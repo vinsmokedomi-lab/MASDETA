@@ -5,7 +5,6 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
-  Edit3,
   Lock,
   Plus,
   RotateCcw,
@@ -35,6 +34,7 @@ import {
 } from '../types/kpm';
 import {
   blockNonNumericKeyDown,
+  formatAlamatLengkap,
   getItemsForYear,
   getKelurahanOptionsForProposal,
   getValidationForDtsen,
@@ -64,7 +64,6 @@ interface KpmRegistrationFormProps {
   onClearPreselectedProposal?: () => void;
   onBack?: () => void;
   onOpenAddProposal: () => void;
-  onOpenEditProposal: (proposalName: string, tahun: string) => void;
   onCreatePengelola: (profile: PengelolaProfile) => void;
   onSave: (values: KpmFormValues, editingId?: string) => void;
   onCancelEdit: () => void;
@@ -87,7 +86,6 @@ export function KpmRegistrationForm({
   onClearPreselectedProposal,
   onBack,
   onOpenAddProposal,
-  onOpenEditProposal,
   onCreatePengelola,
   onSave,
   onCancelEdit,
@@ -413,7 +411,7 @@ export function KpmRegistrationForm({
           ? values.kelurahan
           : resolvedDomicile.kelurahan || values.kelurahan || '',
         nama: values.nama.trim().toUpperCase(),
-        alamat: values.alamat.trim(),
+        alamat: formatAlamatLengkap(values.alamat, true),
         catatan: values.catatan.trim(),
         rt: values.rt.trim().padStart(3, '0'),
         rw: values.rw.trim().padStart(3, '0'),
@@ -454,6 +452,7 @@ export function KpmRegistrationForm({
 
   const errorCount = Object.values(errors).filter(Boolean).length;
   const selectedPengelolaObj = pengelolaList.find((p) => p.displayName === values.pengelola);
+  const hasProposalSelected = Boolean(values.tahun && values.proposal);
 
   return (
     <>
@@ -609,7 +608,7 @@ export function KpmRegistrationForm({
                     </span>
                   </p>
                 ) : (
-                  <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1">
+                  <div className="mt-1.5">
                     <button
                       type="button"
                       onClick={onOpenAddProposal}
@@ -618,17 +617,6 @@ export function KpmRegistrationForm({
                       <Plus className="h-3.5 w-3.5 shrink-0" />
                       <span>Tambah proposal baru</span>
                     </button>
-
-                    {values.proposal && (
-                      <button
-                        type="button"
-                        onClick={() => onOpenEditProposal(values.proposal, values.tahun)}
-                        className="inline-flex min-h-[36px] items-center gap-1.5 text-xs font-semibold text-slate-700 hover:text-teal-800 active:opacity-80"
-                      >
-                        <Edit3 className="h-3.5 w-3.5 shrink-0" />
-                        <span>Edit proposal ini</span>
-                      </button>
-                    )}
                   </div>
                 )}
 
@@ -669,6 +657,17 @@ export function KpmRegistrationForm({
             </div>
           </section>
 
+          {!hasProposalSelected ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white/80 px-4 py-6 text-center">
+              <p className="text-sm font-semibold text-slate-800">
+                Pilih Tahun dan Proposal Terlebih Dahulu
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Kolom pengisian profil calon KPM, bantuan, dan dokumen akan tampil otomatis setelah tahun anggaran dan proposal dipilih.
+              </p>
+            </div>
+          ) : (
+            <>
           {/* Section 2: Profil Calon KPM */}
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
             <h2 className="text-base font-semibold text-slate-900">
@@ -748,10 +747,11 @@ export function KpmRegistrationForm({
                   <input
                     id="input-nama"
                     type="text"
+                    autoCapitalize="characters"
                     placeholder="Sesuai KTP elektronik"
                     value={values.nama}
-                    onChange={(e) => updateField('nama', e.target.value)}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                    onChange={(e) => updateField('nama', e.target.value.toUpperCase())}
+                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm uppercase text-slate-900 placeholder:normal-case placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
                       errors.nama ? 'border-rose-400' : 'border-slate-300'
                     }`}
                   />
@@ -765,9 +765,15 @@ export function KpmRegistrationForm({
                   <input
                     id="input-alamat"
                     type="text"
-                    placeholder="Nama jalan, gang, atau nomor rumah"
+                    autoCapitalize="words"
+                    placeholder="Contoh: Jl. Imam Bonjol Gg. 1 No. 5"
                     value={values.alamat}
-                    onChange={(e) => updateField('alamat', e.target.value)}
+                    onChange={(e) => updateField('alamat', formatAlamatLengkap(e.target.value, false))}
+                    onBlur={() => {
+                      if (values.alamat) {
+                        updateField('alamat', formatAlamatLengkap(values.alamat, true));
+                      }
+                    }}
                     className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
                       errors.alamat ? 'border-rose-400' : 'border-slate-300'
                     }`}
@@ -1178,10 +1184,13 @@ export function KpmRegistrationForm({
               />
             </div>
           </section>
+            </>
+          )}
           </div>
         </div>
 
         {/* Sticky Bottom Action Bar constrained to Mobile Screen */}
+        {hasProposalSelected && (
         <div className="fixed bottom-0 left-1/2 z-30 w-full max-w-md -translate-x-1/2 border-t border-slate-200 bg-white/95 px-4 py-2.5 backdrop-blur-md">
           <div className="flex items-center gap-2.5">
             <button
@@ -1217,6 +1226,7 @@ export function KpmRegistrationForm({
             </button>
           </div>
         </div>
+        )}
       </form>
 
       {/* Searchable Pengelola Selector & Add New Pengelola Modal */}

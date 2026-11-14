@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   INITIAL_INTERNAL_USERS,
   INITIAL_ITEM_LIST,
@@ -40,6 +40,7 @@ import {
   loadProposalHistory,
   loadProposals,
   loadWilayahList,
+  recalculateProposalRegisterCodes,
   resolvePackageForKpm,
   saveInternalUsers,
   saveItemList,
@@ -51,6 +52,7 @@ import {
   saveProposals,
   saveWilayahList,
 } from './utils/imageProcessor';
+import { importProposalKpmFromCsv } from './utils/csvImporter';
 import { KpmRegistrationForm } from './components/KpmRegistrationForm';
 import { KpmDetailView } from './components/KpmDetailView';
 import { SubItemRecapView } from './components/SubItemRecapView';
@@ -116,6 +118,8 @@ export default function App() {
   const [kpmFormReturnToDetail, setKpmFormReturnToDetail] = useState(false);
   const [kpmFormReturnToProposalDetail, setKpmFormReturnToProposalDetail] = useState(false);
   const [kpmDetailReturnToRecap, setKpmDetailReturnToRecap] = useState(false);
+  const [kpmDetailReturnToProposalDetail, setKpmDetailReturnToProposalDetail] = useState(false);
+  const [addProposalFromKpmForm, setAddProposalFromKpmForm] = useState(false);
   const [menuSection, setMenuSection] = useState<MenuSection>('root');
   const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
 
@@ -258,6 +262,119 @@ export default function App() {
     saveInternalUsers(internalUsers);
   }, [internalUsers]);
 
+  useEffect(() => {
+    setRecords((prev) => recalculateProposalRegisterCodes(prev, proposals, items, wilayahList));
+  }, [proposals, items, wilayahList]);
+
+  const latestImportStateRef = useRef({
+    records,
+    proposals,
+    pengelolaList,
+    pekerjaanList,
+    items,
+    wilayahList,
+    currentActor,
+  });
+
+  latestImportStateRef.current = {
+    records,
+    proposals,
+    pengelolaList,
+    pekerjaanList,
+    items,
+    wilayahList,
+    currentActor,
+  };
+
+  const handleImportCsv = (
+    csvText: string,
+    sourceLabel?: string
+  ): {
+    importedRecords: number;
+    importedProposals: number;
+    addedPengelola: number;
+    skipped: number;
+    error?: string;
+  } => {
+    const state = latestImportStateRef.current;
+    const result = importProposalKpmFromCsv({
+      csvText,
+      existingRecords: state.records,
+      existingProposals: state.proposals,
+      existingPengelolaList: state.pengelolaList,
+      existingPekerjaanList: state.pekerjaanList,
+      items: state.items,
+      wilayahList: state.wilayahList,
+      actorName: state.currentActor.nama,
+      actorEmail: state.currentActor.email,
+    });
+
+    if (result.importedRecordsCount > 0) {
+      setProposals(result.nextProposals);
+      setPengelolaList(result.nextPengelolaList);
+      setPekerjaanList(result.nextPekerjaanList);
+      setRecords(result.nextRecords);
+      if (result.newAuditLogs.length > 0) {
+        setKpmAuditLogs((prev) => [...result.newAuditLogs, ...prev]);
+      }
+      if (result.newProposalHistory.length > 0) {
+        setProposalHistory((prev) => [...result.newProposalHistory, ...prev]);
+      }
+      setFeedback({
+        type: 'success',
+        message: `${result.importedRecordsCount} calon KPM${
+          sourceLabel ? ` dari "${sourceLabel}"` : ''
+        } berhasil diimpor otomatis.${
+          result.skippedCount > 0 ? ` (${result.skippedCount} duplikat dilewati)` : ''
+        }`,
+      });
+    }
+
+    return {
+      importedRecords: result.importedRecordsCount,
+      importedProposals: result.importedProposalsCount,
+      addedPengelola: result.addedPengelolaCount,
+      skipped: result.skippedCount,
+      error: result.error,
+    };
+  };
+
+  const seedCsvAttemptedRef = useRef(false);
+
+  useEffect(() => {
+    if (seedCsvAttemptedRef.current) return;
+    seedCsvAttemptedRef.current = true;
+
+    const SEED_FLAG_KEY = 'masdeta_csv_seed_ptk_kota_2026_v1';
+    try {
+      if (localStorage.getItem(SEED_FLAG_KEY) === 'done') return;
+    } catch {
+      // Ignore storage access errors
+    }
+
+    let cancelled = false;
+    fetch('/assets/aistudio/Kecamatan_Pontianak_Kota_2026_ab18452d.csv')
+      .then((res) => (res.ok ? res.text() : Promise.reject(new Error('CSV tidak ditemukan'))))
+      .then((csvText) => {
+        if (cancelled || !csvText) return;
+        const summary = handleImportCsv(csvText, 'Kecamatan Pontianak Kota 2026.csv');
+        if (summary.importedRecords > 0 || summary.skipped > 0) {
+          try {
+            localStorage.setItem(SEED_FLAG_KEY, 'done');
+          } catch {
+            // Ignore storage access errors
+          }
+        }
+      })
+      .catch(() => {
+        // Ignore seed fetch failure silently
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const openKpmDetail = (
     record: KpmRecord,
     fromTab: MainTab = activeTab,
@@ -295,9 +412,10 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const openAddProposalForm = (fromTab: MainTab = activeTab) => {
+  const openAddProposalForm = (fromTab: MainTab = activeTab, fromKpmForm = false) => {
     setFeedback(null);
     setReturnToTab(fromTab);
+    setAddProposalFromKpmForm(fromKpmForm);
     setSubView('add-proposal');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -350,41 +468,6 @@ export default function App() {
       };
       setProposals((prev) => [created, ...prev]);
       openProposalDetailById(created.id, returnToTab);
-    }
-  };
-
-  const handleOpenEditProposalByName = (proposalName: string, tahun: string) => {
-    const existing =
-      proposals.find((p) => p.namaProposal === proposalName && p.tahun === tahun) ??
-      proposals.find((p) => p.namaProposal === proposalName);
-
-    if (existing) {
-      openEditProposalById(existing.id, activeTab);
-    } else {
-      const now = new Date().toISOString();
-      const created: ProposalRecord = {
-        id: `prop-${Date.now()}`,
-        tahun: tahun || '2026',
-        tipe: 'Murni',
-        namaProposal: proposalName,
-        jumlahKpm: 66,
-        status: 'unlocked',
-        checklist: {
-          docx: false,
-          dinas: false,
-          rab: false,
-          rt: false,
-          rw: false,
-          lurah: false,
-          camat: false,
-        },
-        catatan: '',
-        documents: {},
-        createdAt: now,
-        updatedAt: now,
-      };
-      setProposals((prev) => [created, ...prev]);
-      openEditProposalById(created.id, activeTab);
     }
   };
 
@@ -475,8 +558,8 @@ export default function App() {
         }
       }
 
-      setRecords((prev) =>
-        prev.map((rec) =>
+      setRecords((prev) => {
+        const mapped = prev.map((rec) =>
           rec.id === editingId
             ? {
                 ...rec,
@@ -485,8 +568,9 @@ export default function App() {
                 updatedAt: now,
               }
             : rec
-        )
-      );
+        );
+        return recalculateProposalRegisterCodes(mapped, proposals, items, wilayahList);
+      });
       setEditingKpmRecord(null);
       if (kpmFormReturnToDetail && activeKpmId) {
         setKpmFormReturnToDetail(false);
@@ -503,74 +587,90 @@ export default function App() {
       return;
     }
 
-    const newRecord: KpmRecord = {
+    const rawNewRecord: KpmRecord = {
       id: `kpm-${Date.now()}`,
-      registerCode: generateRegisterCode(values.tahun, values.item, records.length),
+      registerCode: generateRegisterCode(
+        values.tahun,
+        values.item,
+        records.filter((r) => r.proposal === values.proposal && r.tahun === values.tahun).length
+      ),
       ...values,
       validasi: values.validasi || 'pending',
       createdAt: now,
       updatedAt: now,
     };
 
-    const itemMatch = resolvePackageForKpm(items, newRecord.tahun, newRecord.item);
+    const nextRecordsList = recalculateProposalRegisterCodes(
+      [rawNewRecord, ...records],
+      proposals,
+      items,
+      wilayahList
+    );
+    const savedNewRecord =
+      nextRecordsList.find((r) => r.id === rawNewRecord.id) ?? rawNewRecord;
+
+    const itemMatch = resolvePackageForKpm(items, savedNewRecord.tahun, savedNewRecord.item);
     const itemDisplay =
       itemMatch && itemMatch.name !== itemMatch.code
         ? `${itemMatch.code} — ${itemMatch.name}`
-        : newRecord.item;
+        : savedNewRecord.item;
 
     const createdAuditEntry: KpmAuditLogEntry = {
       id: `audit-create-${Date.now()}`,
-      kpmId: newRecord.id,
+      kpmId: savedNewRecord.id,
       action: 'created',
       actorName: currentActor.nama,
       actorEmail: currentActor.email,
       timestamp: now,
-      proposal: newRecord.proposal,
-      tahun: newRecord.tahun,
+      proposal: savedNewRecord.proposal,
+      tahun: savedNewRecord.tahun,
       changes: [
         {
           field: 'Proposal Awal',
           before: '-',
-          after: `${newRecord.proposal} (${newRecord.tahun})`,
+          after: `${savedNewRecord.proposal} (${savedNewRecord.tahun})`,
         },
         { field: 'Item Bantuan', before: '-', after: itemDisplay },
         {
           field: 'Status Validasi',
           before: '-',
-          after: formatValidationLabel(newRecord.validasi),
+          after: formatValidationLabel(savedNewRecord.validasi),
         },
       ],
     };
 
     const enteredHistory: ProposalKpmHistoryEntry = {
       id: `hist-enter-${Date.now()}`,
-      tahun: newRecord.tahun,
-      proposalName: newRecord.proposal,
-      kpmId: newRecord.id,
-      kpmName: newRecord.nama,
-      registerCode: newRecord.registerCode,
+      tahun: savedNewRecord.tahun,
+      proposalName: savedNewRecord.proposal,
+      kpmId: savedNewRecord.id,
+      kpmName: savedNewRecord.nama,
+      registerCode: savedNewRecord.registerCode,
       action: 'entered',
-      toProposal: newRecord.proposal,
+      toProposal: savedNewRecord.proposal,
       actorName: currentActor.nama,
       timestamp: now,
     };
 
-    setRecords((prev) => [newRecord, ...prev]);
+    setRecords(nextRecordsList);
     setKpmAuditLogs((prev) => [createdAuditEntry, ...prev]);
     setProposalHistory((prev) => [enteredHistory, ...prev]);
     setPendingSelectedProposal(null);
     setLockedKpmProposalScope(null);
-    setSelectedYear(newRecord.tahun);
+    setSelectedYear(savedNewRecord.tahun);
+    setActiveKpmId(savedNewRecord.id);
+    setKpmDetailReturnToRecap(false);
     if (kpmFormReturnToProposalDetail && activeProposal) {
       setKpmFormReturnToProposalDetail(false);
-      setSubView('proposal-detail');
+      setKpmDetailReturnToProposalDetail(true);
     } else {
-      setSubView('none');
-      setActiveTab('kpm');
+      setKpmDetailReturnToProposalDetail(false);
+      setReturnToTab('kpm');
     }
+    setSubView('kpm-detail');
     setFeedback({
       type: 'success',
-      message: `Calon KPM "${newRecord.nama}" (${newRecord.registerCode}) berhasil disimpan.`,
+      message: `Calon KPM "${savedNewRecord.nama}" (${savedNewRecord.registerCode}) berhasil disimpan.`,
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -604,7 +704,14 @@ export default function App() {
     };
 
     setProposalHistory((prev) => [removedHistory, ...prev]);
-    setRecords((prev) => prev.filter((r) => r.id !== id));
+    setRecords((prev) =>
+      recalculateProposalRegisterCodes(
+        prev.filter((r) => r.id !== id),
+        proposals,
+        items,
+        wilayahList
+      )
+    );
     if (activeKpmId === id) {
       setActiveKpmId(null);
       setSubView('none');
@@ -766,6 +873,24 @@ export default function App() {
     setItems((prev) => prev.filter((i) => !(i.tahun === tahun && i.code === code)));
   };
 
+  const handleMoveItemOrder = (tahun: string, code: string, direction: 'up' | 'down') => {
+    setItems((prev) => {
+      const yearIndices: number[] = [];
+      prev.forEach((item, idx) => {
+        if (item.tahun === tahun) yearIndices.push(idx);
+      });
+      const pos = yearIndices.findIndex((idx) => prev[idx].code === code);
+      if (pos < 0) return prev;
+      const targetPos = direction === 'up' ? pos - 1 : pos + 1;
+      if (targetPos < 0 || targetPos >= yearIndices.length) return prev;
+      const next = [...prev];
+      const idxA = yearIndices[pos];
+      const idxB = yearIndices[targetPos];
+      [next[idxA], next[idxB]] = [next[idxB], next[idxA]];
+      return next;
+    });
+  };
+
   const handleUpdateItemSubItems = (tahun: string, code: string, subItems: string[]) => {
     setItems((prev) =>
       prev.map((i) =>
@@ -816,16 +941,23 @@ export default function App() {
 
     setProposals((prev) => [newProposal, ...prev]);
 
-    if (newProposal.status === 'unlocked') {
+    if (addProposalFromKpmForm && newProposal.status === 'unlocked') {
       setPendingSelectedProposal({
         namaProposal: newProposal.namaProposal,
         tahun: newProposal.tahun,
       });
+    } else {
+      setPendingSelectedProposal(null);
     }
 
     setSelectedYear(newProposal.tahun);
-    setSubView('none');
-    setActiveTab(returnToTab === 'kpm' ? 'proposal' : returnToTab);
+    if (addProposalFromKpmForm) {
+      setAddProposalFromKpmForm(false);
+      setSubView('kpm-form');
+    } else {
+      setSubView('none');
+      setActiveTab(returnToTab === 'kpm' ? 'proposal' : returnToTab);
+    }
     setFeedback({
       type: 'success',
       message:
@@ -950,10 +1082,15 @@ export default function App() {
             items={items}
             wilayahList={wilayahList}
             auditLogs={kpmAuditLogs}
+            feedback={feedback}
+            onDismissFeedback={() => setFeedback(null)}
             onBack={() => {
               setFeedback(null);
               setActiveKpmId(null);
-              if (kpmDetailReturnToRecap) {
+              if (kpmDetailReturnToProposalDetail && activeProposal) {
+                setKpmDetailReturnToProposalDetail(false);
+                setSubView('proposal-detail');
+              } else if (kpmDetailReturnToRecap) {
                 setKpmDetailReturnToRecap(false);
                 setSubView('subitem-recap');
               } else {
@@ -994,55 +1131,56 @@ export default function App() {
           />
         )}
 
-        {subView === 'kpm-form' && (
-          <KpmRegistrationForm
-            editingRecord={editingKpmRecord}
-            pengelolaList={pengelolaList}
-            proposals={proposals}
-            itemOptions={items}
-            pekerjaanOptions={pekerjaanList}
-            wilayahList={wilayahList}
-            feedback={feedback}
-            onDismissFeedback={() => setFeedback(null)}
-            preselectedProposal={pendingSelectedProposal}
-            lockedProposalScope={lockedKpmProposalScope}
-            onClearPreselectedProposal={() => setPendingSelectedProposal(null)}
-            onBack={() => {
-              setFeedback(null);
-              setEditingKpmRecord(null);
-              setLockedKpmProposalScope(null);
-              if (kpmFormReturnToDetail && activeKpmId) {
-                setKpmFormReturnToDetail(false);
-                setSubView('kpm-detail');
-              } else if (kpmFormReturnToProposalDetail && activeProposal) {
-                setKpmFormReturnToProposalDetail(false);
-                setSubView('proposal-detail');
-              } else {
-                setSubView('none');
-                setActiveTab(returnToTab);
-              }
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            onOpenAddProposal={() => openAddProposalForm('kpm')}
-            onOpenEditProposal={handleOpenEditProposalByName}
-            onCreatePengelola={handleCreatePengelola}
-            onSave={handleSaveKpm}
-            onCancelEdit={() => {
-              setEditingKpmRecord(null);
-              setLockedKpmProposalScope(null);
-              if (kpmFormReturnToDetail && activeKpmId) {
-                setKpmFormReturnToDetail(false);
-                setSubView('kpm-detail');
-              } else if (kpmFormReturnToProposalDetail && activeProposal) {
-                setKpmFormReturnToProposalDetail(false);
-                setSubView('proposal-detail');
-              } else {
-                setSubView('none');
-                setActiveTab(returnToTab);
-              }
-            }}
-            onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
-          />
+        {(subView === 'kpm-form' || (subView === 'add-proposal' && addProposalFromKpmForm)) && (
+          <div className={subView === 'kpm-form' ? '' : 'hidden'}>
+            <KpmRegistrationForm
+              editingRecord={editingKpmRecord}
+              pengelolaList={pengelolaList}
+              proposals={proposals}
+              itemOptions={items}
+              pekerjaanOptions={pekerjaanList}
+              wilayahList={wilayahList}
+              feedback={feedback}
+              onDismissFeedback={() => setFeedback(null)}
+              preselectedProposal={pendingSelectedProposal}
+              lockedProposalScope={lockedKpmProposalScope}
+              onClearPreselectedProposal={() => setPendingSelectedProposal(null)}
+              onBack={() => {
+                setFeedback(null);
+                setEditingKpmRecord(null);
+                setLockedKpmProposalScope(null);
+                if (kpmFormReturnToDetail && activeKpmId) {
+                  setKpmFormReturnToDetail(false);
+                  setSubView('kpm-detail');
+                } else if (kpmFormReturnToProposalDetail && activeProposal) {
+                  setKpmFormReturnToProposalDetail(false);
+                  setSubView('proposal-detail');
+                } else {
+                  setSubView('none');
+                  setActiveTab(returnToTab);
+                }
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              onOpenAddProposal={() => openAddProposalForm('kpm', true)}
+              onCreatePengelola={handleCreatePengelola}
+              onSave={handleSaveKpm}
+              onCancelEdit={() => {
+                setEditingKpmRecord(null);
+                setLockedKpmProposalScope(null);
+                if (kpmFormReturnToDetail && activeKpmId) {
+                  setKpmFormReturnToDetail(false);
+                  setSubView('kpm-detail');
+                } else if (kpmFormReturnToProposalDetail && activeProposal) {
+                  setKpmFormReturnToProposalDetail(false);
+                  setSubView('proposal-detail');
+                } else {
+                  setSubView('none');
+                  setActiveTab(returnToTab);
+                }
+              }}
+              onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
+            />
+          </div>
         )}
 
         {subView === 'add-proposal' && (
@@ -1051,8 +1189,13 @@ export default function App() {
             wilayahList={wilayahList}
             onBack={() => {
               setFeedback(null);
-              setSubView('none');
-              setActiveTab(returnToTab);
+              if (addProposalFromKpmForm) {
+                setAddProposalFromKpmForm(false);
+                setSubView('kpm-form');
+              } else {
+                setSubView('none');
+                setActiveTab(returnToTab);
+              }
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onSaveNewProposal={handleCreateProposal}
@@ -1153,6 +1296,7 @@ export default function App() {
             records={records}
             proposals={proposals}
             items={items}
+            wilayahList={wilayahList}
             selectedYear={selectedYear}
             onChangeYear={setSelectedYear}
             statusFilter={kpmStatusFilter}
@@ -1199,6 +1343,7 @@ export default function App() {
             internalUsers={internalUsers}
             onAddItem={(item) => setItems((prev) => [...prev, item])}
             onDeleteItem={handleDeleteCatalogItem}
+            onMoveItemOrder={handleMoveItemOrder}
             onUpdateItemSubItems={handleUpdateItemSubItems}
             onCopyItemsFromYear={handleCopyItemsFromYear}
             onAddPekerjaan={(job) => setPekerjaanList((prev) => [...prev, job])}
@@ -1208,6 +1353,7 @@ export default function App() {
             onAddPengelola={handleCreatePengelola}
             onUpdateUserStatus={handleUpdateUserStatus}
             onRegisterInternalUser={handleRegisterInternalUser}
+            onImportCsv={handleImportCsv}
             onSelectKpmFromDuplicate={(rec) => openKpmDetail(rec, 'menu')}
             onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
           />

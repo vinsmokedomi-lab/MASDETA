@@ -15,6 +15,7 @@ import {
   ShieldCheck,
   Trash2,
   User,
+  X,
   XCircle,
 } from 'lucide-react';
 import { DTSEN_OPTION_ITEMS, INITIAL_WILAYAH_LIST } from '../data/kpmOptions';
@@ -60,6 +61,8 @@ interface KpmDetailViewProps {
   onSelectDuplicateRecord: (record: KpmRecord) => void;
   onOpenProposal: (proposalName: string, tahun: string) => void;
   onPreviewDocument: (file: KpmDocumentFile, title: string) => void;
+  feedback?: { type: 'success' | 'error'; message: string } | null;
+  onDismissFeedback?: () => void;
 }
 
 export function KpmDetailView({
@@ -78,6 +81,8 @@ export function KpmDetailView({
   onSelectDuplicateRecord,
   onOpenProposal,
   onPreviewDocument,
+  feedback,
+  onDismissFeedback,
 }: KpmDetailViewProps) {
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -95,7 +100,12 @@ export function KpmDetailView({
   );
 
   const displayKelurahan = record.kelurahan?.trim() || resolvedDomicile.kelurahan;
-  const displayKecamatan = record.kecamatan?.trim() || resolvedDomicile.kecamatan;
+  const rawKecamatan = record.kecamatan?.trim() || resolvedDomicile.kecamatan;
+  const displayKecamatan = rawKecamatan
+    ? /^kecamatan\s+/i.test(rawKecamatan)
+      ? rawKecamatan
+      : `Kecamatan ${rawKecamatan}`
+    : '';
 
   const isProposalLocked = matchingProposal?.status === 'locked';
 
@@ -257,6 +267,37 @@ export function KpmDetailView({
       </header>
 
       <main className="space-y-4 px-4 pt-4">
+        {feedback && (
+          <div
+            role="status"
+            className={`flex items-center justify-between gap-2.5 rounded-2xl border px-3.5 py-2.5 text-xs ${
+              feedback.type === 'success'
+                ? 'border-teal-200 bg-teal-50 text-teal-900'
+                : 'border-rose-200 bg-rose-50 text-rose-900'
+            }`}
+          >
+            <div className="flex items-start gap-2 min-w-0">
+              <CheckCircle2
+                className={`mt-0.5 h-4 w-4 shrink-0 ${
+                  feedback.type === 'success' ? 'text-teal-700' : 'text-rose-600'
+                }`}
+              />
+              <p className="font-medium leading-snug">{feedback.message}</p>
+            </div>
+
+            {onDismissFeedback && (
+              <button
+                type="button"
+                onClick={onDismissFeedback}
+                className="inline-flex min-h-[32px] min-w-[32px] items-center justify-center rounded-lg text-slate-500 hover:bg-black/5 shrink-0"
+                aria-label="Tutup pemberitahuan"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+        )}
+
         {isProposalLocked && (
           <div className="flex items-center gap-2 rounded-2xl border border-slate-300 bg-slate-100 px-3.5 py-2.5 text-xs font-medium text-slate-700">
             <Lock className="h-4 w-4 shrink-0 text-slate-700" />

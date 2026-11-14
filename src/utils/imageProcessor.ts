@@ -259,6 +259,75 @@ export function capitalizeWords(value: string): string {
   });
 }
 
+const ROMAN_1_TO_39: Record<string, number> = {
+  I: 1,
+  II: 2,
+  III: 3,
+  IV: 4,
+  V: 5,
+  VI: 6,
+  VII: 7,
+  VIII: 8,
+  IX: 9,
+  X: 10,
+  XI: 11,
+  XII: 12,
+  XIII: 13,
+  XIV: 14,
+  XV: 15,
+  XVI: 16,
+  XVII: 17,
+  XVIII: 18,
+  XIX: 19,
+  XX: 20,
+  XXI: 21,
+  XXII: 22,
+  XXIII: 23,
+  XXIV: 24,
+  XXV: 25,
+  XXVI: 26,
+  XXVII: 27,
+  XXVIII: 28,
+  XXIX: 29,
+  XXX: 30,
+  XXXI: 31,
+  XXXII: 32,
+  XXXIII: 33,
+  XXXIV: 34,
+  XXXV: 35,
+  XXXVI: 36,
+  XXXVII: 37,
+  XXXVIII: 38,
+  XXXIX: 39,
+};
+
+export function formatAlamatLengkap(value: string, finalize = false): string {
+  let result = value.replace(/ {2,}/g, ' ');
+  // Wajib spasi setelah titik jika langsung diikuti huruf/angka
+  result = result.replace(/\.([^\s.,/)])/g, '. $1');
+
+  const jalanRegex = finalize
+    ? /(^|[\s,/])(?:jalan|jln|jl)\.?(?=\s|,|\/|$)/gi
+    : /(^|[\s,/])(?:jalan|jln|jl)\.?(?=\s|,|\/)/gi;
+  result = result.replace(jalanRegex, '$1Jl.');
+
+  const gangRegex = finalize
+    ? /(^|[\s,/])(?:gang|gg)\.?(?=\s|,|\/|$)/gi
+    : /(^|[\s,/])(?:gang|gg)\.?(?=\s|,|\/)/gi;
+  result = result.replace(gangRegex, '$1Gg.');
+
+  const romanRegex = finalize
+    ? /(^|[\s,/])([IVXivx]{1,7})\.?(?=\s|,|\/|$)/g
+    : /(^|[\s,/])([IVXivx]{1,7})(?=\s|,|\/)/g;
+  result = result.replace(romanRegex, (full, prefix: string, token: string) => {
+    const mapped = ROMAN_1_TO_39[token.toUpperCase()];
+    return mapped ? `${prefix}${mapped}` : full;
+  });
+
+  result = capitalizeWords(result);
+  return finalize ? result.trim() : result;
+}
+
 export function blockNonNumericKeyDown(e: KeyboardEvent<HTMLInputElement>): void {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const allowedKeys = [
@@ -507,6 +576,106 @@ export function generateRegisterCode(tahun: string, item: string, count: number)
   const seq = String(count + 1).padStart(3, '0');
   const itemCode = item || 'BNS';
   return `${seq}. ${tahun} - ${itemCode}`;
+}
+
+export function getAbsenSeq(registerCode: string): number {
+  const match = registerCode.trim().match(/^(\d+)/);
+  return match ? parseInt(match[1], 10) : 999999;
+}
+
+export function getItemHierarchyRank(
+  itemCode: string,
+  tahun: string,
+  catalog: ItemBantuan[]
+): number {
+  const yearItems = getItemsForYear(catalog, tahun);
+  const idx = yearItems.findIndex((i) => i.code === itemCode);
+  return idx >= 0 ? idx : 9999;
+}
+
+export function recalculateProposalRegisterCodes(
+  records: KpmRecord[],
+  proposals: ProposalRecord[],
+  catalog: ItemBantuan[],
+  wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST
+): KpmRecord[] {
+  if (records.length === 0) return records;
+
+  // Group records by proposal + tahun
+  const groups = new Map<string, KpmRecord[]>();
+  for (const rec of records) {
+    const key = `${rec.proposal}__${rec.tahun}`;
+    const list = groups.get(key) ?? [];
+    list.push(rec);
+    groups.set(key, list);
+  }
+
+  const nextCodeById = new Map<string, string>();
+
+  for (const group of groups.values()) {
+    const sample = group[0];
+    const matchedProposal =
+      proposals.find(
+        (p) => p.namaProposal === sample.proposal && p.tahun === sample.tahun
+      ) ?? proposals.find((p) => p.namaProposal === sample.proposal);
+    const targetCount = matchedProposal?.jumlahKpm ?? 66;
+    const isFinalizedOrder = targetCount > 0 && group.length >= targetCount;
+
+    const sorted = [...group].sort((a, b) => {
+      if (!isFinalizedOrder) {
+        return a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+      }
+
+      // Hierarchy: Item (per year) -> Kecamatan -> RW -> RT -> Kelurahan -> Inisial/Nama KPM
+      const rankA = getItemHierarchyRank(a.item, a.tahun, catalog);
+      const rankB = getItemHierarchyRank(b.item, b.tahun, catalog);
+      if (rankA !== rankB) return rankA - rankB;
+      const itemCmp = a.item.localeCompare(b.item, 'id');
+      if (itemCmp !== 0) return itemCmp;
+
+      const domA = resolveProposalDomicile(a.proposal, proposals, a.tahun, wilayahList);
+      const domB = resolveProposalDomicile(b.proposal, proposals, b.tahun, wilayahList);
+      const kecA = (a.kecamatan || domA.kecamatan || '').trim();
+      const kecB = (b.kecamatan || domB.kecamatan || '').trim();
+      const kecCmp = kecA.localeCompare(kecB, 'id');
+      if (kecCmp !== 0) return kecCmp;
+
+      const rwNumA = parseInt(a.rw || '0', 10) || 0;
+      const rwNumB = parseInt(b.rw || '0', 10) || 0;
+      if (rwNumA !== rwNumB) return rwNumA - rwNumB;
+
+      const rtNumA = parseInt(a.rt || '0', 10) || 0;
+      const rtNumB = parseInt(b.rt || '0', 10) || 0;
+      if (rtNumA !== rtNumB) return rtNumA - rtNumB;
+
+      const kelA = (a.kelurahan || domA.kelurahan || '').trim();
+      const kelB = (b.kelurahan || domB.kelurahan || '').trim();
+      const kelCmp = kelA.localeCompare(kelB, 'id');
+      if (kelCmp !== 0) return kelCmp;
+
+      const namaCmp = a.nama.localeCompare(b.nama, 'id');
+      if (namaCmp !== 0) return namaCmp;
+
+      return a.createdAt.localeCompare(b.createdAt);
+    });
+
+    sorted.forEach((rec, idx) => {
+      const seq = String(idx + 1).padStart(3, '0');
+      nextCodeById.set(rec.id, `${seq}. ${rec.tahun} - ${rec.item || 'BNS'}`);
+    });
+  }
+
+  let changed = false;
+  const updated = records.map((rec) => {
+    const nextCode = nextCodeById.get(rec.id);
+    if (nextCode && nextCode !== rec.registerCode) {
+      changed = true;
+      return { ...rec, registerCode: nextCode };
+    }
+    return rec;
+  });
+
+  return changed ? updated : records;
 }
 
 export function normalizeSubItemKey(name: string): string {

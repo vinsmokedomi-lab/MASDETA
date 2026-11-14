@@ -1,7 +1,9 @@
-import { FormEvent, useMemo, useState } from 'react';
+import { ChangeEvent, FormEvent, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowDown,
   ArrowLeft,
+  ArrowUp,
   Banknote,
   Briefcase,
   Check,
@@ -19,6 +21,7 @@ import {
   Settings,
   ShieldCheck,
   Trash2,
+  Upload,
   User,
   UserCheck,
   UserPlus,
@@ -76,6 +79,7 @@ interface MenuHubViewProps {
   internalUsers: InternalUser[];
   onAddItem: (item: ItemBantuan) => void;
   onDeleteItem: (tahun: string, code: string) => void;
+  onMoveItemOrder: (tahun: string, code: string, direction: 'up' | 'down') => void;
   onUpdateItemSubItems: (tahun: string, code: string, subItems: string[]) => void;
   onCopyItemsFromYear: (fromYear: string, toYear: string) => void;
   onAddPekerjaan: (name: string) => void;
@@ -85,6 +89,16 @@ interface MenuHubViewProps {
   onAddPengelola: (profile: PengelolaProfile) => void;
   onUpdateUserStatus: (userId: string, status: InternalUserStatus, role?: InternalUserRole) => void;
   onRegisterInternalUser: (user: Omit<InternalUser, 'id' | 'status' | 'registeredAt' | 'updatedAt'>) => void;
+  onImportCsv?: (
+    csvText: string,
+    fileName: string
+  ) => {
+    importedRecords: number;
+    importedProposals: number;
+    addedPengelola: number;
+    skipped: number;
+    error?: string;
+  };
   onSelectKpmFromDuplicate: (record: KpmRecord) => void;
   onPreviewDocument: (file: KpmDocumentFile, title: string) => void;
 }
@@ -101,6 +115,7 @@ export function MenuHubView({
   internalUsers,
   onAddItem,
   onDeleteItem,
+  onMoveItemOrder,
   onUpdateItemSubItems,
   onCopyItemsFromYear,
   onAddPekerjaan,
@@ -110,6 +125,7 @@ export function MenuHubView({
   onAddPengelola,
   onUpdateUserStatus,
   onRegisterInternalUser,
+  onImportCsv,
   onSelectKpmFromDuplicate,
   onPreviewDocument,
 }: MenuHubViewProps) {
@@ -124,6 +140,10 @@ export function MenuHubView({
   // Master Pekerjaan modal state
   const [isAddPekerjaanOpen, setIsAddPekerjaanOpen] = useState(false);
   const [newPekerjaan, setNewPekerjaan] = useState('');
+  const [csvImportStatus, setCsvImportStatus] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
   const [pekerjaanError, setPekerjaanError] = useState<string | null>(null);
 
   // Master Wilayah state
@@ -935,20 +955,23 @@ export function MenuHubView({
                   ))}
                 </datalist>
 
-                {yearCatalogItems.map((item) => {
+                {yearCatalogItems.map((item, idx) => {
                   const isExpanded = expandedItemCode === item.code;
                   return (
                     <div key={`${item.tahun}-${item.code}`} className="bg-white">
-                      <div className="flex items-center justify-between gap-2 px-4 py-3">
+                      <div className="flex items-center justify-between gap-1.5 px-3 py-3">
+                        <span className="w-5 shrink-0 text-center font-mono text-[11px] font-bold text-slate-400 tabular-nums">
+                          {idx + 1}
+                        </span>
                         <button
                           type="button"
                           onClick={() => {
                             setExpandedItemCode(isExpanded ? null : item.code);
                             setNewSubItemInput('');
                           }}
-                          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                          className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
                         >
-                          <span className="flex h-9 w-12 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-xs font-bold text-teal-800">
+                          <span className="flex h-9 w-11 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-xs font-bold text-teal-800">
                             {item.code}
                           </span>
                           <div className="min-w-0 flex-1">
@@ -967,14 +990,34 @@ export function MenuHubView({
                           />
                         </button>
 
-                        <button
-                          type="button"
-                          onClick={() => onDeleteItem(item.tahun, item.code)}
-                          aria-label={`Hapus item ${item.code} tahun ${item.tahun}`}
-                          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+                        <div className="flex shrink-0 items-center gap-0.5">
+                          <button
+                            type="button"
+                            disabled={idx === 0}
+                            onClick={() => onMoveItemOrder(item.tahun, item.code, 'up')}
+                            aria-label={`Naikkan urutan ${item.code}`}
+                            className="inline-flex h-8 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30"
+                          >
+                            <ArrowUp className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={idx === yearCatalogItems.length - 1}
+                            onClick={() => onMoveItemOrder(item.tahun, item.code, 'down')}
+                            aria-label={`Turunkan urutan ${item.code}`}
+                            className="inline-flex h-8 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30"
+                          >
+                            <ArrowDown className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onDeleteItem(item.tahun, item.code)}
+                            aria-label={`Hapus item ${item.code} tahun ${item.tahun}`}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
                       </div>
 
                       {isExpanded && (
@@ -1714,10 +1757,77 @@ export function MenuHubView({
   }
 
   // 8. LAPORAN & DOWNLOAD CSV
+  const handleCsvFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !onImportCsv) return;
+    try {
+      const text = await file.text();
+      const summary = onImportCsv(text, file.name);
+      if (summary.error && summary.importedRecords === 0) {
+        setCsvImportStatus({ type: 'error', message: summary.error });
+      } else {
+        const parts = [`${summary.importedRecords} calon KPM berhasil diimpor`];
+        if (summary.importedProposals > 0) {
+          parts.push(`${summary.importedProposals} proposal baru dibuat`);
+        }
+        if (summary.addedPengelola > 0) {
+          parts.push(`${summary.addedPengelola} pengelola ditambahkan`);
+        }
+        if (summary.skipped > 0) {
+          parts.push(`${summary.skipped} data duplikat dilewati`);
+        }
+        setCsvImportStatus({ type: 'success', message: `${parts.join(', ')}.` });
+      }
+    } catch {
+      setCsvImportStatus({
+        type: 'error',
+        message: 'Gagal membaca file CSV. Pastikan format file valid (.csv).',
+      });
+    }
+  };
+
   return (
     <div className="min-h-screen pb-24">
       {renderSubHeader('Laporan & Download Data', () => onChangeSection('root'))}
       <div className="space-y-4 px-4 pt-4">
+        {onImportCsv && (
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
+            <h2 className="text-sm font-bold text-slate-900">Import Data Proposal (.CSV)</h2>
+            <p className="text-xs text-slate-500">
+              Unggah file CSV daftar penerima proposal (pemisah titik koma atau koma) untuk
+              mengimpor proposal, pengelola, dan seluruh calon KPM secara otomatis.
+            </p>
+            <label className="inline-flex min-h-[44px] w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-teal-200 bg-teal-50 px-4 text-sm font-semibold text-teal-800 hover:bg-teal-100/70">
+              <Upload className="h-4 w-4" />
+              <span>Pilih File CSV Proposal</span>
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                onChange={handleCsvFileChange}
+                className="sr-only"
+              />
+            </label>
+            {csvImportStatus && (
+              <div
+                role="status"
+                className={`flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs ${
+                  csvImportStatus.type === 'success'
+                    ? 'border-teal-200 bg-teal-50 text-teal-900'
+                    : 'border-rose-200 bg-rose-50 text-rose-900'
+                }`}
+              >
+                {csvImportStatus.type === 'success' ? (
+                  <Check className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+                ) : (
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+                )}
+                <p className="font-medium leading-snug">{csvImportStatus.message}</p>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
           <h2 className="text-sm font-bold text-slate-900">Ekspor Data Calon KPM (.CSV)</h2>
           <p className="text-xs text-slate-500">
