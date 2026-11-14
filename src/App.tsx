@@ -6,6 +6,7 @@ import {
   INITIAL_PENGELOLA_LIST,
   INITIAL_PROPOSAL_HISTORY,
   INITIAL_PROPOSAL_LIST,
+  INITIAL_WILAYAH_LIST,
   PEKERJAAN_OPTIONS,
   SAMPLE_KPM_RECORDS,
 } from './data/kpmOptions';
@@ -23,6 +24,7 @@ import {
   ProposalKpmHistoryEntry,
   ProposalRecord,
   ValidationStatus,
+  WilayahKabKota,
 } from './types/kpm';
 import {
   clearSampleRecordsOnce,
@@ -37,6 +39,7 @@ import {
   loadPengelolaList,
   loadProposalHistory,
   loadProposals,
+  loadWilayahList,
   resolvePackageForKpm,
   saveInternalUsers,
   saveItemList,
@@ -46,6 +49,7 @@ import {
   savePengelolaList,
   saveProposalHistory,
   saveProposals,
+  saveWilayahList,
 } from './utils/imageProcessor';
 import { KpmRegistrationForm } from './components/KpmRegistrationForm';
 import { KpmDetailView } from './components/KpmDetailView';
@@ -140,6 +144,9 @@ export default function App() {
   const [items, setItems] = useState<ItemBantuan[]>(() => loadItemList(INITIAL_ITEM_LIST));
   const [pekerjaanList, setPekerjaanList] = useState<string[]>(() =>
     loadPekerjaanList(PEKERJAAN_OPTIONS)
+  );
+  const [wilayahList, setWilayahList] = useState<WilayahKabKota[]>(() =>
+    loadWilayahList(INITIAL_WILAYAH_LIST)
   );
   const [internalUsers, setInternalUsers] = useState<InternalUser[]>(() =>
     loadInternalUsers(INITIAL_INTERNAL_USERS)
@@ -242,6 +249,10 @@ export default function App() {
   useEffect(() => {
     savePekerjaanList(pekerjaanList);
   }, [pekerjaanList]);
+
+  useEffect(() => {
+    saveWilayahList(wilayahList);
+  }, [wilayahList]);
 
   useEffect(() => {
     saveInternalUsers(internalUsers);
@@ -937,6 +948,7 @@ export default function App() {
             allRecords={records}
             proposals={proposals}
             items={items}
+            wilayahList={wilayahList}
             auditLogs={kpmAuditLogs}
             onBack={() => {
               setFeedback(null);
@@ -989,6 +1001,7 @@ export default function App() {
             proposals={proposals}
             itemOptions={items}
             pekerjaanOptions={pekerjaanList}
+            wilayahList={wilayahList}
             feedback={feedback}
             onDismissFeedback={() => setFeedback(null)}
             preselectedProposal={pendingSelectedProposal}
@@ -1035,6 +1048,7 @@ export default function App() {
         {subView === 'add-proposal' && (
           <AddProposalForm
             existingProposals={proposals}
+            wilayahList={wilayahList}
             onBack={() => {
               setFeedback(null);
               setSubView('none');
@@ -1181,6 +1195,7 @@ export default function App() {
             items={items}
             pekerjaanList={pekerjaanList}
             pengelolaList={pengelolaList}
+            wilayahList={wilayahList}
             internalUsers={internalUsers}
             onAddItem={(item) => setItems((prev) => [...prev, item])}
             onDeleteItem={handleDeleteCatalogItem}
@@ -1188,6 +1203,7 @@ export default function App() {
             onCopyItemsFromYear={handleCopyItemsFromYear}
             onAddPekerjaan={(job) => setPekerjaanList((prev) => [...prev, job])}
             onDeletePekerjaan={(job) => setPekerjaanList((prev) => prev.filter((p) => p !== job))}
+            onUpdateWilayahList={setWilayahList}
             onOpenAddProposal={() => openAddProposalForm('menu')}
             onOpenSubItemRecap={() => openSubItemRecap('menu')}
             onAddPengelola={handleCreatePengelola}

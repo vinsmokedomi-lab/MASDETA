@@ -23,12 +23,26 @@ export interface KpmDocuments {
   lainnya: KpmDocumentFile[];
 }
 
+export interface WilayahKecamatan {
+  id: string;
+  nama: string;
+  kelurahanList: string[];
+}
+
+export interface WilayahKabKota {
+  id: string;
+  nama: string;
+  kecamatanList: WilayahKecamatan[];
+}
+
 export interface PengelolaProfile {
   id: string;
   title: string;
   nama: string;
   displayName: string;
+  kabKota?: string;
   kecamatan: string;
+  kelurahan?: string;
   alamat: string;
   kontak: string;
   foto?: KpmDocumentFile;
@@ -46,6 +60,7 @@ export interface KpmRecord {
   registerCode: string;
   tahun: string;
   proposal: string;
+  kecamatan?: string;
   kelurahan: string;
   item: string;
   nama: string;
@@ -70,6 +85,7 @@ export interface KpmRecord {
 export interface KpmFormValues {
   tahun: string;
   proposal: string;
+  kecamatan?: string;
   kelurahan: string;
   item: string;
   nama: string;

@@ -1,5 +1,9 @@
 import { KeyboardEvent } from 'react';
-import { INITIAL_ITEM_LIST, KELURAHAN_BY_KECAMATAN } from '../data/kpmOptions';
+import {
+  INITIAL_ITEM_LIST,
+  INITIAL_WILAYAH_LIST,
+  KELURAHAN_BY_KECAMATAN,
+} from '../data/kpmOptions';
 import {
   InternalUser,
   ItemBantuan,
@@ -12,6 +16,7 @@ import {
   ProposalKpmHistoryEntry,
   ProposalRecord,
   ValidationStatus,
+  WilayahKabKota,
 } from '../types/kpm';
 
 const STORAGE_KEY = 'masdeta_kpm_records_v1';
@@ -19,7 +24,9 @@ const PENGELOLA_STORAGE_KEY = 'masdeta_pengelola_v1';
 const PROPOSAL_STORAGE_KEY = 'masdeta_proposals_v1';
 const LEGACY_ITEM_STORAGE_KEY = 'masdeta_items_v1';
 const ITEM_STORAGE_KEY = 'masdeta_item_catalog_v2';
-const PEKERJAAN_STORAGE_KEY = 'masdeta_pekerjaan_v1';
+const LEGACY_PEKERJAAN_STORAGE_KEY = 'masdeta_pekerjaan_v1';
+const PEKERJAAN_STORAGE_KEY = 'masdeta_pekerjaan_v2';
+const WILAYAH_STORAGE_KEY = 'masdeta_wilayah_v1';
 const INTERNAL_USERS_STORAGE_KEY = 'masdeta_internal_users_v1';
 const PROPOSAL_HISTORY_STORAGE_KEY = 'masdeta_proposal_history_v1';
 const KPM_AUDIT_STORAGE_KEY = 'masdeta_kpm_audit_v1';
@@ -46,16 +53,111 @@ export function clearSampleRecordsOnce(): void {
 export function isKecamatanProposal(proposal: string): boolean {
   const lower = proposal.trim().toLowerCase();
   if (!lower) return false;
-  return lower.includes('kecamatan ') && !lower.includes('kelurahan ');
+  return (
+    lower.includes('kecamatan ') &&
+    !lower.includes('kelurahan ') &&
+    !lower.includes('desa ')
+  );
 }
 
-export function getKelurahanOptionsForProposal(proposal: string): string[] {
+export function getKelurahanOptionsForProposal(
+  proposal: string,
+  wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST
+): string[] {
   if (!isKecamatanProposal(proposal)) return [];
   const lower = proposal.toLowerCase();
-  const matchedKecamatan = Object.keys(KELURAHAN_BY_KECAMATAN).find((kec) =>
+
+  // Search dynamic wilayah hierarchy first (longest kecamatan name match wins)
+  const allKecamatans = wilayahList
+    .flatMap((w) => w.kecamatanList)
+    .sort((a, b) => b.nama.length - a.nama.length);
+
+  const matchedDynamic = allKecamatans.find((kec) =>
+    lower.includes(`kecamatan ${kec.nama.toLowerCase()}`)
+  );
+  if (matchedDynamic) return matchedDynamic.kelurahanList;
+
+  const matchedFallback = Object.keys(KELURAHAN_BY_KECAMATAN).find((kec) =>
     lower.includes(`kecamatan ${kec.toLowerCase()}`)
   );
-  return matchedKecamatan ? KELURAHAN_BY_KECAMATAN[matchedKecamatan] : [];
+  return matchedFallback ? KELURAHAN_BY_KECAMATAN[matchedFallback] : [];
+}
+
+export function resolveProposalDomicile(
+  proposalName: string,
+  proposals: ProposalRecord[],
+  tahun?: string,
+  wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST
+): { kabKota: string; kecamatan: string; kelurahan: string } {
+  const trimmedName = proposalName.trim();
+  const matchedProposal =
+    (tahun
+      ? proposals.find((p) => p.namaProposal === trimmedName && p.tahun === tahun)
+      : undefined) ?? proposals.find((p) => p.namaProposal === trimmedName);
+
+  let kabKota = matchedProposal?.kabKota?.trim() || '';
+  let kecamatan = matchedProposal?.kecamatan?.trim() || '';
+  let kelurahan = matchedProposal?.kelurahan?.trim() || '';
+
+  if (kelurahan && !/^(kelurahan|desa)\s+/i.test(kelurahan)) {
+    kelurahan = `Kelurahan ${kelurahan}`;
+  }
+
+  const lower = trimmedName.toLowerCase();
+
+  if (!isKecamatanProposal(trimmedName)) {
+    // Find matching kelurahan/desa across wilayahList if kelurahan or kecamatan is still missing
+    if (!kelurahan || !kecamatan) {
+      const flatVillages: { kabKota: string; kecamatan: string; kelurahan: string }[] = [];
+      for (const kab of wilayahList) {
+        for (const kec of kab.kecamatanList) {
+          for (const kel of kec.kelurahanList) {
+            flatVillages.push({ kabKota: kab.nama, kecamatan: kec.nama, kelurahan: kel });
+          }
+        }
+      }
+      flatVillages.sort((a, b) => b.kelurahan.length - a.kelurahan.length);
+
+      const villageMatch = flatVillages.find((v) => {
+        const vLower = v.kelurahan.toLowerCase();
+        const bare = vLower.replace(/^(kelurahan|desa)\s+/i, '').trim();
+        return (
+          lower.includes(vLower) ||
+          (kelurahan && vLower === kelurahan.toLowerCase()) ||
+          (bare && (lower.includes(`kelurahan ${bare}`) || lower.includes(`desa ${bare}`)))
+        );
+      });
+
+      if (villageMatch) {
+        if (!kabKota) kabKota = villageMatch.kabKota;
+        if (!kecamatan) kecamatan = villageMatch.kecamatan;
+        if (!kelurahan) kelurahan = villageMatch.kelurahan;
+      } else if (!kelurahan) {
+        const extractMatch = trimmedName.match(/((?:Kelurahan|Desa)\s+.+)$/i);
+        if (extractMatch) {
+          kelurahan = capitalizeWords(extractMatch[1].trim());
+        }
+      }
+    }
+  } else if (!kecamatan) {
+    const allKecamatans = wilayahList
+      .flatMap((kab) => kab.kecamatanList.map((kec) => ({ kabKota: kab.nama, kecamatan: kec.nama })))
+      .sort((a, b) => b.kecamatan.length - a.kecamatan.length);
+    const kecMatch = allKecamatans.find((item) =>
+      lower.includes(`kecamatan ${item.kecamatan.toLowerCase()}`)
+    );
+    if (kecMatch) {
+      if (!kabKota) kabKota = kecMatch.kabKota;
+      kecamatan = kecMatch.kecamatan;
+    } else {
+      const extractKec = trimmedName.match(/Kecamatan\s+(.+)$/i);
+      if (extractKec) {
+        kecamatan = capitalizeWords(extractKec[1].trim());
+      }
+    }
+  }
+
+  return { kabKota, kecamatan, kelurahan };
 }
 
 export function buildCombinedProposalName({
@@ -76,7 +178,7 @@ export function buildCombinedProposalName({
 
   const cleanKel = kelurahan.trim();
   const kelLabel = cleanKel
-    ? cleanKel.toLowerCase().startsWith('kelurahan ')
+    ? /^(kelurahan|desa)\s+/i.test(cleanKel)
       ? cleanKel
       : `Kelurahan ${cleanKel}`
     : '';
@@ -331,6 +433,7 @@ export function loadKpmRecords(fallback: KpmRecord[]): KpmRecord[] {
           ? [rawRumah]
           : [];
       return {
+        kecamatan: '',
         kelurahan: '',
         ...rec,
         documents: {
@@ -697,6 +800,47 @@ export function computeSubItemRecap(
 export function loadPekerjaanList(fallback: string[]): string[] {
   try {
     const raw = localStorage.getItem(PEKERJAAN_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+
+    // Migrate any custom entries from v1 key into comprehensive default list
+    const legacyRaw = localStorage.getItem(LEGACY_PEKERJAAN_STORAGE_KEY);
+    if (legacyRaw) {
+      const legacyParsed = JSON.parse(legacyRaw);
+      if (Array.isArray(legacyParsed)) {
+        const merged = [...fallback];
+        const lowerSet = new Set(merged.map((m) => m.toLowerCase()));
+        for (const item of legacyParsed) {
+          const clean = String(item || '').trim();
+          if (clean && !lowerSet.has(clean.toLowerCase())) {
+            lowerSet.add(clean.toLowerCase());
+            merged.push(clean);
+          }
+        }
+        return merged.sort((a, b) => a.localeCompare(b));
+      }
+    }
+
+    return fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export function savePekerjaanList(list: string[]): boolean {
+  try {
+    localStorage.setItem(PEKERJAAN_STORAGE_KEY, JSON.stringify(list));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function loadWilayahList(fallback: WilayahKabKota[]): WilayahKabKota[] {
+  try {
+    const raw = localStorage.getItem(WILAYAH_STORAGE_KEY);
     if (!raw) return fallback;
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed) || parsed.length === 0) return fallback;
@@ -706,9 +850,9 @@ export function loadPekerjaanList(fallback: string[]): string[] {
   }
 }
 
-export function savePekerjaanList(list: string[]): boolean {
+export function saveWilayahList(list: WilayahKabKota[]): boolean {
   try {
-    localStorage.setItem(PEKERJAAN_STORAGE_KEY, JSON.stringify(list));
+    localStorage.setItem(WILAYAH_STORAGE_KEY, JSON.stringify(list));
     return true;
   } catch {
     return false;
@@ -745,6 +889,7 @@ export function exportKpmRecordsToCsv(
     'Kode Register',
     'Tahun',
     'Proposal',
+    'Kecamatan',
     'Kelurahan',
     'Item',
     'Nama KPM',
@@ -787,6 +932,7 @@ export function exportKpmRecordsToCsv(
       r.registerCode,
       r.tahun,
       r.proposal,
+      r.kecamatan || '',
       r.kelurahan || '',
       r.item,
       r.nama,
@@ -907,6 +1053,7 @@ export function diffKpmRecordChanges(
 
   compare('Tahun', prev.tahun, next.tahun);
   compare('Proposal', prev.proposal, next.proposal);
+  compare('Kecamatan', prev.kecamatan || '', next.kecamatan || '');
   compare('Kelurahan', prev.kelurahan || '', next.kelurahan || '');
   compare('Item Bantuan', prev.item, next.item);
   compare('Nama Lengkap', prev.nama, next.nama);

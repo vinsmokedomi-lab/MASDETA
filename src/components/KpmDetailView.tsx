@@ -17,7 +17,7 @@ import {
   User,
   XCircle,
 } from 'lucide-react';
-import { DTSEN_OPTION_ITEMS } from '../data/kpmOptions';
+import { DTSEN_OPTION_ITEMS, INITIAL_WILAYAH_LIST } from '../data/kpmOptions';
 import {
   ItemBantuan,
   KpmAuditLogEntry,
@@ -25,6 +25,7 @@ import {
   KpmRecord,
   ProposalRecord,
   ValidationStatus,
+  WilayahKabKota,
 } from '../types/kpm';
 import {
   formatNikDisplay,
@@ -32,12 +33,14 @@ import {
   formatUploadDateTime,
   getKpmSubItemStatusList,
   resolvePackageForKpm,
+  resolveProposalDomicile,
 } from '../utils/imageProcessor';
 
 interface KpmDetailViewProps {
   record: KpmRecord;
   allRecords: KpmRecord[];
   proposals: ProposalRecord[];
+  wilayahList?: WilayahKabKota[];
   items: ItemBantuan[];
   auditLogs: KpmAuditLogEntry[];
   onBack: () => void;
@@ -63,6 +66,7 @@ export function KpmDetailView({
   record,
   allRecords,
   proposals,
+  wilayahList = INITIAL_WILAYAH_LIST,
   items,
   auditLogs,
   onBack,
@@ -84,6 +88,14 @@ export function KpmDetailView({
       ) ?? proposals.find((p) => p.namaProposal === record.proposal),
     [proposals, record.proposal, record.tahun]
   );
+
+  const resolvedDomicile = useMemo(
+    () => resolveProposalDomicile(record.proposal, proposals, record.tahun, wilayahList),
+    [record.proposal, proposals, record.tahun, wilayahList]
+  );
+
+  const displayKelurahan = record.kelurahan?.trim() || resolvedDomicile.kelurahan;
+  const displayKecamatan = record.kecamatan?.trim() || resolvedDomicile.kecamatan;
 
   const isProposalLocked = matchingProposal?.status === 'locked';
 
@@ -273,8 +285,9 @@ export function KpmDetailView({
               className="inline-flex min-w-0 items-center gap-1 text-left text-xs font-semibold text-teal-700 hover:underline"
             >
               <span className="truncate">
-                {record.kelurahan
-                  ? `${record.proposal} · ${record.kelurahan}`
+                {displayKelurahan &&
+                !record.proposal.toLowerCase().includes(displayKelurahan.toLowerCase())
+                  ? `${record.proposal} · ${displayKelurahan}`
                   : record.proposal}
               </span>
               <ChevronRight className="h-3.5 w-3.5 shrink-0" />
@@ -544,14 +557,6 @@ export function KpmDetailView({
                 </button>
               </dd>
             </div>
-            {record.kelurahan && (
-              <div className="flex items-center justify-between gap-3 px-4 py-3">
-                <dt className="text-xs text-slate-500 shrink-0">Kelurahan</dt>
-                <dd className="text-right text-xs font-semibold text-slate-900">
-                  {record.kelurahan}
-                </dd>
-              </div>
-            )}
             <div className="flex items-start justify-between gap-3 px-4 py-3">
               <dt className="text-xs text-slate-500 shrink-0">Item Bantuan</dt>
               <dd className="text-right text-xs font-semibold text-slate-900">{itemName}</dd>
@@ -593,6 +598,22 @@ export function KpmDetailView({
                 {record.alamat} · RT {record.rt} / RW {record.rw}
               </dd>
             </div>
+            {displayKelurahan && (
+              <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <dt className="text-xs text-slate-500 shrink-0">Kelurahan / Desa</dt>
+                <dd className="text-right text-xs font-semibold text-slate-900">
+                  {displayKelurahan}
+                </dd>
+              </div>
+            )}
+            {displayKecamatan && (
+              <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <dt className="text-xs text-slate-500 shrink-0">Kecamatan</dt>
+                <dd className="text-right text-xs font-semibold text-slate-900">
+                  {displayKecamatan}
+                </dd>
+              </div>
+            )}
             <div className="flex items-center justify-between gap-3 px-4 py-3">
               <dt className="text-xs text-slate-500 shrink-0">Pekerjaan</dt>
               <dd className="text-right text-xs font-semibold text-slate-900">

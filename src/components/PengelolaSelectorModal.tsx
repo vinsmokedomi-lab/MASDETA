@@ -7,8 +7,8 @@ import {
   User,
   X,
 } from 'lucide-react';
-import { KECAMATAN_OPTIONS, PENGELOLA_TITLE_OPTIONS } from '../data/kpmOptions';
-import { KpmDocumentFile, PengelolaProfile } from '../types/kpm';
+import { INITIAL_WILAYAH_LIST, PENGELOLA_TITLE_OPTIONS } from '../data/kpmOptions';
+import { KpmDocumentFile, PengelolaProfile, WilayahKabKota } from '../types/kpm';
 import {
   blockNonNumericKeyDown,
   capitalizeWords,
@@ -19,6 +19,7 @@ import { PlaceholderSelect } from './FormControls';
 
 interface AddPengelolaFormContentProps {
   initialNama?: string;
+  wilayahList?: WilayahKabKota[];
   showBackButton?: boolean;
   onBack?: () => void;
   onClose: () => void;
@@ -28,6 +29,7 @@ interface AddPengelolaFormContentProps {
 
 function AddPengelolaFormContent({
   initialNama = '',
+  wilayahList = INITIAL_WILAYAH_LIST,
   showBackButton = false,
   onBack,
   onClose,
@@ -36,11 +38,34 @@ function AddPengelolaFormContent({
 }: AddPengelolaFormContentProps) {
   const [title, setTitle] = useState('');
   const [nama, setNama] = useState(initialNama);
+  const [kabKota, setKabKota] = useState(() => wilayahList[0]?.nama || '');
   const [kecamatan, setKecamatan] = useState('');
+  const [kelurahan, setKelurahan] = useState('');
   const [alamat, setAlamat] = useState('');
   const [kontak, setKontak] = useState('');
   const [foto, setFoto] = useState<KpmDocumentFile | undefined>(undefined);
   const [namaError, setNamaError] = useState<string | null>(null);
+
+  const kabKotaOptions = useMemo(() => wilayahList.map((w) => w.nama), [wilayahList]);
+
+  const kecamatanOptions = useMemo(() => {
+    if (!kabKota) {
+      return Array.from(
+        new Set(wilayahList.flatMap((w) => w.kecamatanList.map((k) => k.nama)))
+      );
+    }
+    const matchedKab = wilayahList.find((w) => w.nama === kabKota);
+    return matchedKab ? matchedKab.kecamatanList.map((k) => k.nama) : [];
+  }, [wilayahList, kabKota]);
+
+  const kelurahanOptions = useMemo(() => {
+    if (!kecamatan) return [];
+    const matchedKab = kabKota
+      ? wilayahList.find((w) => w.nama === kabKota)
+      : wilayahList.find((w) => w.kecamatanList.some((k) => k.nama === kecamatan));
+    const matchedKec = matchedKab?.kecamatanList.find((k) => k.nama === kecamatan);
+    return matchedKec ? matchedKec.kelurahanList : [];
+  }, [wilayahList, kabKota, kecamatan]);
 
   const handleSave = () => {
     const trimmedNama = capitalizeWords(nama.trim());
@@ -55,7 +80,9 @@ function AddPengelolaFormContent({
       title,
       nama: trimmedNama,
       displayName,
+      kabKota,
       kecamatan,
+      kelurahan,
       alamat: capitalizeWords(alamat.trim()),
       kontak: kontak.trim(),
       foto,
@@ -149,19 +176,66 @@ function AddPengelolaFormContent({
         </div>
 
         <div>
+          <label htmlFor="pengelola-kabkota" className="block text-xs font-semibold text-slate-700">
+            Kabupaten / Kota
+          </label>
+          <PlaceholderSelect
+            placeholder="Pilih Kabupaten / Kota"
+            id="pengelola-kabkota"
+            value={kabKota}
+            onChange={(v) => {
+              setKabKota(v);
+              setKecamatan('');
+              setKelurahan('');
+            }}
+            className="mt-1.5 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3.5 text-sm focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
+          >
+            {kabKotaOptions.map((kab) => (
+              <option key={kab} value={kab}>
+                {kab}
+              </option>
+            ))}
+          </PlaceholderSelect>
+        </div>
+
+        <div>
           <label htmlFor="pengelola-kecamatan" className="block text-xs font-semibold text-slate-700">
             Kecamatan
           </label>
           <PlaceholderSelect
-            placeholder="Pilih Kecamatan"
+            placeholder={kabKota ? 'Pilih Kecamatan' : 'Pilih Kabupaten / Kota terlebih dahulu'}
             id="pengelola-kecamatan"
+            disabled={!kabKota}
             value={kecamatan}
-            onChange={(v) => setKecamatan(v)}
-            className="mt-1.5 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3.5 text-sm focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
+            onChange={(v) => {
+              setKecamatan(v);
+              setKelurahan('');
+            }}
+            className="mt-1.5 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3.5 text-sm focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
           >
-            {KECAMATAN_OPTIONS.map((kec) => (
+            {kecamatanOptions.map((kec) => (
               <option key={kec} value={kec}>
                 {kec}
+              </option>
+            ))}
+          </PlaceholderSelect>
+        </div>
+
+        <div>
+          <label htmlFor="pengelola-kelurahan" className="block text-xs font-semibold text-slate-700">
+            Kelurahan / Desa
+          </label>
+          <PlaceholderSelect
+            placeholder={kecamatan ? 'Pilih Kelurahan / Desa' : 'Pilih Kecamatan terlebih dahulu'}
+            id="pengelola-kelurahan"
+            disabled={!kecamatan}
+            value={kelurahan}
+            onChange={(v) => setKelurahan(v)}
+            className="mt-1.5 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3.5 text-sm focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+          >
+            {kelurahanOptions.map((kel) => (
+              <option key={kel} value={kel}>
+                {kel}
               </option>
             ))}
           </PlaceholderSelect>
@@ -237,6 +311,7 @@ function AddPengelolaFormContent({
 
 interface AddPengelolaModalProps {
   isOpen: boolean;
+  wilayahList?: WilayahKabKota[];
   onClose: () => void;
   onCreatePengelola: (profile: PengelolaProfile) => void;
   onPreviewDocument: (file: KpmDocumentFile, title: string) => void;
@@ -244,6 +319,7 @@ interface AddPengelolaModalProps {
 
 export function AddPengelolaModal({
   isOpen,
+  wilayahList = INITIAL_WILAYAH_LIST,
   onClose,
   onCreatePengelola,
   onPreviewDocument,
@@ -263,6 +339,7 @@ export function AddPengelolaModal({
         onClick={(e) => e.stopPropagation()}
       >
         <AddPengelolaFormContent
+          wilayahList={wilayahList}
           onClose={onClose}
           onCreatePengelola={(profile) => {
             onCreatePengelola(profile);
@@ -278,6 +355,7 @@ export function AddPengelolaModal({
 interface PengelolaSelectorModalProps {
   isOpen: boolean;
   pengelolaList: PengelolaProfile[];
+  wilayahList?: WilayahKabKota[];
   selectedName: string;
   onClose: () => void;
   onSelect: (displayName: string) => void;
@@ -288,6 +366,7 @@ interface PengelolaSelectorModalProps {
 export function PengelolaSelectorModal({
   isOpen,
   pengelolaList,
+  wilayahList = INITIAL_WILAYAH_LIST,
   selectedName,
   onClose,
   onSelect,
@@ -415,10 +494,12 @@ export function PengelolaSelectorModal({
                           <p className="truncate text-sm font-semibold text-slate-900">
                             {item.displayName}
                           </p>
-                          {(item.kecamatan || item.kontak) && (
+                          {(item.kelurahan || item.kecamatan || item.kabKota || item.kontak) && (
                             <p className="truncate text-xs text-slate-500">
                               {[
+                                item.kelurahan || '',
                                 item.kecamatan ? `Kec. ${item.kecamatan}` : '',
+                                item.kabKota || '',
                                 item.kontak,
                               ]
                                 .filter(Boolean)
@@ -456,6 +537,7 @@ export function PengelolaSelectorModal({
         ) : (
           <AddPengelolaFormContent
             initialNama={capitalizeWords(searchQuery.trim())}
+            wilayahList={wilayahList}
             showBackButton
             onBack={() => setMode('select')}
             onClose={handleClose}

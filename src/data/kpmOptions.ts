@@ -9,6 +9,7 @@ import {
   ProposalKpmHistoryEntry,
   ProposalRecord,
   ProposalTipe,
+  WilayahKabKota,
 } from '../types/kpm';
 
 export const TAHUN_OPTIONS = ['2023', '2024', '2025', '2026', '2027'];
@@ -101,7 +102,19 @@ export const ITEM_BANTUAN_OPTIONS = [
   'LE',
 ];
 
-export const KAB_KOTA_OPTIONS = ['Pontianak', 'Kubu Raya', 'Mempawah'];
+export const KAB_KOTA_OPTIONS = ['Kota Pontianak'];
+
+export const INITIAL_WILAYAH_LIST: WilayahKabKota[] = [
+  {
+    id: 'wil-kota-pontianak',
+    nama: 'Kota Pontianak',
+    kecamatanList: KECAMATAN_OPTIONS.map((kec) => ({
+      id: `kec-${kec.toLowerCase().replace(/\s+/g, '-')}`,
+      nama: kec,
+      kelurahanList: [...(KELURAHAN_BY_KECAMATAN[kec] || [])],
+    })),
+  },
+];
 
 export const DTSEN_OPTION_ITEMS: { value: string; label: string }[] = [
   { value: '1', label: 'Desil 1 — Sangat Miskin (Miskin Ekstrem)' },
@@ -122,14 +135,51 @@ export const DTSEN_OPTION_ITEMS: { value: string; label: string }[] = [
 export const DTSEN_OPTIONS = DTSEN_OPTION_ITEMS.map((item) => item.value);
 
 export const PEKERJAAN_OPTIONS = [
+  'Asisten Rumah Tangga',
+  'Belum / Tidak Bekerja',
   'Buruh Harian Lepas',
-  'Pedagang Kecil / Kaki Lima',
-  'Nelayan / Petani',
-  'Pengrajin / UMKM',
-  'Ibu Rumah Tangga',
-  'Pekerja Lepas / Ojek',
-  'Tidak Bekerja / Lansia',
-  'Lainnya',
+  'Buruh Nelayan / Perikanan',
+  'Buruh / Peternakan',
+  'Buruh Tani / Perkebunan',
+  'Dosen',
+  'Guru',
+  'Guru (Ngaji)',
+  'Imam Masjid',
+  'Industri',
+  'Karyawan BUMD',
+  'Karyawan BUMN',
+  'Karyawan Honorer',
+  'Karyawan Swasta',
+  'Kepolisian RI (POLRI)',
+  'Konstruksi',
+  'Mekanik',
+  'Mengurus Rumah Tangga',
+  'Nelayan / Perikanan',
+  'Pedagang',
+  'Pegawai Negeri Sipil',
+  'Pelajar / Mahasiswa',
+  'Pelaut',
+  'Pembantu Rumah Tangga',
+  'Penata Rambut',
+  'Penata Rias',
+  'Pensiunan',
+  'Perawat',
+  'Perdagangan',
+  'Petani / Pekebun',
+  'Petani / Perkebunan',
+  'Peternak',
+  'Sopir',
+  'Transportasi',
+  'Tukang Batu',
+  'Tukang Cukur',
+  'Tukang Jahit',
+  'Tukang Kayu',
+  'Tukang Las / Pandai Besi',
+  'Tukang Listrik',
+  'Tukang Sol Sepatu',
+  'Ustadz / Mubaligh',
+  'Wartawan',
+  'Wiraswasta',
 ];
 
 export const PENGELOLA_TITLE_OPTIONS = [
@@ -154,6 +204,7 @@ export const INITIAL_PENGELOLA_LIST: PengelolaProfile[] = [];
 export const INITIAL_FORM_VALUES: KpmFormValues = {
   tahun: '2026',
   proposal: '',
+  kecamatan: '',
   kelurahan: '',
   item: '',
   nama: '',

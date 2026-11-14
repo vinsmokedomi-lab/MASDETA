@@ -1,9 +1,7 @@
 import { FormEvent, useMemo, useState } from 'react';
 import { AlertCircle, ArrowLeft, Save, X } from 'lucide-react';
 import {
-  KAB_KOTA_OPTIONS,
-  KECAMATAN_OPTIONS,
-  KELURAHAN_BY_KECAMATAN,
+  INITIAL_WILAYAH_LIST,
   PROPOSAL_TIPE_OPTIONS,
   TAHUN_OPTIONS,
 } from '../data/kpmOptions';
@@ -11,6 +9,7 @@ import {
   ProposalFormValues,
   ProposalRecord,
   ProposalTipe,
+  WilayahKabKota,
 } from '../types/kpm';
 import {
   blockNonNumericKeyDown,
@@ -22,6 +21,7 @@ import { PlaceholderSelect } from './FormControls';
 
 interface AddProposalFormProps {
   existingProposals: ProposalRecord[];
+  wilayahList?: WilayahKabKota[];
   onBack: () => void;
   onSaveNewProposal: (values: ProposalFormValues) => void;
 }
@@ -32,23 +32,32 @@ type AddProposalErrors = Partial<
 
 export function AddProposalForm({
   existingProposals,
+  wilayahList = INITIAL_WILAYAH_LIST,
   onBack,
   onSaveNewProposal,
 }: AddProposalFormProps) {
   const [tahun, setTahun] = useState('2026');
   const [tipe, setTipe] = useState<ProposalTipe | ''>('');
-  const [kabKota, setKabKota] = useState('Pontianak');
+  const [kabKota, setKabKota] = useState(() => wilayahList[0]?.nama || 'Kota Pontianak');
   const [kecamatan, setKecamatan] = useState('');
   const [kelurahan, setKelurahan] = useState('');
   const [jalan, setJalan] = useState('');
   const [jumlahKpm, setJumlahKpm] = useState('66');
   const [errors, setErrors] = useState<AddProposalErrors>({});
 
+  const kabKotaOptions = useMemo(() => wilayahList.map((w) => w.nama), [wilayahList]);
+
+  const kecamatanOptions = useMemo(() => {
+    const matchedKab = wilayahList.find((w) => w.nama === kabKota);
+    return matchedKab ? matchedKab.kecamatanList.map((k) => k.nama) : [];
+  }, [wilayahList, kabKota]);
+
   const kelurahanList = useMemo(() => {
     if (!kecamatan) return [];
-    const list = KELURAHAN_BY_KECAMATAN[kecamatan] || [];
-    return list.map((item) => item.replace(/^Kelurahan\s+/i, '').trim());
-  }, [kecamatan]);
+    const matchedKab = wilayahList.find((w) => w.nama === kabKota);
+    const matchedKec = matchedKab?.kecamatanList.find((k) => k.nama === kecamatan);
+    return matchedKec ? matchedKec.kelurahanList : [];
+  }, [wilayahList, kabKota, kecamatan]);
 
   const combinedProposalName = useMemo(
     () =>
@@ -67,6 +76,13 @@ export function AddProposalForm({
       (p) => p.tahun === tahun && p.namaProposal.trim().toLowerCase() === targetLower
     );
   }, [existingProposals, tahun, combinedProposalName]);
+
+  const handleKabKotaChange = (nextKab: string) => {
+    setKabKota(nextKab);
+    setKecamatan('');
+    setKelurahan('');
+    setErrors((prev) => ({ ...prev, kabKota: undefined, kecamatan: undefined, duplicate: undefined }));
+  };
 
   const handleKecamatanChange = (nextKec: string) => {
     setKecamatan(nextKec);
@@ -230,21 +246,18 @@ export function AddProposalForm({
             {/* Kab / Kota * */}
             <div>
               <label htmlFor="add-prop-kabkota" className="block text-xs font-semibold text-slate-700">
-                Kab / Kota <span className="text-rose-600">*</span>
+                Kabupaten / Kota <span className="text-rose-600">*</span>
               </label>
               <PlaceholderSelect
-                placeholder="Pilih Kab / Kota"
+                placeholder="Pilih Kabupaten / Kota"
                 id="add-prop-kabkota"
                 value={kabKota}
-                onChange={(v) => {
-                  setKabKota(v);
-                  setErrors((prev) => ({ ...prev, kabKota: undefined }));
-                }}
+                onChange={(v) => handleKabKotaChange(v)}
                 className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
                   errors.kabKota ? 'border-rose-400' : 'border-slate-300'
                 }`}
               >
-                {KAB_KOTA_OPTIONS.map((item) => (
+                {kabKotaOptions.map((item) => (
                   <option key={item} value={item}>
                     {item}
                   </option>
@@ -259,15 +272,16 @@ export function AddProposalForm({
                 Kecamatan <span className="text-rose-600">*</span>
               </label>
               <PlaceholderSelect
-                placeholder="Pilih Kecamatan"
+                placeholder={kabKota ? 'Pilih Kecamatan' : 'Pilih Kabupaten / Kota terlebih dahulu'}
                 id="add-prop-kecamatan"
+                disabled={!kabKota}
                 value={kecamatan}
                 onChange={(v) => handleKecamatanChange(v)}
-                className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500 ${
                   errors.kecamatan ? 'border-rose-400' : 'border-slate-300'
                 }`}
               >
-                {KECAMATAN_OPTIONS.map((kec) => (
+                {kecamatanOptions.map((kec) => (
                   <option key={kec} value={kec}>
                     {kec}
                   </option>
@@ -278,17 +292,17 @@ export function AddProposalForm({
               )}
             </div>
 
-            {/* Kelurahan (Opsional) */}
+            {/* Kelurahan / Desa (Opsional) */}
             <div>
               <div className="flex items-center justify-between gap-2">
                 <label htmlFor="add-prop-kelurahan" className="block text-xs font-semibold text-slate-700">
-                  Kelurahan
+                  Kelurahan / Desa
                 </label>
                 <span className="text-[11px] text-slate-400">Opsional</span>
               </div>
               <PlaceholderSelect
-                placeholder={kecamatan ? 'Pilih Kelurahan (Opsional)' : 'Pilih Kecamatan terlebih dahulu'}
-                clearLabel="Tanpa kelurahan"
+                placeholder={kecamatan ? 'Pilih Kelurahan / Desa (Opsional)' : 'Pilih Kecamatan terlebih dahulu'}
+                clearLabel="Tanpa kelurahan / desa"
                 id="add-prop-kelurahan"
                 disabled={!kecamatan}
                 value={kelurahan}

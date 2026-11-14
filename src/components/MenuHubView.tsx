@@ -12,6 +12,7 @@ import {
   FileSpreadsheet,
   FolderPlus,
   Layers,
+  MapPin,
   Package,
   PackagePlus,
   Plus,
@@ -40,6 +41,7 @@ import {
   KpmRecord,
   PengelolaProfile,
   ProposalRecord,
+  WilayahKabKota,
 } from '../types/kpm';
 import {
   capitalizeWords,
@@ -59,6 +61,7 @@ export type MenuSection =
   | 'administrasi'
   | 'dtsen'
   | 'pengelola'
+  | 'pekerjaan'
   | 'laporan';
 
 interface MenuHubViewProps {
@@ -68,6 +71,7 @@ interface MenuHubViewProps {
   proposals: ProposalRecord[];
   items: ItemBantuan[];
   pekerjaanList: string[];
+  wilayahList: WilayahKabKota[];
   pengelolaList: PengelolaProfile[];
   internalUsers: InternalUser[];
   onAddItem: (item: ItemBantuan) => void;
@@ -76,6 +80,7 @@ interface MenuHubViewProps {
   onCopyItemsFromYear: (fromYear: string, toYear: string) => void;
   onAddPekerjaan: (name: string) => void;
   onDeletePekerjaan: (name: string) => void;
+  onUpdateWilayahList: (nextList: WilayahKabKota[]) => void;
   onOpenAddProposal: () => void;
   onOpenSubItemRecap: () => void;
   onAddPengelola: (profile: PengelolaProfile) => void;
@@ -92,6 +97,7 @@ export function MenuHubView({
   proposals,
   items,
   pekerjaanList,
+  wilayahList,
   pengelolaList,
   internalUsers,
   onAddItem,
@@ -100,6 +106,7 @@ export function MenuHubView({
   onCopyItemsFromYear,
   onAddPekerjaan,
   onDeletePekerjaan,
+  onUpdateWilayahList,
   onOpenAddProposal,
   onOpenSubItemRecap,
   onAddPengelola,
@@ -116,8 +123,20 @@ export function MenuHubView({
   const [expandedItemCode, setExpandedItemCode] = useState<string | null>(null);
   const [newSubItemInput, setNewSubItemInput] = useState('');
 
-  // Master Pekerjaan form
+  // Master Pekerjaan modal state
+  const [isAddPekerjaanOpen, setIsAddPekerjaanOpen] = useState(false);
   const [newPekerjaan, setNewPekerjaan] = useState('');
+  const [pekerjaanError, setPekerjaanError] = useState<string | null>(null);
+
+  // Master Wilayah state
+  const [newKabKotaInput, setNewKabKotaInput] = useState('');
+  const [wilayahError, setWilayahError] = useState<string | null>(null);
+  const [expandedKabId, setExpandedKabId] = useState<string | null>(
+    () => wilayahList[0]?.id ?? null
+  );
+  const [expandedKecId, setExpandedKecId] = useState<string | null>(null);
+  const [newKecamatanByKab, setNewKecamatanByKab] = useState<Record<string, string>>({});
+  const [newKelurahanByKec, setNewKelurahanByKec] = useState<Record<string, string>>({});
 
   // Pengelola modal state
   const [isAddPengelolaOpen, setIsAddPengelolaOpen] = useState(false);
@@ -131,7 +150,7 @@ export function MenuHubView({
   const [regRole, setRegRole] = useState<InternalUserRole>('Petugas');
 
   // Active sub-tab in Setting
-  const [settingPanel, setSettingPanel] = useState<'main' | 'items' | 'pekerjaan'>('main');
+  const [settingPanel, setSettingPanel] = useState<'main' | 'items' | 'wilayah'>('main');
 
   // User filter
   const [userStatusFilter, setUserStatusFilter] = useState<'all' | InternalUserStatus>('all');
@@ -253,10 +272,121 @@ export function MenuHubView({
   const handleAddPekerjaanSubmit = (e: FormEvent) => {
     e.preventDefault();
     const name = capitalizeWords(newPekerjaan.trim());
-    if (!name) return;
-    if (pekerjaanList.some((p) => p.toLowerCase() === name.toLowerCase())) return;
+    if (!name) {
+      setPekerjaanError('Nama pekerjaan wajib diisi.');
+      return;
+    }
+    if (pekerjaanList.some((p) => p.toLowerCase() === name.toLowerCase())) {
+      setPekerjaanError(`Pekerjaan "${name}" sudah terdaftar.`);
+      return;
+    }
     onAddPekerjaan(name);
     setNewPekerjaan('');
+    setPekerjaanError(null);
+    setIsAddPekerjaanOpen(false);
+  };
+
+  const handleAddKabKotaSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    const clean = capitalizeWords(newKabKotaInput.trim());
+    if (!clean) {
+      setWilayahError('Nama Kabupaten / Kota wajib diisi.');
+      return;
+    }
+    if (wilayahList.some((w) => w.nama.toLowerCase() === clean.toLowerCase())) {
+      setWilayahError(`Wilayah "${clean}" sudah terdaftar.`);
+      return;
+    }
+    const created: WilayahKabKota = {
+      id: `wil-${Date.now()}`,
+      nama: clean,
+      kecamatanList: [],
+    };
+    onUpdateWilayahList([...wilayahList, created]);
+    setNewKabKotaInput('');
+    setWilayahError(null);
+    setExpandedKabId(created.id);
+  };
+
+  const handleDeleteKabKota = (kabId: string) => {
+    onUpdateWilayahList(wilayahList.filter((w) => w.id !== kabId));
+    if (expandedKabId === kabId) setExpandedKabId(null);
+  };
+
+  const handleAddKecamatan = (kabId: string) => {
+    const raw = (newKecamatanByKab[kabId] || '').trim();
+    const clean = capitalizeWords(raw);
+    if (!clean) return;
+    const newKecId = `kec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    onUpdateWilayahList(
+      wilayahList.map((kab) => {
+        if (kab.id !== kabId) return kab;
+        if (kab.kecamatanList.some((k) => k.nama.toLowerCase() === clean.toLowerCase())) {
+          return kab;
+        }
+        return {
+          ...kab,
+          kecamatanList: [
+            ...kab.kecamatanList,
+            { id: newKecId, nama: clean, kelurahanList: [] },
+          ],
+        };
+      })
+    );
+    setNewKecamatanByKab((prev) => ({ ...prev, [kabId]: '' }));
+    setExpandedKecId(newKecId);
+  };
+
+  const handleDeleteKecamatan = (kabId: string, kecId: string) => {
+    onUpdateWilayahList(
+      wilayahList.map((kab) =>
+        kab.id === kabId
+          ? { ...kab, kecamatanList: kab.kecamatanList.filter((k) => k.id !== kecId) }
+          : kab
+      )
+    );
+    if (expandedKecId === kecId) setExpandedKecId(null);
+  };
+
+  const handleAddKelurahan = (kabId: string, kecId: string) => {
+    const raw = (newKelurahanByKec[kecId] || '').trim();
+    const clean = capitalizeWords(raw);
+    if (!clean) return;
+    onUpdateWilayahList(
+      wilayahList.map((kab) => {
+        if (kab.id !== kabId) return kab;
+        return {
+          ...kab,
+          kecamatanList: kab.kecamatanList.map((kec) => {
+            if (kec.id !== kecId) return kec;
+            if (kec.kelurahanList.some((kel) => kel.toLowerCase() === clean.toLowerCase())) {
+              return kec;
+            }
+            return {
+              ...kec,
+              kelurahanList: [...kec.kelurahanList, clean],
+            };
+          }),
+        };
+      })
+    );
+    setNewKelurahanByKec((prev) => ({ ...prev, [kecId]: '' }));
+  };
+
+  const handleDeleteKelurahan = (kabId: string, kecId: string, kelName: string) => {
+    onUpdateWilayahList(
+      wilayahList.map((kab) => {
+        if (kab.id !== kabId) return kab;
+        return {
+          ...kab,
+          kecamatanList: kab.kecamatanList.map((kec) =>
+            kec.id === kecId
+              ? { ...kec, kelurahanList: kec.kelurahanList.filter((k) => k !== kelName) }
+              : kec
+          ),
+        };
+      })
+    );
   };
 
   const handleRegisterUserSubmit = (e: FormEvent) => {
@@ -386,6 +516,23 @@ export function MenuHubView({
                   <p className="text-sm font-semibold text-slate-900">Data Pengelola Lapangan</p>
                   <p className="mt-0.5 text-xs text-slate-500">
                     Daftar pengelola dan penanggung jawab lapangan
+                  </p>
+                </div>
+                <ChevronRight className="h-4 w-4 text-slate-400" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onChangeSection('pekerjaan')}
+                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+              >
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+                  <Briefcase className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-slate-900">Pekerjaan</p>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Daftar pekerjaan dan sebaran jumlah KPM
                   </p>
                 </div>
                 <ChevronRight className="h-4 w-4 text-slate-400" />
@@ -896,24 +1043,32 @@ export function MenuHubView({
       );
     }
 
-    if (settingPanel === 'pekerjaan') {
+    if (settingPanel === 'wilayah') {
       return (
         <div className="min-h-screen pb-24">
-          {renderSubHeader('Kelola Daftar Pekerjaan', () => setSettingPanel('main'))}
+          {renderSubHeader('Wilayah', () => setSettingPanel('main'))}
           <div className="space-y-4 px-4 pt-4">
             <form
-              onSubmit={handleAddPekerjaanSubmit}
+              onSubmit={handleAddKabKotaSubmit}
               className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3"
             >
-              <h2 className="text-sm font-bold text-slate-900">Tambah Pilihan Pekerjaan</h2>
+              <div>
+                <h2 className="text-sm font-bold text-slate-900">Tambah Kabupaten / Kota</h2>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  Tambahkan wilayah ekspansi baru beserta daftar kecamatan dan desa/kelurahan di dalamnya.
+                </p>
+              </div>
               <div className="flex gap-2">
                 <input
                   type="text"
-                  required
-                  value={newPekerjaan}
-                  onChange={(e) => setNewPekerjaan(e.target.value)}
-                  placeholder="Contoh: Penjahit Rumahan"
-                  className="min-h-[44px] flex-1 rounded-xl border border-slate-300 px-3 text-sm focus:border-teal-700 focus:outline-none"
+                  autoCapitalize="words"
+                  value={newKabKotaInput}
+                  onChange={(e) => {
+                    setNewKabKotaInput(capitalizeWords(e.target.value));
+                    if (wilayahError) setWilayahError(null);
+                  }}
+                  placeholder="Contoh: Kabupaten Kubu Raya"
+                  className="min-h-[44px] flex-1 rounded-xl border border-slate-300 px-3.5 text-sm focus:border-teal-700 focus:outline-none"
                 />
                 <button
                   type="submit"
@@ -923,22 +1078,192 @@ export function MenuHubView({
                   <span>Tambah</span>
                 </button>
               </div>
+              {wilayahError && <p className="text-xs text-rose-600">{wilayahError}</p>}
             </form>
 
-            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
-              {pekerjaanList.map((job) => (
-                <div key={job} className="flex items-center justify-between gap-3 px-4 py-3">
-                  <span className="text-sm font-medium text-slate-900">{job}</span>
-                  <button
-                    type="button"
-                    onClick={() => onDeletePekerjaan(job)}
-                    aria-label={`Hapus pekerjaan ${job}`}
-                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+            <div className="space-y-3">
+              {wilayahList.map((kab) => {
+                const isKabExpanded = expandedKabId === kab.id;
+                const totalVillages = kab.kecamatanList.reduce(
+                  (sum, k) => sum + k.kelurahanList.length,
+                  0
+                );
+
+                return (
+                  <div
+                    key={kab.id}
+                    className="overflow-hidden rounded-2xl border border-slate-200 bg-white"
                   >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
-              ))}
+                    <div className="flex items-center justify-between gap-2 px-4 py-3">
+                      <button
+                        type="button"
+                        onClick={() => setExpandedKabId(isKabExpanded ? null : kab.id)}
+                        className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                      >
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                          <MapPin className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-bold text-slate-900">{kab.nama}</p>
+                          <p className="text-[11px] text-slate-500 tabular-nums">
+                            {kab.kecamatanList.length} Kecamatan · {totalVillages} Kelurahan / Desa
+                          </p>
+                        </div>
+                        <ChevronDown
+                          className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${
+                            isKabExpanded ? 'rotate-180' : ''
+                          }`}
+                        />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteKabKota(kab.id)}
+                        aria-label={`Hapus wilayah ${kab.nama}`}
+                        className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    {isKabExpanded && (
+                      <div className="space-y-3 border-t border-slate-100 bg-slate-50/70 px-4 py-3">
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            autoCapitalize="words"
+                            value={newKecamatanByKab[kab.id] || ''}
+                            onChange={(e) =>
+                              setNewKecamatanByKab((prev) => ({
+                                ...prev,
+                                [kab.id]: capitalizeWords(e.target.value),
+                              }))
+                            }
+                            placeholder={`Tambah kecamatan di ${kab.nama}...`}
+                            className="min-h-[40px] flex-1 rounded-xl border border-slate-300 bg-white px-3 text-xs focus:border-teal-700 focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleAddKecamatan(kab.id)}
+                            className="inline-flex min-h-[40px] items-center gap-1 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 whitespace-nowrap"
+                          >
+                            <Plus className="h-3.5 w-3.5" />
+                            <span>Kecamatan</span>
+                          </button>
+                        </div>
+
+                        {kab.kecamatanList.length === 0 ? (
+                          <p className="py-3 text-center text-xs text-slate-500">
+                            Belum ada kecamatan di {kab.nama}. Tambahkan di atas.
+                          </p>
+                        ) : (
+                          <div className="space-y-2">
+                            {kab.kecamatanList.map((kec) => {
+                              const isKecExpanded = expandedKecId === kec.id;
+                              return (
+                                <div
+                                  key={kec.id}
+                                  className="overflow-hidden rounded-xl border border-slate-200 bg-white"
+                                >
+                                  <div className="flex items-center justify-between gap-2 px-3 py-2.5">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setExpandedKecId(isKecExpanded ? null : kec.id)
+                                      }
+                                      className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left"
+                                    >
+                                      <div className="min-w-0">
+                                        <p className="truncate text-xs font-bold text-slate-900">
+                                          Kec. {kec.nama}
+                                        </p>
+                                        <p className="text-[11px] text-slate-500 tabular-nums">
+                                          {kec.kelurahanList.length} Kelurahan / Desa
+                                        </p>
+                                      </div>
+                                      <ChevronDown
+                                        className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform ${
+                                          isKecExpanded ? 'rotate-180' : ''
+                                        }`}
+                                      />
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteKecamatan(kab.id, kec.id)}
+                                      aria-label={`Hapus kecamatan ${kec.nama}`}
+                                      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
+
+                                  {isKecExpanded && (
+                                    <div className="space-y-2.5 border-t border-slate-100 bg-slate-50/50 px-3 py-2.5">
+                                      <div className="flex gap-2">
+                                        <input
+                                          type="text"
+                                          autoCapitalize="words"
+                                          value={newKelurahanByKec[kec.id] || ''}
+                                          onChange={(e) =>
+                                            setNewKelurahanByKec((prev) => ({
+                                              ...prev,
+                                              [kec.id]: capitalizeWords(e.target.value),
+                                            }))
+                                          }
+                                          placeholder="Contoh: Desa Kapur / Kelurahan Mariana"
+                                          className="min-h-[38px] flex-1 rounded-lg border border-slate-300 bg-white px-2.5 text-xs focus:border-teal-700 focus:outline-none"
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => handleAddKelurahan(kab.id, kec.id)}
+                                          className="inline-flex min-h-[38px] items-center gap-1 rounded-lg bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 whitespace-nowrap"
+                                        >
+                                          <Plus className="h-3.5 w-3.5" />
+                                          <span>Tambah</span>
+                                        </button>
+                                      </div>
+
+                                      {kec.kelurahanList.length === 0 ? (
+                                        <p className="text-[11px] text-slate-400">
+                                          Belum ada kelurahan / desa terdaftar.
+                                        </p>
+                                      ) : (
+                                        <div className="divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200 bg-white">
+                                          {kec.kelurahanList.map((kel) => (
+                                            <div
+                                              key={kel}
+                                              className="flex items-center justify-between gap-2 px-2.5 py-2"
+                                            >
+                                              <span className="truncate text-xs font-medium text-slate-800">
+                                                {kel}
+                                              </span>
+                                              <button
+                                                type="button"
+                                                onClick={() =>
+                                                  handleDeleteKelurahan(kab.id, kec.id, kel)
+                                                }
+                                                aria-label={`Hapus ${kel}`}
+                                                className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                                              >
+                                                <X className="h-3.5 w-3.5" />
+                                              </button>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -967,6 +1292,23 @@ export function MenuHubView({
 
             <button
               type="button"
+              onClick={() => setSettingPanel('wilayah')}
+              className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50"
+            >
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                <MapPin className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-slate-900">Wilayah</p>
+                <p className="text-xs text-slate-500">
+                  Kabupaten / Kota, Kecamatan, dan Desa / Kelurahan
+                </p>
+              </div>
+              <ChevronRight className="h-4 w-4 text-slate-400" />
+            </button>
+
+            <button
+              type="button"
               onClick={() => setSettingPanel('items')}
               className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50"
             >
@@ -984,7 +1326,7 @@ export function MenuHubView({
 
             <button
               type="button"
-              onClick={() => setSettingPanel('pekerjaan')}
+              onClick={() => onChangeSection('pekerjaan')}
               className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50"
             >
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
@@ -1204,9 +1546,14 @@ export function MenuHubView({
                     )}
                     <div className="min-w-0">
                       <p className="truncate text-sm font-bold text-slate-900">{p.displayName}</p>
-                      {(p.kecamatan || p.kontak) && (
+                      {(p.kelurahan || p.kecamatan || p.kabKota || p.kontak) && (
                         <p className="truncate text-xs text-slate-500">
-                          {[p.kecamatan ? `Kec. ${p.kecamatan}` : '', p.kontak]
+                          {[
+                            p.kelurahan || '',
+                            p.kecamatan ? `Kec. ${p.kecamatan}` : '',
+                            p.kabKota || '',
+                            p.kontak,
+                          ]
                             .filter(Boolean)
                             .join(' · ')}
                         </p>
@@ -1224,10 +1571,150 @@ export function MenuHubView({
 
         <AddPengelolaModal
           isOpen={isAddPengelolaOpen}
+          wilayahList={wilayahList}
           onClose={() => setIsAddPengelolaOpen(false)}
           onCreatePengelola={onAddPengelola}
           onPreviewDocument={onPreviewDocument}
         />
+      </div>
+    );
+  }
+
+  // 8. PEKERJAAN
+  if (activeSection === 'pekerjaan') {
+    const jobCounts = new Map<string, number>();
+    for (const rec of records) {
+      if (rec.pekerjaan) {
+        const key = rec.pekerjaan.trim().toLowerCase();
+        jobCounts.set(key, (jobCounts.get(key) ?? 0) + 1);
+      }
+    }
+
+    return (
+      <div className="min-h-screen pb-24">
+        {renderSubHeader('Pekerjaan', () => onChangeSection('root'))}
+        <div className="space-y-4 px-4 pt-4">
+          <button
+            type="button"
+            onClick={() => {
+              setNewPekerjaan('');
+              setPekerjaanError(null);
+              setIsAddPekerjaanOpen(true);
+            }}
+            className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.99]"
+          >
+            <Plus className="h-4 w-4" />
+            <span>Tambah Pekerjaan Baru</span>
+          </button>
+
+          {pekerjaanList.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
+              <p className="text-sm font-semibold text-slate-900">Belum ada daftar pekerjaan</p>
+              <p className="mt-1 text-xs text-slate-500">
+                Ketuk tombol di atas untuk menambahkan jenis pekerjaan baru.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+              {pekerjaanList.map((job) => {
+                const count = jobCounts.get(job.trim().toLowerCase()) ?? 0;
+                return (
+                  <div key={job} className="flex items-center justify-between gap-3 px-4 py-3">
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-900">
+                      {job}
+                    </span>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className="text-xs font-bold text-slate-700 tabular-nums">
+                        {count} KPM
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onDeletePekerjaan(job)}
+                        aria-label={`Hapus pekerjaan ${job}`}
+                        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Add Pekerjaan Modal */}
+        {isAddPekerjaanOpen && (
+          <div
+            className="fixed inset-0 z-40 flex items-end justify-center bg-slate-950/50 backdrop-blur-xs sm:items-center sm:p-4"
+            onClick={() => setIsAddPekerjaanOpen(false)}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Tambah Pekerjaan Baru"
+          >
+            <form
+              onSubmit={handleAddPekerjaanSubmit}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-md rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl"
+            >
+              <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+              <div className="flex items-center justify-between pb-3">
+                <h2 className="text-base font-bold text-slate-900">Tambah Pekerjaan Baru</h2>
+                <button
+                  type="button"
+                  onClick={() => setIsAddPekerjaanOpen(false)}
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100"
+                  aria-label="Tutup"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div>
+                <label htmlFor="modal-pekerjaan-nama" className="block text-xs font-semibold text-slate-700">
+                  Nama Pekerjaan <span className="text-rose-600">*</span>
+                </label>
+                <input
+                  id="modal-pekerjaan-nama"
+                  type="text"
+                  autoFocus
+                  autoCapitalize="words"
+                  value={newPekerjaan}
+                  onChange={(e) => {
+                    setNewPekerjaan(capitalizeWords(e.target.value));
+                    if (pekerjaanError) setPekerjaanError(null);
+                  }}
+                  placeholder="Contoh: Penjahit Rumahan"
+                  className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                    pekerjaanError ? 'border-rose-400' : 'border-slate-300'
+                  }`}
+                />
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Huruf awal setiap kata otomatis kapital.
+                </p>
+                {pekerjaanError && (
+                  <p className="mt-1 text-xs text-rose-600">{pekerjaanError}</p>
+                )}
+              </div>
+
+              <div className="mt-4 flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setIsAddPekerjaanOpen(false)}
+                  className="inline-flex min-h-[44px] items-center justify-center rounded-xl border border-slate-200 bg-white px-5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-teal-700 px-5 text-sm font-semibold text-white hover:bg-teal-800"
+                >
+                  Simpan Pekerjaan
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
       </div>
     );
   }
