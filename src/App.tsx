@@ -110,6 +110,7 @@ export default function App() {
   const [subView, setSubView] = useState<SubView>('none');
   const [returnToTab, setReturnToTab] = useState<MainTab>('dashboard');
   const [kpmFormReturnToDetail, setKpmFormReturnToDetail] = useState(false);
+  const [kpmFormReturnToProposalDetail, setKpmFormReturnToProposalDetail] = useState(false);
   const [kpmDetailReturnToRecap, setKpmDetailReturnToRecap] = useState(false);
   const [menuSection, setMenuSection] = useState<MenuSection>('root');
   const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
@@ -148,6 +149,10 @@ export default function App() {
   const [activeKpmId, setActiveKpmId] = useState<string | null>(null);
   const [activeProposalId, setActiveProposalId] = useState<string | null>(null);
   const [pendingSelectedProposal, setPendingSelectedProposal] = useState<{
+    namaProposal: string;
+    tahun: string;
+  } | null>(null);
+  const [lockedKpmProposalScope, setLockedKpmProposalScope] = useState<{
     namaProposal: string;
     tahun: string;
   } | null>(null);
@@ -265,11 +270,15 @@ export default function App() {
   const openKpmForm = (
     record: KpmRecord | null,
     fromTab: MainTab = activeTab,
-    returnToDetail = false
+    returnToDetail = false,
+    returnToProposalDetail = false,
+    lockedScope: { namaProposal: string; tahun: string } | null = null
   ) => {
     setFeedback(null);
     setReturnToTab(fromTab);
     setKpmFormReturnToDetail(returnToDetail);
+    setKpmFormReturnToProposalDetail(returnToProposalDetail);
+    setLockedKpmProposalScope(lockedScope);
     setEditingKpmRecord(record);
     setSubView('kpm-form');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -312,6 +321,7 @@ export default function App() {
         tahun: tahun || '2026',
         tipe: 'Murni',
         namaProposal: proposalName,
+        jumlahKpm: 66,
         status: 'unlocked',
         checklist: {
           docx: false,
@@ -346,6 +356,7 @@ export default function App() {
         tahun: tahun || '2026',
         tipe: 'Murni',
         namaProposal: proposalName,
+        jumlahKpm: 66,
         status: 'unlocked',
         checklist: {
           docx: false,
@@ -537,9 +548,15 @@ export default function App() {
     setKpmAuditLogs((prev) => [createdAuditEntry, ...prev]);
     setProposalHistory((prev) => [enteredHistory, ...prev]);
     setPendingSelectedProposal(null);
+    setLockedKpmProposalScope(null);
     setSelectedYear(newRecord.tahun);
-    setSubView('none');
-    setActiveTab('kpm');
+    if (kpmFormReturnToProposalDetail && activeProposal) {
+      setKpmFormReturnToProposalDetail(false);
+      setSubView('proposal-detail');
+    } else {
+      setSubView('none');
+      setActiveTab('kpm');
+    }
     setFeedback({
       type: 'success',
       message: `Calon KPM "${newRecord.nama}" (${newRecord.registerCode}) berhasil disimpan.`,
@@ -777,6 +794,7 @@ export default function App() {
       kelurahan: values.kelurahan,
       jalan: values.jalan,
       namaProposal: values.namaProposal,
+      jumlahKpm: values.jumlahKpm ?? 66,
       status: values.status,
       checklist: values.checklist,
       catatan: values.catatan,
@@ -827,6 +845,7 @@ export default function App() {
               ...p,
               tahun: values.tahun,
               tipe: values.tipe as ProposalRecord['tipe'],
+              jumlahKpm: values.jumlahKpm ?? p.jumlahKpm ?? 66,
               status: values.status,
               checklist: values.checklist,
               catatan: values.catatan,
@@ -973,13 +992,18 @@ export default function App() {
             feedback={feedback}
             onDismissFeedback={() => setFeedback(null)}
             preselectedProposal={pendingSelectedProposal}
+            lockedProposalScope={lockedKpmProposalScope}
             onClearPreselectedProposal={() => setPendingSelectedProposal(null)}
             onBack={() => {
               setFeedback(null);
               setEditingKpmRecord(null);
+              setLockedKpmProposalScope(null);
               if (kpmFormReturnToDetail && activeKpmId) {
                 setKpmFormReturnToDetail(false);
                 setSubView('kpm-detail');
+              } else if (kpmFormReturnToProposalDetail && activeProposal) {
+                setKpmFormReturnToProposalDetail(false);
+                setSubView('proposal-detail');
               } else {
                 setSubView('none');
                 setActiveTab(returnToTab);
@@ -992,9 +1016,13 @@ export default function App() {
             onSave={handleSaveKpm}
             onCancelEdit={() => {
               setEditingKpmRecord(null);
+              setLockedKpmProposalScope(null);
               if (kpmFormReturnToDetail && activeKpmId) {
                 setKpmFormReturnToDetail(false);
                 setSubView('kpm-detail');
+              } else if (kpmFormReturnToProposalDetail && activeProposal) {
+                setKpmFormReturnToProposalDetail(false);
+                setSubView('proposal-detail');
               } else {
                 setSubView('none');
                 setActiveTab(returnToTab);
@@ -1030,6 +1058,12 @@ export default function App() {
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onEditProposal={(id) => openEditProposalById(id, returnToTab)}
+            onAddKpmInProposal={(proposalName, tahun) => {
+              openKpmForm(null, returnToTab, false, true, {
+                namaProposal: proposalName,
+                tahun,
+              });
+            }}
             onViewKpmInProposal={(proposalName, tahun) => {
               setSelectedYear(tahun);
               setKpmStatusFilter('all');
@@ -1160,6 +1194,7 @@ export default function App() {
             onUpdateUserStatus={handleUpdateUserStatus}
             onRegisterInternalUser={handleRegisterInternalUser}
             onSelectKpmFromDuplicate={(rec) => openKpmDetail(rec, 'menu')}
+            onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
           />
         )}
       </div>

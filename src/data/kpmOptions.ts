@@ -192,6 +192,7 @@ export const INITIAL_PROPOSAL_FORM_VALUES: ProposalFormValues = {
   tahun: '2026',
   tipe: '',
   namaProposal: '',
+  jumlahKpm: 66,
   status: 'unlocked',
   checklist: {
     docx: false,

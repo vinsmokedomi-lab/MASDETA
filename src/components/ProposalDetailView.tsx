@@ -9,6 +9,7 @@ import {
   Lock,
   MapPin,
   Unlock,
+  UserPlus,
   Users,
 } from 'lucide-react';
 import {
@@ -31,6 +32,7 @@ interface ProposalDetailViewProps {
   historyEntries: ProposalKpmHistoryEntry[];
   onBack: () => void;
   onEditProposal: (proposalId: string) => void;
+  onAddKpmInProposal: (proposalName: string, tahun: string) => void;
   onViewKpmInProposal: (proposalName: string, tahun: string) => void;
 }
 
@@ -41,6 +43,7 @@ export function ProposalDetailView({
   historyEntries,
   onBack,
   onEditProposal,
+  onAddKpmInProposal,
   onViewKpmInProposal,
 }: ProposalDetailViewProps) {
   const proposalRecords = useMemo(
@@ -210,7 +213,7 @@ export function ProposalDetailView({
   return (
     <div className="min-h-screen pb-10">
       {/* Sub-Screen Header: hanya panah kembali + judul */}
-      <header className="sticky top-0 z-20 flex items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur-md">
+      <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
         <button
           type="button"
           onClick={onBack}
@@ -219,37 +222,34 @@ export function ProposalDetailView({
         >
           <ArrowLeft className="h-5 w-5" />
         </button>
-        <h1 className="truncate text-base font-bold text-slate-900">{proposal.namaProposal}</h1>
+        <h1 className="truncate text-base font-bold text-slate-900">
+          {proposal.namaProposal} {proposal.tahun}
+        </h1>
       </header>
 
       <main className="space-y-4 px-4 pt-4">
         {/* Hero Overview Card */}
         <section className="rounded-3xl bg-white p-5 border border-slate-200">
           <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-xs font-medium text-slate-500 tabular-nums">
-                Tahun {proposal.tahun} · {proposal.tipe} ·{' '}
+            <div className="min-w-0 flex-1 space-y-1">
+              <p className="text-sm font-bold text-slate-900 tabular-nums">
+                {proposal.tipe} · Tahun {proposal.tahun}
+              </p>
+              <p className="text-xs text-slate-600">
+                Status Dinas:{' '}
                 <span
                   className={
                     proposal.checklist.dinas
                       ? 'font-semibold text-teal-700'
-                      : 'text-slate-600'
+                      : 'font-medium text-slate-700'
                   }
                 >
                   {proposal.checklist.dinas ? 'Sudah ke Dinas' : 'Belum ke Dinas'}
                 </span>
               </p>
-              <p className="mt-1 text-[11px] text-slate-400 tabular-nums">
+              <p className="text-[11px] text-slate-400 tabular-nums">
                 Diperbarui {formatUploadDateTime(proposal.updatedAt)}
               </p>
-              <button
-                type="button"
-                onClick={() => onEditProposal(proposal.id)}
-                className="mt-1.5 inline-flex items-center gap-1 text-xs font-bold text-teal-700 hover:underline"
-              >
-                <Edit3 className="h-3.5 w-3.5" />
-                <span>Edit proposal</span>
-              </button>
             </div>
 
             <div
@@ -278,6 +278,9 @@ export function ProposalDetailView({
               <p className="text-[11px] text-slate-500">Total KPM</p>
               <p className="mt-0.5 text-xl font-bold text-slate-900 tabular-nums">
                 {kpmCounts.total}
+                <span className="text-xs font-medium text-slate-400">
+                  /{proposal.jumlahKpm ?? 66}
+                </span>
               </p>
             </div>
             <div className="px-3">
@@ -316,14 +319,48 @@ export function ProposalDetailView({
             ))}
           </div>
 
-          <button
-            type="button"
-            onClick={() => onViewKpmInProposal(proposal.namaProposal, proposal.tahun)}
-            className="mt-4 inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800"
-          >
-            <Users className="h-4 w-4" />
-            <span>Lihat Daftar Calon KPM ({kpmCounts.total})</span>
-          </button>
+          {kpmCounts.total === 0 ? (
+            <div className="mt-4 flex items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => onEditProposal(proposal.id)}
+                className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3.5 text-xs font-semibold text-slate-800 transition-colors hover:bg-slate-100 whitespace-nowrap"
+              >
+                <Edit3 className="h-4 w-4 text-teal-700" />
+                <span>Edit Proposal</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={proposal.status === 'locked'}
+                onClick={() => onAddKpmInProposal(proposal.namaProposal, proposal.tahun)}
+                className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 whitespace-nowrap"
+              >
+                <UserPlus className="h-4 w-4" />
+                <span>Tambah Calon KPM</span>
+              </button>
+            </div>
+          ) : (
+            <div className="mt-4 space-y-2">
+              <button
+                type="button"
+                onClick={() => onViewKpmInProposal(proposal.namaProposal, proposal.tahun)}
+                className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800"
+              >
+                <Users className="h-4 w-4" />
+                <span>Lihat Daftar Calon KPM ({kpmCounts.total})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onEditProposal(proposal.id)}
+                className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-4 text-xs font-semibold text-slate-800 transition-colors hover:bg-slate-100"
+              >
+                <Edit3 className="h-4 w-4 text-teal-700" />
+                <span>Edit Proposal</span>
+              </button>
+            </div>
+          )}
         </section>
 
         {/* Proporsi DTSEN Donut Ring */}
@@ -580,19 +617,12 @@ export function ProposalDetailView({
           )}
         </section>
 
-        {/* Paling Bawah: Riwayat Perpindahan Calon KPM (Masuk & Keluar) */}
+        {/* Paling Bawah: History */}
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
           <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
             <div className="flex items-center gap-2">
               <History className="h-4 w-4 text-slate-700" />
-              <div>
-                <h2 className="text-sm font-bold text-slate-900">
-                  Riwayat Masuk & Keluar KPM
-                </h2>
-                <p className="text-[11px] text-slate-500">
-                  Jejak perpindahan calon KPM beserta waktu dan petugas
-                </p>
-              </div>
+              <h2 className="text-sm font-bold text-slate-900">History</h2>
             </div>
             <span className="text-xs font-bold text-slate-700 tabular-nums">
               {proposalHistory.length}

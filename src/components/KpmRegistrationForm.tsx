@@ -56,6 +56,7 @@ interface KpmRegistrationFormProps {
   feedback?: { type: 'success' | 'error'; message: string } | null;
   onDismissFeedback?: () => void;
   preselectedProposal?: { namaProposal: string; tahun: string } | null;
+  lockedProposalScope?: { namaProposal: string; tahun: string } | null;
   onClearPreselectedProposal?: () => void;
   onBack?: () => void;
   onOpenAddProposal: () => void;
@@ -77,6 +78,7 @@ export function KpmRegistrationForm({
   feedback,
   onDismissFeedback,
   preselectedProposal,
+  lockedProposalScope,
   onClearPreselectedProposal,
   onBack,
   onOpenAddProposal,
@@ -86,7 +88,18 @@ export function KpmRegistrationForm({
   onCancelEdit,
   onPreviewDocument,
 }: KpmRegistrationFormProps) {
-  const [values, setValues] = useState<KpmFormValues>(INITIAL_FORM_VALUES);
+  const isProposalScopeLocked = Boolean(lockedProposalScope && !editingRecord);
+
+  const [values, setValues] = useState<KpmFormValues>(() => {
+    if (lockedProposalScope && !editingRecord) {
+      return {
+        ...INITIAL_FORM_VALUES,
+        tahun: lockedProposalScope.tahun || INITIAL_FORM_VALUES.tahun,
+        proposal: lockedProposalScope.namaProposal,
+      };
+    }
+    return INITIAL_FORM_VALUES;
+  });
   const [errors, setErrors] = useState<FormErrors>({});
   const [isPengelolaModalOpen, setIsPengelolaModalOpen] = useState(false);
 
@@ -113,20 +126,6 @@ export function KpmRegistrationForm({
     if (!values.item) return [];
     return resolvePackageForKpm(itemOptions || [], values.tahun || '2026', values.item).subItems;
   }, [itemOptions, values.tahun, values.item]);
-
-  useEffect(() => {
-    if (preselectedProposal) {
-      const nextOptions = getKelurahanOptionsForProposal(preselectedProposal.namaProposal);
-      setValues((prev) => ({
-        ...prev,
-        tahun: preselectedProposal.tahun || prev.tahun,
-        proposal: preselectedProposal.namaProposal,
-        kelurahan: nextOptions.includes(prev.kelurahan) ? prev.kelurahan : '',
-      }));
-      setErrors((prev) => ({ ...prev, proposal: undefined, kelurahan: undefined }));
-      onClearPreselectedProposal?.();
-    }
-  }, [preselectedProposal, onClearPreselectedProposal]);
 
   useEffect(() => {
     if (editingRecord) {
@@ -159,11 +158,32 @@ export function KpmRegistrationForm({
         },
       });
       setErrors({});
+    } else if (lockedProposalScope) {
+      setValues({
+        ...INITIAL_FORM_VALUES,
+        tahun: lockedProposalScope.tahun || INITIAL_FORM_VALUES.tahun,
+        proposal: lockedProposalScope.namaProposal,
+      });
+      setErrors({});
     } else {
       setValues(INITIAL_FORM_VALUES);
       setErrors({});
     }
-  }, [editingRecord]);
+  }, [editingRecord, lockedProposalScope]);
+
+  useEffect(() => {
+    if (preselectedProposal && !editingRecord && !lockedProposalScope) {
+      const nextOptions = getKelurahanOptionsForProposal(preselectedProposal.namaProposal);
+      setValues((prev) => ({
+        ...prev,
+        tahun: preselectedProposal.tahun || prev.tahun,
+        proposal: preselectedProposal.namaProposal,
+        kelurahan: nextOptions.includes(prev.kelurahan) ? prev.kelurahan : '',
+      }));
+      setErrors((prev) => ({ ...prev, proposal: undefined, kelurahan: undefined }));
+      onClearPreselectedProposal?.();
+    }
+  }, [preselectedProposal, editingRecord, lockedProposalScope, onClearPreselectedProposal]);
 
   const proposalMenuItems = useMemo(() => {
     const map = new Map<string, { name: string; locked: boolean }>();
@@ -377,7 +397,15 @@ export function KpmRegistrationForm({
     );
 
     if (!editingRecord) {
-      setValues(INITIAL_FORM_VALUES);
+      setValues(
+        lockedProposalScope
+          ? {
+              ...INITIAL_FORM_VALUES,
+              tahun: lockedProposalScope.tahun || INITIAL_FORM_VALUES.tahun,
+              proposal: lockedProposalScope.namaProposal,
+            }
+          : INITIAL_FORM_VALUES
+      );
       setErrors({});
     }
   };
@@ -386,7 +414,15 @@ export function KpmRegistrationForm({
     if (editingRecord) {
       onCancelEdit();
     } else {
-      setValues(INITIAL_FORM_VALUES);
+      setValues(
+        lockedProposalScope
+          ? {
+              ...INITIAL_FORM_VALUES,
+              tahun: lockedProposalScope.tahun || INITIAL_FORM_VALUES.tahun,
+              proposal: lockedProposalScope.namaProposal,
+            }
+          : INITIAL_FORM_VALUES
+      );
       setErrors({});
     }
   };
@@ -398,7 +434,7 @@ export function KpmRegistrationForm({
     <>
       <form onSubmit={handleSubmit} noValidate className="min-h-screen pb-24">
         {/* Native Mobile Sub-Screen Header (Back + Title Only) */}
-        <div className="sticky top-0 z-20 flex items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur-md">
+        <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
           <button
             type="button"
             onClick={() => {
@@ -418,7 +454,7 @@ export function KpmRegistrationForm({
           <h1 className="truncate text-base font-bold text-slate-900">
             {editingRecord ? 'Perbarui Data Calon KPM' : 'Pendaftaran Calon KPM'}
           </h1>
-        </div>
+        </header>
 
         <div className="space-y-4 px-4 pt-4">
           {feedback && (
@@ -503,9 +539,10 @@ export function KpmRegistrationForm({
                 <PlaceholderSelect
                   placeholder="Pilih Tahun"
                   id="input-tahun"
+                  disabled={editingProposalLocked || isProposalScopeLocked}
                   value={values.tahun}
                   onChange={(v) => updateField('tahun', v)}
-                  className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                  className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-700 ${
                     errors.tahun ? 'border-rose-400' : 'border-slate-300'
                   }`}
                 >
@@ -525,10 +562,10 @@ export function KpmRegistrationForm({
                 <PlaceholderSelect
                   placeholder="Pilih Kelurahan / Kecamatan"
                   id="input-proposal"
-                  disabled={editingProposalLocked}
+                  disabled={editingProposalLocked || isProposalScopeLocked}
                   value={values.proposal}
                   onChange={(v) => handleProposalChange(v)}
-                  className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 ${
+                  className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-700 ${
                     errors.proposal ? 'border-rose-400' : 'border-slate-300'
                   }`}
                 >
@@ -539,27 +576,36 @@ export function KpmRegistrationForm({
                   ))}
                 </PlaceholderSelect>
 
-                <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1">
-                  <button
-                    type="button"
-                    onClick={onOpenAddProposal}
-                    className="inline-flex min-h-[36px] items-center gap-1.5 text-xs font-semibold text-teal-700 hover:text-teal-800 active:opacity-80"
-                  >
-                    <Plus className="h-3.5 w-3.5 shrink-0" />
-                    <span>Tambah proposal baru</span>
-                  </button>
-
-                  {values.proposal && (
+                {isProposalScopeLocked ? (
+                  <p className="mt-1.5 flex items-center gap-1.5 text-[11px] font-medium text-teal-800">
+                    <Lock className="h-3.5 w-3.5 shrink-0" />
+                    <span>
+                      Tahun dan proposal dikunci otomatis. Ubah nanti melalui menu Edit Data KPM jika perlu.
+                    </span>
+                  </p>
+                ) : (
+                  <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1">
                     <button
                       type="button"
-                      onClick={() => onOpenEditProposal(values.proposal, values.tahun)}
-                      className="inline-flex min-h-[36px] items-center gap-1.5 text-xs font-semibold text-slate-700 hover:text-teal-800 active:opacity-80"
+                      onClick={onOpenAddProposal}
+                      className="inline-flex min-h-[36px] items-center gap-1.5 text-xs font-semibold text-teal-700 hover:text-teal-800 active:opacity-80"
                     >
-                      <Edit3 className="h-3.5 w-3.5 shrink-0" />
-                      <span>Edit proposal ini</span>
+                      <Plus className="h-3.5 w-3.5 shrink-0" />
+                      <span>Tambah proposal baru</span>
                     </button>
-                  )}
-                </div>
+
+                    {values.proposal && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenEditProposal(values.proposal, values.tahun)}
+                        className="inline-flex min-h-[36px] items-center gap-1.5 text-xs font-semibold text-slate-700 hover:text-teal-800 active:opacity-80"
+                      >
+                        <Edit3 className="h-3.5 w-3.5 shrink-0" />
+                        <span>Edit proposal ini</span>
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 {errors.proposal && <p className="mt-0.5 text-xs text-rose-600">{errors.proposal}</p>}
               </div>

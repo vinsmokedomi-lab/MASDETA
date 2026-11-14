@@ -134,15 +134,17 @@ export function SegmentedTabs<K extends string>({
             role="tab"
             aria-selected={active}
             onClick={() => onChange(tab.key)}
-            className={`flex min-w-0 items-center justify-center rounded-lg px-1 font-semibold leading-none transition-colors ${
+            className={`flex min-w-0 items-center justify-center rounded-lg font-semibold leading-none transition-colors ${
               stacked
-                ? 'min-h-[40px] flex-col gap-1 py-1 text-[10px]'
-                : 'min-h-[34px] gap-1 text-[11px]'
+                ? 'min-h-[40px] flex-col gap-1 px-1 py-1 text-[10px]'
+                : 'min-h-[34px] gap-1 px-1.5 text-[11px]'
             } ${
               active ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            <span className="w-full truncate text-center">{tab.label}</span>
+            <span className={stacked ? 'w-full truncate text-center' : 'truncate'}>
+              {tab.label}
+            </span>
             {tab.count !== undefined && (
               <span
                 className={`shrink-0 tabular-nums ${stacked ? 'text-xs font-bold' : ''} ${

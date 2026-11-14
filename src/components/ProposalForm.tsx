@@ -20,7 +20,11 @@ import {
   ProposalRecord,
   ProposalTipe,
 } from '../types/kpm';
-import { formatUploadDateTime } from '../utils/imageProcessor';
+import {
+  blockNonNumericKeyDown,
+  formatUploadDateTime,
+  sanitizeDigits,
+} from '../utils/imageProcessor';
 import { DocumentUploadCard } from './DocumentUploadCard';
 import { ProposalDocumentUploadCard } from './ProposalDocumentUploadCard';
 import { PlaceholderSelect } from './FormControls';
@@ -35,7 +39,7 @@ interface ProposalFormProps {
   onPreviewDocument: (file: KpmDocumentFile, title: string) => void;
 }
 
-type ProposalErrors = Partial<Record<'tahun' | 'tipe', string>>;
+type ProposalErrors = Partial<Record<'tahun' | 'tipe' | 'jumlahKpm', string>>;
 
 interface ToggleRowConfig {
   key: 'docx' | 'dinas' | 'rab' | 'rt' | 'rw' | 'lurah' | 'camat';
@@ -166,11 +170,15 @@ export function ProposalForm({
     kelurahan: proposal.kelurahan,
     jalan: proposal.jalan,
     namaProposal: proposal.namaProposal,
+    jumlahKpm: proposal.jumlahKpm ?? 66,
     status: proposal.status,
     checklist: { ...proposal.checklist },
     catatan: proposal.catatan,
     documents: { ...proposal.documents },
   });
+  const [jumlahKpmInput, setJumlahKpmInput] = useState<string>(
+    String(proposal.jumlahKpm ?? 66)
+  );
   const [errors, setErrors] = useState<ProposalErrors>({});
 
   useEffect(() => {
@@ -182,11 +190,13 @@ export function ProposalForm({
       kelurahan: proposal.kelurahan,
       jalan: proposal.jalan,
       namaProposal: proposal.namaProposal,
+      jumlahKpm: proposal.jumlahKpm ?? 66,
       status: proposal.status,
       checklist: { ...proposal.checklist },
       catatan: proposal.catatan,
       documents: { ...proposal.documents },
     });
+    setJumlahKpmInput(String(proposal.jumlahKpm ?? 66));
     setErrors({});
   }, [proposal]);
 
@@ -254,6 +264,10 @@ export function ProposalForm({
     const nextErrors: ProposalErrors = {};
     if (!values.tahun) nextErrors.tahun = 'Pilih tahun anggaran.';
     if (!values.tipe) nextErrors.tipe = 'Pilih tipe proposal.';
+    const parsedJumlah = Number(jumlahKpmInput);
+    if (!jumlahKpmInput || !Number.isFinite(parsedJumlah) || parsedJumlah < 1) {
+      nextErrors.jumlahKpm = 'Jumlah KPM wajib diisi (minimal 1).';
+    }
     return nextErrors;
   };
 
@@ -273,6 +287,7 @@ export function ProposalForm({
 
     onSaveProposal(proposal.id, {
       ...values,
+      jumlahKpm: Number(jumlahKpmInput) || 66,
       namaProposal: proposal.namaProposal,
       catatan: values.catatan.trim(),
     });
@@ -281,7 +296,7 @@ export function ProposalForm({
   return (
     <div className="min-h-screen pb-24">
       {/* Native Mobile Sub-Screen Header (Back + Title Only) */}
-      <div className="sticky top-0 z-20 flex items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur-md">
+      <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
         <button
           type="button"
           onClick={onBack}
@@ -293,7 +308,7 @@ export function ProposalForm({
         <h1 className="truncate text-base font-bold text-slate-900">
           Edit Proposal
         </h1>
-      </div>
+      </header>
 
       <div className="space-y-4 px-4 pt-4">
         {feedback && (
@@ -430,6 +445,42 @@ export function ProposalForm({
                   value={values.namaProposal}
                   className="mt-1.5 min-h-[44px] w-full cursor-not-allowed rounded-xl border border-slate-300 bg-slate-100 px-3.5 text-sm font-semibold text-slate-700 focus:outline-none"
                 />
+              </div>
+
+              {/* Jumlah KPM */}
+              <div id="proposal-field-jumlahKpm">
+                <div className="flex items-center justify-between gap-2">
+                  <label htmlFor="prop-jumlah-kpm" className="block text-xs font-semibold text-slate-700">
+                    Jumlah KPM <span className="text-rose-600">*</span>
+                  </label>
+                  <span className="text-[11px] text-slate-400">Default 66</span>
+                </div>
+                <input
+                  id="prop-jumlah-kpm"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={5}
+                  disabled={isPersistedLocked}
+                  placeholder="66"
+                  value={jumlahKpmInput}
+                  onKeyDown={blockNonNumericKeyDown}
+                  onChange={(e) => {
+                    const digits = sanitizeDigits(e.target.value, 5);
+                    setJumlahKpmInput(digits);
+                    setValues((prev) => ({
+                      ...prev,
+                      jumlahKpm: Number(digits) || 0,
+                    }));
+                    setErrors((prev) => ({ ...prev, jumlahKpm: undefined }));
+                  }}
+                  className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm text-slate-900 tabular-nums placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600 ${
+                    errors.jumlahKpm ? 'border-rose-400' : 'border-slate-300'
+                  }`}
+                />
+                {errors.jumlahKpm && (
+                  <p className="mt-1 text-xs text-rose-600">{errors.jumlahKpm}</p>
+                )}
               </div>
 
               {/* Status Kunci Proposal */}

@@ -122,6 +122,7 @@ export interface ProposalRecord {
   kelurahan?: string;
   jalan?: string;
   namaProposal: string;
+  jumlahKpm?: number;
   status: ProposalLockStatus;
   checklist: ProposalChecklist;
   catatan: string;
@@ -138,6 +139,7 @@ export interface ProposalFormValues {
   kelurahan?: string;
   jalan?: string;
   namaProposal: string;
+  jumlahKpm?: number;
   status: ProposalLockStatus;
   checklist: ProposalChecklist;
   catatan: string;

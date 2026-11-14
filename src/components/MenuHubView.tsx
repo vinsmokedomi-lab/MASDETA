@@ -18,16 +18,17 @@ import {
   Settings,
   ShieldCheck,
   Trash2,
+  User,
   UserCheck,
   UserPlus,
   Users,
   X,
 } from 'lucide-react';
 import { SegmentedTabs } from './FormControls';
+import { AddPengelolaModal } from './PengelolaSelectorModal';
 import { PWAInstallButton } from './PWAInstallButton';
 import {
   DTSEN_OPTION_ITEMS,
-  KECAMATAN_OPTIONS,
   TAHUN_OPTIONS,
 } from '../data/kpmOptions';
 import {
@@ -35,6 +36,7 @@ import {
   InternalUserRole,
   InternalUserStatus,
   ItemBantuan,
+  KpmDocumentFile,
   KpmRecord,
   PengelolaProfile,
   ProposalRecord,
@@ -80,6 +82,7 @@ interface MenuHubViewProps {
   onUpdateUserStatus: (userId: string, status: InternalUserStatus, role?: InternalUserRole) => void;
   onRegisterInternalUser: (user: Omit<InternalUser, 'id' | 'status' | 'registeredAt' | 'updatedAt'>) => void;
   onSelectKpmFromDuplicate: (record: KpmRecord) => void;
+  onPreviewDocument: (file: KpmDocumentFile, title: string) => void;
 }
 
 export function MenuHubView({
@@ -103,6 +106,7 @@ export function MenuHubView({
   onUpdateUserStatus,
   onRegisterInternalUser,
   onSelectKpmFromDuplicate,
+  onPreviewDocument,
 }: MenuHubViewProps) {
   // Master Item & Sub-Item form (year-versioned)
   const [selectedItemYear, setSelectedItemYear] = useState<string>('2026');
@@ -115,10 +119,8 @@ export function MenuHubView({
   // Master Pekerjaan form
   const [newPekerjaan, setNewPekerjaan] = useState('');
 
-  // Pengelola quick form
-  const [newPengelolaNama, setNewPengelolaNama] = useState('');
-  const [newPengelolaKec, setNewPengelolaKec] = useState('Pontianak Timur');
-  const [newPengelolaKontak, setNewPengelolaKontak] = useState('');
+  // Pengelola modal state
+  const [isAddPengelolaOpen, setIsAddPengelolaOpen] = useState(false);
 
   // Internal User registration simulation / submission form (pending approval)
   const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
@@ -257,24 +259,6 @@ export function MenuHubView({
     setNewPekerjaan('');
   };
 
-  const handleAddPengelolaSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    const cleanName = capitalizeWords(newPengelolaNama.trim());
-    if (!cleanName) return;
-    onAddPengelola({
-      id: `peng-${Date.now()}`,
-      title: '',
-      nama: cleanName,
-      displayName: cleanName,
-      kecamatan: newPengelolaKec,
-      alamat: '',
-      kontak: newPengelolaKontak.trim(),
-      createdAt: new Date().toISOString(),
-    });
-    setNewPengelolaNama('');
-    setNewPengelolaKontak('');
-  };
-
   const handleRegisterUserSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (!regNama.trim() || !regEmail.trim()) return;
@@ -294,7 +278,7 @@ export function MenuHubView({
   };
 
   const renderSubHeader = (title: string, onBack: () => void) => (
-    <div className="sticky top-0 z-20 flex items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur-md">
+    <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
       <button
         type="button"
         onClick={onBack}
@@ -304,15 +288,15 @@ export function MenuHubView({
         <ArrowLeft className="h-5 w-5" />
       </button>
       <h1 className="truncate text-base font-bold text-slate-900">{title}</h1>
-    </div>
+    </header>
   );
 
   // 1. ROOT MENU HUB
   if (activeSection === 'root') {
     return (
       <div className="min-h-screen pb-24">
-        <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur-md">
-          <h1 className="text-base font-bold text-slate-900">Menu Operasional</h1>
+        <header className="sticky top-0 z-20 flex h-14 items-center border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md">
+          <h1 className="truncate text-base font-bold text-slate-900">Menu Operasional</h1>
         </header>
 
         <div className="space-y-5 px-4 pt-4">
@@ -1176,64 +1160,74 @@ export function MenuHubView({
       <div className="min-h-screen pb-24">
         {renderSubHeader('Data Pengelola Lapangan', () => onChangeSection('root'))}
         <div className="space-y-4 px-4 pt-4">
-          <form
-            onSubmit={handleAddPengelolaSubmit}
-            className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3"
+          <button
+            type="button"
+            onClick={() => setIsAddPengelolaOpen(true)}
+            className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.99]"
           >
-            <h2 className="text-sm font-bold text-slate-900">Tambah Pengelola Baru</h2>
-            <input
-              type="text"
-              required
-              value={newPengelolaNama}
-              onChange={(e) => setNewPengelolaNama(e.target.value)}
-              placeholder="Nama pengelola *"
-              className="min-h-[44px] w-full rounded-xl border border-slate-300 px-3.5 text-sm focus:border-teal-700 focus:outline-none"
-            />
-            <div className="grid grid-cols-2 gap-2.5">
-              <select
-                value={newPengelolaKec}
-                onChange={(e) => setNewPengelolaKec(e.target.value)}
-                className="min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm focus:border-teal-700 focus:outline-none"
-              >
-                {KECAMATAN_OPTIONS.map((kec) => (
-                  <option key={kec} value={kec}>
-                    {kec}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="tel"
-                value={newPengelolaKontak}
-                onChange={(e) => setNewPengelolaKontak(e.target.value)}
-                placeholder="No. HP (opsional)"
-                className="min-h-[44px] rounded-xl border border-slate-300 px-3 text-sm focus:border-teal-700 focus:outline-none"
-              />
-            </div>
-            <button
-              type="submit"
-              className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-xl bg-teal-700 text-sm font-semibold text-white hover:bg-teal-800"
-            >
-              <Plus className="h-4 w-4" />
-              <span>Simpan Pengelola</span>
-            </button>
-          </form>
+            <Plus className="h-4 w-4" />
+            <span>Tambah Pengelola Baru</span>
+          </button>
 
-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
-            {pengelolaList.map((p) => (
-              <div key={p.id} className="flex items-center justify-between gap-3 px-4 py-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-bold text-slate-900">{p.displayName}</p>
-                  <p className="truncate text-xs text-slate-500">
-                    {p.kecamatan || 'Pontianak'} {p.kontak ? `· ${p.kontak}` : ''}
-                  </p>
+          {pengelolaList.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
+              <p className="text-sm font-semibold text-slate-900">
+                Belum ada data pengelola lapangan
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Ketuk tombol di atas untuk mendaftarkan pengelola lapangan baru.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+              {pengelolaList.map((p) => (
+                <div key={p.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    {p.foto ? (
+                      <button
+                        type="button"
+                        onClick={() => onPreviewDocument(p.foto!, p.displayName)}
+                        className="h-10 w-10 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100"
+                        aria-label={`Lihat foto ${p.displayName}`}
+                      >
+                        <img
+                          src={p.foto.dataUrl}
+                          alt={p.displayName}
+                          referrerPolicy="no-referrer"
+                          className="h-full w-full object-cover"
+                        />
+                      </button>
+                    ) : (
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
+                        <User className="h-4 w-4" />
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-bold text-slate-900">{p.displayName}</p>
+                      {(p.kecamatan || p.kontak) && (
+                        <p className="truncate text-xs text-slate-500">
+                          {[p.kecamatan ? `Kec. ${p.kecamatan}` : '', p.kontak]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <span className="text-xs font-semibold text-slate-600 tabular-nums shrink-0">
+                    {records.filter((r) => r.pengelola === p.displayName).length} KPM
+                  </span>
                 </div>
-                <span className="text-xs font-semibold text-slate-600 tabular-nums shrink-0">
-                  {records.filter((r) => r.pengelola === p.displayName).length} KPM
-                </span>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
+
+        <AddPengelolaModal
+          isOpen={isAddPengelolaOpen}
+          onClose={() => setIsAddPengelolaOpen(false)}
+          onCreatePengelola={onAddPengelola}
+          onPreviewDocument={onPreviewDocument}
+        />
       </div>
     );
   }

@@ -54,8 +54,8 @@ export function ProposalListView({
   return (
     <div className="min-h-screen pb-24">
       {/* Sticky Header: hanya judul, tanpa dropdown / tombol aksi */}
-      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur-md">
-        <h1 className="text-base font-bold text-slate-900">Daftar Proposal</h1>
+      <header className="sticky top-0 z-20 flex h-14 items-center border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md">
+        <h1 className="truncate text-base font-bold text-slate-900">Daftar Proposal</h1>
       </header>
 
       <div className="space-y-4 px-4 pt-4">
@@ -76,11 +76,11 @@ export function ProposalListView({
               ariaLabel="Filter tahun proposal"
               value={selectedYear}
               onChange={onChangeYear}
-              className="w-[108px] shrink-0"
+              className="w-[88px] shrink-0"
             >
               {yearOptions.map((y) => (
                 <option key={y} value={y}>
-                  Tahun {y}
+                  {y}
                 </option>
               ))}
               <option value="all">Semua</option>
@@ -138,7 +138,7 @@ export function ProposalListView({
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-bold text-slate-900">{prop.namaProposal}</p>
                     <p className="mt-0.5 truncate text-xs text-slate-500 tabular-nums">
-                      {matchingRecords.length} KPM · {prop.tipe} · {prop.tahun}
+                      {matchingRecords.length}/{prop.jumlahKpm ?? 66} KPM · {prop.tipe} · {prop.tahun}
                     </p>
                     <p
                       className={`mt-0.5 text-[11px] font-medium ${

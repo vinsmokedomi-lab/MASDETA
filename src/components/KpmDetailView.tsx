@@ -232,7 +232,7 @@ export function KpmDetailView({
   return (
     <div className="min-h-screen pb-10">
       {/* Sub-Screen Header: hanya panah kembali + judul */}
-      <header className="sticky top-0 z-20 flex items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur-md">
+      <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
         <button
           type="button"
           onClick={onBack}

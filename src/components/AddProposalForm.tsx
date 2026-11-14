@@ -1,5 +1,5 @@
 import { FormEvent, useMemo, useState } from 'react';
-import { AlertCircle, ArrowLeft, Lock, Save, Unlock, X } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Save, X } from 'lucide-react';
 import {
   KAB_KOTA_OPTIONS,
   KECAMATAN_OPTIONS,
@@ -9,11 +9,15 @@ import {
 } from '../data/kpmOptions';
 import {
   ProposalFormValues,
-  ProposalLockStatus,
   ProposalRecord,
   ProposalTipe,
 } from '../types/kpm';
-import { buildCombinedProposalName, capitalizeWords } from '../utils/imageProcessor';
+import {
+  blockNonNumericKeyDown,
+  buildCombinedProposalName,
+  capitalizeWords,
+  sanitizeDigits,
+} from '../utils/imageProcessor';
 import { PlaceholderSelect } from './FormControls';
 
 interface AddProposalFormProps {
@@ -23,7 +27,7 @@ interface AddProposalFormProps {
 }
 
 type AddProposalErrors = Partial<
-  Record<'tahun' | 'tipe' | 'kabKota' | 'kecamatan' | 'duplicate', string>
+  Record<'tahun' | 'tipe' | 'jumlahKpm' | 'kabKota' | 'kecamatan' | 'duplicate', string>
 >;
 
 export function AddProposalForm({
@@ -37,7 +41,7 @@ export function AddProposalForm({
   const [kecamatan, setKecamatan] = useState('');
   const [kelurahan, setKelurahan] = useState('');
   const [jalan, setJalan] = useState('');
-  const [status, setStatus] = useState<ProposalLockStatus>('unlocked');
+  const [jumlahKpm, setJumlahKpm] = useState('66');
   const [errors, setErrors] = useState<AddProposalErrors>({});
 
   const kelurahanList = useMemo(() => {
@@ -75,6 +79,10 @@ export function AddProposalForm({
     const nextErrors: AddProposalErrors = {};
     if (!tahun) nextErrors.tahun = 'Tahun anggaran wajib dipilih.';
     if (!tipe) nextErrors.tipe = 'Tipe proposal wajib dipilih.';
+    const parsedJumlah = Number(jumlahKpm);
+    if (!jumlahKpm || !Number.isFinite(parsedJumlah) || parsedJumlah < 1) {
+      nextErrors.jumlahKpm = 'Jumlah KPM wajib diisi (minimal 1).';
+    }
     if (!kabKota) nextErrors.kabKota = 'Kab / Kota wajib dipilih.';
     if (!kecamatan) nextErrors.kecamatan = 'Kecamatan wajib dipilih.';
     if (isDuplicateProposal) {
@@ -94,7 +102,8 @@ export function AddProposalForm({
       kelurahan,
       jalan: jalan.trim(),
       namaProposal: combinedProposalName,
-      status,
+      jumlahKpm: parsedJumlah,
+      status: 'unlocked',
       checklist: {
         docx: false,
         dinas: false,
@@ -112,7 +121,7 @@ export function AddProposalForm({
   return (
     <div className="min-h-screen pb-24">
       {/* Native Mobile Sub-Screen Header (Back + Title Only) */}
-      <div className="sticky top-0 z-20 flex items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur-md">
+      <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
         <button
           type="button"
           onClick={onBack}
@@ -124,7 +133,7 @@ export function AddProposalForm({
         <h1 className="truncate text-base font-bold text-slate-900">
           Tambah Proposal Baru
         </h1>
-      </div>
+      </header>
 
       <form onSubmit={handleSubmit} noValidate className="space-y-4 px-4 pt-4">
         <section className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -186,6 +195,36 @@ export function AddProposalForm({
                 ))}
               </PlaceholderSelect>
               {errors.tipe && <p className="mt-1 text-xs text-rose-600">{errors.tipe}</p>}
+            </div>
+
+            {/* Jumlah KPM * */}
+            <div>
+              <div className="flex items-center justify-between gap-2">
+                <label htmlFor="add-prop-jumlah-kpm" className="block text-xs font-semibold text-slate-700">
+                  Jumlah KPM <span className="text-rose-600">*</span>
+                </label>
+                <span className="text-[11px] text-slate-400">Default 66</span>
+              </div>
+              <input
+                id="add-prop-jumlah-kpm"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={5}
+                placeholder="66"
+                value={jumlahKpm}
+                onKeyDown={blockNonNumericKeyDown}
+                onChange={(e) => {
+                  setJumlahKpm(sanitizeDigits(e.target.value, 5));
+                  setErrors((prev) => ({ ...prev, jumlahKpm: undefined }));
+                }}
+                className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm text-slate-900 tabular-nums placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                  errors.jumlahKpm ? 'border-rose-400' : 'border-slate-300'
+                }`}
+              />
+              {errors.jumlahKpm && (
+                <p className="mt-1 text-xs text-rose-600">{errors.jumlahKpm}</p>
+              )}
             </div>
 
             {/* Kab / Kota * */}
@@ -313,40 +352,6 @@ export function AddProposalForm({
                   <span>Proposal pada tahun ini sudah terdaftar</span>
                 </p>
               )}
-            </div>
-
-            {/* Status Proposal */}
-            <div>
-              <span className="block text-xs font-semibold text-slate-700">
-                Status Proposal
-              </span>
-              <div className="mt-1.5 grid grid-cols-2 gap-1.5 rounded-xl bg-slate-100 p-1">
-                <button
-                  type="button"
-                  onClick={() => setStatus('unlocked')}
-                  className={`inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-semibold transition-colors ${
-                    status === 'unlocked'
-                      ? 'bg-white text-teal-800 shadow-sm'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <Unlock className="h-4 w-4 shrink-0" />
-                  <span>Terbuka</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setStatus('locked')}
-                  className={`inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-semibold transition-colors ${
-                    status === 'locked'
-                      ? 'bg-slate-900 text-white shadow-sm'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <Lock className="h-4 w-4 shrink-0" />
-                  <span>Terkunci</span>
-                </button>
-              </div>
             </div>
           </div>
         </section>

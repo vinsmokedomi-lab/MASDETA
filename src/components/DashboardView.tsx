@@ -126,7 +126,7 @@ export function DashboardView({
   return (
     <div className="min-h-screen pb-24">
       {/* Main Brand Top Bar: hanya logo + nama, tanpa tombol / dropdown */}
-      <header className="sticky top-0 z-20 flex items-center gap-2.5 border-b border-slate-200 bg-white/95 px-4 py-2.5 backdrop-blur-md">
+      <header className="sticky top-0 z-20 flex h-14 items-center gap-2.5 border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md">
         {logo}
         <span className="text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap">
           MASDETA
@@ -177,11 +177,11 @@ export function DashboardView({
               >
                 {yearOptions.map((year) => (
                   <option key={year} value={year} className="text-slate-900">
-                    Tahun {year}
+                    {year}
                   </option>
                 ))}
                 <option value="all" className="text-slate-900">
-                  Semua Tahun
+                  Semua
                 </option>
               </select>
               <ChevronDown className="pointer-events-none absolute right-0 h-3.5 w-3.5 text-teal-200" />
@@ -299,9 +299,68 @@ export function DashboardView({
           </section>
         )}
 
-        {/* Section 1: List Item Bantuan */}
+        {/* Section 1: List Proposal (Max 8 items, without + Tambah, without 0/7, clean subtitle) */}
         <section>
-          <h2 className="mb-2.5 px-0.5 text-sm font-bold text-slate-900">List Item Bantuan</h2>
+          <h2 className="mb-2.5 px-0.5 text-sm font-bold text-slate-900">List Proposal</h2>
+
+          {visibleProposals.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center">
+              <p className="text-xs font-semibold text-slate-800">
+                Belum ada proposal terdaftar di {yearDisplayLabel}
+              </p>
+              <p className="mt-1 text-[11px] text-slate-500">
+                Tambahkan proposal lewat tombol + di bawah.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+              {visibleProposals.map((prop) => (
+                <button
+                  key={prop.id}
+                  type="button"
+                  onClick={() => onOpenProposalDetail(prop.id)}
+                  className="flex min-h-[66px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
+                >
+                  <div
+                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+                      prop.status === 'locked'
+                        ? 'bg-slate-900 text-white'
+                        : 'bg-teal-50 text-teal-800'
+                    }`}
+                  >
+                    {prop.status === 'locked' ? (
+                      <Lock className="h-4 w-4" />
+                    ) : (
+                      <Unlock className="h-4 w-4" />
+                    )}
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-bold text-slate-900">
+                      {prop.namaProposal}
+                    </p>
+                    <p className="mt-0.5 truncate text-xs text-slate-500 tabular-nums">
+                      {prop.totalKpm}/{prop.jumlahKpm ?? 66} KPM · {prop.tipe} · {prop.tahun}
+                    </p>
+                    <p
+                      className={`mt-0.5 text-[11px] font-medium ${
+                        prop.checklist.dinas ? 'text-teal-700' : 'text-slate-400'
+                      }`}
+                    >
+                      {prop.checklist.dinas ? 'Sudah diantar ke Dinas' : 'Belum diantar ke Dinas'}
+                    </p>
+                  </div>
+
+                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* Section 2: List Item */}
+        <section>
+          <h2 className="mb-2.5 px-0.5 text-sm font-bold text-slate-900">List Item</h2>
 
           {itemBreakdown.length === 0 ? (
             <div className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center">
@@ -336,58 +395,6 @@ export function DashboardView({
                     </span>
                     <ChevronRight className="h-4 w-4 text-slate-400" />
                   </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </section>
-
-        {/* Section 2: List Proposal (Max 8 items, without + Tambah, without 0/7, clean subtitle) */}
-        <section>
-          <h2 className="mb-2.5 px-0.5 text-sm font-bold text-slate-900">List Proposal</h2>
-
-          {visibleProposals.length === 0 ? (
-            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center">
-              <p className="text-xs font-semibold text-slate-800">
-                Belum ada proposal terdaftar di {yearDisplayLabel}
-              </p>
-              <p className="mt-1 text-[11px] text-slate-500">
-                Tambahkan proposal lewat tombol + di bawah.
-              </p>
-            </div>
-          ) : (
-            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
-              {visibleProposals.map((prop) => (
-                <button
-                  key={prop.id}
-                  type="button"
-                  onClick={() => onOpenProposalDetail(prop.id)}
-                  className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
-                >
-                  <div
-                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
-                      prop.status === 'locked'
-                        ? 'bg-slate-900 text-white'
-                        : 'bg-slate-100 text-slate-600'
-                    }`}
-                  >
-                    {prop.status === 'locked' ? (
-                      <Lock className="h-4 w-4" />
-                    ) : (
-                      <Unlock className="h-4 w-4" />
-                    )}
-                  </div>
-
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold text-slate-900">
-                      {prop.namaProposal}
-                    </p>
-                    <p className="mt-0.5 truncate text-xs text-slate-500 tabular-nums">
-                      {prop.totalKpm} KPM · {prop.tipe}
-                    </p>
-                  </div>
-
-                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
                 </button>
               ))}
             </div>

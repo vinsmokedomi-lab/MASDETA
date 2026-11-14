@@ -49,7 +49,7 @@ export function BottomNavBar({
         >
           <Users className="h-5 w-5" strokeWidth={activeTab === 'kpm' ? 2.3 : 1.9} />
           <span className="text-[11px] font-medium tracking-tight whitespace-nowrap">
-            Calon KPM
+            KPM
           </span>
         </button>
 

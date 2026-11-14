@@ -103,7 +103,11 @@ export function KpmListView({
   return (
     <div className="min-h-screen pb-24">
       {/* Sticky Header: hanya judul (+ panah kembali), tanpa dropdown / tombol aksi */}
-      <header className="sticky top-0 z-20 flex items-center gap-1 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur-md">
+      <header
+        className={`sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 backdrop-blur-md ${
+          onBack ? 'px-3' : 'px-4'
+        }`}
+      >
         {onBack && (
           <button
             type="button"
@@ -114,7 +118,7 @@ export function KpmListView({
             <ArrowLeft className="h-5 w-5" />
           </button>
         )}
-        <h1 className={`truncate text-base font-bold text-slate-900 ${onBack ? '' : 'pl-1'}`}>
+        <h1 className="truncate text-base font-bold text-slate-900">
           Daftar Calon KPM
         </h1>
       </header>
@@ -168,10 +172,10 @@ export function KpmListView({
             >
               {yearOptions.map((y) => (
                 <option key={y} value={y}>
-                  Tahun {y}
+                  {y}
                 </option>
               ))}
-              <option value="all">Semua Tahun</option>
+              <option value="all">Semua</option>
             </FilterSelect>
           </div>
 
