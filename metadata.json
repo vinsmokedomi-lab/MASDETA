@@ -1,0 +1,6 @@
+{
+  "name": "SiBansos KPM — Pendaftaran & Manajemen Bantuan",
+  "description": "Aplikasi mobile-first untuk pendaftaran calon Keluarga Penerima Manfaat (KPM) dengan unggah dokumen KTP dan Kartu Keluarga secara langsung.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

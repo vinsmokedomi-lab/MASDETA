@@ -1,0 +1,209 @@
+import { useMemo, useState } from 'react';
+import {
+  ChevronDown,
+  ChevronRight,
+  Lock,
+  Plus,
+  Search,
+  Unlock,
+} from 'lucide-react';
+import { PROPOSAL_TIPE_OPTIONS, TAHUN_OPTIONS } from '../data/kpmOptions';
+import { KpmRecord, ProposalRecord, ProposalTipe } from '../types/kpm';
+
+interface ProposalListViewProps {
+  proposals: ProposalRecord[];
+  records: KpmRecord[];
+  selectedYear: string;
+  onChangeYear: (year: string) => void;
+  onOpenProposalDetail: (proposalId: string) => void;
+  onOpenAddProposal: () => void;
+}
+
+export function ProposalListView({
+  proposals,
+  records,
+  selectedYear,
+  onChangeYear,
+  onOpenProposalDetail,
+  onOpenAddProposal,
+}: ProposalListViewProps) {
+  const [query, setQuery] = useState('');
+  const [tipeFilter, setTipeFilter] = useState<'all' | ProposalTipe>('all');
+
+  const yearOptions = useMemo(() => {
+    const set = new Set<string>(TAHUN_OPTIONS);
+    proposals.forEach((p) => {
+      if (p.tahun) set.add(p.tahun);
+    });
+    return Array.from(set).sort((a, b) => b.localeCompare(a));
+  }, [proposals]);
+
+  const yearScopedProposals = useMemo(() => {
+    if (selectedYear === 'all') return proposals;
+    return proposals.filter((p) => p.tahun === selectedYear);
+  }, [proposals, selectedYear]);
+
+  const stats = useMemo(() => {
+    const total = yearScopedProposals.length;
+    const locked = yearScopedProposals.filter((p) => p.status === 'locked').length;
+    const dinasDone = yearScopedProposals.filter((p) => p.checklist.dinas).length;
+    return { total, locked, unlocked: total - locked, dinasDone };
+  }, [yearScopedProposals]);
+
+  const filteredProposals = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return yearScopedProposals.filter((prop) => {
+      if (tipeFilter !== 'all' && prop.tipe !== tipeFilter) return false;
+      if (!q) return true;
+      return (
+        prop.namaProposal.toLowerCase().includes(q) ||
+        prop.tipe.toLowerCase().includes(q) ||
+        (prop.kecamatan && prop.kecamatan.toLowerCase().includes(q)) ||
+        (prop.kelurahan && prop.kelurahan.toLowerCase().includes(q))
+      );
+    });
+  }, [yearScopedProposals, tipeFilter, query]);
+
+  return (
+    <div className="min-h-screen pb-24">
+      {/* Sticky Header */}
+      <header className="sticky top-0 z-20 flex items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-4 py-2.5 backdrop-blur-md">
+        <div>
+          <h1 className="text-base font-bold text-slate-900">Daftar Proposal</h1>
+          <p className="text-[11px] text-slate-500 tabular-nums">
+            {stats.total} Proposal · {stats.dinasDone} Sudah ke Dinas · {stats.locked} Terkunci
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <div className="relative">
+            <select
+              aria-label="Filter tahun proposal"
+              value={selectedYear}
+              onChange={(e) => onChangeYear(e.target.value)}
+              className="min-h-[38px] appearance-none rounded-xl border border-slate-200 bg-slate-50 pr-7 pl-3 text-xs font-bold text-slate-900 focus:border-teal-700 focus:bg-white focus:outline-none tabular-nums"
+            >
+              {yearOptions.map((y) => (
+                <option key={y} value={y}>
+                  {y}
+                </option>
+              ))}
+              <option value="all">Semua</option>
+            </select>
+            <ChevronDown className="pointer-events-none absolute top-1/2 right-2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
+          </div>
+
+          <button
+            type="button"
+            onClick={onOpenAddProposal}
+            aria-label="Tambah proposal baru"
+            className="inline-flex min-h-[38px] items-center gap-1 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 whitespace-nowrap"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            <span>Baru</span>
+          </button>
+        </div>
+      </header>
+
+      <div className="space-y-4 px-4 pt-4">
+        {/* Search & Tipe Segmented Filter */}
+        <div className="space-y-2.5">
+          <div className="relative">
+            <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Cari nama proposal, kecamatan, atau kelurahan..."
+              className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pr-3.5 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
+            />
+          </div>
+
+          <div className="flex items-center gap-1 overflow-x-auto rounded-xl bg-slate-200/70 p-1">
+            {(['all', ...PROPOSAL_TIPE_OPTIONS] as ('all' | ProposalTipe)[]).map((tipe) => (
+              <button
+                key={tipe}
+                type="button"
+                onClick={() => setTipeFilter(tipe)}
+                className={`min-h-[34px] flex-1 rounded-lg px-2.5 text-xs font-semibold transition-colors whitespace-nowrap ${
+                  tipeFilter === tipe
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                {tipe === 'all' ? 'Semua' : tipe}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Proposal List */}
+        {filteredProposals.length === 0 ? (
+          <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
+            <p className="text-sm font-semibold text-slate-900">Tidak ada proposal ditemukan</p>
+            <p className="mt-1 text-xs text-slate-500">
+              Ubah filter tahun/tipe atau tambahkan proposal baru.
+            </p>
+            <button
+              type="button"
+              onClick={onOpenAddProposal}
+              className="mt-4 inline-flex min-h-[42px] items-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white hover:bg-teal-800"
+            >
+              <Plus className="h-4 w-4" />
+              <span>Tambah Proposal Baru</span>
+            </button>
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+            {filteredProposals.map((prop) => {
+              const matchingRecords = records.filter(
+                (r) =>
+                  r.proposal === prop.namaProposal &&
+                  (selectedYear === 'all' ? r.tahun === prop.tahun : r.tahun === selectedYear)
+              );
+
+              return (
+                <button
+                  key={prop.id}
+                  type="button"
+                  onClick={() => onOpenProposalDetail(prop.id)}
+                  className="flex min-h-[66px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
+                >
+                  <div
+                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+                      prop.status === 'locked'
+                        ? 'bg-slate-900 text-white'
+                        : 'bg-teal-50 text-teal-800'
+                    }`}
+                  >
+                    {prop.status === 'locked' ? (
+                      <Lock className="h-4 w-4" />
+                    ) : (
+                      <Unlock className="h-4 w-4" />
+                    )}
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-bold text-slate-900">{prop.namaProposal}</p>
+                    <p className="mt-0.5 truncate text-xs text-slate-500 tabular-nums">
+                      {matchingRecords.length} KPM · {prop.tipe} · {prop.tahun}
+                    </p>
+                    <p
+                      className={`mt-0.5 text-[11px] font-medium ${
+                        prop.checklist.dinas ? 'text-teal-700' : 'text-slate-400'
+                      }`}
+                    >
+                      {prop.checklist.dinas ? 'Sudah diantar ke Dinas' : 'Belum diantar ke Dinas'}
+                    </p>
+                  </div>
+
+                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
