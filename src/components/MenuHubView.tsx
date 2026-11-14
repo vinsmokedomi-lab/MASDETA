@@ -79,7 +79,6 @@ interface MenuHubViewProps {
   onUpdateItemSubItems: (tahun: string, code: string, subItems: string[]) => void;
   onCopyItemsFromYear: (fromYear: string, toYear: string) => void;
   onAddPekerjaan: (name: string) => void;
-  onDeletePekerjaan: (name: string) => void;
   onUpdateWilayahList: (nextList: WilayahKabKota[]) => void;
   onOpenAddProposal: () => void;
   onOpenSubItemRecap: () => void;
@@ -105,7 +104,6 @@ export function MenuHubView({
   onUpdateItemSubItems,
   onCopyItemsFromYear,
   onAddPekerjaan,
-  onDeletePekerjaan,
   onUpdateWilayahList,
   onOpenAddProposal,
   onOpenSubItemRecap,
@@ -314,7 +312,7 @@ export function MenuHubView({
   };
 
   const handleAddKecamatan = (kabId: string) => {
-    const raw = (newKecamatanByKab[kabId] || '').trim();
+    const raw = (newKecamatanByKab[kabId] || '').trim().replace(/^(?:kec\.?|kecamatan)\s+/i, '');
     const clean = capitalizeWords(raw);
     if (!clean) return;
     const newKecId = `kec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -349,7 +347,7 @@ export function MenuHubView({
   };
 
   const handleAddKelurahan = (kabId: string, kecId: string) => {
-    const raw = (newKelurahanByKec[kecId] || '').trim();
+    const raw = (newKelurahanByKec[kecId] || '').trim().replace(/^kel\.?\s+/i, 'Kelurahan ');
     const clean = capitalizeWords(raw);
     if (!clean) return;
     onUpdateWilayahList(
@@ -1175,7 +1173,9 @@ export function MenuHubView({
                                     >
                                       <div className="min-w-0">
                                         <p className="truncate text-xs font-bold text-slate-900">
-                                          Kec. {kec.nama}
+                                          {kec.nama.toLowerCase().startsWith('kecamatan ')
+                                            ? kec.nama
+                                            : `Kecamatan ${kec.nama}`}
                                         </p>
                                         <p className="text-[11px] text-slate-500 tabular-nums">
                                           {kec.kelurahanList.length} Kelurahan / Desa
@@ -1549,8 +1549,12 @@ export function MenuHubView({
                       {(p.kelurahan || p.kecamatan || p.kabKota || p.kontak) && (
                         <p className="truncate text-xs text-slate-500">
                           {[
-                            p.kelurahan || '',
-                            p.kecamatan ? `Kec. ${p.kecamatan}` : '',
+                            p.kelurahan ? p.kelurahan.replace(/^kel\.?\s+/i, 'Kelurahan ') : '',
+                            p.kecamatan
+                              ? p.kecamatan.toLowerCase().startsWith('kecamatan ')
+                                ? p.kecamatan
+                                : `Kecamatan ${p.kecamatan.replace(/^kec\.?\s+/i, '')}`
+                              : '',
                             p.kabKota || '',
                             p.kontak,
                           ]
@@ -1623,19 +1627,9 @@ export function MenuHubView({
                     <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-900">
                       {job}
                     </span>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <span className="text-xs font-bold text-slate-700 tabular-nums">
-                        {count} KPM
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => onDeletePekerjaan(job)}
-                        aria-label={`Hapus pekerjaan ${job}`}
-                        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
+                    <span className="shrink-0 text-xs font-bold text-slate-700 tabular-nums">
+                      {count} KPM
+                    </span>
                   </div>
                 );
               })}

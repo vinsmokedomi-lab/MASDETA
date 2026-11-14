@@ -497,8 +497,14 @@ export function PengelolaSelectorModal({
                           {(item.kelurahan || item.kecamatan || item.kabKota || item.kontak) && (
                             <p className="truncate text-xs text-slate-500">
                               {[
-                                item.kelurahan || '',
-                                item.kecamatan ? `Kec. ${item.kecamatan}` : '',
+                                item.kelurahan
+                                  ? item.kelurahan.replace(/^kel\.?\s+/i, 'Kelurahan ')
+                                  : '',
+                                item.kecamatan
+                                  ? item.kecamatan.toLowerCase().startsWith('kecamatan ')
+                                    ? item.kecamatan
+                                    : `Kecamatan ${item.kecamatan.replace(/^kec\.?\s+/i, '')}`
+                                  : '',
                                 item.kabKota || '',
                                 item.kontak,
                               ]

@@ -1202,7 +1202,6 @@ export default function App() {
             onUpdateItemSubItems={handleUpdateItemSubItems}
             onCopyItemsFromYear={handleCopyItemsFromYear}
             onAddPekerjaan={(job) => setPekerjaanList((prev) => [...prev, job])}
-            onDeletePekerjaan={(job) => setPekerjaanList((prev) => prev.filter((p) => p !== job))}
             onUpdateWilayahList={setWilayahList}
             onOpenAddProposal={() => openAddProposalForm('menu')}
             onOpenSubItemRecap={() => openSubItemRecap('menu')}
