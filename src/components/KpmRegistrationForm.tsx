@@ -548,7 +548,7 @@ export function KpmRegistrationForm({
           <div className="space-y-4">
           {/* Section 1: Data Usulan & Proposal */}
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
-            <h2 className="text-base font-semibold text-slate-900">
+            <h2 className="text-sm font-bold text-slate-900">
               01. Data Usulan & Proposal
             </h2>
             <p className="mt-0.5 text-xs text-slate-500">
@@ -670,7 +670,7 @@ export function KpmRegistrationForm({
             <>
           {/* Section 2: Profil Calon KPM */}
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
-            <h2 className="text-base font-semibold text-slate-900">
+            <h2 className="text-sm font-bold text-slate-900">
               02. Profil Calon KPM
             </h2>
             <p className="mt-0.5 text-xs text-slate-500">
@@ -884,7 +884,7 @@ export function KpmRegistrationForm({
 
             {/* Section 3: Item, Pengelola & Validasi */}
             <section className="rounded-2xl border border-slate-200 bg-white p-4">
-              <h2 className="text-base font-semibold text-slate-900">
+              <h2 className="text-sm font-bold text-slate-900">
                 03. Item, Pengelola & Validasi
               </h2>
               <p className="mt-0.5 text-xs text-slate-500">
@@ -1081,7 +1081,7 @@ export function KpmRegistrationForm({
 
           {/* 04. Dokumen KTP & KK */}
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
-            <h2 className="text-base font-semibold text-slate-900">
+            <h2 className="text-sm font-bold text-slate-900">
               04. Dokumen KTP & KK
             </h2>
             <p className="mt-0.5 text-xs text-slate-500">
@@ -1119,7 +1119,7 @@ export function KpmRegistrationForm({
 
           {/* 05. Dokumentasi Lapangan */}
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
-            <h2 className="text-base font-semibold text-slate-900">
+            <h2 className="text-sm font-bold text-slate-900">
               05. Dokumentasi Lapangan
             </h2>
             <p className="mt-0.5 text-xs text-slate-500">
@@ -1165,7 +1165,7 @@ export function KpmRegistrationForm({
 
           {/* 06. Foto Lainnya */}
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
-            <h2 className="text-base font-semibold text-slate-900">
+            <h2 className="text-sm font-bold text-slate-900">
               06. Foto Lainnya
             </h2>
             <p className="mt-0.5 text-xs text-slate-500">

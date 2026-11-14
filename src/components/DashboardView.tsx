@@ -5,16 +5,21 @@ import {
   ChevronDown,
   ChevronRight,
   Lock,
+  MessageSquare,
   Unlock,
+  User,
   UserCheck,
   X,
 } from 'lucide-react';
-import { ItemBantuan, KpmRecord, ProposalRecord, ValidationStatus } from '../types/kpm';
+import { InternalUser, ItemBantuan, KpmRecord, ProposalRecord, ValidationStatus } from '../types/kpm';
 import { TAHUN_OPTIONS } from '../data/kpmOptions';
-import { resolvePackageForKpm } from '../utils/imageProcessor';
+import { getItemHierarchyRank, resolvePackageForKpm } from '../utils/imageProcessor';
+import { PresenceDot } from './PresenceDot';
 
 interface DashboardViewProps {
   logo: React.ReactNode;
+  currentUser: InternalUser;
+  unreadChatCount: number;
   selectedYear: string;
   onChangeYear: (year: string) => void;
   records: KpmRecord[];
@@ -24,6 +29,8 @@ interface DashboardViewProps {
   duplicateNikCount: number;
   feedback?: { type: 'success' | 'error'; message: string } | null;
   onDismissFeedback?: () => void;
+  onOpenChat: () => void;
+  onOpenProfile: () => void;
   onOpenKpmList: (filter?: { status?: 'all' | ValidationStatus; item?: string }) => void;
   onOpenSubItemRecap?: () => void;
   onOpenProposalList?: () => void;
@@ -35,6 +42,8 @@ interface DashboardViewProps {
 
 export function DashboardView({
   logo,
+  currentUser,
+  unreadChatCount,
   selectedYear,
   onChangeYear,
   records,
@@ -44,6 +53,8 @@ export function DashboardView({
   duplicateNikCount,
   feedback,
   onDismissFeedback,
+  onOpenChat,
+  onOpenProfile,
   onOpenKpmList,
   onOpenProposalDetail,
   onOpenUserApproval,
@@ -101,10 +112,13 @@ export function DashboardView({
       itemMap.set(code, existing);
     }
 
-    return Array.from(itemMap.values()).sort(
-      (a, b) => b.total - a.total || a.code.localeCompare(b.code)
-    );
-  }, [filteredRecords, items]);
+    return Array.from(itemMap.values()).sort((a, b) => {
+      const rankA = getItemHierarchyRank(a.code, selectedYear, items);
+      const rankB = getItemHierarchyRank(b.code, selectedYear, items);
+      if (rankA !== rankB) return rankA - rankB;
+      return a.code.localeCompare(b.code, 'id');
+    });
+  }, [filteredRecords, items, selectedYear]);
 
   const proposalSummaryList = useMemo(() => {
     return filteredProposals.map((prop) => {
@@ -125,12 +139,57 @@ export function DashboardView({
 
   return (
     <div className="min-h-screen pb-24">
-      {/* Main Brand Top Bar: hanya logo + nama, tanpa tombol / dropdown */}
-      <header className="sticky top-0 z-20 flex h-14 items-center gap-2.5 border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md">
-        {logo}
-        <span className="text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap">
-          MASDETA
-        </span>
+      {/* Main Brand Top Bar with Chat & Active User Profile Dot */}
+      <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md">
+        <div className="flex items-center gap-2.5 min-w-0">
+          {logo}
+          <h1 className="text-base font-bold tracking-tight text-slate-900 whitespace-nowrap">
+            MASDETA
+          </h1>
+        </div>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={onOpenChat}
+            aria-label="Buka pesan langsung"
+            className="relative inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 transition-colors hover:bg-slate-50"
+          >
+            <MessageSquare className="h-4.5 w-4.5" />
+            {unreadChatCount > 0 && (
+              <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-rose-600 px-1 text-[9px] font-bold text-white tabular-nums">
+                {unreadChatCount}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={onOpenProfile}
+            aria-label="Profil dan status user"
+            className="relative flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white pr-2.5 pl-1.5 transition-colors hover:bg-slate-50"
+          >
+            <div className="relative flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-teal-50 text-teal-800">
+              {currentUser.fotoDataUrl ? (
+                <img
+                  src={currentUser.fotoDataUrl}
+                  alt={currentUser.nama}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <User className="h-4 w-4" />
+              )}
+              <PresenceDot
+                status={currentUser.presenceStatus}
+                size="sm"
+                className="absolute -right-0.5 -bottom-0.5"
+              />
+            </div>
+            <span className="max-w-[72px] truncate text-xs font-semibold text-slate-800">
+              {currentUser.nama}
+            </span>
+          </button>
+        </div>
       </header>
 
       <main className="space-y-5 px-4 pt-4">
@@ -193,7 +252,7 @@ export function DashboardView({
             onClick={() => onOpenKpmList({ status: 'accepted' })}
             className="mt-1 flex items-baseline gap-2 text-left transition-opacity hover:opacity-90"
           >
-            <span className="text-4xl font-bold tracking-tight tabular-nums">
+            <span className="text-3xl font-bold tracking-tight tabular-nums">
               {kpmStats.accepted}
             </span>
             <span className="text-sm font-medium text-teal-100">KPM Menerima</span>
@@ -201,7 +260,7 @@ export function DashboardView({
 
           {/* Progress Bar */}
           <div className="mt-4">
-            <div className="flex items-center justify-between text-[11px] text-teal-100 tabular-nums">
+            <div className="flex items-center justify-between text-xs text-teal-100 tabular-nums">
               <span>Rasio Diterima</span>
               <span className="font-semibold text-white">
                 {kpmStats.acceptanceRate}% dari {kpmStats.total} usulan
@@ -222,7 +281,7 @@ export function DashboardView({
               onClick={() => onOpenKpmList({ status: 'all' })}
               className="pr-2 text-left transition-opacity hover:opacity-80"
             >
-              <p className="text-[11px] text-teal-100">Total Usulan</p>
+              <p className="text-xs text-teal-100">Total Usulan</p>
               <p className="mt-0.5 text-base font-bold text-white tabular-nums">
                 {kpmStats.total}
               </p>
@@ -233,7 +292,7 @@ export function DashboardView({
               onClick={() => onOpenKpmList({ status: 'pending' })}
               className="px-3 text-left transition-opacity hover:opacity-80"
             >
-              <p className="text-[11px] text-teal-100">Menunggu</p>
+              <p className="text-xs text-teal-100">Menunggu</p>
               <p className="mt-0.5 text-base font-bold text-white tabular-nums">
                 {kpmStats.pending}
               </p>
@@ -244,7 +303,7 @@ export function DashboardView({
               onClick={() => onOpenKpmList({ status: 'rejected' })}
               className="pl-3 text-left transition-opacity hover:opacity-80"
             >
-              <p className="text-[11px] text-teal-100">Ditolak</p>
+              <p className="text-xs text-teal-100">Ditolak</p>
               <p className="mt-0.5 text-base font-bold text-white tabular-nums">
                 {kpmStats.rejected}
               </p>
@@ -343,7 +402,7 @@ export function DashboardView({
                       {prop.totalKpm}/{prop.jumlahKpm ?? 66} KPM · {prop.tipe} · {prop.tahun}
                     </p>
                     <p
-                      className={`mt-0.5 text-[11px] font-medium ${
+                      className={`mt-0.5 text-xs font-medium ${
                         prop.checklist.dinas ? 'text-teal-700' : 'text-slate-400'
                       }`}
                     >

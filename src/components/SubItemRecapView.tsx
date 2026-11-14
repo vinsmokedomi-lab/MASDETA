@@ -208,7 +208,7 @@ export function SubItemRecapView({
 
           <div className="mt-4 grid grid-cols-2 divide-x divide-slate-800 border-t border-slate-800 pt-3.5">
             <div className="pr-3">
-              <p className="text-[11px] text-slate-400">Sudah Diterima KPM</p>
+              <p className="text-xs text-slate-400">Sudah Diterima KPM</p>
               <p className="mt-0.5 text-lg font-bold text-teal-300 tabular-nums">
                 {recap.totalDelivered} Unit
               </p>
@@ -221,7 +221,7 @@ export function SubItemRecapView({
               }}
               className="pl-3 text-left transition-opacity hover:opacity-80"
             >
-              <p className="text-[11px] text-slate-400">Belum Dibagikan / Hutang</p>
+              <p className="text-xs text-slate-400">Belum Dibagikan / Hutang</p>
               <p className="mt-0.5 text-lg font-bold text-amber-300 tabular-nums">
                 {recap.totalPending} Unit
               </p>
@@ -292,7 +292,7 @@ export function SubItemRecapView({
                           </div>
                           <div className="min-w-0">
                             <p className="text-sm font-bold text-slate-900">{row.name}</p>
-                            <p className="mt-0.5 text-[11px] text-slate-500 tabular-nums">
+                            <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
                               Dari paket:{' '}
                               {row.packageSources
                                 .map((src) => `${src.code} (${src.total})`)
@@ -307,13 +307,13 @@ export function SubItemRecapView({
                               {row.totalNeeded} Unit
                             </p>
                             <p
-                              className={`text-[11px] font-semibold tabular-nums ${
+                              className={`text-xs font-semibold tabular-nums ${
                                 row.pendingCount > 0 ? 'text-amber-700' : 'text-teal-700'
                               }`}
                             >
                               {row.pendingCount > 0
-                                ? `Kurang ${row.pendingCount}`
-                                : 'Terpenuhi'}
+                                ? `Belum dibagi ${row.pendingCount}`
+                                : 'Lengkap'}
                             </p>
                           </div>
                           <ChevronRight className="h-4 w-4 text-slate-400" />
@@ -327,7 +327,7 @@ export function SubItemRecapView({
                             style={{ width: `${pct}%` }}
                           />
                         </div>
-                        <span className="shrink-0 text-[11px] font-medium text-slate-500 tabular-nums">
+                        <span className="shrink-0 text-xs font-medium text-slate-500 tabular-nums">
                           {row.deliveredCount}/{row.totalNeeded} Diterima
                         </span>
                       </div>
@@ -366,7 +366,7 @@ export function SubItemRecapView({
                 <button
                   type="button"
                   onClick={() => setSelectedSubItemKey('all')}
-                  className="inline-flex h-7 items-center gap-1 rounded-lg bg-white px-2 text-[11px] font-semibold text-teal-800 hover:bg-teal-100"
+                  className="inline-flex h-7 items-center gap-1 rounded-lg bg-white px-2 text-xs font-semibold text-teal-800 hover:bg-teal-100"
                 >
                   <X className="h-3 w-3" />
                   <span>Semua</span>
@@ -408,17 +408,17 @@ export function SubItemRecapView({
                           {row.record.registerCode} · {row.record.nama}
                         </p>
                         {row.debtStatus === 'complete' ? (
-                          <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-bold text-teal-700">
+                          <span className="inline-flex shrink-0 items-center gap-1 text-xs font-bold text-teal-700">
                             <CheckCircle2 className="h-3.5 w-3.5" />
                             Lengkap
                           </span>
                         ) : row.debtStatus === 'partial' ? (
-                          <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-bold text-amber-700">
+                          <span className="inline-flex shrink-0 items-center gap-1 text-xs font-bold text-amber-700">
                             <AlertTriangle className="h-3.5 w-3.5" />
                             Hutang {row.pendingItems.length}
                           </span>
                         ) : (
-                          <span className="shrink-0 text-[11px] font-bold text-rose-600">
+                          <span className="shrink-0 text-xs font-bold text-rose-600">
                             Belum ({row.pendingItems.length})
                           </span>
                         )}
@@ -429,14 +429,14 @@ export function SubItemRecapView({
                       </p>
 
                       {row.deliveredItems.length > 0 && (
-                        <p className="mt-1.5 text-[11px] text-teal-700 leading-snug">
+                        <p className="mt-1.5 text-xs text-teal-700 leading-snug">
                           <span className="font-semibold">Sudah diterima:</span>{' '}
                           {row.deliveredItems.map((d) => d.name).join(', ')}
                         </p>
                       )}
 
                       {row.pendingItems.length > 0 && (
-                        <p className="mt-1 text-[11px] text-amber-800 leading-snug">
+                        <p className="mt-1 text-xs text-amber-800 leading-snug">
                           <span className="font-semibold">Belum diterima:</span>{' '}
                           {row.pendingItems.map((p) => p.name).join(', ')}
                         </p>

@@ -253,6 +253,24 @@ export function sanitizeDigits(value: string, maxLen = 16): string {
   return value.replace(/\D/g, '').slice(0, maxLen);
 }
 
+export const HIGH_DESIL_VALUES = new Set(['5', '6', '7', '8', '9', '10', '6 - 10']);
+
+export function isArchivedKpm(record: KpmRecord): boolean {
+  return record.validasi === 'rejected';
+}
+
+export function formatWhatsAppUrl(phone?: string): string | null {
+  const digits = (phone || '').replace(/\D/g, '');
+  if (digits.length < 8) return null;
+  let normalized = digits;
+  if (normalized.startsWith('0')) {
+    normalized = `62${normalized.slice(1)}`;
+  } else if (normalized.startsWith('8')) {
+    normalized = `62${normalized}`;
+  }
+  return `https://wa.me/${normalized}`;
+}
+
 export function capitalizeWords(value: string): string {
   return value.replace(/(^|\s)([a-z\u00e0-\u00ff])/g, (_, space: string, ch: string) => {
     return `${space}${ch.toUpperCase()}`;
@@ -1161,7 +1179,7 @@ export function exportSubItemRecapToCsv(
     row.totalNeeded,
     row.deliveredCount,
     row.pendingCount,
-    row.packageSources.map((p) => `${p.code}: ${p.total} (Kurang ${p.pending})`).join('; '),
+    row.packageSources.map((p) => `${p.code}: ${p.total} (Belum dibagi ${p.pending})`).join('; '),
   ]);
 
   const csvContent =

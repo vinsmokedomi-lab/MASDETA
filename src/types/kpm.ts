@@ -78,6 +78,9 @@ export interface KpmRecord {
   payment: number;
   documents: KpmDocuments;
   subItemDeliveries?: Record<string, SubItemDeliveryState>;
+  berkasDikembalikan?: boolean;
+  berkasDikembalikanAt?: string;
+  berkasDikembalikanBy?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -170,9 +173,17 @@ export interface ItemBantuan {
   subItems: string[];
 }
 
-export type InternalUserRole = 'Admin' | 'Verifikator' | 'Petugas';
+export type InternalUserRole = 'SuperAdmin' | 'Admin' | 'Viewer';
 
 export type InternalUserStatus = 'pending' | 'active' | 'rejected';
+
+export type UserPresenceStatus = 'online' | 'idle' | 'offline';
+
+export interface UserPermissions {
+  add: boolean;
+  update: boolean;
+  delete: boolean;
+}
 
 export interface InternalUser {
   id: string;
@@ -182,8 +193,23 @@ export interface InternalUser {
   kontak: string;
   role: InternalUserRole;
   status: InternalUserStatus;
+  permissions: UserPermissions;
+  presenceStatus: UserPresenceStatus;
+  presenceManual?: boolean;
+  fotoDataUrl?: string;
+  lastActiveAt?: string;
   registeredAt: string;
   updatedAt: string;
+}
+
+export interface DirectChatMessage {
+  id: string;
+  conversationKey: string;
+  senderId: string;
+  recipientId: string;
+  text: string;
+  createdAt: string;
+  readAt?: string;
 }
 
 export type ProposalHistoryAction = 'entered' | 'moved_in' | 'moved_out' | 'removed';

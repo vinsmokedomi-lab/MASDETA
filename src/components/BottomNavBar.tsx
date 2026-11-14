@@ -5,6 +5,7 @@ export type MainTab = 'dashboard' | 'kpm' | 'proposal' | 'menu';
 interface BottomNavBarProps {
   activeTab: MainTab;
   pendingUsersCount?: number;
+  unreadChatCount?: number;
   onSelectTab: (tab: MainTab) => void;
   onOpenQuickAdd: () => void;
 }
@@ -12,9 +13,11 @@ interface BottomNavBarProps {
 export function BottomNavBar({
   activeTab,
   pendingUsersCount = 0,
+  unreadChatCount = 0,
   onSelectTab,
   onOpenQuickAdd,
 }: BottomNavBarProps) {
+  const menuBadgeCount = pendingUsersCount + unreadChatCount;
   return (
     <nav
       aria-label="Navigasi utama"
@@ -93,12 +96,12 @@ export function BottomNavBar({
         >
           <div className="relative">
             <LayoutGrid className="h-5 w-5" strokeWidth={activeTab === 'menu' ? 2.3 : 1.9} />
-            {pendingUsersCount > 0 && (
+            {menuBadgeCount > 0 && (
               <span
-                aria-label={`${pendingUsersCount} persetujuan user`}
+                aria-label={`${menuBadgeCount} notifikasi`}
                 className="absolute -top-1 -right-2 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-amber-600 px-1 text-[9px] font-bold text-white tabular-nums"
               >
-                {pendingUsersCount}
+                {menuBadgeCount}
               </span>
             )}
           </div>

@@ -1,12 +1,12 @@
 import { ChangeEvent, FormEvent, useMemo, useState } from 'react';
 import {
   AlertTriangle,
-  ArrowDown,
+  Archive,
   ArrowLeft,
-  ArrowUp,
   Banknote,
   Briefcase,
   Check,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   CopyCheck,
@@ -14,12 +14,17 @@ import {
   FileSpreadsheet,
   FolderPlus,
   Layers,
+  Lock,
   MapPin,
+  MessageCircle,
+  MessageSquare,
   Package,
   PackagePlus,
   Plus,
+  Search,
   Settings,
   ShieldCheck,
+  SlidersHorizontal,
   Trash2,
   Upload,
   User,
@@ -28,13 +33,12 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { SegmentedTabs } from './FormControls';
+import { FilterSelect, SegmentedTabs } from './FormControls';
+import { ItemManagerView } from './ItemManagerView';
 import { AddPengelolaModal } from './PengelolaSelectorModal';
+import { PresenceDot, getPresenceMeta } from './PresenceDot';
 import { PWAInstallButton } from './PWAInstallButton';
-import {
-  DTSEN_OPTION_ITEMS,
-  TAHUN_OPTIONS,
-} from '../data/kpmOptions';
+import { DTSEN_OPTION_ITEMS } from '../data/kpmOptions';
 import {
   InternalUser,
   InternalUserRole,
@@ -44,6 +48,7 @@ import {
   KpmRecord,
   PengelolaProfile,
   ProposalRecord,
+  UserPermissions,
   WilayahKabKota,
 } from '../types/kpm';
 import {
@@ -51,9 +56,11 @@ import {
   exportKpmRecordsToCsv,
   formatNikDisplay,
   formatRupiah,
-  formatUploadDateTime,
-  getItemsForYear,
-  normalizeSubItemKey,
+  formatWhatsAppUrl,
+  getAbsenSeq,
+  isArchivedKpm,
+  isKecamatanProposal,
+  resolveProposalDomicile,
 } from '../utils/imageProcessor';
 
 export type MenuSection =
@@ -61,6 +68,7 @@ export type MenuSection =
   | 'setting'
   | 'users'
   | 'duplikasi'
+  | 'arsip'
   | 'administrasi'
   | 'dtsen'
   | 'pengelola'
@@ -70,6 +78,8 @@ export type MenuSection =
 interface MenuHubViewProps {
   activeSection: MenuSection;
   onChangeSection: (section: MenuSection) => void;
+  currentUser: InternalUser;
+  unreadChatCount: number;
   records: KpmRecord[];
   proposals: ProposalRecord[];
   items: ItemBantuan[];
@@ -77,7 +87,9 @@ interface MenuHubViewProps {
   wilayahList: WilayahKabKota[];
   pengelolaList: PengelolaProfile[];
   internalUsers: InternalUser[];
-  onAddItem: (item: ItemBantuan) => void;
+  onOpenChat: (peerId?: string) => void;
+  onOpenProfile: () => void;
+  onSaveItem: (item: ItemBantuan, orderIndex: number, originalCode?: string) => void;
   onDeleteItem: (tahun: string, code: string) => void;
   onMoveItemOrder: (tahun: string, code: string, direction: 'up' | 'down') => void;
   onUpdateItemSubItems: (tahun: string, code: string, subItems: string[]) => void;
@@ -87,8 +99,21 @@ interface MenuHubViewProps {
   onOpenAddProposal: () => void;
   onOpenSubItemRecap: () => void;
   onAddPengelola: (profile: PengelolaProfile) => void;
-  onUpdateUserStatus: (userId: string, status: InternalUserStatus, role?: InternalUserRole) => void;
-  onRegisterInternalUser: (user: Omit<InternalUser, 'id' | 'status' | 'registeredAt' | 'updatedAt'>) => void;
+  onAdminControlUser: (
+    userId: string,
+    patch: {
+      status?: InternalUserStatus;
+      role?: InternalUserRole;
+      permissions?: UserPermissions;
+    }
+  ) => void;
+  onRegisterInternalUser: (user: {
+    nama: string;
+    email: string;
+    jabatan: string;
+    kontak: string;
+    role: InternalUserRole;
+  }) => void;
   onImportCsv?: (
     csvText: string,
     fileName: string
@@ -99,6 +124,8 @@ interface MenuHubViewProps {
     skipped: number;
     error?: string;
   };
+  onSelectKpm?: (record: KpmRecord) => void;
+  onToggleBerkasDikembalikan?: (kpmId: string, nextValue: boolean) => void;
   onSelectKpmFromDuplicate: (record: KpmRecord) => void;
   onPreviewDocument: (file: KpmDocumentFile, title: string) => void;
 }
@@ -106,6 +133,8 @@ interface MenuHubViewProps {
 export function MenuHubView({
   activeSection,
   onChangeSection,
+  currentUser,
+  unreadChatCount,
   records,
   proposals,
   items,
@@ -113,7 +142,9 @@ export function MenuHubView({
   wilayahList,
   pengelolaList,
   internalUsers,
-  onAddItem,
+  onOpenChat,
+  onOpenProfile,
+  onSaveItem,
   onDeleteItem,
   onMoveItemOrder,
   onUpdateItemSubItems,
@@ -123,19 +154,14 @@ export function MenuHubView({
   onOpenAddProposal,
   onOpenSubItemRecap,
   onAddPengelola,
-  onUpdateUserStatus,
+  onAdminControlUser,
   onRegisterInternalUser,
   onImportCsv,
+  onSelectKpm,
+  onToggleBerkasDikembalikan,
   onSelectKpmFromDuplicate,
   onPreviewDocument,
 }: MenuHubViewProps) {
-  // Master Item & Sub-Item form (year-versioned)
-  const [selectedItemYear, setSelectedItemYear] = useState<string>('2026');
-  const [newItemCode, setNewItemCode] = useState('');
-  const [newItemName, setNewItemName] = useState('');
-  const [newItemSubItemsText, setNewItemSubItemsText] = useState('');
-  const [expandedItemCode, setExpandedItemCode] = useState<string | null>(null);
-  const [newSubItemInput, setNewSubItemInput] = useState('');
 
   // Master Pekerjaan modal state
   const [isAddPekerjaanOpen, setIsAddPekerjaanOpen] = useState(false);
@@ -165,13 +191,25 @@ export function MenuHubView({
   const [regEmail, setRegEmail] = useState('');
   const [regJabatan, setRegJabatan] = useState('');
   const [regKontak, setRegKontak] = useState('');
-  const [regRole, setRegRole] = useState<InternalUserRole>('Petugas');
+  const [regRole, setRegRole] = useState<InternalUserRole>('Admin');
 
   // Active sub-tab in Setting
   const [settingPanel, setSettingPanel] = useState<'main' | 'items' | 'wilayah'>('main');
 
   // User filter
   const [userStatusFilter, setUserStatusFilter] = useState<'all' | InternalUserStatus>('all');
+
+  // Arsip Berkas KPM filters
+  const [arsipQuery, setArsipQuery] = useState('');
+  const [arsipYearFilter, setArsipYearFilter] = useState<string>('all');
+  const [arsipProposalFilter, setArsipProposalFilter] = useState<string>('all');
+  const [arsipReturnFilter, setArsipReturnFilter] = useState<'all' | 'pending_return' | 'returned'>('all');
+  const [showArsipExtraFilters, setShowArsipExtraFilters] = useState(false);
+
+  const archivedRecords = useMemo(
+    () => records.filter((r) => isArchivedKpm(r)),
+    [records]
+  );
 
   const pendingUsersCount = useMemo(
     () => internalUsers.filter((u) => u.status === 'pending').length,
@@ -224,68 +262,7 @@ export function MenuHubView({
     }));
   }, [records]);
 
-  const itemYearOptions = useMemo(() => {
-    const set = new Set<string>(TAHUN_OPTIONS);
-    items.forEach((i) => {
-      if (i.tahun) set.add(i.tahun);
-    });
-    return Array.from(set).sort((a, b) => b.localeCompare(a));
-  }, [items]);
 
-  const yearCatalogItems = useMemo(
-    () => getItemsForYear(items, selectedItemYear),
-    [items, selectedItemYear]
-  );
-
-  const canonicalSubItemSuggestions = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const pkg of items) {
-      for (const s of pkg.subItems) {
-        const key = normalizeSubItemKey(s);
-        if (key && !map.has(key)) map.set(key, s);
-      }
-    }
-    return Array.from(map.values()).sort((a, b) => a.localeCompare(b));
-  }, [items]);
-
-  const handleAddItemSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    const code = newItemCode.trim().toUpperCase();
-    const name = capitalizeWords(newItemName.trim());
-    if (!code || !name) return;
-    if (yearCatalogItems.some((i) => i.code === code)) return;
-
-    const parsedSubs = newItemSubItemsText
-      .split(',')
-      .map((s) => capitalizeWords(s.trim()))
-      .filter(Boolean);
-
-    onAddItem({
-      id: `${selectedItemYear}-${code}`,
-      tahun: selectedItemYear,
-      code,
-      name,
-      subItems: parsedSubs.length > 0 ? parsedSubs : [name],
-    });
-    setNewItemCode('');
-    setNewItemName('');
-    setNewItemSubItemsText('');
-  };
-
-  const handleAddSubItemToPackage = (pkg: ItemBantuan) => {
-    const raw = newSubItemInput.trim();
-    if (!raw) return;
-    const key = normalizeSubItemKey(raw);
-    const existingCanonical =
-      canonicalSubItemSuggestions.find((s) => normalizeSubItemKey(s) === key) ||
-      capitalizeWords(raw);
-    if (pkg.subItems.some((s) => normalizeSubItemKey(s) === key)) {
-      setNewSubItemInput('');
-      return;
-    }
-    onUpdateItemSubItems(pkg.tahun, pkg.code, [...pkg.subItems, existingCanonical]);
-    setNewSubItemInput('');
-  };
 
   const handleAddPekerjaanSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -421,7 +398,7 @@ export function MenuHubView({
     setRegEmail('');
     setRegJabatan('');
     setRegKontak('');
-    setRegRole('Petugas');
+    setRegRole('Admin');
     setIsRegisterModalOpen(false);
   };
 
@@ -441,17 +418,101 @@ export function MenuHubView({
 
   // 1. ROOT MENU HUB
   if (activeSection === 'root') {
+    const profilePresence = getPresenceMeta(currentUser.presenceStatus);
+
     return (
       <div className="min-h-screen pb-24">
-        <header className="sticky top-0 z-20 flex h-14 items-center border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md">
+        <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md">
           <h1 className="truncate text-base font-bold text-slate-900">Menu Operasional</h1>
+          <button
+            type="button"
+            onClick={onOpenProfile}
+            className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-1 pr-2.5 pl-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-100"
+          >
+            <span className={`h-2 w-2 rounded-full ${profilePresence.dotClass}`} />
+            <span className="max-w-[96px] truncate">{currentUser.nama}</span>
+          </button>
         </header>
 
         <div className="space-y-5 px-4 pt-4">
-          {/* Group 1: Pemeriksaan & Rekap Data */}
+          {/* Active Profile Card */}
+          <button
+            type="button"
+            onClick={onOpenProfile}
+            className="flex w-full items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3.5 text-left transition-colors hover:bg-slate-50"
+          >
+            <div className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
+              {currentUser.fotoDataUrl ? (
+                <img
+                  src={currentUser.fotoDataUrl}
+                  alt={currentUser.nama}
+                  className="h-full w-full rounded-xl object-cover"
+                />
+              ) : (
+                <User className="h-5 w-5" />
+              )}
+              <PresenceDot
+                status={currentUser.presenceStatus}
+                size="md"
+                className="absolute -right-1 -bottom-1"
+              />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <p className="truncate text-sm font-bold text-slate-900">{currentUser.nama}</p>
+                <span
+                  className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                    currentUser.role === 'SuperAdmin'
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-teal-50 text-teal-800'
+                  }`}
+                >
+                  {currentUser.role}
+                </span>
+              </div>
+              <p className="mt-0.5 truncate text-xs text-slate-500">
+                {profilePresence.label} · {currentUser.email}
+              </p>
+            </div>
+            <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+          </button>
+
+          {/* Group 1: Komunikasi & Koordinasi */}
           <section>
             <h2 className="mb-2 px-1 text-xs font-bold tracking-wide text-slate-500">
-              Audit & Rekapitulasi
+              Komunikasi Tim
+            </h2>
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+              <button
+                type="button"
+                onClick={() => onOpenChat()}
+                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+              >
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-700 text-white">
+                  <MessageSquare className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-bold text-slate-900">Pesan Langsung</p>
+                    {unreadChatCount > 0 && (
+                      <span className="flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
+                        {unreadChatCount}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    Chat pribadi 1-on-1 Admin &amp; SuperAdmin
+                  </p>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+              </button>
+            </div>
+          </section>
+
+          {/* Group 2: Audit & Rekapitulasi */}
+          <section>
+            <h2 className="mb-2 px-1 text-xs font-bold tracking-wide text-slate-500">
+              Audit &amp; Rekapitulasi
             </h2>
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
               <button
@@ -459,16 +520,33 @@ export function MenuHubView({
                 onClick={onOpenSubItemRecap}
                 className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
               >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-700 text-white">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
                   <Package className="h-5 w-5" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-bold text-slate-900">Rekapitulasi Item & Sub-Item</p>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    Akumulasi sub-item dan daftar hutang penyaluran
+                  <p className="text-sm font-semibold text-slate-900">Rekapitulasi Item &amp; Sub-Item</p>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    Akumulasi barang dan hutang penyaluran
                   </p>
                 </div>
-                <ChevronRight className="h-4 w-4 text-slate-400" />
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onChangeSection('dtsen')}
+                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+              >
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                  <Layers className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-slate-900">Klasifikasi DTSEN</p>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    Sebaran Desil 1–10 Kemensos
+                  </p>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
               </button>
 
               <button
@@ -481,28 +559,28 @@ export function MenuHubView({
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-slate-900">Cek Duplikasi NIK / KK</p>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    Periksa NIK atau KK yang tercatat ganda
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    Deteksi NIK atau KK ganda
                   </p>
                 </div>
-                <ChevronRight className="h-4 w-4 text-slate-400" />
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
               </button>
 
               <button
                 type="button"
-                onClick={() => onChangeSection('dtsen')}
+                onClick={() => onChangeSection('arsip')}
                 className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
               >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
-                  <Layers className="h-5 w-5" />
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                  <Archive className="h-5 w-5" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">Sebaran Desil DTSEN</p>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    Klasifikasi Desil 1–10 Kemensos
+                  <p className="text-sm font-semibold text-slate-900">Arsip Berkas Ditolak</p>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    Pengembalian berkas KPM ditolak
                   </p>
                 </div>
-                <ChevronRight className="h-4 w-4 text-slate-400" />
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
               </button>
 
               <button
@@ -514,46 +592,12 @@ export function MenuHubView({
                   <Banknote className="h-5 w-5" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">Administrasi & Pelayanan</p>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    Catatan biaya administrasi calon KPM
+                  <p className="text-sm font-semibold text-slate-900">Administrasi &amp; Pelayanan</p>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    Catatan biaya pelayanan calon KPM
                   </p>
                 </div>
-                <ChevronRight className="h-4 w-4 text-slate-400" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => onChangeSection('pengelola')}
-                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
-                  <Users className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">Data Pengelola Lapangan</p>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    Daftar pengelola dan penanggung jawab lapangan
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 text-slate-400" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => onChangeSection('pekerjaan')}
-                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
-                  <Briefcase className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">Pekerjaan</p>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    Daftar pekerjaan dan sebaran jumlah KPM
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 text-slate-400" />
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
               </button>
 
               <button
@@ -565,39 +609,81 @@ export function MenuHubView({
                   <FileSpreadsheet className="h-5 w-5" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">Laporan & Download CSV</p>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    Unduh data KPM dan rekap proposal
+                  <p className="text-sm font-semibold text-slate-900">Laporan &amp; Ekspor CSV</p>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    Unduh data KPM dan proposal
                   </p>
                 </div>
-                <ChevronRight className="h-4 w-4 text-slate-400" />
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
               </button>
             </div>
           </section>
 
-          {/* Group 2: Sistem Internal & Pengaturan */}
+          {/* Group 3: Basis Data Lapangan */}
           <section>
             <h2 className="mb-2 px-1 text-xs font-bold tracking-wide text-slate-500">
-              Internal & Pengaturan
+              Basis Data Lapangan
+            </h2>
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+              <button
+                type="button"
+                onClick={() => onChangeSection('pengelola')}
+                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+              >
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+                  <Users className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-slate-900">Pengelola Lapangan</p>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    Daftar pengelola dan koordinator
+                  </p>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onChangeSection('pekerjaan')}
+                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+              >
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+                  <Briefcase className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-slate-900">Profesi &amp; Pekerjaan</p>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    Daftar profesi dan sebaran KPM
+                  </p>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+              </button>
+            </div>
+          </section>
+
+          {/* Group 4: Administrasi Sistem & Pengaturan */}
+          <section>
+            <h2 className="mb-2 px-1 text-xs font-bold tracking-wide text-slate-500">
+              Sistem &amp; Pengaturan
             </h2>
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
               <button
                 type="button"
                 onClick={() => onChangeSection('users')}
-                className="flex min-h-[64px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
               >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-700 text-white">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-white">
                   <UserCheck className="h-5 w-5" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-bold text-slate-900">
-                    Manajemen User Internal
+                  <p className="text-sm font-semibold text-slate-900">
+                    Manajemen User &amp; Akses
                   </p>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    Persetujuan dan peran akun petugas internal
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    Kontrol Admin, izin ADD/UPDATE/DELETE
                   </p>
                 </div>
-                <ChevronRight className="h-4 w-4 text-slate-400" />
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
               </button>
 
               <button
@@ -613,11 +699,11 @@ export function MenuHubView({
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-slate-900">Pengaturan Master Data</p>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    Kelola item bantuan, pekerjaan, dan proposal
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    Item, wilayah, pekerjaan, dan proposal
                   </p>
                 </div>
-                <ChevronRight className="h-4 w-4 text-slate-400" />
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
               </button>
             </div>
           </section>
@@ -630,15 +716,16 @@ export function MenuHubView({
     );
   }
 
-  // 2. MANAJEMEN USER INTERNAL (Replaces "+ TAMBAH USER")
+  // 2. MANAJEMEN USER & AKSES (Kontrol SuperAdmin -> Admin)
   if (activeSection === 'users') {
+    const isSuperAdmin = currentUser.role === 'SuperAdmin';
     const filteredUsers = internalUsers.filter((u) =>
       userStatusFilter === 'all' ? true : u.status === userStatusFilter
     );
 
     return (
       <div className="min-h-screen pb-24">
-        {renderSubHeader('Manajemen User Internal', () => onChangeSection('root'))}
+        {renderSubHeader('Manajemen User & Akses', () => onChangeSection('root'))}
 
         <div className="space-y-4 px-4 pt-4">
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -646,20 +733,26 @@ export function MenuHubView({
               <div>
                 <div className="flex items-center gap-1.5 text-teal-800">
                   <ShieldCheck className="h-4 w-4" />
-                  <span className="text-xs font-bold">Persetujuan Akun Internal</span>
+                  <span className="text-xs font-bold">
+                    {isSuperAdmin ? 'Kendali Penuh SuperAdmin' : 'Daftar Tim Operasional'}
+                  </span>
                 </div>
                 <p className="mt-1 text-xs text-slate-600 leading-relaxed">
-                  Tinjau petugas yang mendaftar sebelum memberi akses.
+                  {isSuperAdmin
+                    ? 'Atur persetujuan akun, peran, serta izin ADD, UPDATE, dan DELETE Admin.'
+                    : 'Hanya SuperAdmin yang dapat mengubah hak akses dan persetujuan Admin.'}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setIsRegisterModalOpen(true)}
-                className="inline-flex min-h-[38px] shrink-0 items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-800 hover:bg-slate-100 whitespace-nowrap"
-              >
-                <UserPlus className="h-3.5 w-3.5" />
-                <span>Simulasi Daftar</span>
-              </button>
+              {isSuperAdmin && (
+                <button
+                  type="button"
+                  onClick={() => setIsRegisterModalOpen(true)}
+                  className="inline-flex min-h-[38px] shrink-0 items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-800 hover:bg-slate-100 whitespace-nowrap"
+                >
+                  <UserPlus className="h-3.5 w-3.5" />
+                  <span>Tambah User</span>
+                </button>
+              )}
             </div>
 
             <SegmentedTabs<'all' | InternalUserStatus>
@@ -680,7 +773,7 @@ export function MenuHubView({
                 },
                 {
                   key: 'rejected',
-                  label: 'Ditolak',
+                  label: 'Nonaktif',
                   count: internalUsers.filter((u) => u.status === 'rejected').length,
                 },
               ]}
@@ -693,85 +786,188 @@ export function MenuHubView({
             </div>
           ) : (
             <div className="space-y-3">
-              {filteredUsers.map((user) => (
-                <div
-                  key={user.id}
-                  className="rounded-2xl border border-slate-200 bg-white p-4"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-bold text-slate-900">{user.nama}</p>
-                      <p className="mt-0.5 truncate text-xs text-slate-600">{user.jabatan}</p>
-                      <p className="mt-0.5 truncate text-xs text-slate-500">
-                        {user.email} · {user.kontak || '-'}
-                      </p>
-                      <p className="mt-1 text-[11px] text-slate-400 tabular-nums">
-                        Terdaftar: {formatUploadDateTime(user.registeredAt)}
-                      </p>
+              {filteredUsers.map((user) => {
+                const isSelf = user.id === currentUser.id;
+                const pMeta = getPresenceMeta(user.presenceStatus);
+                const perms = user.permissions || { add: true, update: true, delete: false };
+
+                return (
+                  <div
+                    key={user.id}
+                    className="rounded-2xl border border-slate-200 bg-white p-4"
+                  >
+                    <div className="flex items-start justify-between gap-2.5">
+                      <div className="flex min-w-0 items-start gap-3">
+                        <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
+                          {user.fotoDataUrl ? (
+                            <img
+                              src={user.fotoDataUrl}
+                              alt={user.nama}
+                              className="h-full w-full rounded-xl object-cover"
+                            />
+                          ) : (
+                            <User className="h-4 w-4" />
+                          )}
+                          <PresenceDot
+                            status={user.presenceStatus}
+                            size="sm"
+                            className="absolute -right-0.5 -bottom-0.5"
+                          />
+                        </div>
+
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <p className="truncate text-sm font-bold text-slate-900">{user.nama}</p>
+                            <span
+                              className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                                user.role === 'SuperAdmin'
+                                  ? 'bg-slate-900 text-white'
+                                  : 'bg-teal-50 text-teal-800'
+                              }`}
+                            >
+                              {user.role}
+                            </span>
+                          </div>
+                          <p className="mt-0.5 truncate text-xs text-slate-500">{user.email}</p>
+                          <p className={`mt-0.5 text-[11px] font-medium ${pMeta.textClass}`}>
+                            {pMeta.label} · {user.jabatan}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex shrink-0 flex-col items-end gap-1.5">
+                        <span
+                          className={`text-xs font-bold ${
+                            user.status === 'active'
+                              ? 'text-teal-700'
+                              : user.status === 'pending'
+                                ? 'text-amber-700'
+                                : 'text-rose-600'
+                          }`}
+                        >
+                          {user.status === 'active'
+                            ? 'Aktif'
+                            : user.status === 'pending'
+                              ? 'Menunggu'
+                              : 'Nonaktif'}
+                        </span>
+                        {!isSelf && user.status === 'active' && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenChat(user.id)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-semibold text-teal-800 hover:bg-teal-100"
+                          >
+                            <MessageSquare className="h-3 w-3" />
+                            <span>Chat</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
 
-                    <span
-                      className={`shrink-0 text-xs font-bold ${
-                        user.status === 'active'
-                          ? 'text-teal-700'
-                          : user.status === 'pending'
-                            ? 'text-amber-700'
-                            : 'text-rose-600'
-                      }`}
-                    >
-                      {user.status === 'active'
-                        ? 'Aktif'
-                        : user.status === 'pending'
-                          ? 'Menunggu'
-                          : 'Ditolak'}
-                    </span>
-                  </div>
+                    {/* SuperAdmin Permission Toggles (ADD / UPDATE / DELETE) */}
+                    {isSuperAdmin && !isSelf && (
+                      <div className="mt-3 space-y-2.5 border-t border-slate-100 pt-3">
+                        <div className="grid grid-cols-3 gap-2">
+                          {(
+                            [
+                              { key: 'add', label: 'ADD' },
+                              { key: 'update', label: 'UPDATE' },
+                              { key: 'delete', label: 'DELETE' },
+                            ] as const
+                          ).map((item) => {
+                            const checked =
+                              user.role === 'SuperAdmin'
+                                ? true
+                                : user.role === 'Viewer'
+                                  ? false
+                                  : perms[item.key];
+                            const toggleDisabled =
+                              user.role === 'SuperAdmin' || user.role === 'Viewer';
+                            return (
+                              <button
+                                key={item.key}
+                                type="button"
+                                disabled={toggleDisabled}
+                                onClick={() =>
+                                  onAdminControlUser(user.id, {
+                                    permissions: {
+                                      ...perms,
+                                      [item.key]: !perms[item.key],
+                                    },
+                                  })
+                                }
+                                className={`flex items-center justify-between rounded-xl border px-2.5 py-2 text-[11px] font-bold transition-colors ${
+                                  checked
+                                    ? 'border-teal-200 bg-teal-50 text-teal-900'
+                                    : 'border-slate-200 bg-slate-50 text-slate-400'
+                                } disabled:opacity-60`}
+                              >
+                                <span>{item.label}</span>
+                                <span
+                                  className={`inline-block h-3.5 w-6 rounded-full p-0.5 transition-colors ${
+                                    checked ? 'bg-teal-700' : 'bg-slate-300'
+                                  }`}
+                                >
+                                  <span
+                                    className={`block h-2.5 w-2.5 rounded-full bg-white transition-transform ${
+                                      checked ? 'translate-x-2.5' : 'translate-x-0'
+                                    }`}
+                                  />
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
 
-                  {/* Role Selector & Approval Buttons */}
-                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
-                    <select
-                      aria-label={`Peran untuk ${user.nama}`}
-                      value={user.role}
-                      onChange={(e) =>
-                        onUpdateUserStatus(user.id, user.status, e.target.value as InternalUserRole)
-                      }
-                      className="min-h-[38px] rounded-xl border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none"
-                    >
-                      <option value="Petugas">Petugas Lapangan</option>
-                      <option value="Verifikator">Verifikator</option>
-                      <option value="Admin">Admin Internal</option>
-                    </select>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <select
+                            aria-label={`Jabatan / Peran untuk ${user.nama}`}
+                            value={user.role}
+                            onChange={(e) =>
+                              onAdminControlUser(user.id, {
+                                role: e.target.value as InternalUserRole,
+                              })
+                            }
+                            className="min-h-[38px] rounded-xl border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none"
+                          >
+                            <option value="SuperAdmin">SuperAdmin</option>
+                            <option value="Admin">Admin</option>
+                            <option value="Viewer">Viewer</option>
+                          </select>
 
-                    <div className="flex items-center gap-1.5">
-                      {user.status !== 'active' && (
-                        <button
-                          type="button"
-                          onClick={() => onUpdateUserStatus(user.id, 'active')}
-                          className="inline-flex min-h-[38px] items-center gap-1 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 whitespace-nowrap"
-                        >
-                          <Check className="h-3.5 w-3.5" />
-                          <span>Setujui</span>
-                        </button>
-                      )}
-                      {user.status !== 'rejected' && (
-                        <button
-                          type="button"
-                          onClick={() => onUpdateUserStatus(user.id, 'rejected')}
-                          className="inline-flex min-h-[38px] items-center gap-1 rounded-xl border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-700 hover:bg-rose-100 whitespace-nowrap"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                          <span>{user.status === 'active' ? 'Nonaktifkan' : 'Tolak'}</span>
-                        </button>
-                      )}
-                    </div>
+                          <div className="flex items-center gap-1.5">
+                            {user.status !== 'active' && (
+                              <button
+                                type="button"
+                                onClick={() => onAdminControlUser(user.id, { status: 'active' })}
+                                className="inline-flex min-h-[38px] items-center gap-1 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 whitespace-nowrap"
+                              >
+                                <Check className="h-3.5 w-3.5" />
+                                <span>Setujui</span>
+                              </button>
+                            )}
+                            {user.status !== 'rejected' && (
+                              <button
+                                type="button"
+                                onClick={() => onAdminControlUser(user.id, { status: 'rejected' })}
+                                className="inline-flex min-h-[38px] items-center gap-1 rounded-xl border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-700 hover:bg-rose-100 whitespace-nowrap"
+                              >
+                                <X className="h-3.5 w-3.5" />
+                                <span>{user.status === 'active' ? 'Nonaktifkan' : 'Tolak'}</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
 
-        {/* Registration Request Modal (Simulates Internal Staff Sign-Up for Approval) */}
+        {/* Add Internal User Modal (SuperAdmin) */}
         {isRegisterModalOpen && (
           <div
             className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 backdrop-blur-xs"
@@ -785,7 +981,7 @@ export function MenuHubView({
               <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-300" />
               <div className="flex items-center justify-between pb-3">
                 <h2 className="text-base font-bold text-slate-900">
-                  Pendaftaran Akun Internal Baru
+                  Tambah Akun Internal Baru
                 </h2>
                 <button
                   type="button"
@@ -796,8 +992,7 @@ export function MenuHubView({
                 </button>
               </div>
               <p className="mb-3 text-xs text-slate-500">
-                Pendaftaran baru otomatis berstatus <strong>Menunggu</strong> sampai disetujui
-                Admin internal.
+                Pendaftaran baru berstatus <strong>Menunggu</strong> sampai disetujui SuperAdmin.
               </p>
 
               <div className="space-y-3">
@@ -806,7 +1001,7 @@ export function MenuHubView({
                   required
                   value={regNama}
                   onChange={(e) => setRegNama(e.target.value)}
-                  placeholder="Nama lengkap petugas *"
+                  placeholder="Nama lengkap *"
                   className="min-h-[44px] w-full rounded-xl border border-slate-300 px-3.5 text-sm focus:border-teal-700 focus:outline-none"
                 />
                 <input
@@ -837,9 +1032,9 @@ export function MenuHubView({
                     onChange={(e) => setRegRole(e.target.value as InternalUserRole)}
                     className="min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 text-sm focus:border-teal-700 focus:outline-none"
                   >
-                    <option value="Petugas">Petugas</option>
-                    <option value="Verifikator">Verifikator</option>
+                    <option value="SuperAdmin">SuperAdmin</option>
                     <option value="Admin">Admin</option>
+                    <option value="Viewer">Viewer</option>
                   </select>
                 </div>
               </div>
@@ -861,226 +1056,15 @@ export function MenuHubView({
   if (activeSection === 'setting') {
     if (settingPanel === 'items') {
       return (
-        <div className="min-h-screen pb-24">
-          {renderSubHeader('Kelola Item & Sub-Item', () => setSettingPanel('main'))}
-          <div className="space-y-4 px-4 pt-4">
-            {/* Year Selector for Package Catalog */}
-            <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
-              <div>
-                <p className="text-xs font-bold text-slate-900">Katalog Paket per Tahun</p>
-                <p className="text-[11px] text-slate-500">
-                  Daftar paket dan sub-item dapat berbeda tiap tahun
-                </p>
-              </div>
-              <div className="relative shrink-0">
-                <select
-                  aria-label="Pilih tahun katalog item"
-                  value={selectedItemYear}
-                  onChange={(e) => {
-                    setSelectedItemYear(e.target.value);
-                    setExpandedItemCode(null);
-                  }}
-                  className="min-h-[38px] appearance-none rounded-xl border border-slate-200 bg-slate-50 pr-7 pl-3 text-xs font-bold text-slate-900 focus:border-teal-700 focus:bg-white focus:outline-none tabular-nums"
-                >
-                  {itemYearOptions.map((yr) => (
-                    <option key={yr} value={yr}>
-                      {yr}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown className="pointer-events-none absolute top-1/2 right-2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
-              </div>
-            </div>
-
-            <form
-              onSubmit={handleAddItemSubmit}
-              className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3"
-            >
-              <h2 className="text-sm font-bold text-slate-900">
-                Tambah Paket Item Tahun {selectedItemYear}
-              </h2>
-              <div className="grid grid-cols-3 gap-2.5">
-                <input
-                  type="text"
-                  maxLength={6}
-                  required
-                  value={newItemCode}
-                  onChange={(e) => setNewItemCode(e.target.value.toUpperCase())}
-                  placeholder="Kode (OV)"
-                  className="col-span-1 min-h-[44px] rounded-xl border border-slate-300 px-3 text-sm font-bold uppercase focus:border-teal-700 focus:outline-none"
-                />
-                <input
-                  type="text"
-                  required
-                  value={newItemName}
-                  onChange={(e) => setNewItemName(e.target.value)}
-                  placeholder="Nama paket (cth: Paket Oven Gas)"
-                  className="col-span-2 min-h-[44px] rounded-xl border border-slate-300 px-3 text-sm focus:border-teal-700 focus:outline-none"
-                />
-              </div>
-              <input
-                type="text"
-                value={newItemSubItemsText}
-                onChange={(e) => setNewItemSubItemsText(e.target.value)}
-                placeholder="Sub-item pisah koma (cth: Oven Gas, Mixer, Blender)"
-                className="min-h-[44px] w-full rounded-xl border border-slate-300 px-3 text-xs focus:border-teal-700 focus:outline-none"
-              />
-              <button
-                type="submit"
-                className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-xl bg-teal-700 text-sm font-semibold text-white hover:bg-teal-800"
-              >
-                <Plus className="h-4 w-4" />
-                <span>Simpan Paket ({selectedItemYear})</span>
-              </button>
-            </form>
-
-            {yearCatalogItems.length === 0 ? (
-              <div className="rounded-2xl border border-slate-200 bg-white p-5 text-center space-y-3">
-                <p className="text-sm font-semibold text-slate-900">
-                  Belum ada paket terdaftar untuk tahun {selectedItemYear}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => onCopyItemsFromYear('2026', selectedItemYear)}
-                  className="inline-flex min-h-[40px] items-center justify-center rounded-xl border border-teal-200 bg-teal-50 px-4 text-xs font-semibold text-teal-800 hover:bg-teal-100"
-                >
-                  Salin Susunan Paket dari Tahun 2026
-                </button>
-              </div>
-            ) : (
-              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
-                <datalist id="canonical-subitem-suggestions">
-                  {canonicalSubItemSuggestions.map((s) => (
-                    <option key={s} value={s} />
-                  ))}
-                </datalist>
-
-                {yearCatalogItems.map((item, idx) => {
-                  const isExpanded = expandedItemCode === item.code;
-                  return (
-                    <div key={`${item.tahun}-${item.code}`} className="bg-white">
-                      <div className="flex items-center justify-between gap-1.5 px-3 py-3">
-                        <span className="w-5 shrink-0 text-center font-mono text-[11px] font-bold text-slate-400 tabular-nums">
-                          {idx + 1}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setExpandedItemCode(isExpanded ? null : item.code);
-                            setNewSubItemInput('');
-                          }}
-                          className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
-                        >
-                          <span className="flex h-9 w-11 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-xs font-bold text-teal-800">
-                            {item.code}
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-semibold text-slate-900">
-                              {item.name}
-                            </p>
-                            <p className="truncate text-[11px] text-slate-500">
-                              {item.subItems.length} sub-item:{' '}
-                              {item.subItems.length > 0 ? item.subItems.join(', ') : 'Belum diisi'}
-                            </p>
-                          </div>
-                          <ChevronDown
-                            className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${
-                              isExpanded ? 'rotate-180' : ''
-                            }`}
-                          />
-                        </button>
-
-                        <div className="flex shrink-0 items-center gap-0.5">
-                          <button
-                            type="button"
-                            disabled={idx === 0}
-                            onClick={() => onMoveItemOrder(item.tahun, item.code, 'up')}
-                            aria-label={`Naikkan urutan ${item.code}`}
-                            className="inline-flex h-8 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30"
-                          >
-                            <ArrowUp className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            disabled={idx === yearCatalogItems.length - 1}
-                            onClick={() => onMoveItemOrder(item.tahun, item.code, 'down')}
-                            aria-label={`Turunkan urutan ${item.code}`}
-                            className="inline-flex h-8 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30"
-                          >
-                            <ArrowDown className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onDeleteItem(item.tahun, item.code)}
-                            aria-label={`Hapus item ${item.code} tahun ${item.tahun}`}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </div>
-                      </div>
-
-                      {isExpanded && (
-                        <div className="border-t border-slate-100 bg-slate-50/70 px-4 py-3 space-y-2.5">
-                          <p className="text-[11px] font-bold text-slate-600">
-                            Daftar Sub-Item ({item.code} · {item.tahun})
-                          </p>
-                          {item.subItems.length > 0 && (
-                            <div className="divide-y divide-slate-200/70 overflow-hidden rounded-xl border border-slate-200 bg-white">
-                              {item.subItems.map((sub, idx) => (
-                                <div
-                                  key={`${sub}-${idx}`}
-                                  className="flex items-center justify-between gap-2 px-3 py-2"
-                                >
-                                  <span className="text-xs font-medium text-slate-800">
-                                    {idx + 1}. {sub}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      onUpdateItemSubItems(
-                                        item.tahun,
-                                        item.code,
-                                        item.subItems.filter((_, i) => i !== idx)
-                                      )
-                                    }
-                                    aria-label={`Hapus sub-item ${sub}`}
-                                    className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
-                                  >
-                                    <X className="h-3.5 w-3.5" />
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-
-                          <div className="flex gap-2">
-                            <input
-                              type="text"
-                              list="canonical-subitem-suggestions"
-                              value={newSubItemInput}
-                              onChange={(e) => setNewSubItemInput(e.target.value)}
-                              placeholder="Tambah sub-item (cth: Blender)"
-                              className="min-h-[38px] flex-1 rounded-xl border border-slate-300 bg-white px-3 text-xs focus:border-teal-700 focus:outline-none"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => handleAddSubItemToPackage(item)}
-                              className="inline-flex min-h-[38px] items-center gap-1 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800"
-                            >
-                              <Plus className="h-3.5 w-3.5" />
-                              <span>Tambah</span>
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
+        <ItemManagerView
+          items={items}
+          onBack={() => setSettingPanel('main')}
+          onSaveItem={onSaveItem}
+          onDeleteItem={onDeleteItem}
+          onMoveItemOrder={onMoveItemOrder}
+          onUpdateItemSubItems={onUpdateItemSubItems}
+          onCopyItemsFromYear={onCopyItemsFromYear}
+        />
       );
     }
 
@@ -1476,6 +1460,279 @@ export function MenuHubView({
     );
   }
 
+  // 4B. ARSIP BERKAS KPM (Hanya KPM Ditolak untuk Pengembalian Berkas Fisik)
+  if (activeSection === 'arsip') {
+    const arsipYearOptions = Array.from(
+      new Set(archivedRecords.map((r) => r.tahun).filter(Boolean))
+    ).sort((a, b) => b.localeCompare(a));
+
+    const arsipProposalOptions = Array.from(
+      new Set(archivedRecords.map((r) => r.proposal).filter(Boolean))
+    ).sort((a, b) => a.localeCompare(b, 'id'));
+
+    const scopedArsip = archivedRecords.filter((rec) => {
+      if (arsipYearFilter !== 'all' && rec.tahun !== arsipYearFilter) return false;
+      if (arsipProposalFilter !== 'all' && rec.proposal !== arsipProposalFilter) return false;
+      return true;
+    });
+
+    const returnedCount = scopedArsip.filter((r) => Boolean(r.berkasDikembalikan)).length;
+    const unreturnedCount = scopedArsip.length - returnedCount;
+
+    const q = arsipQuery.trim().toLowerCase();
+    const visibleArsip = scopedArsip
+      .filter((rec) => {
+        if (arsipReturnFilter === 'pending_return' && rec.berkasDikembalikan) return false;
+        if (arsipReturnFilter === 'returned' && !rec.berkasDikembalikan) return false;
+        if (!q) return true;
+        return (
+          rec.nama.toLowerCase().includes(q) ||
+          rec.proposal.toLowerCase().includes(q) ||
+          (rec.pengelola && rec.pengelola.toLowerCase().includes(q)) ||
+          (rec.kelurahan && rec.kelurahan.toLowerCase().includes(q)) ||
+          rec.nikKtp.includes(q) ||
+          rec.nikKk.includes(q)
+        );
+      })
+      .sort((a, b) => {
+        const retCmp = Number(Boolean(a.berkasDikembalikan)) - Number(Boolean(b.berkasDikembalikan));
+        if (retCmp !== 0) return retCmp;
+        return (
+          a.proposal.localeCompare(b.proposal, 'id') ||
+          getAbsenSeq(a.registerCode) - getAbsenSeq(b.registerCode) ||
+          a.nama.localeCompare(b.nama, 'id')
+        );
+      });
+
+    const getCompactKelurahan = (rawKel: string) =>
+      rawKel.replace(/^(kelurahan|kel\.?)\s+/i, '').trim();
+
+    return (
+      <div className="min-h-screen pb-24">
+        {renderSubHeader('Arsip Berkas Ditolak', () => onChangeSection('root'))}
+
+        <div className="space-y-4 px-4 pt-4">
+          {/* Header & Filter konsisten dengan KpmListView (tanpa card pembungkus tab) */}
+          <div className="space-y-2">
+            <p className="px-0.5 text-xs text-slate-500">
+              Berkas KPM berstatus ditolak untuk pengembalian fisik.
+            </p>
+
+            <div className="flex items-center gap-2">
+              <div className="relative min-w-0 flex-1">
+                <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="search"
+                  value={arsipQuery}
+                  onChange={(e) => setArsipQuery(e.target.value)}
+                  placeholder="Cari nama, NIK, proposal..."
+                  className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pr-3 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
+                />
+              </div>
+
+              <FilterSelect
+                ariaLabel="Filter tahun arsip"
+                value={arsipYearFilter}
+                onChange={setArsipYearFilter}
+                className="w-[82px] shrink-0"
+              >
+                <option value="all">Semua</option>
+                {arsipYearOptions.map((yr) => (
+                  <option key={yr} value={yr}>
+                    {yr}
+                  </option>
+                ))}
+              </FilterSelect>
+
+              <button
+                type="button"
+                onClick={() => setShowArsipExtraFilters((prev) => !prev)}
+                aria-label="Filter proposal arsip"
+                aria-expanded={showArsipExtraFilters}
+                className={`relative inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl border transition-colors ${
+                  showArsipExtraFilters || arsipProposalFilter !== 'all'
+                    ? 'border-teal-700 bg-teal-50 text-teal-800'
+                    : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                <SlidersHorizontal className="h-4 w-4" />
+                {arsipProposalFilter !== 'all' && (
+                  <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-teal-700 px-1 text-[10px] font-bold text-white">
+                    1
+                  </span>
+                )}
+              </button>
+            </div>
+
+            {showArsipExtraFilters && (
+              <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                <FilterSelect
+                  ariaLabel="Filter proposal arsip"
+                  value={arsipProposalFilter}
+                  onChange={setArsipProposalFilter}
+                >
+                  <option value="all">Semua Proposal</option>
+                  {arsipProposalOptions.map((prop) => (
+                    <option key={prop} value={prop}>
+                      {prop}
+                    </option>
+                  ))}
+                </FilterSelect>
+              </div>
+            )}
+
+            {/* Segmented Tabs Terpisah */}
+            <SegmentedTabs<'all' | 'pending_return' | 'returned'>
+              value={arsipReturnFilter}
+              onChange={setArsipReturnFilter}
+              tabs={[
+                { key: 'all', label: 'Semua', count: scopedArsip.length },
+                { key: 'pending_return', label: 'Belum Kembali', count: unreturnedCount },
+                { key: 'returned', label: 'Sudah Kembali', count: returnedCount },
+              ]}
+            />
+          </div>
+
+          {visibleArsip.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
+              <p className="text-sm font-bold text-slate-900">Tidak ada berkas di arsip</p>
+              <p className="mt-1 text-xs text-slate-500">
+                KPM Desil 5 ke atas atau lainnya yang berstatus Ditolak akan masuk ke sini.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+              {visibleArsip.map((rec) => {
+                const thumb = rec.documents.penerima || rec.documents.ktp;
+                const absenSeq = getAbsenSeq(rec.registerCode);
+                const absenLabel =
+                  absenSeq < 999999 ? String(absenSeq).padStart(2, '0') : '--';
+                const desilNumeric =
+                  rec.dtsen && /^\d/.test(rec.dtsen.trim())
+                    ? rec.dtsen.trim().replace(/\s*-\s*/g, '-')
+                    : '';
+                const propMatch =
+                  proposals.find(
+                    (p) => p.namaProposal === rec.proposal && p.tahun === rec.tahun
+                  ) ?? proposals.find((p) => p.namaProposal === rec.proposal);
+                const locked = propMatch?.status === 'locked';
+                const kelRaw =
+                  rec.kelurahan?.trim() ||
+                  resolveProposalDomicile(rec.proposal, proposals, rec.tahun, wilayahList)
+                    .kelurahan ||
+                  '';
+                const kelurahanName = isKecamatanProposal(rec.proposal)
+                  ? getCompactKelurahan(kelRaw)
+                  : '';
+                const metaLine = [kelurahanName, rec.pengelola?.trim()]
+                  .filter(Boolean)
+                  .join(' · ');
+                const waUrl = formatWhatsAppUrl(rec.kontak);
+
+                return (
+                  <div key={rec.id} className="bg-white">
+                    <button
+                      type="button"
+                      onClick={() => onSelectKpm?.(rec)}
+                      className="flex w-full items-stretch gap-2.5 px-3.5 pt-2.5 pb-2 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
+                    >
+                      <div className="flex w-5 shrink-0 items-center justify-center">
+                        <span className="font-mono text-[11px] font-bold text-slate-500 tabular-nums">
+                          {absenLabel}
+                        </span>
+                      </div>
+
+                      <div className="flex w-11 shrink-0 items-center justify-center self-stretch overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
+                        {thumb ? (
+                          <img
+                            src={thumb.dataUrl}
+                            alt={rec.nama}
+                            referrerPolicy="no-referrer"
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <User className="h-5 w-5" />
+                        )}
+                      </div>
+
+                      <div className="min-w-0 flex-1 flex flex-col justify-center">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex min-w-0 items-center gap-1">
+                            <span className="truncate text-[13px] font-bold leading-tight text-slate-900">
+                              {rec.nama}
+                            </span>
+                            {locked && <Lock className="h-3 w-3 shrink-0 text-slate-400" />}
+                          </div>
+
+                          <span className="shrink-0 rounded-md bg-rose-50 px-1.5 py-0.5 text-[11px] font-bold leading-none text-rose-700 tabular-nums">
+                            {rec.item}
+                            {desilNumeric ? ` · ${desilNumeric}` : ''}
+                          </span>
+                        </div>
+
+                        <div className="mt-1 flex items-center justify-between gap-2 text-[11px] leading-tight">
+                          <span className="truncate font-medium text-slate-600">
+                            {rec.proposal}
+                          </span>
+                          <span className="shrink-0 font-semibold text-slate-400 tabular-nums">
+                            {rec.tahun}
+                          </span>
+                        </div>
+
+                        {metaLine && (
+                          <p className="mt-0.5 truncate text-[11px] leading-tight text-slate-500">
+                            {metaLine}
+                          </p>
+                        )}
+                      </div>
+                    </button>
+
+                    <div className="flex items-center justify-between gap-2 px-3.5 pb-2.5 pl-[82px]">
+                      <div className="min-w-0">
+                        {waUrl && rec.kontak ? (
+                          <a
+                            href={waUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex h-7 items-center gap-1 rounded-lg bg-emerald-50 px-2 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100"
+                          >
+                            <MessageCircle className="h-3 w-3 shrink-0" />
+                            <span className="truncate">{rec.kontak}</span>
+                          </a>
+                        ) : (
+                          <span className="text-[11px] text-slate-400">Tanpa No. HP</span>
+                        )}
+                      </div>
+
+                      {onToggleBerkasDikembalikan && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onToggleBerkasDikembalikan(rec.id, !rec.berkasDikembalikan)
+                          }
+                          className={`inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2.5 text-[11px] font-semibold transition-colors ${
+                            rec.berkasDikembalikan
+                              ? 'bg-teal-700 text-white hover:bg-teal-800'
+                              : 'border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                          }`}
+                        >
+                          <CheckCircle2 className="h-3 w-3 shrink-0" />
+                          <span>
+                            {rec.berkasDikembalikan ? 'Sudah Kembali' : 'Tandai Kembali'}
+                          </span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   // 5. ADMINISTRASI / BIAYA PELAYANAN
   if (activeSection === 'administrasi') {
     return (
@@ -1522,17 +1779,27 @@ export function MenuHubView({
   if (activeSection === 'dtsen') {
     return (
       <div className="min-h-screen pb-24">
-        {renderSubHeader('Sebaran Desil DTSEN', () => onChangeSection('root'))}
+        {renderSubHeader('Klasifikasi DTSEN', () => onChangeSection('root'))}
         <div className="px-4 pt-4">
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
-            {dtsenSummary.map((row) => (
-              <div key={row.value} className="flex items-center justify-between gap-3 px-4 py-3">
-                <span className="text-xs font-medium text-slate-800">{row.label}</span>
-                <span className="text-sm font-bold text-slate-900 tabular-nums shrink-0">
-                  {row.count}
-                </span>
-              </div>
-            ))}
+            {dtsenSummary.map((row) => {
+              const dotClass = ['1', '2', '3', '4'].includes(row.value)
+                ? 'bg-teal-700'
+                : row.value === '5'
+                  ? 'bg-amber-600'
+                  : 'bg-slate-400';
+              return (
+                <div key={row.value} className="flex items-center justify-between gap-3 px-4 py-3">
+                  <div className="flex items-center gap-2.5">
+                    <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${dotClass}`} />
+                    <span className="text-xs font-semibold text-slate-800">Desil {row.value}</span>
+                  </div>
+                  <span className="text-sm font-bold text-slate-900 tabular-nums shrink-0">
+                    {row.count}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -1543,7 +1810,7 @@ export function MenuHubView({
   if (activeSection === 'pengelola') {
     return (
       <div className="min-h-screen pb-24">
-        {renderSubHeader('Data Pengelola Lapangan', () => onChangeSection('root'))}
+        {renderSubHeader('Pengelola Lapangan', () => onChangeSection('root'))}
         <div className="space-y-4 px-4 pt-4">
           <button
             type="button"
@@ -1589,7 +1856,7 @@ export function MenuHubView({
                     )}
                     <div className="min-w-0">
                       <p className="truncate text-sm font-bold text-slate-900">{p.displayName}</p>
-                      {(p.kelurahan || p.kecamatan || p.kabKota || p.kontak) && (
+                      {(p.kelurahan || p.kecamatan || p.kabKota) && (
                         <p className="truncate text-xs text-slate-500">
                           {[
                             p.kelurahan ? p.kelurahan.replace(/^kel\.?\s+/i, 'Kelurahan ') : '',
@@ -1599,12 +1866,26 @@ export function MenuHubView({
                                 : `Kecamatan ${p.kecamatan.replace(/^kec\.?\s+/i, '')}`
                               : '',
                             p.kabKota || '',
-                            p.kontak,
                           ]
                             .filter(Boolean)
                             .join(' · ')}
                         </p>
                       )}
+                      {(() => {
+                        const waUrl = formatWhatsAppUrl(p.kontak);
+                        if (!waUrl || !p.kontak) return null;
+                        return (
+                          <a
+                            href={waUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mt-0.5 inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:underline"
+                          >
+                            <MessageCircle className="h-3 w-3 shrink-0" />
+                            <span>{p.kontak}</span>
+                          </a>
+                        );
+                      })()}
                     </div>
                   </div>
                   <span className="text-xs font-semibold text-slate-600 tabular-nums shrink-0">
@@ -1639,7 +1920,7 @@ export function MenuHubView({
 
     return (
       <div className="min-h-screen pb-24">
-        {renderSubHeader('Pekerjaan', () => onChangeSection('root'))}
+        {renderSubHeader('Profesi & Pekerjaan', () => onChangeSection('root'))}
         <div className="space-y-4 px-4 pt-4">
           <button
             type="button"

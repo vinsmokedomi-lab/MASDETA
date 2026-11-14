@@ -371,7 +371,7 @@ export function ProposalForm({
         <form onSubmit={handleSubmit} noValidate className="space-y-4">
           {/* 01. Identitas & Status Kunci Proposal */}
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
-            <h2 className="text-base font-semibold text-slate-900">
+            <h2 className="text-sm font-bold text-slate-900">
               01. Identitas &amp; Status Proposal
             </h2>
             <p className="mt-0.5 text-xs text-slate-500">
@@ -545,7 +545,7 @@ export function ProposalForm({
 
           {/* 02. Status Kelengkapan Proposal (Toggle Switches) */}
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
-            <h2 className="text-base font-semibold text-slate-900">
+            <h2 className="text-sm font-bold text-slate-900">
               02. Status Kelengkapan Proposal
             </h2>
             <p className="mt-0.5 text-xs text-slate-500">
@@ -564,17 +564,17 @@ export function ProposalForm({
                       <div className="flex items-center gap-1.5">
                         <p className="text-xs font-semibold text-slate-900">{row.label}</p>
                         {row.readOnly && (
-                          <span className="text-[10px] font-medium text-slate-400">
+                          <span className="text-xs font-medium text-slate-400">
                             · Otomatis
                           </span>
                         )}
                       </div>
                       <p className="text-[11px] text-slate-500">{row.description}</p>
                       {row.linkedLabel && (
-                        <p className="mt-0.5 text-[10px] text-teal-700 leading-tight">{row.linkedLabel}</p>
+                        <p className="mt-0.5 text-xs text-teal-700 leading-tight">{row.linkedLabel}</p>
                       )}
                       {row.key === 'dinas' && isOn && values.checklist.dinasAt && (
-                        <p className="mt-0.5 flex items-center gap-1 text-[10px] text-teal-700 tabular-nums">
+                        <p className="mt-0.5 flex items-center gap-1 text-xs text-teal-700 tabular-nums">
                           <Clock className="h-3 w-3 shrink-0" />
                           <span>Diantar: {formatUploadDateTime(values.checklist.dinasAt)}</span>
                         </p>
@@ -596,7 +596,7 @@ export function ProposalForm({
 
           {/* 03. Berkas Dokumen Proposal & RAB */}
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
-            <h2 className="text-base font-semibold text-slate-900">
+            <h2 className="text-sm font-bold text-slate-900">
               03. Berkas Dokumen Proposal &amp; RAB
             </h2>
             <p className="mt-0.5 text-xs text-slate-500">
@@ -651,7 +651,7 @@ export function ProposalForm({
 
           {/* 04. Bukti Cap Pengesahan (Kamera / Foto) */}
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
-            <h2 className="text-base font-semibold text-slate-900">
+            <h2 className="text-sm font-bold text-slate-900">
               04. Bukti Cap Pengesahan
             </h2>
             <p className="mt-0.5 text-xs text-slate-500">

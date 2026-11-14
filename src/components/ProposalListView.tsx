@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ChevronRight, Lock, Plus, Search, Unlock } from 'lucide-react';
+import { ChevronRight, Lock, Search, Unlock } from 'lucide-react';
 import { PROPOSAL_TIPE_OPTIONS, TAHUN_OPTIONS } from '../data/kpmOptions';
 import { KpmRecord, ProposalRecord, ProposalTipe } from '../types/kpm';
 import { FilterSelect, SegmentedTabs } from './FormControls';
@@ -10,7 +10,6 @@ interface ProposalListViewProps {
   selectedYear: string;
   onChangeYear: (year: string) => void;
   onOpenProposalDetail: (proposalId: string) => void;
-  onOpenAddProposal: () => void;
 }
 
 export function ProposalListView({
@@ -19,7 +18,6 @@ export function ProposalListView({
   selectedYear,
   onChangeYear,
   onOpenProposalDetail,
-  onOpenAddProposal,
 }: ProposalListViewProps) {
   const [query, setQuery] = useState('');
   const [tipeFilter, setTipeFilter] = useState<'all' | ProposalTipe>('all');
@@ -141,7 +139,7 @@ export function ProposalListView({
                       {matchingRecords.length}/{prop.jumlahKpm ?? 66} KPM · {prop.tipe} · {prop.tahun}
                     </p>
                     <p
-                      className={`mt-0.5 text-[11px] font-medium ${
+                      className={`mt-0.5 text-xs font-medium ${
                         prop.checklist.dinas ? 'text-teal-700' : 'text-slate-400'
                       }`}
                     >
@@ -155,15 +153,6 @@ export function ProposalListView({
             })}
           </div>
         )}
-
-        <button
-          type="button"
-          onClick={onOpenAddProposal}
-          className="inline-flex min-h-[40px] items-center gap-1.5 px-1 text-xs font-bold text-teal-700 hover:underline"
-        >
-          <Plus className="h-4 w-4" />
-          <span>Tambah proposal baru</span>
-        </button>
       </div>
     </div>
   );

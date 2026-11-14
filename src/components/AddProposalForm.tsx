@@ -153,7 +153,7 @@ export function AddProposalForm({
 
       <form onSubmit={handleSubmit} noValidate className="space-y-4 px-4 pt-4">
         <section className="rounded-2xl border border-slate-200 bg-white p-4">
-          <h2 className="text-base font-semibold text-slate-900">
+          <h2 className="text-sm font-bold text-slate-900">
             Data Proposal Baru
           </h2>
           <p className="mt-0.5 text-xs text-slate-500">

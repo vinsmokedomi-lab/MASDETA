@@ -122,8 +122,8 @@ export function SegmentedTabs<K extends string>({
   return (
     <div
       role="tablist"
-      className={`grid gap-0.5 rounded-xl bg-slate-200/70 p-0.5 ${className}`}
-      style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}
+      className={`${stacked ? 'grid' : 'flex'} gap-0.5 rounded-xl bg-slate-200/70 p-0.5 ${className}`}
+      style={stacked ? { gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` } : undefined}
     >
       {tabs.map((tab) => {
         const active = value === tab.key;
@@ -137,7 +137,7 @@ export function SegmentedTabs<K extends string>({
             className={`flex min-w-0 items-center justify-center rounded-lg font-semibold leading-none transition-colors ${
               stacked
                 ? 'min-h-[40px] flex-col gap-1 px-1 py-1 text-[10px]'
-                : 'min-h-[34px] gap-1 px-1.5 text-[11px]'
+                : 'min-h-[34px] flex-auto gap-1 px-1.5 text-[11px]'
             } ${
               active ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
             }`}

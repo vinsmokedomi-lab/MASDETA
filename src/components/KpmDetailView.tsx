@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
-  ArrowRight,
   CheckCircle2,
   ChevronRight,
   Clock,
@@ -11,6 +10,7 @@ import {
   FileText,
   History,
   Lock,
+  MessageCircle,
   Package,
   ShieldCheck,
   Trash2,
@@ -32,6 +32,7 @@ import {
   formatNikDisplay,
   formatRupiah,
   formatUploadDateTime,
+  formatWhatsAppUrl,
   getKpmSubItemStatusList,
   resolvePackageForKpm,
   resolveProposalDomicile,
@@ -60,6 +61,7 @@ interface KpmDetailViewProps {
   ) => void;
   onSelectDuplicateRecord: (record: KpmRecord) => void;
   onOpenProposal: (proposalName: string, tahun: string) => void;
+  onOpenFullHistory: () => void;
   onPreviewDocument: (file: KpmDocumentFile, title: string) => void;
   feedback?: { type: 'success' | 'error'; message: string } | null;
   onDismissFeedback?: () => void;
@@ -80,6 +82,7 @@ export function KpmDetailView({
   onMarkAllSubItemsDelivered,
   onSelectDuplicateRecord,
   onOpenProposal,
+  onOpenFullHistory,
   onPreviewDocument,
   feedback,
   onDismissFeedback,
@@ -310,44 +313,34 @@ export function KpmDetailView({
 
         {/* Hero Card: Identity + Status Validasi */}
         <section className="rounded-3xl border border-slate-200 bg-white p-5">
-          <div className="flex items-start justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs font-semibold text-teal-700 tabular-nums">
               {record.registerCode} · Tahun {record.tahun}
             </p>
             {renderStatusIndicator(record.validasi)}
           </div>
 
-          <h2 className="mt-1 text-xl font-bold tracking-tight text-slate-900">{record.nama}</h2>
+          <h2 className="mt-1.5 break-words text-lg font-bold leading-snug tracking-tight text-slate-900">
+            {record.nama}
+          </h2>
 
-          <div className="mt-1.5 flex items-center justify-between gap-3">
-            <button
-              type="button"
-              onClick={() => onOpenProposal(record.proposal, record.tahun)}
-              className="inline-flex min-w-0 items-center gap-1 text-left text-xs font-semibold text-teal-700 hover:underline"
-            >
-              <span className="truncate">
-                {displayKelurahan &&
-                !record.proposal.toLowerCase().includes(displayKelurahan.toLowerCase())
-                  ? `${record.proposal} · ${displayKelurahan}`
-                  : record.proposal}
-              </span>
-              <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-            </button>
-
-            <button
-              type="button"
-              disabled={isProposalLocked}
-              onClick={() => onEditRecord(record)}
-              className="inline-flex shrink-0 items-center gap-1 text-xs font-bold text-teal-700 hover:underline disabled:cursor-not-allowed disabled:text-slate-400 disabled:no-underline"
-            >
-              {isProposalLocked ? <Lock className="h-3.5 w-3.5" /> : <Edit3 className="h-3.5 w-3.5" />}
-              <span>{isProposalLocked ? 'Terkunci' : 'Edit'}</span>
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => onOpenProposal(record.proposal, record.tahun)}
+            className="mt-1.5 inline-flex items-start gap-1 text-left text-xs font-semibold leading-snug text-teal-700 hover:underline"
+          >
+            <span>
+              {displayKelurahan &&
+              !record.proposal.toLowerCase().includes(displayKelurahan.toLowerCase())
+                ? `${record.proposal} · ${displayKelurahan}`
+                : record.proposal}
+            </span>
+            <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          </button>
 
           {/* Status Validasi Quick Switch */}
           <div className="mt-4 border-t border-slate-100 pt-3.5">
-            <p className="text-[11px] font-semibold text-slate-500">Ubah Status Validasi</p>
+            <p className="text-xs font-semibold text-slate-500">Ubah Status Validasi</p>
             <div className="mt-2 grid grid-cols-3 gap-1.5">
               {(
                 [
@@ -377,6 +370,17 @@ export function KpmDetailView({
             </div>
           </div>
         </section>
+
+        {/* Tombol Edit Data KPM Terpisah tepat di bawah Container Heading */}
+        <button
+          type="button"
+          disabled={isProposalLocked}
+          onClick={() => onEditRecord(record)}
+          className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-2xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+        >
+          {isProposalLocked ? <Lock className="h-4 w-4" /> : <Edit3 className="h-4 w-4" />}
+          <span>{isProposalLocked ? 'Proposal Terkunci' : 'Edit Data KPM'}</span>
+        </button>
 
         {/* Status Duplikasi NIK / KK */}
         {duplicateInfo.hasDuplicates ? (
@@ -458,7 +462,7 @@ export function KpmDetailView({
               </div>
               <div className="min-w-0">
                 <h3 className="text-sm font-bold text-slate-900">Penyaluran Sub-Item</h3>
-                <p className="truncate text-xs text-slate-500">
+                <p className="text-xs leading-snug text-slate-500">
                   {itemName} · {record.tahun}
                 </p>
               </div>
@@ -468,23 +472,25 @@ export function KpmDetailView({
               <p className="text-xs font-bold text-slate-900 tabular-nums">
                 {subItemStats.delivered} / {subItemStats.total} Diterima
               </p>
-              <p
-                className={`text-[11px] font-semibold tabular-nums ${
-                  subItemStats.isComplete
-                    ? 'text-teal-700'
-                    : subItemStats.isPartialDebt
-                      ? 'text-amber-700'
-                      : 'text-slate-500'
-                }`}
-              >
-                {subItemStats.total === 0
-                  ? 'Tanpa sub-item'
-                  : subItemStats.isComplete
-                    ? 'Lengkap Diterima'
-                    : subItemStats.isPartialDebt
-                      ? `Hutang ${subItemStats.pending} Item`
-                      : `Belum Dibagikan (${subItemStats.pending})`}
-              </p>
+              {(subItemStats.total === 0 ||
+                subItemStats.isComplete ||
+                subItemStats.isPartialDebt) && (
+                <p
+                  className={`text-[11px] font-semibold tabular-nums ${
+                    subItemStats.isComplete
+                      ? 'text-teal-700'
+                      : subItemStats.isPartialDebt
+                        ? 'text-amber-700'
+                        : 'text-slate-500'
+                  }`}
+                >
+                  {subItemStats.total === 0
+                    ? 'Tanpa sub-item'
+                    : subItemStats.isComplete
+                      ? 'Lengkap Diterima'
+                      : `Hutang ${subItemStats.pending} Item`}
+                </p>
+              )}
             </div>
           </div>
 
@@ -670,7 +676,21 @@ export function KpmDetailView({
             <div className="flex items-center justify-between gap-3 px-4 py-3">
               <dt className="text-xs text-slate-500 shrink-0">Nomor HP</dt>
               <dd className="text-right text-xs font-semibold text-slate-900 tabular-nums">
-                {record.kontak || '-'}
+                {(() => {
+                  const waUrl = formatWhatsAppUrl(record.kontak);
+                  if (!waUrl || !record.kontak) return '-';
+                  return (
+                    <a
+                      href={waUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700 transition-colors hover:bg-emerald-100"
+                    >
+                      <MessageCircle className="h-3.5 w-3.5 shrink-0" />
+                      <span>{record.kontak}</span>
+                    </a>
+                  );
+                })()}
               </dd>
             </div>
             {record.catatan && (
@@ -771,27 +791,27 @@ export function KpmDetailView({
           </div>
         </section>
 
-        {/* Jejak Historis Data KPM */}
+        {/* Rekam Jejak */}
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
           <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
             <div className="flex items-center gap-2">
               <History className="h-4 w-4 text-teal-700" />
-              <div>
-                <h3 className="text-sm font-bold text-slate-900">Jejak Historis Data KPM</h3>
-                <p className="text-[11px] text-slate-500">
-                  Riwayat input awal, petugas, dan perubahan setiap kolom
-                </p>
-              </div>
+              <h3 className="text-sm font-bold text-slate-900">Rekam Jejak</h3>
             </div>
-            <span className="text-xs font-bold text-slate-600 tabular-nums">
-              {recordAuditLogs.length} Catatan
-            </span>
+            <button
+              type="button"
+              onClick={onOpenFullHistory}
+              className="inline-flex items-center gap-0.5 text-xs font-semibold text-teal-700 hover:underline"
+            >
+              <span>Lihat selengkapnya</span>
+              <ChevronRight className="h-3.5 w-3.5" />
+            </button>
           </div>
 
           {/* Ringkasan Input Awal */}
           {initialCreationEntry && (
-            <div className="border-b border-slate-100 bg-slate-50/70 px-4 py-3">
-              <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500">
+            <div className="px-4 py-3">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-500">
                 <Clock className="h-3.5 w-3.5 text-teal-700" />
                 <span>Waktu Input Awal</span>
               </div>
@@ -806,82 +826,30 @@ export function KpmDetailView({
             </div>
           )}
 
-          {/* Timeline Log Perubahan */}
-          <div className="divide-y divide-slate-100">
-            {recordAuditLogs.map((entry) => {
-              const title =
-                entry.action === 'created'
-                  ? 'Data KPM Didaftarkan'
-                  : entry.action === 'status_changed'
-                    ? 'Perubahan Status Validasi'
-                    : 'Pembaruan Data KPM';
-
-              return (
-                <div key={entry.id} className="px-4 py-3.5">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="text-xs font-bold text-slate-900">{title}</p>
-                      <p className="mt-0.5 text-[11px] text-slate-500 tabular-nums">
-                        {formatUploadDateTime(entry.timestamp)} · Oleh{' '}
-                        <span className="font-semibold text-slate-700">{entry.actorName}</span>
-                      </p>
-                      {entry.actorEmail && (
-                        <p className="text-[11px] text-slate-400">{entry.actorEmail}</p>
-                      )}
-                    </div>
-                    <span className="shrink-0 text-[11px] font-medium text-slate-500 tabular-nums">
-                      {entry.tahun}
-                    </span>
-                  </div>
-
-                  {entry.changes.length > 0 && (
-                    <div className="mt-2.5 space-y-2 rounded-xl border border-slate-100 bg-slate-50/80 p-3">
-                      {entry.changes.map((chg, idx) => (
-                        <div key={`${entry.id}-${chg.field}-${idx}`} className="text-xs">
-                          <p className="font-semibold text-slate-700">{chg.field}</p>
-                          {chg.before === '-' ? (
-                            <p className="mt-0.5 font-medium text-teal-800">{chg.after}</p>
-                          ) : (
-                            <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px]">
-                              <span className="text-slate-500 line-through">{chg.before}</span>
-                              <ArrowRight className="h-3 w-3 shrink-0 text-slate-400" />
-                              <span className="font-semibold text-teal-800">{chg.after}</span>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+          {recordAuditLogs.length > 0 && (
+            <button
+              type="button"
+              onClick={onOpenFullHistory}
+              className="flex min-h-[42px] w-full items-center justify-center gap-1 border-t border-slate-100 bg-slate-50/70 px-4 text-xs font-semibold text-teal-700 transition-colors hover:bg-slate-100"
+            >
+              <span>Lihat selengkapnya</span>
+              <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+          )}
         </section>
 
-        {/* Action Footer (Edit & Safe Delete) */}
+        {/* Action Footer (Safe Delete) */}
         <section className="pt-1">
           {!confirmDelete ? (
-            <div className="flex items-center gap-2.5">
-              <button
-                type="button"
-                disabled={isProposalLocked}
-                onClick={() => setConfirmDelete(true)}
-                className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-4 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap shrink-0"
-              >
-                <Trash2 className="h-4 w-4" />
-                <span>Hapus</span>
-              </button>
-
-              <button
-                type="button"
-                disabled={isProposalLocked}
-                onClick={() => onEditRecord(record)}
-                className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
-              >
-                <Edit3 className="h-4 w-4" />
-                <span>{isProposalLocked ? 'Proposal Terkunci' : 'Edit Data KPM'}</span>
-              </button>
-            </div>
+            <button
+              type="button"
+              disabled={isProposalLocked}
+              onClick={() => setConfirmDelete(true)}
+              className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-4 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Trash2 className="h-4 w-4" />
+              <span>Hapus Data KPM</span>
+            </button>
           ) : (
             <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3.5">
               <p className="text-xs font-bold text-rose-900">

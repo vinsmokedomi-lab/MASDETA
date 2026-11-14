@@ -112,7 +112,7 @@ function AddPengelolaFormContent({
               <ArrowLeft className="h-5 w-5" />
             </button>
           )}
-          <h2 className="truncate text-base font-bold text-slate-900 sm:text-lg">
+          <h2 className="truncate text-base font-bold text-slate-900">
             Tambah Pengelola Baru
           </h2>
         </div>
@@ -415,7 +415,7 @@ export function PengelolaSelectorModal({
 
             {/* Header */}
             <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-3.5">
-              <h2 className="truncate text-base font-bold text-slate-900 sm:text-lg">
+              <h2 className="truncate text-base font-bold text-slate-900">
                 Pilih Pengelola
               </h2>
 

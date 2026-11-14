@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ArrowLeft, ChevronDown, ChevronRight, Lock, Search, SlidersHorizontal, User, X } from 'lucide-react';
+import { Lock, Search, SlidersHorizontal, User, X } from 'lucide-react';
 import { INITIAL_WILAYAH_LIST, TAHUN_OPTIONS } from '../data/kpmOptions';
 import {
   ItemBantuan,
@@ -12,6 +12,7 @@ import {
   getAbsenSeq,
   getItemHierarchyRank,
   getItemsForYear,
+  isKecamatanProposal,
   resolveProposalDomicile,
 } from '../utils/imageProcessor';
 import { FilterSelect, SegmentedTabs } from './FormControls';
@@ -49,7 +50,6 @@ export function KpmListView({
   onChangeItemFilter,
   proposalFilter = 'all',
   onChangeProposalFilter,
-  onBack,
   onSelectRecord,
 }: KpmListViewProps) {
   const [query, setQuery] = useState('');
@@ -72,10 +72,14 @@ export function KpmListView({
     return resolveProposalDomicile(rec.proposal, proposals, rec.tahun, wilayahList).kelurahan || '';
   };
 
+  const getCompactKelurahan = (rawKel: string) =>
+    rawKel.replace(/^(kelurahan|kel\.?)\s+/i, '').trim();
+
   const getRecordRtRw = (rec: KpmRecord) => {
+    if (!rec.rt && !rec.rw) return '';
     const rt = rec.rt ? rec.rt.padStart(3, '0') : '000';
     const rw = rec.rw ? rec.rw.padStart(3, '0') : '000';
-    return `RT ${rt} / RW ${rw}`;
+    return `RT ${rt}/RW ${rw}`;
   };
 
   const yearItemOptions = useMemo(
@@ -99,22 +103,32 @@ export function KpmListView({
     });
   }, [records, selectedYear, proposalFilter]);
 
-  const { kelurahanOptions, rtRwOptions, pengelolaOptions, pekerjaanOptions } = useMemo(() => {
+  const kelurahanScopedRecords = useMemo(() => {
+    if (kelurahanFilter === 'all') return yearBaseRecords;
+    return yearBaseRecords.filter((rec) => getRecordKelurahan(rec) === kelurahanFilter);
+  }, [yearBaseRecords, kelurahanFilter, proposals, wilayahList]);
+
+  const kelurahanOptions = useMemo(() => {
     const kels = new Set<string>();
+    for (const rec of yearBaseRecords) {
+      const kel = getRecordKelurahan(rec);
+      if (kel) kels.add(kel);
+    }
+    return Array.from(kels).sort((a, b) => a.localeCompare(b, 'id'));
+  }, [yearBaseRecords, proposals, wilayahList]);
+
+  const { rtRwOptions, pengelolaOptions, pekerjaanOptions } = useMemo(() => {
     const rtRws = new Set<string>();
     const pengelolas = new Set<string>();
     const pekerjaans = new Set<string>();
 
-    for (const rec of yearBaseRecords) {
-      const kel = getRecordKelurahan(rec);
-      if (kel) kels.add(kel);
+    for (const rec of kelurahanScopedRecords) {
       if (rec.rt || rec.rw) rtRws.add(getRecordRtRw(rec));
       if (rec.pengelola?.trim()) pengelolas.add(rec.pengelola.trim());
       if (rec.pekerjaan?.trim()) pekerjaans.add(rec.pekerjaan.trim());
     }
 
     return {
-      kelurahanOptions: Array.from(kels).sort((a, b) => a.localeCompare(b, 'id')),
       rtRwOptions: Array.from(rtRws).sort((a, b) => {
         const [, rtA = '0', rwA = '0'] = a.match(/RT\s*(\d+)\s*\/\s*RW\s*(\d+)/) || [];
         const [, rtB = '0', rwB = '0'] = b.match(/RT\s*(\d+)\s*\/\s*RW\s*(\d+)/) || [];
@@ -123,13 +137,39 @@ export function KpmListView({
       pengelolaOptions: Array.from(pengelolas).sort((a, b) => a.localeCompare(b, 'id')),
       pekerjaanOptions: Array.from(pekerjaans).sort((a, b) => a.localeCompare(b, 'id')),
     };
-  }, [yearBaseRecords, proposals, wilayahList]);
+  }, [kelurahanScopedRecords]);
 
   const activeExtraFilterCount =
+    (itemFilter !== 'all' ? 1 : 0) +
     (kelurahanFilter !== 'all' ? 1 : 0) +
     (rtRwFilter !== 'all' ? 1 : 0) +
     (pengelolaFilter !== 'all' ? 1 : 0) +
-    (pekerjaanFilter !== 'all' ? 1 : 0);
+    (pekerjaanFilter !== 'all' ? 1 : 0) +
+    (sortBy !== 'absen' ? 1 : 0);
+
+  const handleKelurahanChange = (nextKelurahan: string) => {
+    setKelurahanFilter(nextKelurahan);
+    const nextSubset =
+      nextKelurahan === 'all'
+        ? yearBaseRecords
+        : yearBaseRecords.filter((rec) => getRecordKelurahan(rec) === nextKelurahan);
+
+    if (rtRwFilter !== 'all' && !nextSubset.some((r) => getRecordRtRw(r) === rtRwFilter)) {
+      setRtRwFilter('all');
+    }
+    if (
+      pengelolaFilter !== 'all' &&
+      !nextSubset.some((r) => r.pengelola.trim() === pengelolaFilter)
+    ) {
+      setPengelolaFilter('all');
+    }
+    if (
+      pekerjaanFilter !== 'all' &&
+      !nextSubset.some((r) => r.pekerjaan.trim() === pekerjaanFilter)
+    ) {
+      setPekerjaanFilter('all');
+    }
+  };
 
   const scopedRecords = useMemo(() => {
     return yearBaseRecords.filter((rec) => {
@@ -234,6 +274,8 @@ export function KpmListView({
   }, [scopedRecords, query, statusFilter, sortBy, items, proposals, wilayahList]);
 
   const handleResetExtraFilters = () => {
+    onChangeItemFilter('all');
+    setSortBy('absen');
     setKelurahanFilter('all');
     setRtRwFilter('all');
     setPengelolaFilter('all');
@@ -242,24 +284,10 @@ export function KpmListView({
 
   return (
     <div className="min-h-screen pb-24">
-      {/* Sticky Header: hanya judul (+ panah kembali), tanpa dropdown / tombol aksi */}
-      <header
-        className={`sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 backdrop-blur-md ${
-          onBack ? 'px-3' : 'px-4'
-        }`}
-      >
-        {onBack && (
-          <button
-            type="button"
-            onClick={onBack}
-            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
-            aria-label="Kembali"
-          >
-            <ArrowLeft className="h-5 w-5" />
-          </button>
-        )}
+      {/* Sticky Header: hanya judul tanpa tombol kembali / aksi */}
+      <header className="sticky top-0 z-20 flex h-14 items-center border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md">
         <h1 className="truncate text-base font-bold text-slate-900">
-          Daftar Calon KPM
+          Keluarga Penerima Manfaat (KPM)
         </h1>
       </header>
 
@@ -278,37 +306,25 @@ export function KpmListView({
           </div>
         )}
 
-        {/* Search, Sort & Filter Toolbar */}
+        {/* Search + Tahun sebaris, tombol Filter ringkas, lalu tab status */}
         <div className="space-y-2">
-          <div className="relative">
-            <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Cari nama, NIK, pekerjaan, pengelola, wilayah..."
-              className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pr-3.5 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <FilterSelect
-              ariaLabel="Filter item bantuan"
-              value={itemFilter}
-              onChange={onChangeItemFilter}
-            >
-              <option value="all">Semua Item</option>
-              {yearItemOptions.map((item) => (
-                <option key={item.code} value={item.code}>
-                  {item.code}
-                </option>
-              ))}
-            </FilterSelect>
+          <div className="flex items-center gap-2">
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Cari nama, NIK, wilayah..."
+                className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pr-3 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
+              />
+            </div>
 
             <FilterSelect
               ariaLabel="Filter tahun KPM"
               value={selectedYear}
               onChange={onChangeYear}
+              className="w-[82px] shrink-0"
             >
               {yearOptions.map((y) => (
                 <option key={y} value={y}>
@@ -317,44 +333,24 @@ export function KpmListView({
               ))}
               <option value="all">Semua</option>
             </FilterSelect>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <FilterSelect
-              ariaLabel="Urutkan daftar KPM"
-              value={sortBy}
-              onChange={(v) => setSortBy(v as KpmSortKey)}
-            >
-              <option value="absen">Urut: Nomor Absen</option>
-              <option value="item">Urut: Item</option>
-              <option value="rtrw">Urut: RT &amp; RW</option>
-              <option value="pengelola">Urut: Pengelola</option>
-              <option value="pekerjaan">Urut: Pekerjaan</option>
-              <option value="kelurahan">Urut: Kelurahan</option>
-            </FilterSelect>
 
             <button
               type="button"
               onClick={() => setShowExtraFilters((prev) => !prev)}
-              className={`inline-flex min-h-[42px] items-center justify-between gap-2 rounded-xl border px-3 text-xs font-semibold transition-colors ${
+              aria-label="Filter dan urutkan"
+              aria-expanded={showExtraFilters}
+              className={`relative inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl border transition-colors ${
                 showExtraFilters || activeExtraFilterCount > 0
                   ? 'border-teal-700 bg-teal-50 text-teal-800'
                   : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
               }`}
             >
-              <span className="inline-flex items-center gap-1.5 truncate">
-                <SlidersHorizontal className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">
-                  {activeExtraFilterCount > 0
-                    ? `Filter (${activeExtraFilterCount})`
-                    : 'Filter Lainnya'}
+              <SlidersHorizontal className="h-4 w-4" />
+              {activeExtraFilterCount > 0 && (
+                <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-teal-700 px-1 text-[10px] font-bold text-white tabular-nums">
+                  {activeExtraFilterCount}
                 </span>
-              </span>
-              <ChevronDown
-                className={`h-3.5 w-3.5 shrink-0 transition-transform ${
-                  showExtraFilters ? 'rotate-180' : ''
-                }`}
-              />
+              )}
             </button>
           </div>
 
@@ -362,9 +358,37 @@ export function KpmListView({
             <div className="rounded-2xl border border-slate-200 bg-white p-3 space-y-2.5">
               <div className="grid grid-cols-2 gap-2">
                 <FilterSelect
+                  ariaLabel="Filter item bantuan"
+                  value={itemFilter}
+                  onChange={onChangeItemFilter}
+                >
+                  <option value="all">Semua Item</option>
+                  {yearItemOptions.map((item) => (
+                    <option key={item.code} value={item.code}>
+                      {item.code}
+                    </option>
+                  ))}
+                </FilterSelect>
+
+                <FilterSelect
+                  ariaLabel="Urutkan daftar KPM"
+                  value={sortBy}
+                  onChange={(v) => setSortBy(v as KpmSortKey)}
+                >
+                  <option value="absen">Urut: Nomor Absen</option>
+                  <option value="item">Urut: Item</option>
+                  <option value="rtrw">Urut: RT &amp; RW</option>
+                  <option value="pengelola">Urut: Pengelola</option>
+                  <option value="pekerjaan">Urut: Pekerjaan</option>
+                  <option value="kelurahan">Urut: Kelurahan</option>
+                </FilterSelect>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 border-t border-slate-100 pt-2.5">
+                <FilterSelect
                   ariaLabel="Filter kelurahan"
                   value={kelurahanFilter}
-                  onChange={setKelurahanFilter}
+                  onChange={handleKelurahanChange}
                 >
                   <option value="all">Semua Kelurahan</option>
                   {kelurahanOptions.map((kel) => (
@@ -422,7 +446,7 @@ export function KpmListView({
                     className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-800"
                   >
                     <X className="h-3.5 w-3.5" />
-                    <span>Reset Filter Lainnya</span>
+                    <span>Reset Filter</span>
                   </button>
                 </div>
               )}
@@ -456,16 +480,33 @@ export function KpmListView({
               const locked = isRecordProposalLocked(rec);
               const absenSeq = getAbsenSeq(rec.registerCode);
               const absenLabel =
-                absenSeq < 999999 ? String(absenSeq).padStart(3, '0') : '';
+                absenSeq < 999999 ? String(absenSeq).padStart(2, '0') : '--';
+              const desilNumeric = rec.dtsen && /^\d/.test(rec.dtsen.trim())
+                ? rec.dtsen.trim().replace(/\s*-\s*/g, '-')
+                : '';
+              const kelurahanName = isKecamatanProposal(rec.proposal)
+                ? getCompactKelurahan(getRecordKelurahan(rec))
+                : '';
+              const metaLine = [kelurahanName, rec.pengelola?.trim()]
+                .filter(Boolean)
+                .join(' · ');
 
               return (
                 <button
                   key={rec.id}
                   type="button"
                   onClick={() => onSelectRecord(rec)}
-                  className="flex min-h-[64px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
+                  className="flex w-full items-stretch gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
                 >
-                  <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
+                  {/* Nomor Absen sebelum Foto */}
+                  <div className="flex w-5 shrink-0 items-center justify-center">
+                    <span className="font-mono text-[11px] font-bold text-slate-500 tabular-nums">
+                      {absenLabel}
+                    </span>
+                  </div>
+
+                  {/* Foto Thumbnail Persegi Panjang (sejajar ujung atas judul s.d. ujung bawah subjudul) */}
+                  <div className="flex w-11 shrink-0 items-center justify-center self-stretch overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
                     {thumb ? (
                       <img
                         src={thumb.dataUrl}
@@ -478,27 +519,40 @@ export function KpmListView({
                     )}
                   </div>
 
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
-                      <span className="truncate text-sm font-bold text-slate-900">
-                        {rec.nama}
+                  {/* Konten Utama */}
+                  <div className="min-w-0 flex-1 flex flex-col justify-center">
+                    {/* Baris 1: Nama + Item & Angka Desil */}
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex min-w-0 items-center gap-1">
+                        <span className="truncate text-[13px] font-bold leading-tight text-slate-900">
+                          {rec.nama}
+                        </span>
+                        {locked && <Lock className="h-3 w-3 shrink-0 text-slate-400" />}
+                      </div>
+
+                      <span className="shrink-0 rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] font-bold leading-none text-slate-700 tabular-nums">
+                        {rec.item}
+                        {desilNumeric ? ` · ${desilNumeric}` : ''}
                       </span>
-                      {locked && <Lock className="h-3.5 w-3.5 shrink-0 text-slate-500" />}
                     </div>
-                    <p className="mt-0.5 truncate text-xs text-slate-500 tabular-nums">
-                      {[rec.proposal, rec.tahun, rec.item, rec.dtsen || '-']
-                        .filter(Boolean)
-                        .join(' - ')}
-                    </p>
+
+                    {/* Baris 2: Proposal & Tahun */}
+                    <div className="mt-1 flex items-center justify-between gap-2 text-[11px] leading-tight">
+                      <span className="truncate font-medium text-slate-600">
+                        {rec.proposal}
+                      </span>
+                      <span className="shrink-0 font-semibold text-slate-400 tabular-nums">
+                        {rec.tahun}
+                      </span>
+                    </div>
+
+                    {/* Baris 3: Kelurahan (jika Proposal Kecamatan) · Pengelola */}
+                    {metaLine && (
+                      <p className="mt-0.5 truncate text-[11px] leading-tight text-slate-500">
+                        {metaLine}
+                      </p>
+                    )}
                   </div>
-
-                  {absenLabel && (
-                    <span className="shrink-0 font-mono text-[11px] font-semibold text-slate-400 tabular-nums">
-                      {absenLabel}
-                    </span>
-                  )}
-
-                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
                 </button>
               );
             })}

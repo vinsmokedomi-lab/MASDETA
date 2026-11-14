@@ -44,7 +44,7 @@ export function DocumentLightbox({ documentFile, title, onClose }: DocumentLight
     >
       <div className="flex items-center justify-between gap-4 border-b border-white/10 px-4 py-3 sm:px-6">
         <div className="min-w-0">
-          <h3 className="truncate text-sm font-semibold sm:text-base">{title}</h3>
+          <h3 className="truncate text-base font-bold">{title}</h3>
           <p className="truncate text-xs text-slate-400 tabular-nums">
             {documentFile.fileName} ·{' '}
             {isImage && documentFile.width > 0

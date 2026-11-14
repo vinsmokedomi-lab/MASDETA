@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { MessageSquare, X } from 'lucide-react';
 import {
   INITIAL_INTERNAL_USERS,
   INITIAL_ITEM_LIST,
@@ -11,6 +12,7 @@ import {
   SAMPLE_KPM_RECORDS,
 } from './data/kpmOptions';
 import {
+  DirectChatMessage,
   InternalUser,
   InternalUserRole,
   InternalUserStatus,
@@ -23,6 +25,8 @@ import {
   ProposalFormValues,
   ProposalKpmHistoryEntry,
   ProposalRecord,
+  UserPermissions,
+  UserPresenceStatus,
   ValidationStatus,
   WilayahKabKota,
 } from './types/kpm';
@@ -66,19 +70,89 @@ import { DashboardView } from './components/DashboardView';
 import { KpmListView } from './components/KpmListView';
 import { ProposalListView } from './components/ProposalListView';
 import { MenuHubView, MenuSection } from './components/MenuHubView';
+import { HistoryDetailView } from './components/HistoryDetailView';
+import { ScrollToTopButton } from './components/ScrollToTopButton';
+import { AuthView } from './components/AuthView';
+import { ChatView } from './components/ChatView';
+import { UserProfileView } from './components/UserProfileView';
 
 type SubView =
   | 'none'
   | 'kpm-form'
   | 'kpm-detail'
+  | 'kpm-history'
   | 'subitem-recap'
   | 'add-proposal'
   | 'edit-proposal'
-  | 'proposal-detail';
+  | 'proposal-detail'
+  | 'proposal-history'
+  | 'chat'
+  | 'profile';
 
 interface FeedbackBanner {
   type: 'success' | 'error';
   message: string;
+}
+
+interface IncomingToastBanner {
+  id: string;
+  senderId: string;
+  senderName: string;
+  senderRole: string;
+  text: string;
+}
+
+const SESSION_STORAGE_KEY = 'masdeta_session_user_id_v1';
+const PUSH_ENABLED_STORAGE_KEY = 'masdeta_push_enabled_v1';
+
+function playMessageChime() {
+  try {
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(784, now);
+    osc.frequency.setValueAtTime(988, now + 0.09);
+    gain.gain.setValueAtTime(0.06, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.29);
+    setTimeout(() => {
+      ctx.close().catch(() => {});
+    }, 350);
+  } catch {
+    // Abaikan jika browser memblokir audio sebelum interaksi
+  }
+}
+
+async function triggerPushNotification(title: string, body: string) {
+  if (typeof window === 'undefined' || !('Notification' in window)) return;
+  if (Notification.permission !== 'granted') return;
+
+  try {
+    if ('serviceWorker' in navigator) {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg && typeof reg.showNotification === 'function') {
+        await reg.showNotification(title, {
+          body,
+          icon: '/icons/icon-192.png',
+          badge: '/icons/icon-192.png',
+          tag: `masdeta-chat-${Date.now()}`,
+        });
+        return;
+      }
+    }
+    new Notification(title, { body, icon: '/icons/icon-192.png' });
+  } catch {
+    // Fallback diam-diam jika Notification API dibatasi
+  }
 }
 
 export function MasdetaLogo() {
@@ -172,6 +246,47 @@ export default function App() {
     null
   );
 
+  // Auth, 1-on-1 Direct Chat, Presence & Push Notification states
+  const [sessionUserId, setSessionUserId] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(SESSION_STORAGE_KEY);
+    } catch {
+      return null;
+    }
+  });
+  const [authReady, setAuthReady] = useState(false);
+  const [directMessages, setDirectMessages] = useState<DirectChatMessage[]>([]);
+  const [activeChatPeerId, setActiveChatPeerId] = useState<string | null>(null);
+  const [pushEnabled, setPushEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(PUSH_ENABLED_STORAGE_KEY) !== 'false';
+    } catch {
+      return true;
+    }
+  });
+  const [pushPermission, setPushPermission] = useState<NotificationPermission | 'unsupported'>(
+    () => {
+      if (typeof window === 'undefined' || !('Notification' in window)) {
+        return 'unsupported';
+      }
+      return Notification.permission;
+    }
+  );
+  const [incomingToast, setIncomingToast] = useState<IncomingToastBanner | null>(null);
+
+  const wsRef = useRef<WebSocket | null>(null);
+  const subViewRef = useRef<SubView>(subView);
+  const activeChatPeerIdRef = useRef<string | null>(activeChatPeerId);
+  const pushEnabledRef = useRef<boolean>(pushEnabled);
+  subViewRef.current = subView;
+  activeChatPeerIdRef.current = activeChatPeerId;
+  pushEnabledRef.current = pushEnabled;
+
+  const currentUser = useMemo(() => {
+    if (!sessionUserId) return null;
+    return internalUsers.find((u) => u.id === sessionUserId && u.status === 'active') ?? null;
+  }, [internalUsers, sessionUserId]);
+
   const activeProposal = useMemo(
     () => (activeProposalId ? proposals.find((p) => p.id === activeProposalId) ?? null : null),
     [activeProposalId, proposals]
@@ -183,17 +298,42 @@ export default function App() {
   );
 
   const currentActor = useMemo(() => {
-    const activeAdmin = internalUsers.find((u) => u.status === 'active' && u.role === 'Admin');
-    const anyActive = internalUsers.find((u) => u.status === 'active');
     return {
-      nama: activeAdmin?.nama ?? anyActive?.nama ?? 'Petugas Internal',
-      email: activeAdmin?.email ?? anyActive?.email,
+      nama: currentUser?.nama ?? 'Petugas Internal',
+      email: currentUser?.email,
     };
-  }, [internalUsers]);
+  }, [currentUser]);
+
+  const unreadChatCount = useMemo(() => {
+    if (!currentUser) return 0;
+    return directMessages.filter((m) => m.recipientId === currentUser.id && !m.readAt).length;
+  }, [directMessages, currentUser]);
 
   const pendingUsersCount = useMemo(
     () => internalUsers.filter((u) => u.status === 'pending').length,
     [internalUsers]
+  );
+
+  const hasPermission = useCallback(
+    (perm: keyof UserPermissions): boolean => {
+      if (!currentUser) return false;
+      if (currentUser.role === 'SuperAdmin') return true;
+      return Boolean(currentUser.permissions?.[perm]);
+    },
+    [currentUser]
+  );
+
+  const requirePermission = useCallback(
+    (perm: keyof UserPermissions, actionLabel: string): boolean => {
+      if (hasPermission(perm)) return true;
+      const permLabel = perm === 'add' ? 'ADD' : perm === 'update' ? 'UPDATE' : 'DELETE';
+      setFeedback({
+        type: 'error',
+        message: `Izin ${permLabel} (${actionLabel}) dinonaktifkan oleh SuperAdmin untuk akun ${currentUser?.nama || 'Anda'}.`,
+      });
+      return false;
+    },
+    [hasPermission, currentUser]
   );
 
   const duplicateNikCount = useMemo(() => {
@@ -262,6 +402,308 @@ export default function App() {
     saveInternalUsers(internalUsers);
   }, [internalUsers]);
 
+  // Sinkronisasi awal state user & pesan 1-on-1 dari server
+  useEffect(() => {
+    let cancelled = false;
+    const url = sessionUserId
+      ? `/api/collab/state?userId=${encodeURIComponent(sessionUserId)}`
+      : '/api/collab/state';
+
+    fetch(url)
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('Sync gagal'))))
+      .then(
+        (data: {
+          user?: InternalUser | null;
+          users?: InternalUser[];
+          messages?: DirectChatMessage[];
+        }) => {
+          if (cancelled) return;
+          if (Array.isArray(data.users) && data.users.length > 0) {
+            setInternalUsers(data.users);
+          }
+          if (Array.isArray(data.messages)) {
+            setDirectMessages(data.messages);
+          }
+          if (sessionUserId && (!data.user || data.user.status !== 'active')) {
+            setSessionUserId(null);
+            try {
+              localStorage.removeItem(SESSION_STORAGE_KEY);
+            } catch {
+              // Ignore
+            }
+          }
+        }
+      )
+      .catch(() => {
+        // Fallback ke cache lokal bila offline
+      })
+      .finally(() => {
+        if (!cancelled) setAuthReady(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionUserId]);
+
+  const handleMarkChatRead = useCallback(
+    async (peerId: string) => {
+      if (!currentUser || !peerId) return;
+      const hasUnread = directMessages.some(
+        (m) => m.senderId === peerId && m.recipientId === currentUser.id && !m.readAt
+      );
+      if (!hasUnread) return;
+
+      const now = new Date().toISOString();
+      setDirectMessages((prev) =>
+        prev.map((m) =>
+          m.senderId === peerId && m.recipientId === currentUser.id && !m.readAt
+            ? { ...m, readAt: now }
+            : m
+        )
+      );
+
+      try {
+        await fetch('/api/chat/read', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: currentUser.id, peerId }),
+        });
+      } catch {
+        // Abaikan jika offline sementara
+      }
+    },
+    [currentUser, directMessages]
+  );
+
+  // Koneksi WebSocket Real-time (Presence Dot & 1-on-1 Direct Chat Push)
+  useEffect(() => {
+    const uid = currentUser?.id;
+    if (!uid) {
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      return;
+    }
+
+    let closedByCleanup = false;
+    let reconnectTimer: number | undefined;
+    let toastTimer: number | undefined;
+
+    const connect = () => {
+      if (closedByCleanup) return;
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+      wsRef.current = socket;
+
+      socket.onopen = () => {
+        socket.send(JSON.stringify({ type: 'auth', userId: uid }));
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(String(event.data)) as Record<string, unknown>;
+          if (data.type === 'users:updated' && Array.isArray(data.users)) {
+            setInternalUsers(data.users as InternalUser[]);
+            return;
+          }
+
+          if (data.type === 'chat:message' && data.message) {
+            const msg = data.message as DirectChatMessage;
+            setDirectMessages((prev) => {
+              if (prev.some((m) => m.id === msg.id)) return prev;
+              return [...prev, msg];
+            });
+
+            if (msg.recipientId === uid) {
+              const isViewingThread =
+                subViewRef.current === 'chat' &&
+                activeChatPeerIdRef.current === msg.senderId &&
+                document.visibilityState === 'visible';
+
+              if (isViewingThread) {
+                fetch('/api/chat/read', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ userId: uid, peerId: msg.senderId }),
+                }).catch(() => {});
+              } else {
+                const senderName = String(data.senderName || 'Pengguna Internal');
+                const senderRole = String(data.senderRole || 'Admin');
+                playMessageChime();
+                setIncomingToast({
+                  id: msg.id,
+                  senderId: msg.senderId,
+                  senderName,
+                  senderRole,
+                  text: msg.text,
+                });
+                if (toastTimer) window.clearTimeout(toastTimer);
+                toastTimer = window.setTimeout(() => {
+                  setIncomingToast((curr) => (curr?.id === msg.id ? null : curr));
+                }, 6500);
+
+                if (pushEnabledRef.current) {
+                  void triggerPushNotification(
+                    `Pesan dari ${senderName} (${senderRole})`,
+                    msg.text
+                  );
+                }
+              }
+            }
+            return;
+          }
+
+          if (data.type === 'chat:read' && Array.isArray(data.messageIds)) {
+            const ids = new Set(data.messageIds as string[]);
+            const readAt = String(data.readAt || new Date().toISOString());
+            setDirectMessages((prev) =>
+              prev.map((m) => (ids.has(m.id) ? { ...m, readAt } : m))
+            );
+          }
+        } catch {
+          // Abaikan payload tidak valid
+        }
+      };
+
+      socket.onclose = () => {
+        if (wsRef.current === socket) {
+          wsRef.current = null;
+        }
+        if (!closedByCleanup) {
+          reconnectTimer = window.setTimeout(connect, 3000);
+        }
+      };
+    };
+
+    connect();
+
+    return () => {
+      closedByCleanup = true;
+      if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      if (toastTimer) window.clearTimeout(toastTimer);
+      wsRef.current?.close();
+      wsRef.current = null;
+    };
+  }, [currentUser?.id]);
+
+  // Pelacak Aktivitas Otomatis untuk Presence Dot (Hijau = Aktif, Oranye = Idle)
+  useEffect(() => {
+    if (!currentUser || currentUser.presenceManual) return;
+
+    let idleTimer: number | undefined;
+    let lastSent: UserPresenceStatus | null = null;
+
+    const sendPresence = (status: UserPresenceStatus) => {
+      if (lastSent === status) return;
+      lastSent = status;
+      const sock = wsRef.current;
+      if (sock && sock.readyState === WebSocket.OPEN) {
+        sock.send(JSON.stringify({ type: 'presence:activity', status }));
+      }
+    };
+
+    const scheduleIdle = () => {
+      if (idleTimer) window.clearTimeout(idleTimer);
+      if (document.visibilityState === 'hidden') {
+        sendPresence('idle');
+        return;
+      }
+      sendPresence('online');
+      idleTimer = window.setTimeout(() => {
+        sendPresence('idle');
+      }, 120_000);
+    };
+
+    scheduleIdle();
+    const events: (keyof WindowEventMap)[] = ['pointerdown', 'keydown', 'touchstart', 'scroll'];
+    events.forEach((ev) => window.addEventListener(ev, scheduleIdle, { passive: true }));
+    document.addEventListener('visibilitychange', scheduleIdle);
+
+    return () => {
+      if (idleTimer) window.clearTimeout(idleTimer);
+      events.forEach((ev) => window.removeEventListener(ev, scheduleIdle));
+      document.removeEventListener('visibilitychange', scheduleIdle);
+    };
+  }, [currentUser?.id, currentUser?.presenceManual]);
+
+  // Matikan tombol back bawaan Android / browser agar semua navigasi berasal dari UI dalam aplikasi
+  useEffect(() => {
+    try {
+      window.history.pushState({ masdetaLocked: true }, '', window.location.href);
+    } catch {
+      // Abaikan jika environment membatasi history API
+    }
+
+    const handlePopState = () => {
+      try {
+        window.history.pushState({ masdetaLocked: true }, '', window.location.href);
+      } catch {
+        // Abaikan
+      }
+    };
+
+    const handleCordovaBack = (ev: Event) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+    };
+
+    const handleIonBack = (ev: Event) => {
+      const customEv = ev as CustomEvent<{
+        register?: (priority: number, handler: () => void) => void;
+      }>;
+      if (customEv.detail?.register) {
+        customEv.detail.register(999, () => {});
+      } else {
+        ev.preventDefault();
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    document.addEventListener('backbutton', handleCordovaBack, false);
+    document.addEventListener('ionBackButton', handleIonBack);
+
+    let capListenerHandle: { remove?: () => void } | undefined;
+    const capApp = (
+      window as unknown as {
+        Capacitor?: {
+          Plugins?: {
+            App?: {
+              addListener?: (
+                eventName: string,
+                cb: () => void
+              ) => Promise<{ remove: () => void }> | { remove: () => void };
+            };
+          };
+        };
+      }
+    ).Capacitor?.Plugins?.App;
+
+    if (capApp?.addListener) {
+      const maybePromise = capApp.addListener('backButton', () => {
+        // Sengaja dikosongkan agar tombol back Android tidak keluar/kembali
+      });
+      if (
+        maybePromise &&
+        typeof (maybePromise as Promise<{ remove: () => void }>).then === 'function'
+      ) {
+        (maybePromise as Promise<{ remove: () => void }>).then((handle) => {
+          capListenerHandle = handle;
+        });
+      } else {
+        capListenerHandle = maybePromise as { remove?: () => void };
+      }
+    }
+
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      document.removeEventListener('backbutton', handleCordovaBack, false);
+      document.removeEventListener('ionBackButton', handleIonBack);
+      capListenerHandle?.remove?.();
+    };
+  }, []);
+
   useEffect(() => {
     setRecords((prev) => recalculateProposalRegisterCodes(prev, proposals, items, wilayahList));
   }, [proposals, items, wilayahList]);
@@ -296,6 +738,15 @@ export default function App() {
     skipped: number;
     error?: string;
   } => {
+    if (sourceLabel !== 'Kecamatan Pontianak Kota 2026.csv' && !requirePermission('add', 'mengimpor data CSV')) {
+      return {
+        importedRecords: 0,
+        importedProposals: 0,
+        addedPengelola: 0,
+        skipped: 0,
+        error: 'Izin ADD dinonaktifkan oleh SuperAdmin.',
+      };
+    }
     const state = latestImportStateRef.current;
     const result = importProposalKpmFromCsv({
       csvText,
@@ -402,6 +853,11 @@ export default function App() {
     returnToProposalDetail = false,
     lockedScope: { namaProposal: string; tahun: string } | null = null
   ) => {
+    if (record) {
+      if (!requirePermission('update', 'mengubah data calon KPM')) return;
+    } else {
+      if (!requirePermission('add', 'mendaftarkan calon KPM baru')) return;
+    }
     setFeedback(null);
     setReturnToTab(fromTab);
     setKpmFormReturnToDetail(returnToDetail);
@@ -413,6 +869,7 @@ export default function App() {
   };
 
   const openAddProposalForm = (fromTab: MainTab = activeTab, fromKpmForm = false) => {
+    if (!requirePermission('add', 'menambah proposal baru')) return;
     setFeedback(null);
     setReturnToTab(fromTab);
     setAddProposalFromKpmForm(fromKpmForm);
@@ -429,6 +886,7 @@ export default function App() {
   };
 
   const openEditProposalById = (proposalId: string, fromTab: MainTab = returnToTab) => {
+    if (!requirePermission('update', 'mengubah data proposal')) return;
     setFeedback(null);
     setReturnToTab(fromTab);
     setActiveProposalId(proposalId);
@@ -472,10 +930,17 @@ export default function App() {
   };
 
   const handleCreatePengelola = (profile: PengelolaProfile) => {
+    if (!requirePermission('add', 'menambah pengelola lapangan')) return;
     setPengelolaList((prev) => [profile, ...prev]);
   };
 
   const handleSaveKpm = (values: KpmFormValues, editingId?: string) => {
+    if (editingId) {
+      if (!requirePermission('update', 'memperbarui data calon KPM')) return;
+    } else {
+      if (!requirePermission('add', 'menyimpan calon KPM baru')) return;
+    }
+
     const matchingProposal =
       proposals.find((p) => p.namaProposal === values.proposal && p.tahun === values.tahun) ??
       proposals.find((p) => p.namaProposal === values.proposal);
@@ -676,6 +1141,7 @@ export default function App() {
   };
 
   const handleDeleteKpm = (id: string) => {
+    if (!requirePermission('delete', 'menghapus data calon KPM')) return;
     const target = records.find((r) => r.id === id);
     if (!target) return;
     const prop =
@@ -724,6 +1190,7 @@ export default function App() {
   };
 
   const handleUpdateKpmStatus = (id: string, status: ValidationStatus) => {
+    if (!requirePermission('update', 'mengubah status validasi KPM')) return;
     const target = records.find((r) => r.id === id);
     if (!target || target.validasi === status) return;
     const prop =
@@ -762,6 +1229,7 @@ export default function App() {
     subItemName: string,
     nextDelivered: boolean
   ) => {
+    if (!requirePermission('update', 'mengubah checklist sub-item KPM')) return;
     const target = records.find((r) => r.id === kpmId);
     if (!target) return;
 
@@ -817,6 +1285,7 @@ export default function App() {
     kpmId: string,
     subItems: { key: string; name: string }[]
   ) => {
+    if (!requirePermission('update', 'menandai semua sub-item diterima')) return;
     const target = records.find((r) => r.id === kpmId);
     if (!target) return;
 
@@ -869,11 +1338,40 @@ export default function App() {
     );
   };
 
+  const handleSaveCatalogItem = (
+    savedItem: ItemBantuan,
+    orderIndex: number,
+    originalCode?: string
+  ) => {
+    if (originalCode) {
+      if (!requirePermission('update', 'mengubah master item')) return;
+    } else {
+      if (!requirePermission('add', 'menambah master item')) return;
+    }
+    setItems((prev) => {
+      const codeToRemove = originalCode || savedItem.code;
+      const remaining = prev.filter(
+        (i) => !(i.tahun === savedItem.tahun && i.code === codeToRemove)
+      );
+      const otherYears = remaining.filter((i) => i.tahun !== savedItem.tahun);
+      const sameYear = remaining.filter((i) => i.tahun === savedItem.tahun);
+      const clampedIndex = Math.max(0, Math.min(orderIndex, sameYear.length));
+      const reorderedSameYear = [
+        ...sameYear.slice(0, clampedIndex),
+        savedItem,
+        ...sameYear.slice(clampedIndex),
+      ];
+      return [...otherYears, ...reorderedSameYear];
+    });
+  };
+
   const handleDeleteCatalogItem = (tahun: string, code: string) => {
+    if (!requirePermission('delete', 'menghapus master item')) return;
     setItems((prev) => prev.filter((i) => !(i.tahun === tahun && i.code === code)));
   };
 
   const handleMoveItemOrder = (tahun: string, code: string, direction: 'up' | 'down') => {
+    if (!requirePermission('update', 'mengubah urutan item')) return;
     setItems((prev) => {
       const yearIndices: number[] = [];
       prev.forEach((item, idx) => {
@@ -892,6 +1390,7 @@ export default function App() {
   };
 
   const handleUpdateItemSubItems = (tahun: string, code: string, subItems: string[]) => {
+    if (!requirePermission('update', 'mengubah sub-item bantuan')) return;
     setItems((prev) =>
       prev.map((i) =>
         i.tahun === tahun && i.code === code
@@ -902,6 +1401,7 @@ export default function App() {
   };
 
   const handleCopyItemsFromYear = (fromYear: string, toYear: string) => {
+    if (!requirePermission('add', 'menyalin item antar tahun')) return;
     setItems((prev) => {
       const source = prev.filter((i) => i.tahun === fromYear);
       const existingCodes = new Set(prev.filter((i) => i.tahun === toYear).map((i) => i.code));
@@ -918,6 +1418,7 @@ export default function App() {
   };
 
   const handleCreateProposal = (values: ProposalFormValues) => {
+    if (!requirePermission('add', 'membuat proposal baru')) return;
     const now = new Date().toISOString();
     if (!values.tipe) return;
 
@@ -969,6 +1470,7 @@ export default function App() {
   };
 
   const handleUpdateProposal = (proposalId: string, values: ProposalFormValues) => {
+    if (!requirePermission('update', 'memperbarui proposal')) return;
     const existing = proposals.find((p) => p.id === proposalId);
     if (!existing || !values.tipe) return;
 
@@ -1008,6 +1510,7 @@ export default function App() {
   };
 
   const handleToggleProposalLock = (proposalId: string) => {
+    if (!requirePermission('update', 'mengunci/membuka proposal')) return;
     const target = proposals.find((p) => p.id === proposalId);
     if (!target) return;
 
@@ -1032,48 +1535,511 @@ export default function App() {
     });
   };
 
-  const handleUpdateUserStatus = (
+  const handleLogin = async (
+    email: string,
+    password: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = (await res.json()) as {
+        error?: string;
+        user?: InternalUser;
+        users?: InternalUser[];
+        messages?: DirectChatMessage[];
+      };
+      if (!res.ok || !data.user) {
+        return { ok: false, error: data.error || 'Email atau kata sandi tidak sesuai.' };
+      }
+
+      if (Array.isArray(data.users)) {
+        setInternalUsers(data.users);
+      }
+      if (Array.isArray(data.messages)) {
+        setDirectMessages(data.messages);
+      }
+      setSessionUserId(data.user.id);
+      try {
+        localStorage.setItem(SESSION_STORAGE_KEY, data.user.id);
+      } catch {
+        // Ignore
+      }
+      setSubView('none');
+      setActiveTab('dashboard');
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'Gagal terhubung ke server autentikasi.' };
+    }
+  };
+
+  const handleRegister = async (payload: {
+    nama: string;
+    email: string;
+    kontak: string;
+    password: string;
+    fotoDataUrl?: string;
+  }): Promise<{ ok: boolean; error?: string; message?: string }> => {
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = (await res.json()) as {
+        error?: string;
+        message?: string;
+        user?: InternalUser;
+      };
+      if (!res.ok || !data.user) {
+        return { ok: false, error: data.error || 'Gagal mendaftar.' };
+      }
+      setInternalUsers((prev) => [data.user as InternalUser, ...prev.filter((u) => u.id !== data.user?.id)]);
+      return {
+        ok: true,
+        message:
+          data.message ||
+          'Pendaftaran berhasil dikirim. Menunggu persetujuan & penetapan jabatan oleh SuperAdmin.',
+      };
+    } catch {
+      return { ok: false, error: 'Gagal terhubung ke server.' };
+    }
+  };
+
+  const handleLogout = async () => {
+    const uid = currentUser?.id;
+    if (uid) {
+      fetch(`/api/users/${encodeURIComponent(uid)}/profile`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ presenceManual: false, presenceStatus: 'offline' }),
+      }).catch(() => {});
+    }
+    wsRef.current?.close();
+    wsRef.current = null;
+    setSessionUserId(null);
+    setDirectMessages([]);
+    setActiveChatPeerId(null);
+    setSubView('none');
+    setActiveTab('dashboard');
+    try {
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+    } catch {
+      // Ignore
+    }
+  };
+
+  const handleUpdateProfile = async (patch: {
+    nama: string;
+    jabatan: string;
+    kontak: string;
+    fotoDataUrl?: string | null;
+    newPassword?: string;
+    presenceManual: boolean;
+    presenceStatus: UserPresenceStatus;
+  }): Promise<{ ok: boolean; error?: string }> => {
+    if (!currentUser) return { ok: false, error: 'Sesi tidak ditemukan.' };
+    try {
+      const res = await fetch(`/api/users/${encodeURIComponent(currentUser.id)}/profile`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      const data = (await res.json()) as { error?: string; user?: InternalUser };
+      if (!res.ok || !data.user) {
+        return { ok: false, error: data.error || 'Gagal memperbarui profil.' };
+      }
+      setInternalUsers((prev) =>
+        prev.map((u) => (u.id === data.user?.id ? data.user : u))
+      );
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'Gagal terhubung ke server.' };
+    }
+  };
+
+  const handleAdminControlUser = async (
     userId: string,
-    status: InternalUserStatus,
-    role?: InternalUserRole
+    patch: {
+      status?: InternalUserStatus;
+      role?: InternalUserRole;
+      permissions?: UserPermissions;
+    }
   ) => {
+    if (!currentUser || currentUser.role !== 'SuperAdmin') {
+      setFeedback({
+        type: 'error',
+        message: 'Hanya SuperAdmin yang dapat mengatur status, peran, dan izin Admin.',
+      });
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/users/${encodeURIComponent(userId)}/admin-control`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actorId: currentUser.id, ...patch }),
+      });
+      const data = (await res.json()) as { error?: string; users?: InternalUser[] };
+      if (!res.ok) {
+        setFeedback({ type: 'error', message: data.error || 'Gagal memperbarui akses user.' });
+        return;
+      }
+      if (Array.isArray(data.users)) {
+        setInternalUsers(data.users);
+      }
+    } catch {
+      setFeedback({ type: 'error', message: 'Gagal terhubung ke server saat mengubah akses user.' });
+    }
+  };
+
+  const handleRegisterInternalUser = async (user: {
+    nama: string;
+    email: string;
+    jabatan: string;
+    kontak: string;
+    role: InternalUserRole;
+  }) => {
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...user, password: 'masdeta123' }),
+      });
+      const data = (await res.json()) as { error?: string; user?: InternalUser };
+      if (!res.ok || !data.user) {
+        setFeedback({ type: 'error', message: data.error || 'Gagal menambahkan user baru.' });
+        return;
+      }
+      setInternalUsers((prev) => [data.user as InternalUser, ...prev]);
+
+      if (currentUser?.role === 'SuperAdmin') {
+        await handleAdminControlUser(data.user.id, {
+          status: 'active',
+          role: user.role,
+          permissions: { add: true, update: true, delete: false },
+        });
+      }
+      setFeedback({
+        type: 'success',
+        message: `Akun "${user.nama}" (${user.email}) ditambahkan dengan kata sandi awal: masdeta123`,
+      });
+    } catch {
+      setFeedback({ type: 'error', message: 'Gagal terhubung ke server.' });
+    }
+  };
+
+  const handleSendChatMessage = async (recipientId: string, text: string) => {
+    if (!currentUser) return;
+    const clientMsgId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const res = await fetch('/api/chat/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: clientMsgId,
+        senderId: currentUser.id,
+        recipientId,
+        text,
+      }),
+    });
+    const data = (await res.json()) as { message?: DirectChatMessage };
+    if (res.ok && data.message) {
+      const savedMsg = data.message;
+      setDirectMessages((prev) =>
+        prev.some((m) => m.id === savedMsg.id) ? prev : [...prev, savedMsg]
+      );
+    }
+  };
+
+  const handleRequestPushPermission = async () => {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      setPushPermission('unsupported');
+      return;
+    }
+    try {
+      const result = await Notification.requestPermission();
+      setPushPermission(result);
+      if (result === 'granted') {
+        setPushEnabled(true);
+        try {
+          localStorage.setItem(PUSH_ENABLED_STORAGE_KEY, 'true');
+        } catch {
+          // Ignore
+        }
+        void triggerPushNotification(
+          'Notifikasi MASDETA Aktif',
+          'Pesan langsung antar Admin & SuperAdmin akan muncul sebagai notifikasi push.'
+        );
+      }
+    } catch {
+      // Ignore
+    }
+  };
+
+  const handleTogglePushEnabled = (enabled: boolean) => {
+    setPushEnabled(enabled);
+    try {
+      localStorage.setItem(PUSH_ENABLED_STORAGE_KEY, enabled ? 'true' : 'false');
+    } catch {
+      // Ignore
+    }
+  };
+
+  const openChatView = (peerId?: string) => {
+    setFeedback(null);
+    setIncomingToast(null);
+    setReturnToTab(activeTab);
+    setActiveChatPeerId(peerId ?? null);
+    setSubView('chat');
+    if (peerId) {
+      void handleMarkChatRead(peerId);
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const openProfileView = () => {
+    setFeedback(null);
+    setReturnToTab(activeTab);
+    setSubView('profile');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleAcceptAllInProposal = (proposalName: string, tahun: string) => {
+    if (!requirePermission('update', 'menyetujui seluruh KPM pada proposal')) return;
+    const prop =
+      proposals.find((p) => p.namaProposal === proposalName && p.tahun === tahun) ??
+      proposals.find((p) => p.namaProposal === proposalName);
+    if (prop?.status === 'locked') {
+      setFeedback({
+        type: 'error',
+        message: `Proposal "${prop.namaProposal}" sedang Terkunci.`,
+      });
+      return;
+    }
+
+    const targets = records.filter(
+      (r) =>
+        r.proposal === proposalName &&
+        r.tahun === tahun &&
+        (r.validasi === 'pending' || r.validasi === 'rejected')
+    );
+    if (targets.length === 0) return;
+
     const now = new Date().toISOString();
-    setInternalUsers((prev) =>
-      prev.map((u) =>
-        u.id === userId
+    const targetIds = new Set(targets.map((t) => t.id));
+    const newLogs: KpmAuditLogEntry[] = targets.map((t, idx) => ({
+      id: `audit-accall-${Date.now()}-${idx}`,
+      kpmId: t.id,
+      action: 'status_changed',
+      actorName: currentActor.nama,
+      actorEmail: currentActor.email,
+      timestamp: now,
+      proposal: t.proposal,
+      tahun: t.tahun,
+      changes: [
+        {
+          field: 'Status Validasi',
+          before: formatValidationLabel(t.validasi),
+          after: 'Diterima',
+        },
+      ],
+    }));
+
+    setKpmAuditLogs((prev) => [...newLogs, ...prev]);
+    setRecords((prev) =>
+      prev.map((r) =>
+        targetIds.has(r.id) ? { ...r, validasi: 'accepted', updatedAt: now } : r
+      )
+    );
+    setFeedback({
+      type: 'success',
+      message: `${targets.length} calon KPM pada "${proposalName}" (${tahun}) disetujui menjadi Diterima.`,
+    });
+  };
+
+  const handleToggleBerkasDikembalikan = (kpmId: string, nextValue: boolean) => {
+    if (!requirePermission('update', 'mengubah status pengembalian berkas')) return;
+    const target = records.find((r) => r.id === kpmId);
+    if (!target) return;
+    const now = new Date().toISOString();
+
+    const auditEntry: KpmAuditLogEntry = {
+      id: `audit-berkas-${Date.now()}`,
+      kpmId: target.id,
+      action: 'updated',
+      actorName: currentActor.nama,
+      actorEmail: currentActor.email,
+      timestamp: now,
+      proposal: target.proposal,
+      tahun: target.tahun,
+      changes: [
+        {
+          field: 'Pengembalian Berkas Fisik',
+          before: target.berkasDikembalikan ? 'Sudah Dikembalikan' : 'Belum Dikembalikan',
+          after: nextValue ? 'Sudah Dikembalikan' : 'Belum Dikembalikan',
+        },
+      ],
+    };
+
+    setKpmAuditLogs((prev) => [auditEntry, ...prev]);
+    setRecords((prev) =>
+      prev.map((r) =>
+        r.id === kpmId
           ? {
-              ...u,
-              status,
-              role: role ?? u.role,
+              ...r,
+              berkasDikembalikan: nextValue,
+              berkasDikembalikanAt: nextValue ? now : undefined,
+              berkasDikembalikanBy: nextValue ? currentActor.nama : undefined,
               updatedAt: now,
             }
-          : u
+          : r
       )
     );
   };
 
-  const handleRegisterInternalUser = (
-    user: Omit<InternalUser, 'id' | 'status' | 'registeredAt' | 'updatedAt'>
-  ) => {
-    const now = new Date().toISOString();
-    const created: InternalUser = {
-      id: `usr-${Date.now()}`,
-      ...user,
-      status: 'pending',
-      registeredAt: now,
-      updatedAt: now,
-    };
-    setInternalUsers((prev) => [created, ...prev]);
-  };
-
   const showBottomNav = subView === 'none' && !(activeTab === 'menu' && menuSection !== 'root');
+
+  if (sessionUserId && !authReady && !currentUser) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-100 p-4">
+        <div className="flex flex-col items-center gap-3 rounded-3xl border border-slate-200 bg-white px-8 py-6 shadow-xs">
+          <MasdetaLogo />
+          <p className="text-xs font-semibold text-slate-600">Memuat sesi MASDETA...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-slate-200/70 sm:py-3">
+        <OfflineIndicator />
+        <div className="mx-auto min-h-screen w-full max-w-md overflow-x-hidden bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm">
+          <AuthView
+            logo={<MasdetaLogo />}
+            onLogin={handleLogin}
+            onRegister={handleRegister}
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-200/70 sm:py-3">
       <OfflineIndicator />
+
+      {/* Global Feedback Banner for views without inline feedback slot */}
+      {feedback &&
+        subView !== 'kpm-detail' &&
+        subView !== 'kpm-form' &&
+        subView !== 'edit-proposal' &&
+        !(subView === 'none' && activeTab === 'dashboard') && (
+          <div className="fixed top-3 left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2">
+            <div
+              role="status"
+              className={`flex items-center justify-between gap-2.5 rounded-2xl border px-3.5 py-2.5 text-xs shadow-lg ${
+                feedback.type === 'success'
+                  ? 'border-teal-200 bg-teal-50 text-teal-900'
+                  : 'border-rose-200 bg-rose-50 text-rose-900'
+              }`}
+            >
+              <p className="font-medium leading-snug">{feedback.message}</p>
+              <button
+                type="button"
+                onClick={() => setFeedback(null)}
+                aria-label="Tutup notifikasi"
+                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg hover:bg-black/5"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+      {/* Interactive In-App Push Toast for Incoming 1-on-1 Direct Message */}
+      {incomingToast && (
+        <div className="fixed top-3 left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2">
+          <div className="flex items-start gap-3 rounded-2xl border border-teal-200 bg-white p-3 shadow-lg shadow-slate-900/10">
+            <button
+              type="button"
+              onClick={() => {
+                const peerId = incomingToast.senderId;
+                setIncomingToast(null);
+                openChatView(peerId);
+              }}
+              className="flex min-w-0 flex-1 items-start gap-2.5 text-left"
+            >
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-teal-700 text-white">
+                <MessageSquare className="h-4.5 w-4.5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-bold text-slate-900">
+                  {incomingToast.senderName}{' '}
+                  <span className="font-normal text-teal-700">· {incomingToast.senderRole}</span>
+                </p>
+                <p className="mt-0.5 line-clamp-2 text-xs text-slate-600">{incomingToast.text}</p>
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setIncomingToast(null)}
+              aria-label="Tutup notifikasi pesan"
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Dedicated Mobile Viewport Shell */}
       <div className="mx-auto min-h-screen w-full max-w-md overflow-x-hidden bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm">
         {/* Sub-Views */}
+        {subView === 'chat' && (
+          <ChatView
+            currentUser={currentUser}
+            users={internalUsers}
+            messages={directMessages}
+            activePeerId={activeChatPeerId}
+            onSelectPeer={(peerId) => {
+              setActiveChatPeerId(peerId);
+              if (peerId) {
+                void handleMarkChatRead(peerId);
+              }
+            }}
+            onSendMessage={handleSendChatMessage}
+            onMarkConversationRead={handleMarkChatRead}
+            pushPermission={pushPermission}
+            onRequestPushPermission={handleRequestPushPermission}
+            onBack={() => {
+              setActiveChatPeerId(null);
+              setSubView('none');
+              setActiveTab(returnToTab);
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+          />
+        )}
+
+        {subView === 'profile' && (
+          <UserProfileView
+            user={currentUser}
+            pushEnabled={pushEnabled}
+            pushPermission={pushPermission}
+            onRequestPushPermission={handleRequestPushPermission}
+            onTogglePushEnabled={handleTogglePushEnabled}
+            onUpdateProfile={handleUpdateProfile}
+            onLogout={handleLogout}
+            onBack={() => {
+              setSubView('none');
+              setActiveTab(returnToTab);
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+          />
+        )}
+
         {subView === 'kpm-detail' && activeKpmRecord && (
           <KpmDetailView
             record={activeKpmRecord}
@@ -1111,7 +2077,23 @@ export default function App() {
             onOpenProposal={(proposalName, tahun) =>
               handleOpenProposalDetailByName(proposalName, tahun)
             }
+            onOpenFullHistory={() => {
+              setSubView('kpm-history');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
             onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
+          />
+        )}
+
+        {subView === 'kpm-history' && activeKpmRecord && (
+          <HistoryDetailView
+            mode="kpm"
+            record={activeKpmRecord}
+            kpmAuditLogs={kpmAuditLogs.filter((l) => l.kpmId === activeKpmRecord.id)}
+            onBack={() => {
+              setSubView('kpm-detail');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
           />
         )}
 
@@ -1231,6 +2213,27 @@ export default function App() {
               setActiveTab('kpm');
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
+            onAcceptAllKpm={handleAcceptAllInProposal}
+            onOpenFullHistory={() => {
+              setSubView('proposal-history');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+          />
+        )}
+
+        {subView === 'proposal-history' && activeProposal && (
+          <HistoryDetailView
+            mode="proposal"
+            proposal={activeProposal}
+            proposalHistory={proposalHistory.filter(
+              (h) =>
+                h.proposalName === activeProposal.namaProposal &&
+                (!h.tahun || h.tahun === activeProposal.tahun)
+            )}
+            onBack={() => {
+              setSubView('proposal-detail');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
           />
         )}
 
@@ -1254,15 +2257,19 @@ export default function App() {
         {subView === 'none' && activeTab === 'dashboard' && (
           <DashboardView
             logo={<MasdetaLogo />}
+            currentUser={currentUser}
+            unreadChatCount={unreadChatCount}
             selectedYear={selectedYear}
             onChangeYear={(y) => setSelectedYear(y)}
             records={records}
             proposals={proposals}
             items={items}
-            pendingUsersCount={pendingUsersCount}
+            pendingUsersCount={currentUser.role === 'SuperAdmin' ? pendingUsersCount : 0}
             duplicateNikCount={duplicateNikCount}
             feedback={feedback}
             onDismissFeedback={() => setFeedback(null)}
+            onOpenChat={() => openChatView()}
+            onOpenProfile={openProfileView}
             onOpenKpmList={(filter) => {
               setKpmStatusFilter(filter?.status ?? 'all');
               setKpmItemFilter(filter?.item ?? 'all');
@@ -1326,7 +2333,6 @@ export default function App() {
             selectedYear={selectedYear}
             onChangeYear={setSelectedYear}
             onOpenProposalDetail={(id) => openProposalDetailById(id, 'proposal')}
-            onOpenAddProposal={() => openAddProposalForm('proposal')}
           />
         )}
 
@@ -1334,6 +2340,8 @@ export default function App() {
           <MenuHubView
             activeSection={menuSection}
             onChangeSection={setMenuSection}
+            currentUser={currentUser}
+            unreadChatCount={unreadChatCount}
             records={records}
             proposals={proposals}
             items={items}
@@ -1341,37 +2349,54 @@ export default function App() {
             pengelolaList={pengelolaList}
             wilayahList={wilayahList}
             internalUsers={internalUsers}
-            onAddItem={(item) => setItems((prev) => [...prev, item])}
+            onOpenChat={(peerId) => openChatView(peerId)}
+            onOpenProfile={openProfileView}
+            onSaveItem={handleSaveCatalogItem}
             onDeleteItem={handleDeleteCatalogItem}
             onMoveItemOrder={handleMoveItemOrder}
             onUpdateItemSubItems={handleUpdateItemSubItems}
             onCopyItemsFromYear={handleCopyItemsFromYear}
-            onAddPekerjaan={(job) => setPekerjaanList((prev) => [...prev, job])}
-            onUpdateWilayahList={setWilayahList}
+            onAddPekerjaan={(job) => {
+              if (!requirePermission('add', 'menambah daftar pekerjaan')) return;
+              setPekerjaanList((prev) => [...prev, job]);
+            }}
+            onUpdateWilayahList={(nextList) => {
+              if (!requirePermission('update', 'mengubah data wilayah')) return;
+              setWilayahList(nextList);
+            }}
             onOpenAddProposal={() => openAddProposalForm('menu')}
             onOpenSubItemRecap={() => openSubItemRecap('menu')}
             onAddPengelola={handleCreatePengelola}
-            onUpdateUserStatus={handleUpdateUserStatus}
+            onAdminControlUser={handleAdminControlUser}
             onRegisterInternalUser={handleRegisterInternalUser}
             onImportCsv={handleImportCsv}
+            onSelectKpm={(rec) => openKpmDetail(rec, 'menu')}
+            onToggleBerkasDikembalikan={handleToggleBerkasDikembalikan}
             onSelectKpmFromDuplicate={(rec) => openKpmDetail(rec, 'menu')}
             onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
           />
         )}
       </div>
 
+      {/* Floating Scroll-To-Top Hover Button */}
+      <ScrollToTopButton hasBottomNav={showBottomNav} />
+
       {/* Bottom Navigation Bar with Central Circular Add Button */}
       {showBottomNav && (
         <BottomNavBar
           activeTab={activeTab}
-          pendingUsersCount={pendingUsersCount}
+          pendingUsersCount={currentUser.role === 'SuperAdmin' ? pendingUsersCount : 0}
+          unreadChatCount={unreadChatCount}
           onSelectTab={(tab) => {
             setFeedback(null);
             if (tab === 'menu') setMenuSection('root');
             setActiveTab(tab);
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
-          onOpenQuickAdd={() => setIsQuickAddOpen(true)}
+          onOpenQuickAdd={() => {
+            if (!requirePermission('add', 'menambah data KPM atau proposal baru')) return;
+            setIsQuickAddOpen(true);
+          }}
         />
       )}
 
