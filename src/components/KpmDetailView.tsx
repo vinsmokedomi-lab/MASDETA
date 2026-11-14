@@ -231,33 +231,17 @@ export function KpmDetailView({
 
   return (
     <div className="min-h-screen pb-10">
-      {/* Native Mobile Sub-Screen Header (Back + Title + Edit) */}
-      <header className="sticky top-0 z-20 flex items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur-md">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <button
-            type="button"
-            onClick={onBack}
-            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
-            aria-label="Kembali ke daftar KPM"
-          >
-            <ArrowLeft className="h-5 w-5" />
-          </button>
-          <h1 className="truncate text-base font-bold text-slate-900">Detail Calon KPM</h1>
-        </div>
-
+      {/* Sub-Screen Header: hanya panah kembali + judul */}
+      <header className="sticky top-0 z-20 flex items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur-md">
         <button
           type="button"
-          disabled={isProposalLocked}
-          onClick={() => onEditRecord(record)}
-          className="inline-flex min-h-[38px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap"
+          onClick={onBack}
+          className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
+          aria-label="Kembali ke daftar KPM"
         >
-          {isProposalLocked ? (
-            <Lock className="h-3.5 w-3.5 text-slate-500" />
-          ) : (
-            <Edit3 className="h-3.5 w-3.5 text-teal-700" />
-          )}
-          <span>{isProposalLocked ? 'Terkunci' : 'Edit'}</span>
+          <ArrowLeft className="h-5 w-5" />
         </button>
+        <h1 className="truncate text-base font-bold text-slate-900">Detail Calon KPM</h1>
       </header>
 
       <main className="space-y-4 px-4 pt-4">
@@ -282,18 +266,30 @@ export function KpmDetailView({
 
           <h2 className="mt-1 text-xl font-bold tracking-tight text-slate-900">{record.nama}</h2>
 
-          <button
-            type="button"
-            onClick={() => onOpenProposal(record.proposal, record.tahun)}
-            className="mt-1.5 inline-flex items-center gap-1 text-left text-xs font-semibold text-teal-700 hover:underline"
-          >
-            <span>
-              {record.kelurahan
-                ? `${record.proposal} · ${record.kelurahan}`
-                : record.proposal}
-            </span>
-            <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-          </button>
+          <div className="mt-1.5 flex items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={() => onOpenProposal(record.proposal, record.tahun)}
+              className="inline-flex min-w-0 items-center gap-1 text-left text-xs font-semibold text-teal-700 hover:underline"
+            >
+              <span className="truncate">
+                {record.kelurahan
+                  ? `${record.proposal} · ${record.kelurahan}`
+                  : record.proposal}
+              </span>
+              <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+            </button>
+
+            <button
+              type="button"
+              disabled={isProposalLocked}
+              onClick={() => onEditRecord(record)}
+              className="inline-flex shrink-0 items-center gap-1 text-xs font-bold text-teal-700 hover:underline disabled:cursor-not-allowed disabled:text-slate-400 disabled:no-underline"
+            >
+              {isProposalLocked ? <Lock className="h-3.5 w-3.5" /> : <Edit3 className="h-3.5 w-3.5" />}
+              <span>{isProposalLocked ? 'Terkunci' : 'Edit'}</span>
+            </button>
+          </div>
 
           {/* Status Validasi Quick Switch */}
           <div className="mt-4 border-t border-slate-100 pt-3.5">

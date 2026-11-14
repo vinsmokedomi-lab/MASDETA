@@ -37,3 +37,15 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* Dropdown: teks hint (belum ada pilihan) tampil abu-abu pudar seperti placeholder input.
+   Opsi di daftar selalu gelap supaya tidak ikut abu-abu. */
+select option {
+  color: #0f172a;
+  font-size: 0.875rem;
+}
+
+select[data-empty='true'] {
+  font-size: 0.75rem;
+  line-height: 1rem;
+}

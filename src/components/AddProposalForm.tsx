@@ -14,6 +14,7 @@ import {
   ProposalTipe,
 } from '../types/kpm';
 import { buildCombinedProposalName, capitalizeWords } from '../utils/imageProcessor';
+import { PlaceholderSelect } from './FormControls';
 
 interface AddProposalFormProps {
   existingProposals: ProposalRecord[];
@@ -140,24 +141,24 @@ export function AddProposalForm({
               <label htmlFor="add-prop-tahun" className="block text-xs font-semibold text-slate-700">
                 Tahun <span className="text-rose-600">*</span>
               </label>
-              <select
+              <PlaceholderSelect
+                placeholder="Pilih Tahun"
                 id="add-prop-tahun"
                 value={tahun}
-                onChange={(e) => {
-                  setTahun(e.target.value);
+                onChange={(v) => {
+                  setTahun(v);
                   setErrors((prev) => ({ ...prev, tahun: undefined, duplicate: undefined }));
                 }}
-                className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm text-slate-900 transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
                   errors.tahun ? 'border-rose-400' : 'border-slate-300'
                 }`}
               >
-                <option value="">-- Pilih Tahun --</option>
                 {TAHUN_OPTIONS.map((yr) => (
                   <option key={yr} value={yr}>
                     {yr}
                   </option>
                 ))}
-              </select>
+              </PlaceholderSelect>
               {errors.tahun && <p className="mt-1 text-xs text-rose-600">{errors.tahun}</p>}
             </div>
 
@@ -166,24 +167,24 @@ export function AddProposalForm({
               <label htmlFor="add-prop-tipe" className="block text-xs font-semibold text-slate-700">
                 Tipe <span className="text-rose-600">*</span>
               </label>
-              <select
+              <PlaceholderSelect
+                placeholder="Pilih Tipe"
                 id="add-prop-tipe"
                 value={tipe}
-                onChange={(e) => {
-                  setTipe(e.target.value as ProposalTipe | '');
+                onChange={(v) => {
+                  setTipe(v as ProposalTipe | '');
                   setErrors((prev) => ({ ...prev, tipe: undefined }));
                 }}
-                className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm text-slate-900 transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
                   errors.tipe ? 'border-rose-400' : 'border-slate-300'
                 }`}
               >
-                <option value="">-- Pilih Tipe --</option>
                 {PROPOSAL_TIPE_OPTIONS.map((opt) => (
                   <option key={opt} value={opt}>
                     {opt}
                   </option>
                 ))}
-              </select>
+              </PlaceholderSelect>
               {errors.tipe && <p className="mt-1 text-xs text-rose-600">{errors.tipe}</p>}
             </div>
 
@@ -192,24 +193,24 @@ export function AddProposalForm({
               <label htmlFor="add-prop-kabkota" className="block text-xs font-semibold text-slate-700">
                 Kab / Kota <span className="text-rose-600">*</span>
               </label>
-              <select
+              <PlaceholderSelect
+                placeholder="Pilih Kab / Kota"
                 id="add-prop-kabkota"
                 value={kabKota}
-                onChange={(e) => {
-                  setKabKota(e.target.value);
+                onChange={(v) => {
+                  setKabKota(v);
                   setErrors((prev) => ({ ...prev, kabKota: undefined }));
                 }}
-                className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm text-slate-900 transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
                   errors.kabKota ? 'border-rose-400' : 'border-slate-300'
                 }`}
               >
-                <option value="">-- Pilih Kab / Kota --</option>
                 {KAB_KOTA_OPTIONS.map((item) => (
                   <option key={item} value={item}>
                     {item}
                   </option>
                 ))}
-              </select>
+              </PlaceholderSelect>
               {errors.kabKota && <p className="mt-1 text-xs text-rose-600">{errors.kabKota}</p>}
             </div>
 
@@ -218,21 +219,21 @@ export function AddProposalForm({
               <label htmlFor="add-prop-kecamatan" className="block text-xs font-semibold text-slate-700">
                 Kecamatan <span className="text-rose-600">*</span>
               </label>
-              <select
+              <PlaceholderSelect
+                placeholder="Pilih Kecamatan"
                 id="add-prop-kecamatan"
                 value={kecamatan}
-                onChange={(e) => handleKecamatanChange(e.target.value)}
-                className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm text-slate-900 transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                onChange={(v) => handleKecamatanChange(v)}
+                className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
                   errors.kecamatan ? 'border-rose-400' : 'border-slate-300'
                 }`}
               >
-                <option value="">-- Pilih Kecamatan --</option>
                 {KECAMATAN_OPTIONS.map((kec) => (
                   <option key={kec} value={kec}>
                     {kec}
                   </option>
                 ))}
-              </select>
+              </PlaceholderSelect>
               {errors.kecamatan && (
                 <p className="mt-1 text-xs text-rose-600">{errors.kecamatan}</p>
               )}
@@ -246,25 +247,24 @@ export function AddProposalForm({
                 </label>
                 <span className="text-[11px] text-slate-400">Opsional</span>
               </div>
-              <select
+              <PlaceholderSelect
+                placeholder={kecamatan ? 'Pilih Kelurahan (Opsional)' : 'Pilih Kecamatan terlebih dahulu'}
+                clearLabel="Tanpa kelurahan"
                 id="add-prop-kelurahan"
                 disabled={!kecamatan}
                 value={kelurahan}
-                onChange={(e) => {
-                  setKelurahan(e.target.value);
+                onChange={(v) => {
+                  setKelurahan(v);
                   setErrors((prev) => ({ ...prev, duplicate: undefined }));
                 }}
-                className="mt-1.5 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3.5 text-sm text-slate-900 transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+                className="mt-1.5 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
               >
-                <option value="">
-                  {kecamatan ? '-- Pilih Kelurahan (Opsional) --' : '-- Pilih Kecamatan terlebih dahulu --'}
-                </option>
                 {kelurahanList.map((kel) => (
                   <option key={kel} value={kel}>
                     {kel}
                   </option>
                 ))}
-              </select>
+              </PlaceholderSelect>
             </div>
 
             {/* Jalan (Opsional) */}

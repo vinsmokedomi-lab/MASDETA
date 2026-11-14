@@ -15,6 +15,7 @@ import {
   sanitizeDigits,
 } from '../utils/imageProcessor';
 import { DocumentUploadCard } from './DocumentUploadCard';
+import { PlaceholderSelect } from './FormControls';
 
 interface PengelolaSelectorModalProps {
   isOpen: boolean;
@@ -281,19 +282,20 @@ export function PengelolaSelectorModal({
                   <label htmlFor="pengelola-title" className="block text-xs font-semibold text-slate-700">
                     Title
                   </label>
-                  <select
+                  <PlaceholderSelect
+                    placeholder="Tanpa Title"
+                    clearLabel="Tanpa Title"
                     id="pengelola-title"
                     value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    className="mt-1.5 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
+                    onChange={(v) => setTitle(v)}
+                    className="mt-1.5 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 text-sm focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
                   >
-                    <option value="">-- Tanpa Title --</option>
                     {PENGELOLA_TITLE_OPTIONS.map((t) => (
                       <option key={t} value={t}>
                         {t}
                       </option>
                     ))}
-                  </select>
+                  </PlaceholderSelect>
                 </div>
 
                 <div className="sm:col-span-2">
@@ -325,19 +327,19 @@ export function PengelolaSelectorModal({
                 <label htmlFor="pengelola-kecamatan" className="block text-xs font-semibold text-slate-700">
                   Kecamatan
                 </label>
-                <select
+                <PlaceholderSelect
+                  placeholder="Pilih Kecamatan"
                   id="pengelola-kecamatan"
                   value={kecamatan}
-                  onChange={(e) => setKecamatan(e.target.value)}
-                  className="mt-1.5 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3.5 text-sm text-slate-900 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
+                  onChange={(v) => setKecamatan(v)}
+                  className="mt-1.5 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3.5 text-sm focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
                 >
-                  <option value="">-- Pilih Kecamatan --</option>
                   {KECAMATAN_OPTIONS.map((kec) => (
                     <option key={kec} value={kec}>
                       {kec}
                     </option>
                   ))}
-                </select>
+                </PlaceholderSelect>
               </div>
 
               <div>

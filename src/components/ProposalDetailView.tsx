@@ -209,30 +209,17 @@ export function ProposalDetailView({
 
   return (
     <div className="min-h-screen pb-10">
-      {/* Native Mobile Sub-Screen Header (Back + Title + Edit Trigger) */}
-      <header className="sticky top-0 z-20 flex items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur-md">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <button
-            type="button"
-            onClick={onBack}
-            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
-            aria-label="Kembali"
-          >
-            <ArrowLeft className="h-5 w-5" />
-          </button>
-          <h1 className="truncate text-base font-bold text-slate-900">
-            {proposal.namaProposal}
-          </h1>
-        </div>
-
+      {/* Sub-Screen Header: hanya panah kembali + judul */}
+      <header className="sticky top-0 z-20 flex items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur-md">
         <button
           type="button"
-          onClick={() => onEditProposal(proposal.id)}
-          className="inline-flex min-h-[38px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 hover:bg-slate-50 whitespace-nowrap"
+          onClick={onBack}
+          className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
+          aria-label="Kembali"
         >
-          <Edit3 className="h-3.5 w-3.5 text-teal-700" />
-          <span>Edit</span>
+          <ArrowLeft className="h-5 w-5" />
         </button>
+        <h1 className="truncate text-base font-bold text-slate-900">{proposal.namaProposal}</h1>
       </header>
 
       <main className="space-y-4 px-4 pt-4">
@@ -255,6 +242,14 @@ export function ProposalDetailView({
               <p className="mt-1 text-[11px] text-slate-400 tabular-nums">
                 Diperbarui {formatUploadDateTime(proposal.updatedAt)}
               </p>
+              <button
+                type="button"
+                onClick={() => onEditProposal(proposal.id)}
+                className="mt-1.5 inline-flex items-center gap-1 text-xs font-bold text-teal-700 hover:underline"
+              >
+                <Edit3 className="h-3.5 w-3.5" />
+                <span>Edit proposal</span>
+              </button>
             </div>
 
             <div

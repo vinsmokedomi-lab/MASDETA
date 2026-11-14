@@ -23,6 +23,8 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import { SegmentedTabs } from './FormControls';
+import { PWAInstallButton } from './PWAInstallButton';
 import {
   DTSEN_OPTION_ITEMS,
   KECAMATAN_OPTIONS,
@@ -311,9 +313,6 @@ export function MenuHubView({
       <div className="min-h-screen pb-24">
         <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur-md">
           <h1 className="text-base font-bold text-slate-900">Menu Operasional</h1>
-          <p className="text-xs text-slate-500">
-            Pengawasan data, ekspor laporan, dan pengaturan internal MASDETA
-          </p>
         </header>
 
         <div className="space-y-5 px-4 pt-4">
@@ -334,7 +333,7 @@ export function MenuHubView({
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-bold text-slate-900">Rekapitulasi Item & Sub-Item</p>
                   <p className="mt-0.5 text-xs text-slate-500">
-                    Akumulasi sub-item lintas paket & daftar hutang penyaluran
+                    Akumulasi sub-item dan daftar hutang penyaluran
                   </p>
                 </div>
                 <ChevronRight className="h-4 w-4 text-slate-400" />
@@ -350,10 +349,8 @@ export function MenuHubView({
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-slate-900">Cek Duplikasi NIK / KK</p>
-                  <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
-                    {duplicateGroups.length > 0
-                      ? `${duplicateGroups.length} grup NIK terindikasi ganda`
-                      : 'Tidak ada duplikasi terdeteksi'}
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Periksa NIK atau KK yang tercatat ganda
                   </p>
                 </div>
                 <ChevronRight className="h-4 w-4 text-slate-400" />
@@ -369,8 +366,8 @@ export function MenuHubView({
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-slate-900">Sebaran Desil DTSEN</p>
-                  <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
-                    Klasifikasi Desil 1–10 Kemensos dari {records.length} KPM
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Klasifikasi Desil 1–10 Kemensos
                   </p>
                 </div>
                 <ChevronRight className="h-4 w-4 text-slate-400" />
@@ -386,9 +383,8 @@ export function MenuHubView({
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-slate-900">Administrasi & Pelayanan</p>
-                  <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
-                    Total {formatRupiah(adminStats.totalAmount)} · {adminStats.paidRecords.length}{' '}
-                    transaksi
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Catatan biaya administrasi calon KPM
                   </p>
                 </div>
                 <ChevronRight className="h-4 w-4 text-slate-400" />
@@ -404,8 +400,8 @@ export function MenuHubView({
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-slate-900">Data Pengelola Lapangan</p>
-                  <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
-                    {pengelolaList.length} pengelola terdaftar
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Daftar pengelola dan penanggung jawab lapangan
                   </p>
                 </div>
                 <ChevronRight className="h-4 w-4 text-slate-400" />
@@ -422,7 +418,7 @@ export function MenuHubView({
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-slate-900">Laporan & Download CSV</p>
                   <p className="mt-0.5 text-xs text-slate-500">
-                    Unduh data KPM dan rekap arsip proposal
+                    Unduh data KPM dan rekap proposal
                   </p>
                 </div>
                 <ChevronRight className="h-4 w-4 text-slate-400" />
@@ -448,10 +444,8 @@ export function MenuHubView({
                   <p className="text-sm font-bold text-slate-900">
                     Manajemen User Internal
                   </p>
-                  <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
-                    {pendingUsersCount > 0
-                      ? `${pendingUsersCount} pendaftar menunggu persetujuan`
-                      : `${internalUsers.filter((u) => u.status === 'active').length} akun internal aktif`}
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Persetujuan dan peran akun petugas internal
                   </p>
                 </div>
                 <ChevronRight className="h-4 w-4 text-slate-400" />
@@ -478,6 +472,10 @@ export function MenuHubView({
               </button>
             </div>
           </section>
+
+          <div className="flex justify-center">
+            <PWAInstallButton />
+          </div>
         </div>
       </div>
     );
@@ -502,8 +500,7 @@ export function MenuHubView({
                   <span className="text-xs font-bold">Persetujuan Akun Internal</span>
                 </div>
                 <p className="mt-1 text-xs text-slate-600 leading-relaxed">
-                  Aplikasi ini khusus internal. Tinjau setiap petugas yang mendaftar sebelum
-                  mengizinkan akses penuh.
+                  Tinjau petugas yang mendaftar sebelum memberi akses.
                 </p>
               </div>
               <button
@@ -516,38 +513,29 @@ export function MenuHubView({
               </button>
             </div>
 
-            <div className="mt-3 flex items-center gap-1 rounded-xl bg-slate-100 p-1">
-              {(
-                [
-                  { key: 'all', label: `Semua (${internalUsers.length})` },
-                  {
-                    key: 'pending',
-                    label: `Menunggu (${internalUsers.filter((u) => u.status === 'pending').length})`,
-                  },
-                  {
-                    key: 'active',
-                    label: `Aktif (${internalUsers.filter((u) => u.status === 'active').length})`,
-                  },
-                  {
-                    key: 'rejected',
-                    label: `Ditolak (${internalUsers.filter((u) => u.status === 'rejected').length})`,
-                  },
-                ] as { key: 'all' | InternalUserStatus; label: string }[]
-              ).map((tab) => (
-                <button
-                  key={tab.key}
-                  type="button"
-                  onClick={() => setUserStatusFilter(tab.key)}
-                  className={`min-h-[34px] flex-1 rounded-lg px-2 text-[11px] font-semibold transition-colors whitespace-nowrap tabular-nums ${
-                    userStatusFilter === tab.key
-                      ? 'bg-white text-slate-900 shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
+            <SegmentedTabs<'all' | InternalUserStatus>
+              className="mt-3"
+              value={userStatusFilter}
+              onChange={setUserStatusFilter}
+              tabs={[
+                { key: 'all', label: 'Semua', count: internalUsers.length },
+                {
+                  key: 'pending',
+                  label: 'Menunggu',
+                  count: internalUsers.filter((u) => u.status === 'pending').length,
+                },
+                {
+                  key: 'active',
+                  label: 'Aktif',
+                  count: internalUsers.filter((u) => u.status === 'active').length,
+                },
+                {
+                  key: 'rejected',
+                  label: 'Ditolak',
+                  count: internalUsers.filter((u) => u.status === 'rejected').length,
+                },
+              ]}
+            />
           </div>
 
           {filteredUsers.length === 0 ? (
@@ -1003,8 +991,8 @@ export function MenuHubView({
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold text-slate-900">Kelola Item & Sub-Item</p>
-                <p className="text-xs text-slate-500 tabular-nums">
-                  {getItemsForYear(items, '2026').length} paket aktif tahun 2026
+                <p className="text-xs text-slate-500">
+                  Katalog paket dan sub-item per tahun
                 </p>
               </div>
               <ChevronRight className="h-4 w-4 text-slate-400" />
@@ -1020,8 +1008,8 @@ export function MenuHubView({
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold text-slate-900">Kelola Daftar Pekerjaan</p>
-                <p className="text-xs text-slate-500 tabular-nums">
-                  {pekerjaanList.length} pilihan pekerjaan KPM
+                <p className="text-xs text-slate-500">
+                  Pilihan pekerjaan pada form calon KPM
                 </p>
               </div>
               <ChevronRight className="h-4 w-4 text-slate-400" />
@@ -1037,8 +1025,8 @@ export function MenuHubView({
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold text-slate-900">Kelola Pengelola Lapangan</p>
-                <p className="text-xs text-slate-500 tabular-nums">
-                  {pengelolaList.length} pengelola aktif
+                <p className="text-xs text-slate-500">
+                  Daftar pengelola lapangan
                 </p>
               </div>
               <ChevronRight className="h-4 w-4 text-slate-400" />
@@ -1054,12 +1042,10 @@ export function MenuHubView({
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-bold text-slate-900">
-                  Manajemen User (Persetujuan Akun)
+                  Manajemen User Internal
                 </p>
-                <p className="text-xs text-slate-500 tabular-nums">
-                  {pendingUsersCount > 0
-                    ? `${pendingUsersCount} menunggu persetujuan internal`
-                    : 'Kelola izin akses petugas internal'}
+                <p className="text-xs text-slate-500">
+                  Kelola izin akses petugas internal
                 </p>
               </div>
               <ChevronRight className="h-4 w-4 text-slate-400" />

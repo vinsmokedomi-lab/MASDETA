@@ -1,14 +1,8 @@
 import { useMemo, useState } from 'react';
-import {
-  ChevronDown,
-  ChevronRight,
-  Lock,
-  Plus,
-  Search,
-  Unlock,
-} from 'lucide-react';
+import { ChevronRight, Lock, Plus, Search, Unlock } from 'lucide-react';
 import { PROPOSAL_TIPE_OPTIONS, TAHUN_OPTIONS } from '../data/kpmOptions';
 import { KpmRecord, ProposalRecord, ProposalTipe } from '../types/kpm';
+import { FilterSelect, SegmentedTabs } from './FormControls';
 
 interface ProposalListViewProps {
   proposals: ProposalRecord[];
@@ -43,13 +37,6 @@ export function ProposalListView({
     return proposals.filter((p) => p.tahun === selectedYear);
   }, [proposals, selectedYear]);
 
-  const stats = useMemo(() => {
-    const total = yearScopedProposals.length;
-    const locked = yearScopedProposals.filter((p) => p.status === 'locked').length;
-    const dinasDone = yearScopedProposals.filter((p) => p.checklist.dinas).length;
-    return { total, locked, unlocked: total - locked, dinasDone };
-  }, [yearScopedProposals]);
-
   const filteredProposals = useMemo(() => {
     const q = query.trim().toLowerCase();
     return yearScopedProposals.filter((prop) => {
@@ -66,75 +53,48 @@ export function ProposalListView({
 
   return (
     <div className="min-h-screen pb-24">
-      {/* Sticky Header */}
-      <header className="sticky top-0 z-20 flex items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-4 py-2.5 backdrop-blur-md">
-        <div>
-          <h1 className="text-base font-bold text-slate-900">Daftar Proposal</h1>
-          <p className="text-[11px] text-slate-500 tabular-nums">
-            {stats.total} Proposal · {stats.dinasDone} Sudah ke Dinas · {stats.locked} Terkunci
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2 shrink-0">
-          <div className="relative">
-            <select
-              aria-label="Filter tahun proposal"
-              value={selectedYear}
-              onChange={(e) => onChangeYear(e.target.value)}
-              className="min-h-[38px] appearance-none rounded-xl border border-slate-200 bg-slate-50 pr-7 pl-3 text-xs font-bold text-slate-900 focus:border-teal-700 focus:bg-white focus:outline-none tabular-nums"
-            >
-              {yearOptions.map((y) => (
-                <option key={y} value={y}>
-                  {y}
-                </option>
-              ))}
-              <option value="all">Semua</option>
-            </select>
-            <ChevronDown className="pointer-events-none absolute top-1/2 right-2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
-          </div>
-
-          <button
-            type="button"
-            onClick={onOpenAddProposal}
-            aria-label="Tambah proposal baru"
-            className="inline-flex min-h-[38px] items-center gap-1 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 whitespace-nowrap"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            <span>Baru</span>
-          </button>
-        </div>
+      {/* Sticky Header: hanya judul, tanpa dropdown / tombol aksi */}
+      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur-md">
+        <h1 className="text-base font-bold text-slate-900">Daftar Proposal</h1>
       </header>
 
       <div className="space-y-4 px-4 pt-4">
-        {/* Search & Tipe Segmented Filter */}
-        <div className="space-y-2.5">
-          <div className="relative">
-            <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Cari nama proposal, kecamatan, atau kelurahan..."
-              className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pr-3.5 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
-            />
+        {/* Search + Tahun, lalu tab Tipe */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Cari proposal atau wilayah..."
+                className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pr-3 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
+              />
+            </div>
+            <FilterSelect
+              ariaLabel="Filter tahun proposal"
+              value={selectedYear}
+              onChange={onChangeYear}
+              className="w-[108px] shrink-0"
+            >
+              {yearOptions.map((y) => (
+                <option key={y} value={y}>
+                  Tahun {y}
+                </option>
+              ))}
+              <option value="all">Semua</option>
+            </FilterSelect>
           </div>
 
-          <div className="flex items-center gap-1 overflow-x-auto rounded-xl bg-slate-200/70 p-1">
-            {(['all', ...PROPOSAL_TIPE_OPTIONS] as ('all' | ProposalTipe)[]).map((tipe) => (
-              <button
-                key={tipe}
-                type="button"
-                onClick={() => setTipeFilter(tipe)}
-                className={`min-h-[34px] flex-1 rounded-lg px-2.5 text-xs font-semibold transition-colors whitespace-nowrap ${
-                  tipeFilter === tipe
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {tipe === 'all' ? 'Semua' : tipe}
-              </button>
-            ))}
-          </div>
+          <SegmentedTabs<'all' | ProposalTipe>
+            value={tipeFilter}
+            onChange={setTipeFilter}
+            tabs={(['all', ...PROPOSAL_TIPE_OPTIONS] as ('all' | ProposalTipe)[]).map((tipe) => ({
+              key: tipe,
+              label: tipe === 'all' ? 'Semua' : tipe,
+            }))}
+          />
         </div>
 
         {/* Proposal List */}
@@ -142,16 +102,8 @@ export function ProposalListView({
           <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
             <p className="text-sm font-semibold text-slate-900">Tidak ada proposal ditemukan</p>
             <p className="mt-1 text-xs text-slate-500">
-              Ubah filter tahun/tipe atau tambahkan proposal baru.
+              Ubah filter tahun / tipe, atau tambahkan proposal baru.
             </p>
-            <button
-              type="button"
-              onClick={onOpenAddProposal}
-              className="mt-4 inline-flex min-h-[42px] items-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white hover:bg-teal-800"
-            >
-              <Plus className="h-4 w-4" />
-              <span>Tambah Proposal Baru</span>
-            </button>
           </div>
         ) : (
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
@@ -203,6 +155,15 @@ export function ProposalListView({
             })}
           </div>
         )}
+
+        <button
+          type="button"
+          onClick={onOpenAddProposal}
+          className="inline-flex min-h-[40px] items-center gap-1.5 px-1 text-xs font-bold text-teal-700 hover:underline"
+        >
+          <Plus className="h-4 w-4" />
+          <span>Tambah proposal baru</span>
+        </button>
       </div>
     </div>
   );

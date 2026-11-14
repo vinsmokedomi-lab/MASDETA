@@ -13,6 +13,7 @@ import {
 import { TAHUN_OPTIONS } from '../data/kpmOptions';
 import { ItemBantuan, KpmRecord } from '../types/kpm';
 import { computeSubItemRecap, exportSubItemRecapToCsv } from '../utils/imageProcessor';
+import { FilterSelect, SegmentedTabs } from './FormControls';
 
 interface SubItemRecapViewProps {
   records: KpmRecord[];
@@ -142,63 +143,44 @@ export function SubItemRecapView({
 
   return (
     <div className="min-h-screen pb-24">
-      {/* Native Mobile Sub-Header */}
-      <header className="sticky top-0 z-20 flex items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur-md">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <button
-            type="button"
-            onClick={onBack}
-            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
-            aria-label="Kembali"
-          >
-            <ArrowLeft className="h-5 w-5" />
-          </button>
-          <h1 className="truncate text-base font-bold text-slate-900">Rekapitulasi Sub-Item</h1>
-        </div>
-
-        <div className="relative shrink-0">
-          <select
-            aria-label="Filter tahun rekapitulasi"
-            value={selectedYear}
-            onChange={(e) => onChangeYear(e.target.value)}
-            className="min-h-[38px] appearance-none rounded-xl border border-slate-200 bg-slate-50 pr-6 pl-2.5 text-xs font-bold text-slate-900 focus:border-teal-700 focus:bg-white focus:outline-none tabular-nums"
-          >
-            {yearOptions.map((yr) => (
-              <option key={yr} value={yr}>
-                {yr}
-              </option>
-            ))}
-            <option value="all">Semua</option>
-          </select>
-          <ChevronDown className="pointer-events-none absolute top-1/2 right-1.5 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
-        </div>
+      {/* Sub-Header: hanya panah kembali + judul */}
+      <header className="sticky top-0 z-20 flex items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur-md">
+        <button
+          type="button"
+          onClick={onBack}
+          className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
+          aria-label="Kembali"
+        >
+          <ArrowLeft className="h-5 w-5" />
+        </button>
+        <h1 className="truncate text-base font-bold text-slate-900">Rekapitulasi Sub-Item</h1>
       </header>
 
       <main className="space-y-4 px-4 pt-4">
-        {/* Scope Switcher: KPM Diterima vs Semua Usulan */}
-        <div className="flex items-center gap-1 rounded-xl bg-slate-200/70 p-1">
-          <button
-            type="button"
-            onClick={() => setScopeFilter('accepted')}
-            className={`min-h-[36px] flex-1 rounded-lg px-2.5 text-xs font-semibold transition-colors ${
-              scopeFilter === 'accepted'
-                ? 'bg-white text-slate-900 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
+        {/* Scope Switcher + Tahun dalam satu baris */}
+        <div className="flex items-center gap-2">
+          <SegmentedTabs<'accepted' | 'all'>
+            className="min-w-0 flex-1"
+            value={scopeFilter}
+            onChange={setScopeFilter}
+            tabs={[
+              { key: 'accepted', label: 'KPM Diterima' },
+              { key: 'all', label: 'Semua Usulan' },
+            ]}
+          />
+          <FilterSelect
+            ariaLabel="Filter tahun rekapitulasi"
+            value={selectedYear}
+            onChange={onChangeYear}
+            className="w-[108px] shrink-0"
           >
-            KPM Diterima
-          </button>
-          <button
-            type="button"
-            onClick={() => setScopeFilter('all')}
-            className={`min-h-[36px] flex-1 rounded-lg px-2.5 text-xs font-semibold transition-colors ${
-              scopeFilter === 'all'
-                ? 'bg-white text-slate-900 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Semua Usulan
-          </button>
+            {yearOptions.map((yr) => (
+              <option key={yr} value={yr}>
+                Tahun {yr}
+              </option>
+            ))}
+            <option value="all">Semua</option>
+          </FilterSelect>
         </div>
 
         {/* Hero Summary Card */}
@@ -248,30 +230,14 @@ export function SubItemRecapView({
         </section>
 
         {/* Primary View Tabs */}
-        <div className="grid grid-cols-2 gap-1.5 rounded-xl border border-slate-200 bg-white p-1">
-          <button
-            type="button"
-            onClick={() => setActiveTab('akumulasi')}
-            className={`min-h-[40px] rounded-lg px-2 text-xs font-bold transition-colors ${
-              activeTab === 'akumulasi'
-                ? 'bg-teal-700 text-white'
-                : 'text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            Akumulasi Sub-Item ({recap.aggregates.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('hutang')}
-            className={`min-h-[40px] rounded-lg px-2 text-xs font-bold transition-colors ${
-              activeTab === 'hutang'
-                ? 'bg-teal-700 text-white'
-                : 'text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            Laporan KPM & Hutang ({kpmCounts.pending_only})
-          </button>
-        </div>
+        <SegmentedTabs<'akumulasi' | 'hutang'>
+          value={activeTab}
+          onChange={setActiveTab}
+          tabs={[
+            { key: 'akumulasi', label: 'Akumulasi', count: recap.aggregates.length },
+            { key: 'hutang', label: 'Hutang KPM', count: kpmCounts.pending_only },
+          ]}
+        />
 
         {/* Search Input */}
         <div className="relative">
@@ -408,30 +374,18 @@ export function SubItemRecapView({
               </div>
             )}
 
-            <div className="flex items-center gap-1 overflow-x-auto rounded-xl bg-slate-200/70 p-1">
-              {(
-                [
-                  { key: 'pending_only', label: `Belum Lengkap (${kpmCounts.pending_only})` },
-                  { key: 'partial', label: `Hutang Sebagian (${kpmCounts.partial})` },
-                  { key: 'unstarted', label: `Belum Dibagi (${kpmCounts.unstarted})` },
-                  { key: 'complete', label: `Lengkap (${kpmCounts.complete})` },
-                  { key: 'all', label: `Semua (${kpmCounts.all})` },
-                ] as { key: DebtFilter; label: string }[]
-              ).map((chip) => (
-                <button
-                  key={chip.key}
-                  type="button"
-                  onClick={() => setDebtFilter(chip.key)}
-                  className={`min-h-[32px] shrink-0 rounded-lg px-2.5 text-[11px] font-semibold transition-colors whitespace-nowrap tabular-nums ${
-                    debtFilter === chip.key
-                      ? 'bg-white text-slate-900 shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  {chip.label}
-                </button>
-              ))}
-            </div>
+            <SegmentedTabs<DebtFilter>
+              stacked
+              value={debtFilter}
+              onChange={setDebtFilter}
+              tabs={[
+                { key: 'pending_only', label: 'Belum Lengkap', count: kpmCounts.pending_only },
+                { key: 'partial', label: 'Sebagian', count: kpmCounts.partial },
+                { key: 'unstarted', label: 'Belum Dibagi', count: kpmCounts.unstarted },
+                { key: 'complete', label: 'Lengkap', count: kpmCounts.complete },
+                { key: 'all', label: 'Semua', count: kpmCounts.all },
+              ]}
+            />
 
             {filteredKpmRows.length === 0 ? (
               <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">

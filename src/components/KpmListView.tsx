@@ -1,14 +1,5 @@
 import { useMemo, useState } from 'react';
-import {
-  ArrowLeft,
-  ChevronDown,
-  ChevronRight,
-  Lock,
-  Plus,
-  Search,
-  User,
-  X,
-} from 'lucide-react';
+import { ArrowLeft, ChevronRight, Lock, Search, User, X } from 'lucide-react';
 import { TAHUN_OPTIONS } from '../data/kpmOptions';
 import {
   ItemBantuan,
@@ -17,6 +8,7 @@ import {
   ValidationStatus,
 } from '../types/kpm';
 import { getItemsForYear } from '../utils/imageProcessor';
+import { FilterSelect, SegmentedTabs } from './FormControls';
 
 interface KpmListViewProps {
   records: KpmRecord[];
@@ -110,62 +102,21 @@ export function KpmListView({
 
   return (
     <div className="min-h-screen pb-24">
-      {/* Sticky Header */}
-      <header className="sticky top-0 z-20 flex items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur-md">
-        <div className="flex min-w-0 items-center gap-1">
-          {onBack && (
-            <button
-              type="button"
-              onClick={onBack}
-              className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
-              aria-label="Kembali"
-            >
-              <ArrowLeft className="h-5 w-5" />
-            </button>
-          )}
-          <div className="min-w-0">
-            <h1 className="truncate text-base font-bold text-slate-900">Daftar Calon KPM</h1>
-            <p className="truncate text-[11px] text-slate-500 tabular-nums">
-              {counts.all} Usulan · {counts.accepted} Diterima · {counts.pending} Menunggu
-            </p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-1.5 shrink-0">
-          <div className="relative">
-            <select
-              aria-label="Filter item bantuan"
-              value={itemFilter}
-              onChange={(e) => onChangeItemFilter(e.target.value)}
-              className="min-h-[38px] max-w-[96px] appearance-none truncate rounded-xl border border-slate-200 bg-slate-50 pr-6 pl-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:bg-white focus:outline-none"
-            >
-              <option value="all">Item</option>
-              {yearItemOptions.map((item) => (
-                <option key={item.code} value={item.code}>
-                  {item.code}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="pointer-events-none absolute top-1/2 right-1.5 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
-          </div>
-
-          <div className="relative">
-            <select
-              aria-label="Filter tahun KPM"
-              value={selectedYear}
-              onChange={(e) => onChangeYear(e.target.value)}
-              className="min-h-[38px] appearance-none rounded-xl border border-slate-200 bg-slate-50 pr-6 pl-2.5 text-xs font-bold text-slate-900 focus:border-teal-700 focus:bg-white focus:outline-none tabular-nums"
-            >
-              {yearOptions.map((y) => (
-                <option key={y} value={y}>
-                  {y}
-                </option>
-              ))}
-              <option value="all">Semua</option>
-            </select>
-            <ChevronDown className="pointer-events-none absolute top-1/2 right-1.5 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
-          </div>
-        </div>
+      {/* Sticky Header: hanya judul (+ panah kembali), tanpa dropdown / tombol aksi */}
+      <header className="sticky top-0 z-20 flex items-center gap-1 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur-md">
+        {onBack && (
+          <button
+            type="button"
+            onClick={onBack}
+            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
+            aria-label="Kembali"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </button>
+        )}
+        <h1 className={`truncate text-base font-bold text-slate-900 ${onBack ? '' : 'pl-1'}`}>
+          Daftar Calon KPM
+        </h1>
       </header>
 
       <div className="space-y-4 px-4 pt-4">
@@ -184,7 +135,7 @@ export function KpmListView({
         )}
 
         {/* Search & Filter Toolbar */}
-        <div className="space-y-2.5">
+        <div className="space-y-2">
           <div className="relative">
             <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <input
@@ -196,29 +147,44 @@ export function KpmListView({
             />
           </div>
 
-          <div className="flex items-center gap-1 overflow-x-auto rounded-xl bg-slate-200/70 p-1">
-            {(
-              [
-                { key: 'all', label: `Semua (${counts.all})` },
-                { key: 'accepted', label: `Diterima (${counts.accepted})` },
-                { key: 'pending', label: `Menunggu (${counts.pending})` },
-                { key: 'rejected', label: `Ditolak (${counts.rejected})` },
-              ] as { key: 'all' | ValidationStatus; label: string }[]
-            ).map((tab) => (
-              <button
-                key={tab.key}
-                type="button"
-                onClick={() => onChangeStatusFilter(tab.key)}
-                className={`min-h-[34px] flex-1 rounded-lg px-2.5 text-[11px] font-semibold transition-colors whitespace-nowrap tabular-nums ${
-                  statusFilter === tab.key
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
+          <div className="grid grid-cols-2 gap-2">
+            <FilterSelect
+              ariaLabel="Filter item bantuan"
+              value={itemFilter}
+              onChange={onChangeItemFilter}
+            >
+              <option value="all">Semua Item</option>
+              {yearItemOptions.map((item) => (
+                <option key={item.code} value={item.code}>
+                  {item.code}
+                </option>
+              ))}
+            </FilterSelect>
+
+            <FilterSelect
+              ariaLabel="Filter tahun KPM"
+              value={selectedYear}
+              onChange={onChangeYear}
+            >
+              {yearOptions.map((y) => (
+                <option key={y} value={y}>
+                  Tahun {y}
+                </option>
+              ))}
+              <option value="all">Semua Tahun</option>
+            </FilterSelect>
           </div>
+
+          <SegmentedTabs<'all' | ValidationStatus>
+            value={statusFilter}
+            onChange={onChangeStatusFilter}
+            tabs={[
+              { key: 'all', label: 'Semua', count: counts.all },
+              { key: 'accepted', label: 'Diterima', count: counts.accepted },
+              { key: 'pending', label: 'Menunggu', count: counts.pending },
+              { key: 'rejected', label: 'Ditolak', count: counts.rejected },
+            ]}
+          />
         </div>
 
         {/* Records List */}
@@ -226,16 +192,8 @@ export function KpmListView({
           <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
             <p className="text-sm font-semibold text-slate-900">Tidak ada data calon KPM ditemukan</p>
             <p className="mt-1 text-xs text-slate-500">
-              Ubah filter pencarian atau daftarkan calon KPM baru.
+              Ubah filter pencarian, atau daftarkan calon KPM lewat tombol + di bawah.
             </p>
-            <button
-              type="button"
-              onClick={onCreateNew}
-              className="mt-4 inline-flex min-h-[42px] items-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white hover:bg-teal-800 whitespace-nowrap"
-            >
-              <Plus className="h-4 w-4" />
-              <span>Daftar Calon KPM</span>
-            </button>
           </div>
         ) : (
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">

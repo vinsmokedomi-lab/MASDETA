@@ -45,6 +45,7 @@ import {
 import { DocumentUploadCard } from './DocumentUploadCard';
 import { MultiDocumentUploadCard } from './MultiDocumentUploadCard';
 import { PengelolaSelectorModal } from './PengelolaSelectorModal';
+import { PlaceholderSelect } from './FormControls';
 
 interface KpmRegistrationFormProps {
   editingRecord: KpmRecord | null;
@@ -499,21 +500,21 @@ export function KpmRegistrationForm({
                 <label htmlFor="input-tahun" className="block text-xs font-semibold text-slate-700">
                   Tahun Anggaran <span className="text-rose-600">*</span>
                 </label>
-                <select
+                <PlaceholderSelect
+                  placeholder="Pilih Tahun"
                   id="input-tahun"
                   value={values.tahun}
-                  onChange={(e) => updateField('tahun', e.target.value)}
-                  className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm text-slate-900 transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                  onChange={(v) => updateField('tahun', v)}
+                  className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
                     errors.tahun ? 'border-rose-400' : 'border-slate-300'
                   }`}
                 >
-                  <option value="">-- Pilih Tahun --</option>
                   {TAHUN_OPTIONS.map((yr) => (
                     <option key={yr} value={yr}>
                       {yr}
                     </option>
                   ))}
-                </select>
+                </PlaceholderSelect>
                 {errors.tahun && <p className="mt-1 text-xs text-rose-600">{errors.tahun}</p>}
               </div>
 
@@ -521,23 +522,22 @@ export function KpmRegistrationForm({
                 <label htmlFor="input-proposal" className="block text-xs font-semibold text-slate-700">
                   Proposal <span className="text-rose-600">*</span>
                 </label>
-                <select
+                <PlaceholderSelect
+                  placeholder="Pilih Kelurahan / Kecamatan"
                   id="input-proposal"
                   disabled={editingProposalLocked}
                   value={values.proposal}
-                  onChange={(e) => handleProposalChange(e.target.value)}
-                  className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm text-slate-900 transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 ${
+                  onChange={(v) => handleProposalChange(v)}
+                  className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 ${
                     errors.proposal ? 'border-rose-400' : 'border-slate-300'
                   }`}
                 >
-                  <option value="">-- Pilih Kelurahan / Kecamatan --</option>
-                  <option value="__new_proposal__">+ Tambah Proposal Baru</option>
                   {proposalMenuItems.map((item) => (
                     <option key={item.name} value={item.name} disabled={item.locked}>
                       {item.locked ? `${item.name} (Terkunci)` : item.name}
                     </option>
                   ))}
-                </select>
+                </PlaceholderSelect>
 
                 <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1">
                   <button
@@ -575,21 +575,21 @@ export function KpmRegistrationForm({
                       Wajib (Kecamatan)
                     </span>
                   </div>
-                  <select
+                  <PlaceholderSelect
+                    placeholder={`Pilih Kelurahan di ${values.proposal}`}
                     id="input-kelurahan"
                     value={values.kelurahan}
-                    onChange={(e) => updateField('kelurahan', e.target.value)}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm text-slate-900 transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                    onChange={(v) => updateField('kelurahan', v)}
+                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
                       errors.kelurahan ? 'border-rose-400' : 'border-slate-300'
                     }`}
                   >
-                    <option value="">-- Pilih Kelurahan di {values.proposal} --</option>
                     {kelurahanOptions.map((kel) => (
                       <option key={kel} value={kel}>
                         {kel}
                       </option>
                     ))}
-                  </select>
+                  </PlaceholderSelect>
                   {errors.kelurahan && (
                     <p className="mt-1 text-xs text-rose-600">{errors.kelurahan}</p>
                   )}
@@ -764,21 +764,21 @@ export function KpmRegistrationForm({
                   <label htmlFor="input-pekerjaan" className="block text-xs font-semibold text-slate-700">
                     Pekerjaan <span className="text-rose-600">*</span>
                   </label>
-                  <select
+                  <PlaceholderSelect
+                    placeholder="Pilih Pekerjaan"
                     id="input-pekerjaan"
                     value={values.pekerjaan}
-                    onChange={(e) => updateField('pekerjaan', e.target.value)}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm text-slate-900 transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                    onChange={(v) => updateField('pekerjaan', v)}
+                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
                       errors.pekerjaan ? 'border-rose-400' : 'border-slate-300'
                     }`}
                   >
-                    <option value="">-- Pilih Pekerjaan --</option>
                     {resolvedPekerjaanOptions.map((opt) => (
                       <option key={opt} value={opt}>
                         {opt}
                       </option>
                     ))}
-                  </select>
+                  </PlaceholderSelect>
                   {errors.pekerjaan && <p className="mt-1 text-xs text-rose-600">{errors.pekerjaan}</p>}
                 </div>
 
@@ -819,15 +819,15 @@ export function KpmRegistrationForm({
                   <label htmlFor="input-item" className="block text-xs font-semibold text-slate-700">
                     Item Bantuan <span className="text-rose-600">*</span>
                   </label>
-                  <select
+                  <PlaceholderSelect
+                    placeholder="Pilih Item"
                     id="input-item"
                     value={values.item}
-                    onChange={(e) => updateField('item', e.target.value)}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 font-mono text-sm font-medium text-slate-900 transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                    onChange={(v) => updateField('item', v)}
+                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 font-mono text-sm font-medium transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
                       errors.item ? 'border-rose-400' : 'border-slate-300'
                     }`}
                   >
-                    <option value="">-- Pilih Item --</option>
                     {resolvedItemOptions.map((item) => (
                       <option key={item.code} value={item.code}>
                         {item.name && item.name !== item.code
@@ -835,7 +835,7 @@ export function KpmRegistrationForm({
                           : item.code}
                       </option>
                     ))}
-                  </select>
+                  </PlaceholderSelect>
                   {selectedPackageSubItems.length > 0 && (
                     <p className="mt-1.5 text-[11px] text-slate-500 leading-relaxed">
                       Sub-item ({values.tahun}):{' '}
@@ -875,7 +875,7 @@ export function KpmRegistrationForm({
                           values.pengelola ? 'font-medium text-slate-900' : 'text-slate-400'
                         }`}
                       >
-                        {values.pengelola || '-- Pilih atau Tambah Pengelola --'}
+                        {values.pengelola || 'Pilih atau Tambah Pengelola'}
                       </span>
                     </span>
                     <ChevronDown className="h-4 w-4 text-slate-500 shrink-0" />
@@ -889,21 +889,21 @@ export function KpmRegistrationForm({
                   <label htmlFor="input-dtsen" className="block text-xs font-semibold text-slate-700">
                     DTSEN <span className="text-rose-600">*</span>
                   </label>
-                  <select
+                  <PlaceholderSelect
+                    placeholder="Pilih Status DTSEN"
                     id="input-dtsen"
                     value={values.dtsen}
-                    onChange={(e) => handleDtsenChange(e.target.value)}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm text-slate-900 transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                    onChange={(v) => handleDtsenChange(v)}
+                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
                       errors.dtsen ? 'border-rose-400' : 'border-slate-300'
                     }`}
                   >
-                    <option value="">-- Pilih Status DTSEN --</option>
                     {DTSEN_OPTION_ITEMS.map((opt) => (
                       <option key={opt.value} value={opt.value}>
                         {opt.label}
                       </option>
                     ))}
-                  </select>
+                  </PlaceholderSelect>
                   {errors.dtsen && <p className="mt-1 text-xs text-rose-600">{errors.dtsen}</p>}
                 </div>
 

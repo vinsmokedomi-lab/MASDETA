@@ -1,20 +1,17 @@
 import { useMemo } from 'react';
 import {
   AlertTriangle,
-  Calendar,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Lock,
-  Plus,
   Unlock,
   UserCheck,
   X,
 } from 'lucide-react';
 import { ItemBantuan, KpmRecord, ProposalRecord, ValidationStatus } from '../types/kpm';
 import { TAHUN_OPTIONS } from '../data/kpmOptions';
-import { computeSubItemRecap, resolvePackageForKpm } from '../utils/imageProcessor';
-import { PWAInstallButton } from './PWAInstallButton';
+import { resolvePackageForKpm } from '../utils/imageProcessor';
 
 interface DashboardViewProps {
   logo: React.ReactNode;
@@ -28,10 +25,10 @@ interface DashboardViewProps {
   feedback?: { type: 'success' | 'error'; message: string } | null;
   onDismissFeedback?: () => void;
   onOpenKpmList: (filter?: { status?: 'all' | ValidationStatus; item?: string }) => void;
-  onOpenSubItemRecap: () => void;
-  onOpenProposalList: () => void;
+  onOpenSubItemRecap?: () => void;
+  onOpenProposalList?: () => void;
   onOpenProposalDetail: (proposalId: string) => void;
-  onOpenAddProposal: () => void;
+  onOpenAddProposal?: () => void;
   onOpenUserApproval: () => void;
   onOpenDuplicateCheck: () => void;
 }
@@ -48,10 +45,7 @@ export function DashboardView({
   feedback,
   onDismissFeedback,
   onOpenKpmList,
-  onOpenSubItemRecap,
-  onOpenProposalList,
   onOpenProposalDetail,
-  onOpenAddProposal,
   onOpenUserApproval,
   onOpenDuplicateCheck,
 }: DashboardViewProps) {
@@ -112,11 +106,6 @@ export function DashboardView({
     );
   }, [filteredRecords, items]);
 
-  const subItemSummary = useMemo(() => {
-    const acceptedRecs = filteredRecords.filter((r) => r.validasi === 'accepted');
-    return computeSubItemRecap(acceptedRecs, items);
-  }, [filteredRecords, items]);
-
   const proposalSummaryList = useMemo(() => {
     return filteredProposals.map((prop) => {
       const propRecords = filteredRecords.filter((r) => r.proposal === prop.namaProposal);
@@ -136,37 +125,12 @@ export function DashboardView({
 
   return (
     <div className="min-h-screen pb-24">
-      {/* Main Brand Top Bar */}
-      <header className="sticky top-0 z-20 flex items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-4 py-2.5 backdrop-blur-md">
-        <div className="flex items-center gap-2.5 min-w-0">
-          {logo}
-          <span className="text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap">
-            MASDETA
-          </span>
-        </div>
-
-        <div className="flex items-center gap-2 shrink-0">
-          <PWAInstallButton />
-
-          {/* Year Filter Dropdown */}
-          <div className="relative">
-            <Calendar className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-teal-700" />
-            <select
-              aria-label="Pilih tahun anggaran"
-              value={selectedYear}
-              onChange={(e) => onChangeYear(e.target.value)}
-              className="min-h-[40px] appearance-none rounded-xl border border-slate-200 bg-slate-50 pr-7 pl-8 text-xs font-bold text-slate-900 focus:border-teal-700 focus:bg-white focus:outline-none tabular-nums"
-            >
-              {yearOptions.map((year) => (
-                <option key={year} value={year}>
-                  {year}
-                </option>
-              ))}
-              <option value="all">Semua</option>
-            </select>
-            <ChevronDown className="pointer-events-none absolute top-1/2 right-2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
-          </div>
-        </div>
+      {/* Main Brand Top Bar: hanya logo + nama, tanpa tombol / dropdown */}
+      <header className="sticky top-0 z-20 flex items-center gap-2.5 border-b border-slate-200 bg-white/95 px-4 py-2.5 backdrop-blur-md">
+        {logo}
+        <span className="text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap">
+          MASDETA
+        </span>
       </header>
 
       <main className="space-y-5 px-4 pt-4">
@@ -202,28 +166,38 @@ export function DashboardView({
 
         {/* Hero Metric: KPM yang Menerima */}
         <section className="rounded-3xl bg-teal-800 p-5 text-white shadow-sm">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-xs font-medium text-teal-100">
-                Penerima Bantuan · {yearDisplayLabel}
-              </p>
-              <div className="mt-1.5 flex items-baseline gap-2">
-                <span className="text-4xl font-bold tracking-tight tabular-nums">
-                  {kpmStats.accepted}
-                </span>
-                <span className="text-sm font-medium text-teal-100">KPM Menerima</span>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => onOpenKpmList({ status: 'accepted' })}
-              className="inline-flex min-h-[36px] items-center gap-1 rounded-xl bg-white/15 px-3 text-xs font-semibold text-white transition-colors hover:bg-white/25 whitespace-nowrap shrink-0"
-            >
-              <span>Lihat Data</span>
-              <ChevronRight className="h-3.5 w-3.5" />
-            </button>
+          <div className="flex items-center gap-1 text-xs font-medium text-teal-100">
+            <span>Penerima Bantuan ·</span>
+            <span className="relative inline-flex items-center">
+              <select
+                aria-label="Pilih tahun anggaran"
+                value={selectedYear}
+                onChange={(e) => onChangeYear(e.target.value)}
+                className="appearance-none bg-transparent py-1 pr-4 font-semibold text-white underline decoration-teal-300/60 decoration-dotted underline-offset-4 focus:outline-none"
+              >
+                {yearOptions.map((year) => (
+                  <option key={year} value={year} className="text-slate-900">
+                    Tahun {year}
+                  </option>
+                ))}
+                <option value="all" className="text-slate-900">
+                  Semua Tahun
+                </option>
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-0 h-3.5 w-3.5 text-teal-200" />
+            </span>
           </div>
+
+          <button
+            type="button"
+            onClick={() => onOpenKpmList({ status: 'accepted' })}
+            className="mt-1 flex items-baseline gap-2 text-left transition-opacity hover:opacity-90"
+          >
+            <span className="text-4xl font-bold tracking-tight tabular-nums">
+              {kpmStats.accepted}
+            </span>
+            <span className="text-sm font-medium text-teal-100">KPM Menerima</span>
+          </button>
 
           {/* Progress Bar */}
           <div className="mt-4">
@@ -327,22 +301,7 @@ export function DashboardView({
 
         {/* Section 1: List Item Bantuan */}
         <section>
-          <div className="mb-2.5 flex items-center justify-between px-0.5">
-            <div>
-              <h2 className="text-sm font-bold text-slate-900">List Item Bantuan</h2>
-              <p className="text-xs text-slate-500 tabular-nums">
-                {itemBreakdown.length} paket · {subItemSummary.aggregates.length} sub-item terakumulasi
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={onOpenSubItemRecap}
-              className="inline-flex min-h-[34px] items-center gap-0.5 rounded-lg px-2 text-xs font-semibold text-teal-700 hover:bg-teal-50 whitespace-nowrap"
-            >
-              <span>Rekap Sub-Item</span>
-              <ChevronRight className="h-3.5 w-3.5" />
-            </button>
-          </div>
+          <h2 className="mb-2.5 px-0.5 text-sm font-bold text-slate-900">List Item Bantuan</h2>
 
           {itemBreakdown.length === 0 ? (
             <div className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center">
@@ -350,7 +309,7 @@ export function DashboardView({
                 Belum ada usulan item pada {yearDisplayLabel}
               </p>
               <p className="mt-1 text-[11px] text-slate-500">
-                Ketuk tombol + di tengah bawah untuk mendaftarkan calon KPM.
+                Daftarkan calon KPM lewat tombol + di bawah.
               </p>
             </div>
           ) : (
@@ -385,36 +344,16 @@ export function DashboardView({
 
         {/* Section 2: List Proposal (Max 8 items, without + Tambah, without 0/7, clean subtitle) */}
         <section>
-          <div className="mb-2.5 flex items-center justify-between px-0.5">
-            <div>
-              <h2 className="text-sm font-bold text-slate-900">List Proposal</h2>
-              <p className="text-xs text-slate-500">
-                {proposalSummaryList.length} proposal pada {yearDisplayLabel.toLowerCase()}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={onOpenProposalList}
-              className="inline-flex min-h-[34px] items-center gap-0.5 rounded-lg px-2 text-xs font-semibold text-teal-700 hover:bg-teal-50 whitespace-nowrap"
-            >
-              <span>Lihat Semua</span>
-              <ChevronRight className="h-3.5 w-3.5" />
-            </button>
-          </div>
+          <h2 className="mb-2.5 px-0.5 text-sm font-bold text-slate-900">List Proposal</h2>
 
           {visibleProposals.length === 0 ? (
             <div className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center">
               <p className="text-xs font-semibold text-slate-800">
                 Belum ada proposal terdaftar di {yearDisplayLabel}
               </p>
-              <button
-                type="button"
-                onClick={onOpenAddProposal}
-                className="mt-3 inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white hover:bg-teal-800"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                <span>Tambah Proposal Baru</span>
-              </button>
+              <p className="mt-1 text-[11px] text-slate-500">
+                Tambahkan proposal lewat tombol + di bawah.
+              </p>
             </div>
           ) : (
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">

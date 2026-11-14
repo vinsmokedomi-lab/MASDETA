@@ -23,6 +23,7 @@ import {
 import { formatUploadDateTime } from '../utils/imageProcessor';
 import { DocumentUploadCard } from './DocumentUploadCard';
 import { ProposalDocumentUploadCard } from './ProposalDocumentUploadCard';
+import { PlaceholderSelect } from './FormControls';
 
 interface ProposalFormProps {
   proposal: ProposalRecord;
@@ -368,25 +369,25 @@ export function ProposalForm({
                   <label htmlFor="prop-tahun" className="block text-xs font-semibold text-slate-700">
                     Tahun <span className="text-rose-600">*</span>
                   </label>
-                  <select
+                  <PlaceholderSelect
+                    placeholder="Tahun"
                     id="prop-tahun"
                     disabled={isPersistedLocked}
                     value={values.tahun}
-                    onChange={(e) => {
-                      setValues((prev) => ({ ...prev, tahun: e.target.value }));
+                    onChange={(v) => {
+                      setValues((prev) => ({ ...prev, tahun: v }));
                       setErrors((prev) => ({ ...prev, tahun: undefined }));
                     }}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3 text-sm text-slate-900 transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600 ${
+                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600 ${
                       errors.tahun ? 'border-rose-400' : 'border-slate-300'
                     }`}
                   >
-                    <option value="">-- Tahun --</option>
                     {TAHUN_OPTIONS.map((yr) => (
                       <option key={yr} value={yr}>
                         {yr}
                       </option>
                     ))}
-                  </select>
+                  </PlaceholderSelect>
                   {errors.tahun && <p className="mt-1 text-xs text-rose-600">{errors.tahun}</p>}
                 </div>
 
@@ -394,22 +395,22 @@ export function ProposalForm({
                   <label htmlFor="prop-tipe" className="block text-xs font-semibold text-slate-700">
                     Tipe <span className="text-rose-600">*</span>
                   </label>
-                  <select
+                  <PlaceholderSelect
+                    placeholder="Tipe"
                     id="prop-tipe"
                     disabled={isPersistedLocked}
                     value={values.tipe}
-                    onChange={(e) => handleTipeChange(e.target.value as ProposalTipe | '')}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3 text-sm text-slate-900 transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600 ${
+                    onChange={(v) => handleTipeChange(v as ProposalTipe | '')}
+                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600 ${
                       errors.tipe ? 'border-rose-400' : 'border-slate-300'
                     }`}
                   >
-                    <option value="">-- Tipe --</option>
                     {PROPOSAL_TIPE_OPTIONS.map((t) => (
                       <option key={t} value={t}>
                         {t}
                       </option>
                     ))}
-                  </select>
+                  </PlaceholderSelect>
                   {errors.tipe && <p className="mt-1 text-xs text-rose-600">{errors.tipe}</p>}
                 </div>
               </div>
