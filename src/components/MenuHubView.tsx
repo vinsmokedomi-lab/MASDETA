@@ -45,6 +45,7 @@ import { ItemManagerView } from './ItemManagerView';
 import { AddPengelolaModal } from './PengelolaSelectorModal';
 import { PresenceDot, getPresenceMeta } from './PresenceDot';
 import { APP_VERSION } from '../config/appVersion';
+import { CorrespondentKpmListPanel } from './CorrespondentKpmListPanel';
 import { DTSEN_OPTION_ITEMS } from '../data/kpmOptions';
 import {
   InternalUser,
@@ -93,6 +94,10 @@ export type AdminDataActionType =
 interface MenuHubViewProps {
   activeSection: MenuSection;
   onChangeSection: (section: MenuSection) => void;
+  selectedPengelolaDrill?: string | null;
+  onSelectPengelolaDrill?: (name: string | null) => void;
+  selectedPekerjaanDrill?: string | null;
+  onSelectPekerjaanDrill?: (name: string | null) => void;
   currentUser: InternalUser;
   unreadChatCount: number;
   records: KpmRecord[];
@@ -158,6 +163,10 @@ interface MenuHubViewProps {
 export function MenuHubView({
   activeSection,
   onChangeSection,
+  selectedPengelolaDrill,
+  onSelectPengelolaDrill,
+  selectedPekerjaanDrill,
+  onSelectPekerjaanDrill,
   currentUser,
   unreadChatCount,
   records,
@@ -221,8 +230,30 @@ export function MenuHubView({
   const [newKecamatanByKab, setNewKecamatanByKab] = useState<Record<string, string>>({});
   const [newKelurahanByKec, setNewKelurahanByKec] = useState<Record<string, string>>({});
 
-  // Pengelola modal state
+  // Pengelola & Pekerjaan drill-down state (lifted when provided)
   const [isAddPengelolaOpen, setIsAddPengelolaOpen] = useState(false);
+  const [localPengelolaDrill, setLocalPengelolaDrill] = useState<string | null>(null);
+  const [localPekerjaanDrill, setLocalPekerjaanDrill] = useState<string | null>(null);
+  const activePengelolaDrill =
+    selectedPengelolaDrill !== undefined ? selectedPengelolaDrill : localPengelolaDrill;
+  const setPengelolaDrill = (name: string | null) => {
+    if (onSelectPengelolaDrill) {
+      onSelectPengelolaDrill(name);
+    } else {
+      setLocalPengelolaDrill(name);
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  const activePekerjaanDrill =
+    selectedPekerjaanDrill !== undefined ? selectedPekerjaanDrill : localPekerjaanDrill;
+  const setPekerjaanDrill = (name: string | null) => {
+    if (onSelectPekerjaanDrill) {
+      onSelectPekerjaanDrill(name);
+    } else {
+      setLocalPekerjaanDrill(name);
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   // Internal User creation form (SuperAdmin adds active user with password)
   const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
@@ -2593,6 +2624,95 @@ export function MenuHubView({
 
   // 7. PENGELOLA
   if (activeSection === 'pengelola') {
+    if (activePengelolaDrill) {
+      const targetKey = activePengelolaDrill.trim().toLowerCase();
+      const matchedPengelola = pengelolaList.find(
+        (p) => p.displayName.trim().toLowerCase() === targetKey
+      );
+      const pengelolaTitle = matchedPengelola?.displayName || activePengelolaDrill;
+      const correspondentRecords = records.filter(
+        (r) => (r.pengelola || '').trim().toLowerCase() === targetKey
+      );
+      const domicileText = matchedPengelola
+        ? [
+            matchedPengelola.kelurahan
+              ? matchedPengelola.kelurahan.replace(/^kel\.?\s+/i, 'Kelurahan ')
+              : '',
+            matchedPengelola.kecamatan
+              ? matchedPengelola.kecamatan.toLowerCase().startsWith('kecamatan ')
+                ? matchedPengelola.kecamatan
+                : `Kecamatan ${matchedPengelola.kecamatan.replace(/^kec\.?\s+/i, '')}`
+              : '',
+            matchedPengelola.kabKota || '',
+          ]
+            .filter(Boolean)
+            .join(' · ')
+        : '';
+      const waUrl = matchedPengelola ? formatWhatsAppUrl(matchedPengelola.kontak) : null;
+
+      return (
+        <div className="min-h-screen pb-24">
+          {renderSubHeader(pengelolaTitle, () => setPengelolaDrill(null))}
+          <div className="px-4 pt-4">
+            <CorrespondentKpmListPanel
+              key={pengelolaTitle}
+              records={correspondentRecords}
+              items={items}
+              proposals={proposals}
+              wilayahList={wilayahList}
+              emptyTitle="Belum ada KPM untuk pengelola ini"
+              emptySubtitle={`Pengelola ${pengelolaTitle} belum memiliki data calon KPM yang terdaftar.`}
+              onSelectRecord={onSelectKpm}
+              headerCard={
+                <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-3.5">
+                  <div className="flex min-w-0 items-center gap-3">
+                    {matchedPengelola?.foto ? (
+                      <button
+                        type="button"
+                        onClick={() => onPreviewDocument(matchedPengelola.foto!, pengelolaTitle)}
+                        className="h-11 w-11 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100"
+                        aria-label={`Lihat foto ${pengelolaTitle}`}
+                      >
+                        <DriveImage
+                          doc={matchedPengelola.foto}
+                          alt={pengelolaTitle}
+                          className="h-full w-full object-cover"
+                        />
+                      </button>
+                    ) : (
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
+                        <User className="h-5 w-5" />
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-bold text-slate-900">{pengelolaTitle}</p>
+                      {domicileText && (
+                        <p className="truncate text-xs text-slate-500">{domicileText}</p>
+                      )}
+                      {waUrl && matchedPengelola?.kontak && (
+                        <a
+                          href={waUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-0.5 inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:underline"
+                        >
+                          <MessageCircle className="h-3 w-3 shrink-0" />
+                          <span>{matchedPengelola.kontak}</span>
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                  <span className="shrink-0 rounded-lg bg-teal-50 px-2.5 py-1 text-xs font-bold text-teal-800 tabular-nums">
+                    {correspondentRecords.length} KPM
+                  </span>
+                </div>
+              }
+            />
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="min-h-screen pb-24">
         {renderSubHeader('Pengelola Lapangan', () => onChangeSection('root'))}
@@ -2619,66 +2739,95 @@ export function MenuHubView({
             </div>
           ) : (
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
-              {pengelolaList.map((p) => (
-                <div key={p.id} className="flex items-center justify-between gap-3 px-4 py-3">
-                  <div className="flex min-w-0 items-center gap-3">
-                    {p.foto ? (
-                      <button
-                        type="button"
-                        onClick={() => onPreviewDocument(p.foto!, p.displayName)}
-                        className="h-10 w-10 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100"
-                        aria-label={`Lihat foto ${p.displayName}`}
-                      >
-                        <DriveImage
-                          doc={p.foto}
-                          alt={p.displayName}
-                          className="h-full w-full object-cover"
-                        />
-                      </button>
-                    ) : (
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
-                        <User className="h-4 w-4" />
-                      </div>
-                    )}
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-slate-900">{p.displayName}</p>
-                      {(p.kelurahan || p.kecamatan || p.kabKota) && (
-                        <p className="truncate text-xs text-slate-500">
-                          {[
-                            p.kelurahan ? p.kelurahan.replace(/^kel\.?\s+/i, 'Kelurahan ') : '',
-                            p.kecamatan
-                              ? p.kecamatan.toLowerCase().startsWith('kecamatan ')
-                                ? p.kecamatan
-                                : `Kecamatan ${p.kecamatan.replace(/^kec\.?\s+/i, '')}`
-                              : '',
-                            p.kabKota || '',
-                          ]
-                            .filter(Boolean)
-                            .join(' · ')}
-                        </p>
+              {pengelolaList.map((p) => {
+                const count = records.filter(
+                  (r) =>
+                    (r.pengelola || '').trim().toLowerCase() ===
+                    p.displayName.trim().toLowerCase()
+                ).length;
+
+                return (
+                  <div
+                    key={p.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setPengelolaDrill(p.displayName)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setPengelolaDrill(p.displayName);
+                      }
+                    }}
+                    className="flex min-h-[56px] cursor-pointer items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70 focus:outline-none focus-visible:bg-slate-50"
+                  >
+                    <div className="flex min-w-0 items-center gap-3">
+                      {p.foto ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onPreviewDocument(p.foto!, p.displayName);
+                          }}
+                          className="h-10 w-10 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100"
+                          aria-label={`Lihat foto ${p.displayName}`}
+                        >
+                          <DriveImage
+                            doc={p.foto}
+                            alt={p.displayName}
+                            className="h-full w-full object-cover"
+                          />
+                        </button>
+                      ) : (
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
+                          <User className="h-4 w-4" />
+                        </div>
                       )}
-                      {(() => {
-                        const waUrl = formatWhatsAppUrl(p.kontak);
-                        if (!waUrl || !p.kontak) return null;
-                        return (
-                          <a
-                            href={waUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="mt-0.5 inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:underline"
-                          >
-                            <MessageCircle className="h-3 w-3 shrink-0" />
-                            <span>{p.kontak}</span>
-                          </a>
-                        );
-                      })()}
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-slate-900">
+                          {p.displayName}
+                        </p>
+                        {(p.kelurahan || p.kecamatan || p.kabKota) && (
+                          <p className="truncate text-xs text-slate-500">
+                            {[
+                              p.kelurahan ? p.kelurahan.replace(/^kel\.?\s+/i, 'Kelurahan ') : '',
+                              p.kecamatan
+                                ? p.kecamatan.toLowerCase().startsWith('kecamatan ')
+                                  ? p.kecamatan
+                                  : `Kecamatan ${p.kecamatan.replace(/^kec\.?\s+/i, '')}`
+                                : '',
+                              p.kabKota || '',
+                            ]
+                              .filter(Boolean)
+                              .join(' · ')}
+                          </p>
+                        )}
+                        {(() => {
+                          const waUrl = formatWhatsAppUrl(p.kontak);
+                          if (!waUrl || !p.kontak) return null;
+                          return (
+                            <a
+                              href={waUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="mt-0.5 inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:underline"
+                            >
+                              <MessageCircle className="h-3 w-3 shrink-0" />
+                              <span>{p.kontak}</span>
+                            </a>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className="text-xs font-semibold text-slate-700 tabular-nums">
+                        {count}
+                      </span>
+                      <ChevronRight className="h-4 w-4 text-slate-400" />
                     </div>
                   </div>
-                  <span className="text-xs font-medium text-slate-600 tabular-nums shrink-0">
-                    {records.filter((r) => r.pengelola === p.displayName).length}
-                  </span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -2696,6 +2845,49 @@ export function MenuHubView({
 
   // 8. PEKERJAAN
   if (activeSection === 'pekerjaan') {
+    if (activePekerjaanDrill) {
+      const targetKey = activePekerjaanDrill.trim().toLowerCase();
+      const correspondentRecords = records.filter(
+        (r) => (r.pekerjaan || '').trim().toLowerCase() === targetKey
+      );
+
+      return (
+        <div className="min-h-screen pb-24">
+          {renderSubHeader(activePekerjaanDrill, () => setPekerjaanDrill(null))}
+          <div className="px-4 pt-4">
+            <CorrespondentKpmListPanel
+              key={activePekerjaanDrill}
+              records={correspondentRecords}
+              items={items}
+              proposals={proposals}
+              wilayahList={wilayahList}
+              emptyTitle="Belum ada KPM untuk pekerjaan ini"
+              emptySubtitle={`Belum ada calon KPM dengan profesi/pekerjaan ${activePekerjaanDrill}.`}
+              onSelectRecord={onSelectKpm}
+              headerCard={
+                <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-3.5">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-teal-700">
+                      <Briefcase className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-bold text-slate-900">
+                        {activePekerjaanDrill}
+                      </p>
+                      <p className="text-xs text-slate-500">Daftar KPM Koresponden</p>
+                    </div>
+                  </div>
+                  <span className="shrink-0 rounded-lg bg-teal-50 px-2.5 py-1 text-xs font-bold text-teal-800 tabular-nums">
+                    {correspondentRecords.length} KPM
+                  </span>
+                </div>
+              }
+            />
+          </div>
+        </div>
+      );
+    }
+
     const jobCounts = new Map<string, number>();
     for (const rec of records) {
       if (rec.pekerjaan) {
@@ -2735,14 +2927,22 @@ export function MenuHubView({
               {pekerjaanList.map((job) => {
                 const count = jobCounts.get(job.trim().toLowerCase()) ?? 0;
                 return (
-                  <div key={job} className="flex items-center justify-between gap-3 px-4 py-3">
-                    <span className="min-w-0 flex-1 truncate text-sm font-normal text-slate-900">
+                  <button
+                    key={job}
+                    type="button"
+                    onClick={() => setPekerjaanDrill(job)}
+                    className="flex min-h-[52px] w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
+                  >
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-900">
                       {job}
                     </span>
-                    <span className="shrink-0 text-xs font-medium text-slate-700 tabular-nums">
-                      {count}
-                    </span>
-                  </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className="text-xs font-semibold text-slate-700 tabular-nums">
+                        {count}
+                      </span>
+                      <ChevronRight className="h-4 w-4 text-slate-400" />
+                    </div>
+                  </button>
                 );
               })}
             </div>

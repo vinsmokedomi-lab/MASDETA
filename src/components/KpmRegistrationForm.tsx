@@ -17,7 +17,6 @@ import {
   DTSEN_OPTION_ITEMS,
   INITIAL_FORM_VALUES,
   INITIAL_WILAYAH_LIST,
-  ITEM_BANTUAN_OPTIONS,
   PEKERJAAN_OPTIONS,
   TAHUN_OPTIONS,
 } from '../data/kpmOptions';
@@ -116,21 +115,13 @@ export function KpmRegistrationForm({
   const resolvedPekerjaanOptions =
     pekerjaanOptions && pekerjaanOptions.length > 0 ? pekerjaanOptions : PEKERJAAN_OPTIONS;
   const resolvedItemOptions: ItemBantuan[] = useMemo(() => {
-    const base =
-      itemOptions && itemOptions.length > 0
-        ? getItemsForYear(itemOptions, values.tahun || '2026')
-        : ITEM_BANTUAN_OPTIONS.map((code) => ({
-            tahun: values.tahun || '2026',
-            code,
-            name: code,
-            subItems: [],
-          }));
-    if (values.item && !base.some((b) => b.code === values.item)) {
+    const base = getItemsForYear(itemOptions || [], values.tahun || '2026');
+    if (editingRecord && values.item && !base.some((b) => b.code === values.item)) {
       const legacyPkg = resolvePackageForKpm(itemOptions || [], values.tahun || '2026', values.item);
       return [legacyPkg, ...base];
     }
     return base;
-  }, [itemOptions, values.tahun, values.item]);
+  }, [itemOptions, values.tahun, values.item, editingRecord]);
 
   const selectedPackageSubItems = useMemo(() => {
     if (!values.item) return [];
@@ -281,14 +272,25 @@ export function KpmRegistrationForm({
         editingRecord ||
         isProposalScopeLocked ||
         proposals.some((p) => p.tahun === nextYear && p.namaProposal === prev.proposal);
+      const nextYearItems = getItemsForYear(itemOptions || [], nextYear);
+      const keepItem =
+        editingRecord ||
+        nextYearItems.some((item) => item.code === prev.item);
       return {
         ...prev,
         tahun: nextYear,
         proposal: keepProposal ? prev.proposal : '',
         kelurahan: keepProposal ? prev.kelurahan : '',
+        item: keepItem ? prev.item : '',
       };
     });
-    setErrors((prev) => ({ ...prev, tahun: undefined, proposal: undefined, kelurahan: undefined }));
+    setErrors((prev) => ({
+      ...prev,
+      tahun: undefined,
+      proposal: undefined,
+      kelurahan: undefined,
+      item: undefined,
+    }));
   };
 
   const handleProposalChange = (nextProposal: string) => {
@@ -949,11 +951,16 @@ export function KpmRegistrationForm({
                     Item Bantuan <span className="text-rose-600">*</span>
                   </label>
                   <PlaceholderSelect
-                    placeholder="Pilih Item"
+                    placeholder={
+                      resolvedItemOptions.length === 0
+                        ? `Belum ada item tahun ${values.tahun || 'ini'}`
+                        : 'Pilih Item'
+                    }
                     id="input-item"
                     value={values.item}
                     onChange={(v) => updateField('item', v)}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 font-mono text-sm font-medium transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                    disabled={resolvedItemOptions.length === 0}
+                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 font-mono text-sm font-medium transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-50 ${
                       errors.item ? 'border-rose-400' : 'border-slate-300'
                     }`}
                   >
@@ -965,6 +972,11 @@ export function KpmRegistrationForm({
                       </option>
                     ))}
                   </PlaceholderSelect>
+                  {resolvedItemOptions.length === 0 && (
+                    <p className="mt-1.5 text-[11px] text-amber-700">
+                      Master item untuk tahun {values.tahun || '2026'} masih kosong. Tambahkan paket melalui Kelola Item &amp; Sub-Item.
+                    </p>
+                  )}
                   {selectedPackageSubItems.length > 0 && (
                     <p className="mt-1.5 text-[11px] text-slate-500 leading-relaxed">
                       Sub-item ({values.tahun}):{' '}

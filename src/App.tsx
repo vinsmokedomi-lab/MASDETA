@@ -242,6 +242,8 @@ export default function App() {
   const [kpmDetailReturnToChatPeerId, setKpmDetailReturnToChatPeerId] = useState<string | null>(null);
   const [addProposalFromKpmForm, setAddProposalFromKpmForm] = useState(false);
   const [menuSection, setMenuSection] = useState<MenuSection>('root');
+  const [selectedPengelolaDrill, setSelectedPengelolaDrill] = useState<string | null>(null);
+  const [selectedPekerjaanDrill, setSelectedPekerjaanDrill] = useState<string | null>(null);
   const [menuOpenedFromDashboard, setMenuOpenedFromDashboard] = useState(false);
   const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
 
@@ -3771,6 +3773,8 @@ export default function App() {
           <MenuHubView
             activeSection={menuSection}
             onChangeSection={(section) => {
+              setSelectedPengelolaDrill(null);
+              setSelectedPekerjaanDrill(null);
               if (section === 'root' && menuOpenedFromDashboard) {
                 setMenuOpenedFromDashboard(false);
                 setMenuSection('root');
@@ -3780,6 +3784,10 @@ export default function App() {
               }
               setMenuSection(section);
             }}
+            selectedPengelolaDrill={selectedPengelolaDrill}
+            onSelectPengelolaDrill={setSelectedPengelolaDrill}
+            selectedPekerjaanDrill={selectedPekerjaanDrill}
+            onSelectPekerjaanDrill={setSelectedPekerjaanDrill}
             currentUser={currentUser}
             unreadChatCount={unreadChatCount}
             records={records}
@@ -3841,7 +3849,11 @@ export default function App() {
           onSelectTab={(tab) => {
             setFeedback(null);
             setMenuOpenedFromDashboard(false);
-            if (tab === 'menu') setMenuSection('root');
+            if (tab === 'menu') {
+              setMenuSection('root');
+              setSelectedPengelolaDrill(null);
+              setSelectedPekerjaanDrill(null);
+            }
             setActiveTab(tab);
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}

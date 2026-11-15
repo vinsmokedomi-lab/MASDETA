@@ -1074,10 +1074,6 @@ export function DashboardView({
                         {item.total}
                       </span>
                     </div>
-                    <p className="mt-0.5 text-[11px] text-slate-500 tabular-nums">
-                      {item.accepted} Diterima · {item.pending} Menunggu
-                      {item.subItemCount > 0 ? ` · ${item.subItemCount} sub-item` : ''}
-                    </p>
                   </div>
                   <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
                 </button>

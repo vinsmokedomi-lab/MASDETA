@@ -1,19 +1,21 @@
 import { useMemo, useState } from 'react';
 import {
-  AlertTriangle,
   ArrowLeft,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Download,
   Package,
-  Search,
-  X,
 } from 'lucide-react';
 import { TAHUN_OPTIONS } from '../data/kpmOptions';
 import { ItemBantuan, KpmRecord } from '../types/kpm';
-import { computeSubItemRecap, exportSubItemRecapToCsv } from '../utils/imageProcessor';
-import { FilterSelect, SegmentedTabs } from './FormControls';
+import {
+  computeSubItemRecap,
+  exportSubItemRecapToCsv,
+  getItemHierarchyRank,
+  resolvePackageForKpm,
+} from '../utils/imageProcessor';
+import { SegmentedTabs } from './FormControls';
 
 interface SubItemRecapViewProps {
   records: KpmRecord[];
@@ -24,9 +26,13 @@ interface SubItemRecapViewProps {
   onSelectKpm: (record: KpmRecord) => void;
 }
 
-type RecapTab = 'akumulasi' | 'hutang';
-type KpmScopeFilter = 'accepted' | 'all';
-type DebtFilter = 'pending_only' | 'partial' | 'unstarted' | 'complete' | 'all';
+type RecapMainTab = 'item' | 'subitem';
+
+type RecapDrillTarget =
+  | { kind: 'item'; code: string; name: string }
+  | { kind: 'subitem'; key: string; name: string }
+  | { kind: 'pending_all' }
+  | null;
 
 export function SubItemRecapView({
   records,
@@ -36,11 +42,8 @@ export function SubItemRecapView({
   onBack,
   onSelectKpm,
 }: SubItemRecapViewProps) {
-  const [activeTab, setActiveTab] = useState<RecapTab>('akumulasi');
-  const [scopeFilter, setScopeFilter] = useState<KpmScopeFilter>('accepted');
-  const [debtFilter, setDebtFilter] = useState<DebtFilter>('pending_only');
-  const [selectedSubItemKey, setSelectedSubItemKey] = useState<string>('all');
-  const [query, setQuery] = useState('');
+  const [activeTab, setActiveTab] = useState<RecapMainTab>('item');
+  const [drillTarget, setDrillTarget] = useState<RecapDrillTarget>(null);
 
   const yearOptions = useMemo(() => {
     const set = new Set<string>(TAHUN_OPTIONS);
@@ -53,97 +56,195 @@ export function SubItemRecapView({
     return Array.from(set).sort((a, b) => b.localeCompare(a));
   }, [records, items]);
 
+  // Scope: KPM Diterima pada tahun terpilih
   const scopedRecords = useMemo(() => {
     return records.filter((rec) => {
       if (selectedYear !== 'all' && rec.tahun !== selectedYear) return false;
-      if (scopeFilter === 'accepted' && rec.validasi !== 'accepted') return false;
-      return true;
+      return rec.validasi === 'accepted';
     });
-  }, [records, selectedYear, scopeFilter]);
+  }, [records, selectedYear]);
 
   const recap = useMemo(
     () => computeSubItemRecap(scopedRecords, items),
     [scopedRecords, items]
   );
 
-  const selectedSubItemLabel = useMemo(() => {
-    if (selectedSubItemKey === 'all') return '';
-    return recap.aggregates.find((a) => a.key === selectedSubItemKey)?.name || selectedSubItemKey;
-  }, [recap.aggregates, selectedSubItemKey]);
+  // Ringkasan per Paket Item
+  const itemRows = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        code: string;
+        name: string;
+        subItemCount: number;
+        totalKpm: number;
+        completeKpm: number;
+        pendingKpm: number;
+        deliveredUnits: number;
+        pendingUnits: number;
+      }
+    >();
 
-  const filteredAggregates = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return recap.aggregates;
-    return recap.aggregates.filter(
-      (row) =>
-        row.name.toLowerCase().includes(q) ||
-        row.packageSources.some(
-          (p) => p.code.toLowerCase().includes(q) || p.name.toLowerCase().includes(q)
-        )
-    );
-  }, [recap.aggregates, query]);
+    for (const kpmRow of recap.kpmRows) {
+      const code = kpmRow.record.item || 'LAIN';
+      const pkg = resolvePackageForKpm(items, kpmRow.record.tahun, code);
+      const existing = map.get(code) ?? {
+        code,
+        name: pkg.name && pkg.name !== code ? pkg.name : code,
+        subItemCount: pkg.subItems.length,
+        totalKpm: 0,
+        completeKpm: 0,
+        pendingKpm: 0,
+        deliveredUnits: 0,
+        pendingUnits: 0,
+      };
 
-  const kpmCounts = useMemo(() => {
-    const base =
-      selectedSubItemKey === 'all'
-        ? recap.kpmRows
-        : recap.kpmRows.filter(
-            (r) =>
-              r.deliveredItems.some((d) => d.key === selectedSubItemKey) ||
-              r.pendingItems.some((p) => p.key === selectedSubItemKey)
-          );
+      existing.totalKpm += 1;
+      if (kpmRow.debtStatus === 'complete') {
+        existing.completeKpm += 1;
+      } else {
+        existing.pendingKpm += 1;
+      }
+      existing.deliveredUnits += kpmRow.deliveredItems.length;
+      existing.pendingUnits += kpmRow.pendingItems.length;
+      map.set(code, existing);
+    }
 
-    return {
-      all: base.length,
-      pending_only: base.filter((r) => r.pendingItems.length > 0).length,
-      partial: base.filter((r) => r.debtStatus === 'partial').length,
-      unstarted: base.filter((r) => r.debtStatus === 'unstarted').length,
-      complete: base.filter((r) => r.debtStatus === 'complete').length,
-    };
-  }, [recap.kpmRows, selectedSubItemKey]);
+    return Array.from(map.values()).sort((a, b) => {
+      const rankA = getItemHierarchyRank(a.code, selectedYear, items);
+      const rankB = getItemHierarchyRank(b.code, selectedYear, items);
+      if (rankA !== rankB) return rankA - rankB;
+      return a.code.localeCompare(b.code, 'id');
+    });
+  }, [recap.kpmRows, items, selectedYear]);
 
-  const filteredKpmRows = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return recap.kpmRows
-      .filter((row) => {
-        if (selectedSubItemKey !== 'all') {
-          const matchesPending = row.pendingItems.some((p) => p.key === selectedSubItemKey);
-          const matchesDelivered = row.deliveredItems.some((d) => d.key === selectedSubItemKey);
-          if (debtFilter === 'pending_only' || debtFilter === 'partial' || debtFilter === 'unstarted') {
-            if (!matchesPending) return false;
-          } else if (debtFilter === 'complete') {
-            if (!matchesDelivered) return false;
-          } else if (!matchesPending && !matchesDelivered) {
-            return false;
-          }
-        }
+  const totalPackages = recap.kpmRows.length;
+  const deliveredPackages = useMemo(
+    () => recap.kpmRows.filter((r) => r.debtStatus === 'complete').length,
+    [recap.kpmRows]
+  );
+  const pendingPackages = totalPackages - deliveredPackages;
+  const pctItemComplete =
+    totalPackages > 0 ? Math.round((deliveredPackages / totalPackages) * 100) : 0;
 
-        if (debtFilter === 'pending_only' && row.pendingItems.length === 0) return false;
-        if (debtFilter === 'partial' && row.debtStatus !== 'partial') return false;
-        if (debtFilter === 'unstarted' && row.debtStatus !== 'unstarted') return false;
-        if (debtFilter === 'complete' && row.debtStatus !== 'complete') return false;
-
-        if (!q) return true;
-        return (
-          row.record.nama.toLowerCase().includes(q) ||
-          row.record.registerCode.toLowerCase().includes(q) ||
-          row.record.proposal.toLowerCase().includes(q) ||
-          row.pendingItems.some((p) => p.name.toLowerCase().includes(q))
-        );
-      })
-      .sort((a, b) => {
-        const order = { partial: 0, unstarted: 1, complete: 2 };
-        return order[a.debtStatus] - order[b.debtStatus];
-      });
-  }, [recap.kpmRows, selectedSubItemKey, debtFilter, query]);
-
-  const yearLabel = selectedYear === 'all' ? 'Semua Tahun' : `Tahun ${selectedYear}`;
-  const pctDelivered =
+  const pctSubDelivered =
     recap.totalUnits > 0 ? Math.round((recap.totalDelivered / recap.totalUnits) * 100) : 0;
+
+  // Drill-down KPM rows
+  const drillKpmRows = useMemo(() => {
+    if (!drillTarget) return [];
+    const list = recap.kpmRows.filter((row) => {
+      if (drillTarget.kind === 'item') {
+        return (row.record.item || 'LAIN') === drillTarget.code;
+      }
+      if (drillTarget.kind === 'subitem') {
+        return (
+          row.deliveredItems.some((d) => d.key === drillTarget.key) ||
+          row.pendingItems.some((p) => p.key === drillTarget.key)
+        );
+      }
+      return row.pendingItems.length > 0;
+    });
+
+    return [...list].sort((a, b) => {
+      const order = { unstarted: 0, partial: 1, complete: 2 };
+      const diff = order[a.debtStatus] - order[b.debtStatus];
+      if (diff !== 0) return diff;
+      return a.record.nama.localeCompare(b.record.nama, 'id');
+    });
+  }, [recap.kpmRows, drillTarget]);
+
+  if (drillTarget) {
+    const drillTitle =
+      drillTarget.kind === 'pending_all' ? 'Belum Di Bagikan' : drillTarget.name;
+
+    return (
+      <div className="min-h-screen pb-24">
+        <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
+          <button
+            type="button"
+            onClick={() => setDrillTarget(null)}
+            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
+            aria-label="Kembali ke Rekapitulasi"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </button>
+          <h1 className="min-w-0 flex-1 truncate text-base font-bold text-slate-900">
+            {drillTitle}
+          </h1>
+          <span className="shrink-0 rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 tabular-nums">
+            {drillKpmRows.length} KPM
+          </span>
+        </header>
+
+        <main className="px-4 pt-4">
+          {drillKpmRows.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
+              <p className="text-sm font-semibold text-slate-900">
+                Belum ada data penerima
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Semua unit pada kategori ini sudah selesai dibagikan.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+              {drillKpmRows.map((row) => {
+                const isSubDelivered =
+                  drillTarget.kind === 'subitem'
+                    ? row.deliveredItems.some((d) => d.key === drillTarget.key)
+                    : row.debtStatus === 'complete';
+
+                const statusLabel =
+                  drillTarget.kind === 'subitem'
+                    ? isSubDelivered
+                      ? 'Diterima'
+                      : 'Belum'
+                    : row.debtStatus === 'complete'
+                      ? 'Lengkap'
+                      : `Belum (${row.pendingItems.length})`;
+
+                return (
+                  <button
+                    key={row.record.id}
+                    type="button"
+                    onClick={() => onSelectKpm(row.record)}
+                    className="flex min-h-[58px] w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-slate-900">
+                        {row.record.nama}
+                      </p>
+                      <p className="mt-0.5 truncate text-xs text-slate-500">
+                        {row.record.proposal} · {row.record.item}
+                      </p>
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-2">
+                      {isSubDelivered ? (
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700">
+                          <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                          <span>{statusLabel}</span>
+                        </span>
+                      ) : (
+                        <span className="text-xs font-semibold text-amber-700 tabular-nums">
+                          {statusLabel}
+                        </span>
+                      )}
+                      <ChevronRight className="h-4 w-4 text-slate-400" />
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen pb-24">
-      {/* Sub-Header: hanya panah kembali + judul */}
       <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
         <button
           type="button"
@@ -153,56 +254,77 @@ export function SubItemRecapView({
         >
           <ArrowLeft className="h-5 w-5" />
         </button>
-        <h1 className="truncate text-base font-bold text-slate-900">Rekapitulasi Sub-Item</h1>
+        <h1 className="truncate text-base font-bold text-slate-900">
+          Rekapitulasi Item &amp; Sub-Item
+        </h1>
       </header>
 
       <main className="space-y-4 px-4 pt-4">
-        {/* Scope Switcher + Tahun dalam satu baris */}
-        <div className="flex items-center gap-2">
-          <SegmentedTabs<'accepted' | 'all'>
-            className="min-w-0 flex-1"
-            value={scopeFilter}
-            onChange={setScopeFilter}
-            tabs={[
-              { key: 'accepted', label: 'KPM Diterima' },
-              { key: 'all', label: 'Semua Usulan' },
-            ]}
-          />
-          <FilterSelect
-            ariaLabel="Filter tahun rekapitulasi"
-            value={selectedYear}
-            onChange={onChangeYear}
-            className="w-[88px] shrink-0"
-          >
-            {yearOptions.map((yr) => (
-              <option key={yr} value={yr}>
-                {yr}
-              </option>
-            ))}
-            <option value="all">Semua</option>
-          </FilterSelect>
-        </div>
+        {/* 2 Tab Navigasi: Item vs Sub-Item */}
+        <SegmentedTabs<RecapMainTab>
+          value={activeTab}
+          onChange={(tab) => {
+            setActiveTab(tab);
+            setDrillTarget(null);
+          }}
+          tabs={[
+            { key: 'item', label: 'Item' },
+            { key: 'subitem', label: 'Sub-Item' },
+          ]}
+        />
 
-        {/* Hero Summary Card */}
+        {/* Hero Heading Container (identik dengan Dashboard) */}
         <section className="rounded-3xl bg-slate-900 p-5 text-white">
-          <p className="text-xs font-medium text-slate-300">
-            Akumulasi Penyaluran · {yearLabel} ({scopedRecords.length})
-          </p>
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-lg font-bold tracking-tight text-white leading-snug">
+                {activeTab === 'item' ? 'Rekapitulasi Item' : 'Rekapitulasi Sub-Item'}
+              </p>
+              <p className="mt-0.5 text-xs font-medium text-slate-400">KPM Diterima</p>
+            </div>
 
-          <div className="mt-2 flex items-baseline justify-between gap-2">
+            <div className="relative inline-flex min-h-[44px] min-w-[104px] shrink-0 items-center rounded-xl border border-white/50 bg-white/15 transition-colors hover:border-white/75 hover:bg-white/20">
+              <select
+                aria-label="Pilih tahun anggaran"
+                value={selectedYear}
+                onChange={(e) => onChangeYear(e.target.value)}
+                className="h-full min-h-[44px] w-full cursor-pointer appearance-none bg-transparent py-2.5 pr-9 pl-3.5 text-sm font-bold text-white focus:outline-none"
+              >
+                {yearOptions.map((yr) => (
+                  <option key={yr} value={yr} className="text-slate-900">
+                    {yr}
+                  </option>
+                ))}
+                <option value="all" className="text-slate-900">
+                  Semua Tahun
+                </option>
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-3 h-4 w-4 text-white" />
+            </div>
+          </div>
+
+          <div className="mt-4 flex items-baseline justify-between gap-2">
             <div className="flex items-baseline gap-2">
               <span className="text-3xl font-bold tracking-tight tabular-nums">
-                {recap.totalUnits}
+                {activeTab === 'item' ? totalPackages : recap.totalUnits}
               </span>
-              <span className="text-xs font-medium text-slate-300">Total Unit Sub-Item</span>
+              <span className="text-xs font-medium text-slate-300">
+                {activeTab === 'item' ? 'Total Paket' : 'Total Unit'}
+              </span>
             </div>
-            <span className="text-xs font-bold text-teal-300 tabular-nums">{pctDelivered}% Terbagi</span>
+            <span className="text-xs font-bold text-teal-300 tabular-nums">
+              {activeTab === 'item'
+                ? `${pctItemComplete}% Lengkap`
+                : `${pctSubDelivered}% Terbagi`}
+            </span>
           </div>
 
           <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-800">
             <div
               className="h-full rounded-full bg-teal-400 transition-all duration-300"
-              style={{ width: `${pctDelivered}%` }}
+              style={{
+                width: `${activeTab === 'item' ? pctItemComplete : pctSubDelivered}%`,
+              }}
             />
           </div>
 
@@ -210,243 +332,157 @@ export function SubItemRecapView({
             <div className="px-2 text-center">
               <p className="text-xs text-slate-400">Sudah Diterima</p>
               <p className="mt-0.5 text-lg font-bold text-teal-300 tabular-nums">
-                {recap.totalDelivered} Unit
+                {activeTab === 'item'
+                  ? `${deliveredPackages} Paket`
+                  : `${recap.totalDelivered} Unit`}
               </p>
             </div>
             <button
               type="button"
-              onClick={() => {
-                setDebtFilter('pending_only');
-                setActiveTab('hutang');
-              }}
+              onClick={() => setDrillTarget({ kind: 'pending_all' })}
               className="px-2 text-center transition-opacity hover:opacity-80"
             >
               <p className="text-xs text-slate-400">Belum Di Bagikan</p>
               <p className="mt-0.5 text-lg font-bold text-amber-300 tabular-nums">
-                {recap.totalPending} Unit
+                {activeTab === 'item'
+                  ? `${pendingPackages} Paket`
+                  : `${recap.totalPending} Unit`}
               </p>
             </button>
           </div>
         </section>
 
-        {/* Primary View Tabs */}
-        <SegmentedTabs<'akumulasi' | 'hutang'>
-          value={activeTab}
-          onChange={setActiveTab}
-          tabs={[
-            { key: 'akumulasi', label: 'Akumulasi', count: recap.aggregates.length },
-            { key: 'hutang', label: 'Hutang KPM', count: kpmCounts.pending_only },
-          ]}
-        />
-
-        {/* Search Input */}
-        <div className="relative">
-          <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          <input
-            type="search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder={
-              activeTab === 'akumulasi'
-                ? 'Cari sub-item (contoh: Blender) atau kode paket...'
-                : 'Cari nama KPM, proposal, atau sub-item...'
-            }
-            className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pr-3.5 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
-          />
-        </div>
-
-        {/* TAB 1: AKUMULASI SUB-ITEM */}
-        {activeTab === 'akumulasi' && (
+        {/* LISTING ITEM */}
+        {activeTab === 'item' && (
           <section className="space-y-3">
-            {filteredAggregates.length === 0 ? (
+            {itemRows.length === 0 ? (
               <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
                 <p className="text-sm font-semibold text-slate-900">
-                  Belum ada data sub-item pada filter ini
+                  Belum ada data item diterima
                 </p>
                 <p className="mt-1 text-xs text-slate-500">
-                  Coba ubah tahun atau cakupan usulan KPM.
+                  Pilih tahun lain atau pastikan data KPM diterima sudah tersedia.
                 </p>
               </div>
             ) : (
               <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
-                {filteredAggregates.map((row) => {
-                  const pct =
-                    row.totalNeeded > 0
-                      ? Math.round((row.deliveredCount / row.totalNeeded) * 100)
-                      : 0;
-                  return (
-                    <button
-                      key={row.key}
-                      type="button"
-                      onClick={() => {
-                        setSelectedSubItemKey(row.key);
-                        setDebtFilter(row.pendingCount > 0 ? 'pending_only' : 'all');
-                        setActiveTab('hutang');
-                      }}
-                      className="block w-full px-4 py-3.5 text-left transition-colors hover:bg-slate-50"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-start gap-2.5 min-w-0">
-                          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
-                            <Package className="h-4 w-4" />
-                          </div>
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium text-slate-900">{row.name}</p>
-                            <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
-                              Dari paket:{' '}
-                              {row.packageSources
-                                .map((src) => `${src.code} (${src.total})`)
-                                .join(' · ')}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <div className="text-right">
-                            <p className="text-sm font-medium text-slate-900 tabular-nums">
-                              {row.totalNeeded} Unit
-                            </p>
-                            <p
-                              className={`text-xs font-semibold tabular-nums ${
-                                row.pendingCount > 0 ? 'text-amber-700' : 'text-teal-700'
-                              }`}
-                            >
-                              {row.pendingCount > 0
-                                ? `Belum dibagi ${row.pendingCount}`
-                                : 'Lengkap'}
-                            </p>
-                          </div>
-                          <ChevronRight className="h-4 w-4 text-slate-400" />
-                        </div>
+                {itemRows.map((row) => (
+                  <button
+                    key={row.code}
+                    type="button"
+                    onClick={() =>
+                      setDrillTarget({ kind: 'item', code: row.code, name: row.name })
+                    }
+                    className="flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex min-w-0 flex-1 items-center gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 font-mono text-xs font-bold text-teal-800">
+                        {row.code}
                       </div>
-
-                      <div className="mt-2.5 flex items-center gap-2.5">
-                        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100">
-                          <div
-                            className="h-full rounded-full bg-teal-700"
-                            style={{ width: `${pct}%` }}
-                          />
-                        </div>
-                        <span className="shrink-0 text-xs font-medium text-slate-500 tabular-nums">
-                          {row.deliveredCount}/{row.totalNeeded} Diterima
-                        </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-slate-900">
+                          {row.name}
+                        </p>
+                        <p className="mt-0.5 truncate text-xs text-slate-500 tabular-nums">
+                          {row.subItemCount} sub-item · {row.completeKpm}/{row.totalKpm} lengkap
+                        </p>
                       </div>
-                    </button>
-                  );
-                })}
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-2 text-right">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900 tabular-nums">
+                          {row.totalKpm} Paket
+                        </p>
+                        <p
+                          className={`text-xs font-semibold tabular-nums ${
+                            row.pendingKpm > 0 ? 'text-amber-700' : 'text-teal-700'
+                          }`}
+                        >
+                          {row.pendingKpm > 0 ? `Belum ${row.pendingKpm}` : 'Lengkap'}
+                        </p>
+                      </div>
+                      <ChevronRight className="h-4 w-4 text-slate-400" />
+                    </div>
+                  </button>
+                ))}
               </div>
-            )}
-
-            {filteredAggregates.length > 0 && (
-              <button
-                type="button"
-                onClick={() =>
-                  exportSubItemRecapToCsv(
-                    filteredAggregates,
-                    `masdeta-rekap-subitem-${selectedYear}.csv`
-                  )
-                }
-                className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
-              >
-                <Download className="h-4 w-4 text-teal-700" />
-                <span>Download Rekap Sub-Item (.CSV)</span>
-              </button>
             )}
           </section>
         )}
 
-        {/* TAB 2: LAPORAN KPM & HUTANG PENYALURAN */}
-        {activeTab === 'hutang' && (
+        {/* LISTING SUB-ITEM */}
+        {activeTab === 'subitem' && (
           <section className="space-y-3">
-            {selectedSubItemKey !== 'all' && (
-              <div className="flex items-center justify-between gap-2 rounded-2xl border border-teal-200 bg-teal-50 px-3.5 py-2.5 text-xs text-teal-900">
-                <span className="font-semibold">
-                  Sub-Item: <strong>{selectedSubItemLabel}</strong>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setSelectedSubItemKey('all')}
-                  className="inline-flex h-7 items-center gap-1 rounded-lg bg-white px-2 text-xs font-semibold text-teal-800 hover:bg-teal-100"
-                >
-                  <X className="h-3 w-3" />
-                  <span>Semua</span>
-                </button>
-              </div>
-            )}
-
-            <SegmentedTabs<DebtFilter>
-              stacked
-              value={debtFilter}
-              onChange={setDebtFilter}
-              tabs={[
-                { key: 'pending_only', label: 'Belum Lengkap', count: kpmCounts.pending_only },
-                { key: 'partial', label: 'Sebagian', count: kpmCounts.partial },
-                { key: 'unstarted', label: 'Belum Dibagi', count: kpmCounts.unstarted },
-                { key: 'complete', label: 'Lengkap', count: kpmCounts.complete },
-                { key: 'all', label: 'Semua', count: kpmCounts.all },
-              ]}
-            />
-
-            {filteredKpmRows.length === 0 ? (
+            {recap.aggregates.length === 0 ? (
               <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
                 <p className="text-sm font-semibold text-slate-900">
-                  Tidak ada data penerima pada filter ini
+                  Belum ada data sub-item diterima
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Pilih tahun lain atau pastikan paket item memiliki sub-item terdaftar.
                 </p>
               </div>
             ) : (
-              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
-                {filteredKpmRows.map((row) => (
-                  <button
-                    key={row.record.id}
-                    type="button"
-                    onClick={() => onSelectKpm(row.record)}
-                    className="flex w-full items-start justify-between gap-3 px-4 py-3.5 text-left transition-colors hover:bg-slate-50"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="truncate text-sm font-medium text-slate-900">
-                          {row.record.nama} · {row.record.registerCode}
-                        </p>
-                        {row.debtStatus === 'complete' ? (
-                          <span className="inline-flex shrink-0 items-center gap-1 text-xs font-bold text-teal-700">
-                            <CheckCircle2 className="h-3.5 w-3.5" />
-                            Lengkap
-                          </span>
-                        ) : row.debtStatus === 'partial' ? (
-                          <span className="inline-flex shrink-0 items-center gap-1 text-xs font-bold text-amber-700">
-                            <AlertTriangle className="h-3.5 w-3.5" />
-                            Hutang {row.pendingItems.length}
-                          </span>
-                        ) : (
-                          <span className="shrink-0 text-xs font-bold text-rose-600">
-                            Belum ({row.pendingItems.length})
-                          </span>
-                        )}
+              <>
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+                  {recap.aggregates.map((row) => (
+                    <button
+                      key={row.key}
+                      type="button"
+                      onClick={() =>
+                        setDrillTarget({ kind: 'subitem', key: row.key, name: row.name })
+                      }
+                      className="flex min-h-[60px] w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                    >
+                      <div className="flex min-w-0 flex-1 items-center gap-3">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                          <Package className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-semibold text-slate-900">
+                            {row.name}
+                          </p>
+                          <p className="mt-0.5 truncate text-xs text-slate-500 tabular-nums">
+                            Paket {row.packageSources.map((s) => s.code).join(', ')} ·{' '}
+                            {row.deliveredCount}/{row.totalNeeded} diterima
+                          </p>
+                        </div>
                       </div>
 
-                      <p className="mt-0.5 truncate text-xs text-slate-500">
-                        {row.record.proposal} · {row.record.tahun} ({row.packageName})
-                      </p>
+                      <div className="flex shrink-0 items-center gap-2 text-right">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900 tabular-nums">
+                            {row.totalNeeded} Unit
+                          </p>
+                          <p
+                            className={`text-xs font-semibold tabular-nums ${
+                              row.pendingCount > 0 ? 'text-amber-700' : 'text-teal-700'
+                            }`}
+                          >
+                            {row.pendingCount > 0 ? `Belum ${row.pendingCount}` : 'Lengkap'}
+                          </p>
+                        </div>
+                        <ChevronRight className="h-4 w-4 text-slate-400" />
+                      </div>
+                    </button>
+                  ))}
+                </div>
 
-                      {row.deliveredItems.length > 0 && (
-                        <p className="mt-1.5 text-xs text-teal-700 leading-snug">
-                          <span className="font-semibold">Sudah diterima:</span>{' '}
-                          {row.deliveredItems.map((d) => d.name).join(', ')}
-                        </p>
-                      )}
-
-                      {row.pendingItems.length > 0 && (
-                        <p className="mt-1 text-xs text-amber-800 leading-snug">
-                          <span className="font-semibold">Belum diterima:</span>{' '}
-                          {row.pendingItems.map((p) => p.name).join(', ')}
-                        </p>
-                      )}
-                    </div>
-
-                    <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-slate-400" />
-                  </button>
-                ))}
-              </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    exportSubItemRecapToCsv(
+                      recap.aggregates,
+                      `masdeta-rekap-subitem-${selectedYear}.csv`
+                    )
+                  }
+                  className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                >
+                  <Download className="h-4 w-4 text-teal-700" />
+                  <span>Download Rekap Sub-Item (.CSV)</span>
+                </button>
+              </>
             )}
           </section>
         )}
