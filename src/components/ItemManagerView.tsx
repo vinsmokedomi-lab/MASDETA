@@ -1,5 +1,6 @@
 import { FormEvent, useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowDown,
   ArrowLeft,
   ArrowUp,
@@ -10,16 +11,21 @@ import {
   PackagePlus,
   Plus,
   Search,
+  ShieldAlert,
   Trash2,
   X,
 } from 'lucide-react';
 import { TAHUN_OPTIONS } from '../data/kpmOptions';
-import { ItemBantuan } from '../types/kpm';
+import { ItemBantuan, KpmRecord } from '../types/kpm';
 import { capitalizeWords, getItemsForYear, normalizeSubItemKey } from '../utils/imageProcessor';
 import { FilterSelect } from './FormControls';
 
 interface ItemManagerViewProps {
   items: ItemBantuan[];
+  records?: KpmRecord[];
+  canAdd?: boolean;
+  canUpdate?: boolean;
+  canDelete?: boolean;
   onBack: () => void;
   onSaveItem: (item: ItemBantuan, orderIndex: number, originalCode?: string) => void;
   onDeleteItem: (tahun: string, code: string) => void;
@@ -30,8 +36,24 @@ interface ItemManagerViewProps {
 
 type SatuanOption = 'Unit' | 'Set' | 'Pcs';
 
+interface DeleteLayerState {
+  layer: 1 | 2;
+  kind: 'item' | 'subitem' | 'form-subitem';
+  tahun: string;
+  code: string;
+  name: string;
+  subItemIndex?: number;
+  subItemName?: string;
+  affectedCount: number;
+  confirmedCheck: boolean;
+}
+
 export function ItemManagerView({
   items,
+  records = [],
+  canAdd = true,
+  canUpdate = true,
+  canDelete = true,
   onBack,
   onSaveItem,
   onDeleteItem,
@@ -64,6 +86,82 @@ export function ItemManagerView({
   const [subItemVolume, setSubItemVolume] = useState<number>(1);
   const [subItemSatuan, setSubItemSatuan] = useState<SatuanOption>('Unit');
 
+  // Layered Delete Confirmation ("Notif Berlapis")
+  const [deleteLayerState, setDeleteLayerState] = useState<DeleteLayerState | null>(null);
+
+  const countAffectedKpm = (tahun: string, code: string): number =>
+    records.filter((r) => r.tahun === tahun && r.item === code).length;
+
+  const requestDeleteItem = (item: ItemBantuan) => {
+    if (!canDelete) return;
+    setDeleteLayerState({
+      layer: 1,
+      kind: 'item',
+      tahun: item.tahun,
+      code: item.code,
+      name: item.name,
+      affectedCount: countAffectedKpm(item.tahun, item.code),
+      confirmedCheck: false,
+    });
+  };
+
+  const requestDeleteExpandedSubItem = (item: ItemBantuan, subIdx: number, subName: string) => {
+    if (!canDelete) return;
+    setDeleteLayerState({
+      layer: 1,
+      kind: 'subitem',
+      tahun: item.tahun,
+      code: item.code,
+      name: item.name,
+      subItemIndex: subIdx,
+      subItemName: subName,
+      affectedCount: countAffectedKpm(item.tahun, item.code),
+      confirmedCheck: false,
+    });
+  };
+
+  const requestDeleteFormSubItem = (subIdx: number, subName: string) => {
+    if (editingOriginalCode && !canDelete) return;
+    setDeleteLayerState({
+      layer: 1,
+      kind: 'form-subitem',
+      tahun: formYear,
+      code: (formCode || editingOriginalCode || '').trim().toUpperCase(),
+      name: formName || 'Paket Item',
+      subItemIndex: subIdx,
+      subItemName: subName,
+      affectedCount: editingOriginalCode ? countAffectedKpm(formYear, editingOriginalCode) : 0,
+      confirmedCheck: false,
+    });
+  };
+
+  const handleConfirmLayeredDelete = () => {
+    if (!deleteLayerState || !deleteLayerState.confirmedCheck) return;
+    if (deleteLayerState.kind === 'item') {
+      onDeleteItem(deleteLayerState.tahun, deleteLayerState.code);
+      if (expandedCode === deleteLayerState.code) {
+        setExpandedCode(null);
+      }
+    } else if (deleteLayerState.kind === 'subitem' && deleteLayerState.subItemIndex !== undefined) {
+      const targetItem = items.find(
+        (i) => i.tahun === deleteLayerState.tahun && i.code === deleteLayerState.code
+      );
+      if (targetItem) {
+        onUpdateItemSubItems(
+          targetItem.tahun,
+          targetItem.code,
+          targetItem.subItems.filter((_, i) => i !== deleteLayerState.subItemIndex)
+        );
+      }
+    } else if (
+      deleteLayerState.kind === 'form-subitem' &&
+      deleteLayerState.subItemIndex !== undefined
+    ) {
+      setFormSubItems((prev) => prev.filter((_, i) => i !== deleteLayerState.subItemIndex));
+    }
+    setDeleteLayerState(null);
+  };
+
   const itemYearOptions = useMemo(() => {
     const set = new Set<string>(TAHUN_OPTIONS);
     items.forEach((i) => {
@@ -81,6 +179,16 @@ export function ItemManagerView({
     () => getItemsForYear(items, formYear),
     [items, formYear]
   );
+
+  const copySourceYear = useMemo(() => {
+    if (items.some((i) => i.tahun === '2026' && selectedYear !== '2026')) {
+      return '2026';
+    }
+    const candidate = itemYearOptions.find(
+      (yr) => yr !== selectedYear && items.some((i) => i.tahun === yr)
+    );
+    return candidate || null;
+  }, [items, itemYearOptions, selectedYear]);
 
   // Unique master item templates collected across all years
   const masterItemTemplates = useMemo(() => {
@@ -404,11 +512,10 @@ export function ItemManagerView({
                       </span>
                       <button
                         type="button"
-                        onClick={() =>
-                          setFormSubItems((prev) => prev.filter((_, i) => i !== idx))
-                        }
+                        disabled={Boolean(editingOriginalCode) && !canDelete}
+                        onClick={() => requestDeleteFormSubItem(idx, sub)}
                         aria-label={`Hapus sub-item ${sub}`}
-                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         <X className="h-3.5 w-3.5" />
                       </button>
@@ -687,6 +794,117 @@ export function ItemManagerView({
             </div>
           </div>
         )}
+
+        {deleteLayerState && (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/55 p-4 backdrop-blur-[1px] sm:items-center">
+            <div className="w-full max-w-sm rounded-3xl border border-slate-200 bg-white p-5 shadow-xl space-y-4">
+              {deleteLayerState.layer === 1 ? (
+                <>
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-amber-100 text-amber-700">
+                      <AlertTriangle className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-bold uppercase tracking-wider text-amber-700">
+                        Konfirmasi Tahap 1 dari 2
+                      </p>
+                      <h3 className="text-sm font-bold text-slate-900">
+                        Hapus Sub-Item dari Paket?
+                      </h3>
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-1 text-xs">
+                    <p className="font-bold text-slate-900">{deleteLayerState.subItemName}</p>
+                    <p className="text-slate-600">
+                      Paket: {deleteLayerState.name} ({deleteLayerState.code || '-'} ·{' '}
+                      {deleteLayerState.tahun})
+                    </p>
+                    <p className="font-semibold text-amber-800">
+                      {deleteLayerState.affectedCount > 0
+                        ? `Dipakai oleh ${deleteLayerState.affectedCount} data KPM pada tahun ${deleteLayerState.tahun}.`
+                        : 'Sub-item akan dihapus dari susunan paket ini.'}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setDeleteLayerState(null)}
+                      className="min-h-[42px] flex-1 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDeleteLayerState((prev) =>
+                          prev ? { ...prev, layer: 2, confirmedCheck: false } : null
+                        )
+                      }
+                      className="min-h-[42px] flex-1 rounded-xl bg-amber-600 text-xs font-semibold text-white hover:bg-amber-700"
+                    >
+                      Lanjutkan Hapus
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-rose-100 text-rose-700">
+                      <ShieldAlert className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-bold uppercase tracking-wider text-rose-700">
+                        Konfirmasi Tahap 2 dari 2
+                      </p>
+                      <h3 className="text-sm font-bold text-rose-900">
+                        Penghapusan Permanen Sub-Item
+                      </h3>
+                    </div>
+                  </div>
+                  <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs leading-relaxed text-rose-800">
+                    Menghapus sub-item <strong>{deleteLayerState.subItemName}</strong> akan
+                    menghilangkannya dari checklist penyaluran paket{' '}
+                    <strong>{deleteLayerState.code || deleteLayerState.name}</strong>.
+                  </p>
+                  <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                    <input
+                      type="checkbox"
+                      checked={deleteLayerState.confirmedCheck}
+                      onChange={(e) =>
+                        setDeleteLayerState((prev) =>
+                          prev ? { ...prev, confirmedCheck: e.target.checked } : null
+                        )
+                      }
+                      className="mt-0.5 h-4 w-4 rounded border-slate-300 text-rose-600 focus:ring-rose-600"
+                    />
+                    <span className="text-xs font-semibold text-slate-700">
+                      Saya yakin menghapus sub-item ini dari susunan paket.
+                    </span>
+                  </label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDeleteLayerState((prev) => (prev ? { ...prev, layer: 1 } : null))
+                      }
+                      className="min-h-[42px] flex-1 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      Kembali
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!deleteLayerState.confirmedCheck}
+                      onClick={handleConfirmLayeredDelete}
+                      className="min-h-[42px] flex-1 rounded-xl bg-rose-600 text-xs font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                    >
+                      Ya, Hapus Permanen
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -725,14 +943,16 @@ export function ItemManagerView({
             ))}
           </FilterSelect>
 
-          <button
-            type="button"
-            onClick={openCreateForm}
-            className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.99]"
-          >
-            <PackagePlus className="h-4 w-4 shrink-0" />
-            <span>Tambah Item</span>
-          </button>
+          {canAdd && (
+            <button
+              type="button"
+              onClick={openCreateForm}
+              className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.99]"
+            >
+              <PackagePlus className="h-4 w-4 shrink-0" />
+              <span>Tambah Item</span>
+            </button>
+          )}
         </div>
 
         {/* Item List for Selected Year */}
@@ -742,17 +962,21 @@ export function ItemManagerView({
               Belum ada master item untuk tahun {selectedYear}
             </p>
             <p className="text-xs text-slate-500">
-              Tambahkan item baru atau salin susunan paket dari tahun 2026.
+              {copySourceYear
+                ? `Tambahkan item baru atau salin susunan paket dari tahun ${copySourceYear}.`
+                : 'Belum ada item bantuan yang tersimpan pada tahun mana pun.'}
             </p>
-            <div className="flex flex-col gap-2 pt-1">
-              <button
-                type="button"
-                onClick={() => onCopyItemsFromYear('2026', selectedYear)}
-                className="inline-flex min-h-[42px] w-full items-center justify-center rounded-xl border border-teal-200 bg-teal-50 px-4 text-xs font-bold text-teal-800 hover:bg-teal-100"
-              >
-                Salin Susunan Paket dari Tahun 2026
-              </button>
-            </div>
+            {canAdd && copySourceYear && (
+              <div className="flex flex-col gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => onCopyItemsFromYear(copySourceYear, selectedYear)}
+                  className="inline-flex min-h-[42px] w-full items-center justify-center rounded-xl border border-teal-200 bg-teal-50 px-4 text-xs font-bold text-teal-800 hover:bg-teal-100"
+                >
+                  Salin Susunan Paket dari Tahun {copySourceYear}
+                </button>
+              </div>
+            )}
           </div>
         ) : (
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
@@ -783,7 +1007,7 @@ export function ItemManagerView({
                         {item.code}
                       </span>
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-bold text-slate-900">{item.name}</p>
+                        <p className="truncate text-sm font-medium text-slate-900">{item.name}</p>
                         <p className="truncate text-xs text-slate-500">
                           {item.subItems.length} sub-item
                           {item.subItems.length > 0 ? ` · ${item.subItems.join(', ')}` : ''}
@@ -797,40 +1021,46 @@ export function ItemManagerView({
                     </button>
 
                     <div className="flex shrink-0 items-center gap-0.5">
-                      <button
-                        type="button"
-                        disabled={idx === 0}
-                        onClick={() => onMoveItemOrder(item.tahun, item.code, 'up')}
-                        aria-label={`Naikkan urutan ${item.code}`}
-                        className="inline-flex h-8 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30"
-                      >
-                        <ArrowUp className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        disabled={idx === yearCatalogItems.length - 1}
-                        onClick={() => onMoveItemOrder(item.tahun, item.code, 'down')}
-                        aria-label={`Turunkan urutan ${item.code}`}
-                        className="inline-flex h-8 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30"
-                      >
-                        <ArrowDown className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openEditForm(item, idx)}
-                        aria-label={`Edit item ${item.code}`}
-                        className="inline-flex h-8 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-teal-50 hover:text-teal-700"
-                      >
-                        <Edit3 className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onDeleteItem(item.tahun, item.code)}
-                        aria-label={`Hapus item ${item.code} tahun ${item.tahun}`}
-                        className="inline-flex h-8 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      {canUpdate && (
+                        <>
+                          <button
+                            type="button"
+                            disabled={idx === 0}
+                            onClick={() => onMoveItemOrder(item.tahun, item.code, 'up')}
+                            aria-label={`Naikkan urutan ${item.code}`}
+                            className="inline-flex h-8 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30"
+                          >
+                            <ArrowUp className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={idx === yearCatalogItems.length - 1}
+                            onClick={() => onMoveItemOrder(item.tahun, item.code, 'down')}
+                            aria-label={`Turunkan urutan ${item.code}`}
+                            className="inline-flex h-8 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30"
+                          >
+                            <ArrowDown className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openEditForm(item, idx)}
+                            aria-label={`Edit item ${item.code}`}
+                            className="inline-flex h-8 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-teal-50 hover:text-teal-700"
+                          >
+                            <Edit3 className="h-3.5 w-3.5" />
+                          </button>
+                        </>
+                      )}
+                      {canDelete && (
+                        <button
+                          type="button"
+                          onClick={() => requestDeleteItem(item)}
+                          aria-label={`Hapus item ${item.code} tahun ${item.tahun}`}
+                          className="inline-flex h-8 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -840,13 +1070,15 @@ export function ItemManagerView({
                         <p className="text-xs font-bold text-slate-700">
                           Daftar Sub-Item ({item.code} · {item.tahun})
                         </p>
-                        <button
-                          type="button"
-                          onClick={() => openEditForm(item, idx)}
-                          className="text-xs font-semibold text-teal-700 hover:underline"
-                        >
-                          Ubah Paket
-                        </button>
+                        {canUpdate && (
+                          <button
+                            type="button"
+                            onClick={() => openEditForm(item, idx)}
+                            className="text-xs font-semibold text-teal-700 hover:underline"
+                          >
+                            Ubah Paket
+                          </button>
+                        )}
                       </div>
 
                       {item.subItems.length > 0 && (
@@ -859,44 +1091,42 @@ export function ItemManagerView({
                               <span className="text-xs font-medium text-slate-800">
                                 {subIdx + 1}. {sub}
                               </span>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onUpdateItemSubItems(
-                                    item.tahun,
-                                    item.code,
-                                    item.subItems.filter((_, i) => i !== subIdx)
-                                  )
-                                }
-                                aria-label={`Hapus sub-item ${sub}`}
-                                className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
-                              >
-                                <X className="h-3.5 w-3.5" />
-                              </button>
+                              {canDelete && (
+                                <button
+                                  type="button"
+                                  onClick={() => requestDeleteExpandedSubItem(item, subIdx, sub)}
+                                  aria-label={`Hapus sub-item ${sub}`}
+                                  className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </button>
+                              )}
                             </div>
                           ))}
                         </div>
                       )}
 
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          autoCapitalize="words"
-                          list="canonical-subitem-suggestions"
-                          value={inlineSubItemInput}
-                          onChange={(e) => setInlineSubItemInput(capitalizeWords(e.target.value))}
-                          placeholder="Tambah sub-item cepat..."
-                          className="min-h-[38px] flex-1 rounded-xl border border-slate-300 bg-white px-3 text-xs focus:border-teal-700 focus:outline-none"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => handleInlineAddSubItem(item)}
-                          className="inline-flex min-h-[38px] items-center gap-1 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800"
-                        >
-                          <Plus className="h-3.5 w-3.5" />
-                          <span>Tambah</span>
-                        </button>
-                      </div>
+                      {canUpdate && (
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            autoCapitalize="words"
+                            list="canonical-subitem-suggestions"
+                            value={inlineSubItemInput}
+                            onChange={(e) => setInlineSubItemInput(capitalizeWords(e.target.value))}
+                            placeholder="Tambah sub-item cepat..."
+                            className="min-h-[38px] flex-1 rounded-xl border border-slate-300 bg-white px-3 text-xs focus:border-teal-700 focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleInlineAddSubItem(item)}
+                            className="inline-flex min-h-[38px] items-center gap-1 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800"
+                          >
+                            <Plus className="h-3.5 w-3.5" />
+                            <span>Tambah</span>
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -905,6 +1135,147 @@ export function ItemManagerView({
           </div>
         )}
       </div>
+
+      {/* Layered Delete Confirmation Modal ("Notif Berlapis") */}
+      {deleteLayerState && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/55 p-4 backdrop-blur-[1px] sm:items-center">
+          <div className="w-full max-w-sm rounded-3xl border border-slate-200 bg-white p-5 shadow-xl space-y-4">
+            {deleteLayerState.layer === 1 ? (
+              <>
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-amber-100 text-amber-700">
+                    <AlertTriangle className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-bold uppercase tracking-wider text-amber-700">
+                      Notifikasi Lapis 1 dari 2
+                    </p>
+                    <h3 className="text-sm font-bold text-slate-900">
+                      {deleteLayerState.kind === 'item'
+                        ? 'Hapus Master Item Bantuan?'
+                        : 'Hapus Sub-Item Paket?'}
+                    </h3>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-1 text-xs">
+                  {deleteLayerState.kind === 'item' ? (
+                    <p className="font-bold text-slate-900">
+                      {deleteLayerState.name} ({deleteLayerState.code} · {deleteLayerState.tahun})
+                    </p>
+                  ) : (
+                    <>
+                      <p className="font-bold text-slate-900">{deleteLayerState.subItemName}</p>
+                      <p className="text-slate-600">
+                        Paket: {deleteLayerState.name} ({deleteLayerState.code} ·{' '}
+                        {deleteLayerState.tahun})
+                      </p>
+                    </>
+                  )}
+                  <p className="font-semibold text-amber-800">
+                    {deleteLayerState.affectedCount > 0
+                      ? `Terkait dengan ${deleteLayerState.affectedCount} data KPM pada tahun ${deleteLayerState.tahun}.`
+                      : `Belum ada data KPM yang memakai ${
+                          deleteLayerState.kind === 'item' ? 'item' : 'paket'
+                        } ini di tahun ${deleteLayerState.tahun}.`}
+                  </p>
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setDeleteLayerState(null)}
+                    className="min-h-[42px] flex-1 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDeleteLayerState((prev) =>
+                        prev ? { ...prev, layer: 2, confirmedCheck: false } : null
+                      )
+                    }
+                    className="min-h-[42px] flex-1 rounded-xl bg-amber-600 text-xs font-semibold text-white hover:bg-amber-700"
+                  >
+                    Lanjutkan Hapus
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-rose-100 text-rose-700">
+                    <ShieldAlert className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-bold uppercase tracking-wider text-rose-700">
+                      Notifikasi Lapis 2 dari 2
+                    </p>
+                    <h3 className="text-sm font-bold text-rose-900">
+                      Konfirmasi Penghapusan Permanen
+                    </h3>
+                  </div>
+                </div>
+
+                <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs leading-relaxed text-rose-800">
+                  {deleteLayerState.kind === 'item' ? (
+                    <>
+                      Master item <strong>{deleteLayerState.name}</strong> (
+                      <strong>{deleteLayerState.code}</strong>) akan dihapus permanen dari katalog
+                      tahun <strong>{deleteLayerState.tahun}</strong>. Rekapitulasi item &amp;
+                      checklist penerima akan ikut terpengaruh.
+                    </>
+                  ) : (
+                    <>
+                      Sub-item <strong>{deleteLayerState.subItemName}</strong> akan dihapus permanen
+                      dari paket <strong>{deleteLayerState.code}</strong> ({deleteLayerState.tahun}
+                      ) termasuk daftar kewajiban penyalurannya.
+                    </>
+                  )}
+                </p>
+
+                <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                  <input
+                    type="checkbox"
+                    checked={deleteLayerState.confirmedCheck}
+                    onChange={(e) =>
+                      setDeleteLayerState((prev) =>
+                        prev ? { ...prev, confirmedCheck: e.target.checked } : null
+                      )
+                    }
+                    className="mt-0.5 h-4 w-4 rounded border-slate-300 text-rose-600 focus:ring-rose-600"
+                  />
+                  <span className="text-xs font-semibold text-slate-700">
+                    Saya yakin menghapus {deleteLayerState.kind === 'item' ? 'item' : 'sub-item'} ini
+                    secara permanen.
+                  </span>
+                </label>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDeleteLayerState((prev) => (prev ? { ...prev, layer: 1 } : null))
+                    }
+                    className="min-h-[42px] flex-1 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    Kembali
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!deleteLayerState.confirmedCheck}
+                    onClick={handleConfirmLayeredDelete}
+                    className="min-h-[42px] flex-1 rounded-xl bg-rose-600 text-xs font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    Ya, Hapus Permanen
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

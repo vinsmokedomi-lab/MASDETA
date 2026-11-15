@@ -134,9 +134,9 @@ export function ProposalListView({
                   </div>
 
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-bold text-slate-900">{prop.namaProposal}</p>
+                    <p className="truncate text-sm font-medium text-slate-900">{prop.namaProposal}</p>
                     <p className="mt-0.5 truncate text-xs text-slate-500 tabular-nums">
-                      {matchingRecords.length}/{prop.jumlahKpm ?? 66} KPM · {prop.tipe} · {prop.tahun}
+                      {matchingRecords.length}/{prop.jumlahKpm ?? 66} · {prop.tipe} · {prop.tahun}
                     </p>
                     <p
                       className={`mt-0.5 text-xs font-medium ${

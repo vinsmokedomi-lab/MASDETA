@@ -4,11 +4,12 @@ import {
   Bell,
   Check,
   CheckCheck,
+  ChevronRight,
   Search,
   Send,
   User,
 } from 'lucide-react';
-import { DirectChatMessage, InternalUser } from '../types/kpm';
+import { DirectChatMessage, InternalUser, SharedKpmCard } from '../types/kpm';
 import { PresenceDot, getPresenceMeta } from './PresenceDot';
 
 interface ChatViewProps {
@@ -17,8 +18,9 @@ interface ChatViewProps {
   messages: DirectChatMessage[];
   activePeerId: string | null;
   onSelectPeer: (peerId: string | null) => void;
-  onSendMessage: (recipientId: string, text: string) => Promise<void>;
+  onSendMessage: (recipientId: string, text: string, sharedKpm?: SharedKpmCard) => Promise<void>;
   onMarkConversationRead: (peerId: string) => void;
+  onOpenSharedKpm?: (kpmId: string) => void;
   pushPermission: NotificationPermission | 'unsupported';
   onRequestPushPermission: () => Promise<void>;
   onBack: () => void;
@@ -41,6 +43,7 @@ export function ChatView({
   onSelectPeer,
   onSendMessage,
   onMarkConversationRead,
+  onOpenSharedKpm,
   pushPermission,
   onRequestPushPermission,
   onBack,
@@ -51,8 +54,25 @@ export function ChatView({
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   const peers = useMemo(() => {
+    const isPrimaryDomi = currentUser.email.toLowerCase() === 'vinsmoke.domi@gmail.com';
     return users
-      .filter((u) => u.id !== currentUser.id && u.status === 'active')
+      .filter((u) => {
+        if (u.id === currentUser.id || u.status !== 'active') return false;
+        if (
+          isPrimaryDomi &&
+          u.email.toLowerCase() === 'la.qsas@gmail.com' &&
+          u.presenceStatus === 'offline' &&
+          !u.fotoDataUrl &&
+          !messages.some(
+            (m) =>
+              (m.senderId === currentUser.id && m.recipientId === u.id) ||
+              (m.senderId === u.id && m.recipientId === currentUser.id)
+          )
+        ) {
+          return false;
+        }
+        return true;
+      })
       .sort((a, b) => {
         if (a.role === 'SuperAdmin' && b.role !== 'SuperAdmin') return -1;
         if (b.role === 'SuperAdmin' && a.role !== 'SuperAdmin') return 1;
@@ -61,7 +81,7 @@ export function ChatView({
         if (pDiff !== 0) return pDiff;
         return a.nama.localeCompare(b.nama, 'id');
       });
-  }, [users, currentUser.id]);
+  }, [users, currentUser.id, currentUser.email, messages]);
 
   const activePeer = useMemo(
     () => (activePeerId ? users.find((u) => u.id === activePeerId) ?? null : null),
@@ -117,6 +137,7 @@ export function ChatView({
               <img
                 src={activePeer.fotoDataUrl}
                 alt={activePeer.nama}
+                referrerPolicy="no-referrer"
                 className="h-full w-full rounded-xl object-cover"
               />
             ) : (
@@ -143,7 +164,7 @@ export function ChatView({
               </span>
             </div>
             <p className={`truncate text-[11px] font-medium ${meta.textClass}`}>
-              {meta.label} · {activePeer.email}
+              {meta.label}
             </p>
           </div>
         </header>
@@ -162,19 +183,124 @@ export function ChatView({
           ) : (
             threadMessages.map((msg) => {
               const isMine = msg.senderId === currentUser.id;
+              const kpmCard = msg.sharedKpm;
+              const kpmStatusLabel =
+                kpmCard?.validasi === 'accepted'
+                  ? 'Diterima'
+                  : kpmCard?.validasi === 'rejected'
+                    ? 'Ditolak'
+                    : 'Menunggu';
+
               return (
                 <div
                   key={msg.id}
                   className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}
                 >
                   <div
-                    className={`max-w-[82%] rounded-2xl px-3.5 py-2.5 text-sm shadow-xs ${
+                    className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm shadow-xs ${
                       isMine
                         ? 'rounded-br-md bg-teal-700 text-white'
                         : 'rounded-bl-md border border-slate-200 bg-white text-slate-900'
                     }`}
                   >
-                    <p className="whitespace-pre-wrap break-words leading-relaxed">{msg.text}</p>
+                    {kpmCard && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenSharedKpm?.(kpmCard.kpmId)}
+                        className={`mb-2 block w-full overflow-hidden rounded-xl border text-left transition-colors ${
+                          isMine
+                            ? 'border-teal-500/50 bg-teal-800/70 text-white hover:bg-teal-800'
+                            : 'border-slate-200 bg-slate-50 text-slate-900 hover:bg-slate-100'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 p-2.5">
+                          <div
+                            className={`flex h-12 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border ${
+                              isMine
+                                ? 'border-teal-600 bg-teal-900/60 text-teal-100'
+                                : 'border-slate-200 bg-white text-slate-400'
+                            }`}
+                          >
+                            {kpmCard.fotoDataUrl ? (
+                              <img
+                                src={kpmCard.fotoDataUrl}
+                                alt={kpmCard.nama}
+                                referrerPolicy="no-referrer"
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <User className="h-4 w-4" />
+                            )}
+                          </div>
+
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-1.5">
+                              <span
+                                className={`truncate text-[10px] font-medium tabular-nums ${
+                                  isMine ? 'text-teal-200' : 'text-teal-700'
+                                }`}
+                              >
+                                {kpmCard.registerCode}
+                              </span>
+                              <span
+                                className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold ${
+                                  kpmCard.validasi === 'accepted'
+                                    ? isMine
+                                      ? 'bg-teal-600 text-white'
+                                      : 'bg-teal-50 text-teal-800'
+                                    : kpmCard.validasi === 'rejected'
+                                      ? isMine
+                                        ? 'bg-rose-500/80 text-white'
+                                        : 'bg-rose-50 text-rose-700'
+                                      : isMine
+                                        ? 'bg-amber-500/80 text-white'
+                                        : 'bg-amber-50 text-amber-800'
+                                }`}
+                              >
+                                {kpmStatusLabel}
+                              </span>
+                            </div>
+
+                            <p className="mt-0.5 truncate text-xs font-bold leading-snug">
+                              {kpmCard.nama}
+                            </p>
+                            <p
+                              className={`truncate text-[11px] ${
+                                isMine ? 'text-teal-100' : 'text-slate-600'
+                              }`}
+                            >
+                              {kpmCard.itemName || kpmCard.item} · {kpmCard.proposal} ({kpmCard.tahun})
+                            </p>
+                            {kpmCard.kontak && (
+                              <p
+                                className={`truncate text-[10px] tabular-nums ${
+                                  isMine ? 'text-teal-200' : 'text-slate-500'
+                                }`}
+                              >
+                                HP: {kpmCard.kontak}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div
+                          className={`flex items-center justify-between border-t px-2.5 py-1.5 text-[10px] font-semibold ${
+                            isMine
+                              ? 'border-teal-600/60 bg-teal-900/30 text-teal-100'
+                              : 'border-slate-200 bg-white text-teal-700'
+                          }`}
+                        >
+                          <span>Kartu Data KPM</span>
+                          <span className="inline-flex items-center gap-0.5">
+                            Buka Detail <ChevronRight className="h-3 w-3" />
+                          </span>
+                        </div>
+                      </button>
+                    )}
+
+                    {msg.text && (
+                      <p className="whitespace-pre-wrap break-words leading-relaxed">{msg.text}</p>
+                    )}
                     <div
                       className={`mt-1 flex items-center justify-end gap-1 text-[10px] tabular-nums ${
                         isMine ? 'text-teal-100' : 'text-slate-400'
@@ -227,7 +353,6 @@ export function ChatView({
     (p) =>
       !q ||
       p.nama.toLowerCase().includes(q) ||
-      p.email.toLowerCase().includes(q) ||
       p.jabatan.toLowerCase().includes(q)
   );
 
@@ -242,7 +367,7 @@ export function ChatView({
         >
           <ArrowLeft className="h-5 w-5" />
         </button>
-        <h1 className="truncate text-base font-bold text-slate-900">Pesan Langsung</h1>
+        <h1 className="truncate text-base font-bold text-slate-900">Chat</h1>
       </header>
 
       <div className="space-y-4 px-4 pt-4">
@@ -307,6 +432,7 @@ export function ChatView({
                       <img
                         src={peer.fotoDataUrl}
                         alt={peer.nama}
+                        referrerPolicy="no-referrer"
                         className="h-full w-full rounded-xl object-cover"
                       />
                     ) : (
@@ -343,8 +469,13 @@ export function ChatView({
                     <div className="mt-0.5 flex items-center justify-between gap-2">
                       <p className="truncate text-xs text-slate-500">
                         {lastMsg
-                          ? `${lastMsg.senderId === currentUser.id ? 'Anda: ' : ''}${lastMsg.text}`
-                          : `${presenceMeta.label} · ${peer.email}`}
+                          ? `${lastMsg.senderId === currentUser.id ? 'Anda: ' : ''}${
+                              lastMsg.text ||
+                              (lastMsg.sharedKpm
+                                ? `[Kartu KPM: ${lastMsg.sharedKpm.nama}]`
+                                : '')
+                            }`
+                          : presenceMeta.label}
                       </p>
                       {unreadCount > 0 && (
                         <span className="flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-teal-700 px-1.5 text-[10px] font-bold text-white tabular-nums">

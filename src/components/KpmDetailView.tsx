@@ -6,12 +6,14 @@ import {
   ChevronRight,
   Clock,
   CreditCard,
-  Edit3,
   FileText,
   History,
   Lock,
   MessageCircle,
   Package,
+  Pencil,
+  Send,
+  Share2,
   ShieldCheck,
   Trash2,
   User,
@@ -20,11 +22,13 @@ import {
 } from 'lucide-react';
 import { DTSEN_OPTION_ITEMS, INITIAL_WILAYAH_LIST } from '../data/kpmOptions';
 import {
+  InternalUser,
   ItemBantuan,
   KpmAuditLogEntry,
   KpmDocumentFile,
   KpmRecord,
   ProposalRecord,
+  SharedKpmCard,
   ValidationStatus,
   WilayahKabKota,
 } from '../types/kpm';
@@ -45,6 +49,10 @@ interface KpmDetailViewProps {
   wilayahList?: WilayahKabKota[];
   items: ItemBantuan[];
   auditLogs: KpmAuditLogEntry[];
+  currentUserId: string;
+  internalUsers: InternalUser[];
+  canUpdate?: boolean;
+  canDelete?: boolean;
   onBack: () => void;
   onEditRecord: (record: KpmRecord) => void;
   onDeleteRecord: (id: string) => void;
@@ -59,6 +67,7 @@ interface KpmDetailViewProps {
     kpmId: string,
     subItems: { key: string; name: string }[]
   ) => void;
+  onShareToChat: (recipientId: string, card: SharedKpmCard, message: string) => Promise<void>;
   onSelectDuplicateRecord: (record: KpmRecord) => void;
   onOpenProposal: (proposalName: string, tahun: string) => void;
   onOpenFullHistory: () => void;
@@ -74,12 +83,17 @@ export function KpmDetailView({
   wilayahList = INITIAL_WILAYAH_LIST,
   items,
   auditLogs,
+  currentUserId,
+  internalUsers,
+  canUpdate = true,
+  canDelete = true,
   onBack,
   onEditRecord,
   onDeleteRecord,
   onUpdateStatus,
   onToggleSubItem,
   onMarkAllSubItemsDelivered,
+  onShareToChat,
   onSelectDuplicateRecord,
   onOpenProposal,
   onOpenFullHistory,
@@ -88,6 +102,10 @@ export function KpmDetailView({
   onDismissFeedback,
 }: KpmDetailViewProps) {
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [shareRecipientId, setShareRecipientId] = useState<string>('');
+  const [shareMessage, setShareMessage] = useState<string>('');
+  const [sharingChat, setSharingChat] = useState(false);
 
   const matchingProposal = useMemo(
     () =>
@@ -253,9 +271,56 @@ export function KpmDetailView({
       ? [record.documents.rumah]
       : [];
   const lainnyaDocs = record.documents.lainnya || [];
+  const heroPhotoDoc = record.documents.penerima || record.documents.ktp;
+  const heroWaUrl = formatWhatsAppUrl(record.kontak);
+
+  const chatRecipients = useMemo(() => {
+    const currentUser = internalUsers.find((u) => u.id === currentUserId);
+    const isPrimaryDomi = currentUser?.email.toLowerCase() === 'vinsmoke.domi@gmail.com';
+    return internalUsers
+      .filter((u) => {
+        if (u.id === currentUserId || u.status !== 'active') return false;
+        if (
+          isPrimaryDomi &&
+          u.email.toLowerCase() === 'la.qsas@gmail.com' &&
+          u.presenceStatus === 'offline' &&
+          !u.fotoDataUrl
+        ) {
+          return false;
+        }
+        return true;
+      })
+      .sort((a, b) => a.nama.localeCompare(b.nama, 'id'));
+  }, [internalUsers, currentUserId]);
+
+  const handleOpenShareModal = () => {
+    setShareRecipientId(chatRecipients[0]?.id || '');
+    setShareMessage(`Mohon info terkait data KPM atas nama ${record.nama}.`);
+    setIsShareModalOpen(true);
+  };
+
+  const handleConfirmShare = async () => {
+    if (!shareRecipientId || sharingChat) return;
+    setSharingChat(true);
+    const card: SharedKpmCard = {
+      kpmId: record.id,
+      registerCode: record.registerCode,
+      nama: record.nama,
+      tahun: record.tahun,
+      item: record.item,
+      itemName,
+      proposal: record.proposal,
+      kontak: record.kontak,
+      validasi: record.validasi,
+      fotoDataUrl: heroPhotoDoc?.dataUrl,
+    };
+    await onShareToChat(shareRecipientId, card, shareMessage.trim());
+    setSharingChat(false);
+    setIsShareModalOpen(false);
+  };
 
   return (
-    <div className="min-h-screen pb-10">
+    <div className="min-h-screen pb-24">
       {/* Sub-Screen Header: hanya panah kembali + judul */}
       <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
         <button
@@ -311,76 +376,127 @@ export function KpmDetailView({
           </div>
         )}
 
-        {/* Hero Card: Identity + Status Validasi */}
-        <section className="rounded-3xl border border-slate-200 bg-white p-5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs font-semibold text-teal-700 tabular-nums">
-              {record.registerCode} · Tahun {record.tahun}
+        {/* Hero Identity Card: Foto, Nama, Item, Proposal, Nomor HP */}
+        <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xs">
+          {/* Card Top Bar */}
+          <div className="flex items-center justify-between gap-2 border-b border-slate-100 bg-slate-50/70 px-4 py-2.5">
+            <p className="truncate text-xs font-medium text-teal-800 tabular-nums">
+              {record.registerCode} · {record.tahun}
             </p>
             {renderStatusIndicator(record.validasi)}
           </div>
 
-          <h2 className="mt-1.5 break-words text-lg font-bold leading-snug tracking-tight text-slate-900">
-            {record.nama}
-          </h2>
-
-          <button
-            type="button"
-            onClick={() => onOpenProposal(record.proposal, record.tahun)}
-            className="mt-1.5 inline-flex items-start gap-1 text-left text-xs font-semibold leading-snug text-teal-700 hover:underline"
-          >
-            <span>
-              {displayKelurahan &&
-              !record.proposal.toLowerCase().includes(displayKelurahan.toLowerCase())
-                ? `${record.proposal} · ${displayKelurahan}`
-                : record.proposal}
-            </span>
-            <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          </button>
-
-          {/* Status Validasi Quick Switch */}
-          <div className="mt-4 border-t border-slate-100 pt-3.5">
-            <p className="text-xs font-semibold text-slate-500">Ubah Status Validasi</p>
-            <div className="mt-2 grid grid-cols-3 gap-1.5">
-              {(
-                [
-                  { key: 'pending', label: 'Menunggu' },
-                  { key: 'rejected', label: 'Ditolak' },
-                  { key: 'accepted', label: 'Diterima' },
-                ] as { key: ValidationStatus; label: string }[]
-              ).map((st) => (
+          {/* Core Identity Body */}
+          <div className="p-4">
+            <div className="flex items-start gap-3.5">
+              {/* Foto KPM */}
+              {heroPhotoDoc ? (
                 <button
-                  key={st.key}
                   type="button"
-                  disabled={isProposalLocked}
-                  onClick={() => onUpdateStatus(record.id, st.key)}
-                  className={`min-h-[38px] rounded-xl px-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-                    record.validasi === st.key
-                      ? st.key === 'accepted'
-                        ? 'bg-teal-700 text-white'
-                        : st.key === 'rejected'
-                          ? 'bg-rose-600 text-white'
-                          : 'bg-slate-900 text-white'
-                      : 'border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
-                  }`}
+                  onClick={() => onPreviewDocument(heroPhotoDoc, record.nama)}
+                  className="h-22 w-18 shrink-0 overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 shadow-xs"
+                  aria-label={`Lihat foto ${record.nama}`}
                 >
-                  {st.label}
+                  <img
+                    src={heroPhotoDoc.dataUrl}
+                    alt={record.nama}
+                    referrerPolicy="no-referrer"
+                    className="h-full w-full object-cover"
+                  />
                 </button>
-              ))}
+              ) : (
+                <div className="flex h-22 w-18 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-slate-100 text-slate-400">
+                  <User className="h-8 w-8" />
+                </div>
+              )}
+
+              {/* Nama, Item, Proposal, Nomor HP */}
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <h2 className="break-words text-base font-bold leading-snug tracking-tight text-slate-900">
+                  {record.nama}
+                </h2>
+
+                <div className="flex items-center gap-1.5 text-xs text-slate-700">
+                  <Package className="h-3.5 w-3.5 shrink-0 text-teal-700" />
+                  <span className="truncate font-medium">{itemName}</span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => onOpenProposal(record.proposal, record.tahun)}
+                  className="flex w-full items-start gap-1 text-left text-xs font-medium leading-snug text-teal-700 hover:underline"
+                >
+                  <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span className="line-clamp-2">
+                    {displayKelurahan &&
+                    !record.proposal.toLowerCase().includes(displayKelurahan.toLowerCase())
+                      ? `${record.proposal} · ${displayKelurahan}`
+                      : record.proposal}
+                  </span>
+                </button>
+
+                <div className="pt-0.5">
+                  {heroWaUrl && record.kontak ? (
+                    <a
+                      href={heroWaUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-100 tabular-nums"
+                    >
+                      <MessageCircle className="h-3.5 w-3.5 shrink-0" />
+                      <span>{record.kontak}</span>
+                    </a>
+                  ) : (
+                    <span className="text-xs text-slate-400">Tanpa No. HP</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Status Validasi Quick Switch + Share ke Chat */}
+            <div className="mt-4 space-y-3 border-t border-slate-100 pt-3.5">
+              <div>
+                <p className="text-xs font-medium text-slate-500">Ubah Status Validasi</p>
+                <div className="mt-2 grid grid-cols-3 gap-1.5">
+                  {(
+                    [
+                      { key: 'pending', label: 'Menunggu' },
+                      { key: 'rejected', label: 'Ditolak' },
+                      { key: 'accepted', label: 'Diterima' },
+                    ] as { key: ValidationStatus; label: string }[]
+                  ).map((st) => (
+                    <button
+                      key={st.key}
+                      type="button"
+                      disabled={isProposalLocked || !canUpdate}
+                      onClick={() => onUpdateStatus(record.id, st.key)}
+                      className={`min-h-[38px] rounded-xl px-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                        record.validasi === st.key
+                          ? st.key === 'accepted'
+                            ? 'bg-teal-700 text-white'
+                            : st.key === 'rejected'
+                              ? 'bg-rose-600 text-white'
+                              : 'bg-slate-900 text-white'
+                          : 'border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      {st.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleOpenShareModal}
+                className="inline-flex min-h-[40px] w-full items-center justify-center gap-2 rounded-xl border border-teal-200 bg-teal-50/70 px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100"
+              >
+                <Share2 className="h-3.5 w-3.5 shrink-0" />
+                <span>Bagikan Kartu KPM ke Chat</span>
+              </button>
             </div>
           </div>
         </section>
-
-        {/* Tombol Edit Data KPM Terpisah tepat di bawah Container Heading */}
-        <button
-          type="button"
-          disabled={isProposalLocked}
-          onClick={() => onEditRecord(record)}
-          className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-2xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-        >
-          {isProposalLocked ? <Lock className="h-4 w-4" /> : <Edit3 className="h-4 w-4" />}
-          <span>{isProposalLocked ? 'Proposal Terkunci' : 'Edit Data KPM'}</span>
-        </button>
 
         {/* Status Duplikasi NIK / KK */}
         {duplicateInfo.hasDuplicates ? (
@@ -414,7 +530,7 @@ export function KpmDetailView({
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <p className="truncate text-sm font-bold text-slate-900">
+                        <p className="truncate text-sm font-medium text-slate-900">
                           {dup.registerCode} · {dup.nama}
                         </p>
                       </div>
@@ -517,7 +633,7 @@ export function KpmDetailView({
                     className="flex min-h-[58px] items-center justify-between gap-3 px-4 py-2.5"
                   >
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold text-slate-900">{sub.name}</p>
+                      <p className="text-sm font-normal text-slate-800">{sub.name}</p>
                       <p
                         className={`mt-0.5 text-[11px] font-medium ${
                           sub.delivered
@@ -541,7 +657,7 @@ export function KpmDetailView({
                       role="switch"
                       aria-checked={sub.delivered}
                       aria-label={`Status terima ${sub.name}`}
-                      disabled={isProposalLocked}
+                      disabled={isProposalLocked || !canUpdate}
                       onClick={() =>
                         onToggleSubItem(record.id, sub.key, sub.name, !sub.delivered)
                       }
@@ -559,7 +675,7 @@ export function KpmDetailView({
                 ))}
               </div>
 
-              {!subItemStats.isComplete && !isProposalLocked && (
+              {!subItemStats.isComplete && !isProposalLocked && canUpdate && (
                 <div className="border-t border-slate-100 bg-slate-50/70 px-4 py-2.5">
                   <button
                     type="button"
@@ -588,13 +704,13 @@ export function KpmDetailView({
           <dl className="divide-y divide-slate-100 text-sm">
             <div className="flex items-center justify-between gap-3 px-4 py-3">
               <dt className="text-xs text-slate-500 shrink-0">Tahun</dt>
-              <dd className="text-right text-xs font-semibold text-slate-900 tabular-nums">
+              <dd className="text-right text-xs font-medium text-slate-900 tabular-nums">
                 {record.tahun}
               </dd>
             </div>
             <div className="flex items-start justify-between gap-3 px-4 py-3">
               <dt className="text-xs text-slate-500 shrink-0">Proposal</dt>
-              <dd className="text-right text-xs font-semibold text-teal-700">
+              <dd className="max-w-[64%] text-right text-xs font-medium text-teal-700">
                 <button
                   type="button"
                   onClick={() => onOpenProposal(record.proposal, record.tahun)}
@@ -606,15 +722,17 @@ export function KpmDetailView({
             </div>
             <div className="flex items-start justify-between gap-3 px-4 py-3">
               <dt className="text-xs text-slate-500 shrink-0">Item Bantuan</dt>
-              <dd className="text-right text-xs font-semibold text-slate-900">{itemName}</dd>
+              <dd className="max-w-[64%] text-right text-xs font-medium text-slate-900">
+                {itemName}
+              </dd>
             </div>
             <div className="flex items-start justify-between gap-3 px-4 py-3">
               <dt className="text-xs text-slate-500 shrink-0">DTSEN</dt>
-              <dd className="text-right text-xs font-semibold text-slate-900">{dtsenLabel}</dd>
+              <dd className="text-right text-xs font-medium text-slate-900">{dtsenLabel}</dd>
             </div>
             <div className="flex items-center justify-between gap-3 px-4 py-3">
               <dt className="text-xs text-slate-500 shrink-0">Biaya Administrasi</dt>
-              <dd className="text-right text-xs font-bold text-slate-900 tabular-nums">
+              <dd className="text-right text-xs font-medium text-slate-900 tabular-nums">
                 {formatRupiah(record.payment)}
               </dd>
             </div>
@@ -629,26 +747,29 @@ export function KpmDetailView({
           <dl className="divide-y divide-slate-100 text-sm">
             <div className="flex items-center justify-between gap-3 px-4 py-3">
               <dt className="text-xs text-slate-500 shrink-0">NIK KTP</dt>
-              <dd className="text-right text-xs font-bold text-slate-900 tabular-nums">
+              <dd className="text-right text-xs font-medium text-slate-900 tabular-nums">
                 {formatNikDisplay(record.nikKtp)}
               </dd>
             </div>
             <div className="flex items-center justify-between gap-3 px-4 py-3">
               <dt className="text-xs text-slate-500 shrink-0">Nomor KK</dt>
-              <dd className="text-right text-xs font-bold text-slate-900 tabular-nums">
+              <dd className="text-right text-xs font-medium text-slate-900 tabular-nums">
                 {formatNikDisplay(record.nikKk)}
               </dd>
             </div>
-            <div className="px-4 py-3">
-              <dt className="text-xs text-slate-500">Alamat Lengkap</dt>
-              <dd className="mt-1 text-xs font-medium text-slate-900">
-                {record.alamat} · RT {record.rt} / RW {record.rw}
+            <div className="flex items-start justify-between gap-3 px-4 py-3">
+              <dt className="shrink-0 text-xs text-slate-500">Alamat Lengkap</dt>
+              <dd className="max-w-[64%] text-right text-xs font-medium leading-relaxed text-slate-900 break-words">
+                <span>{record.alamat || '-'}</span>
+                <span className="mt-0.5 block text-slate-600 tabular-nums">
+                  RT {record.rt || '-'} / RW {record.rw || '-'}
+                </span>
               </dd>
             </div>
             {displayKelurahan && (
               <div className="flex items-center justify-between gap-3 px-4 py-3">
                 <dt className="text-xs text-slate-500 shrink-0">Kelurahan / Desa</dt>
-                <dd className="text-right text-xs font-semibold text-slate-900">
+                <dd className="text-right text-xs font-medium text-slate-900">
                   {displayKelurahan}
                 </dd>
               </div>
@@ -656,26 +777,26 @@ export function KpmDetailView({
             {displayKecamatan && (
               <div className="flex items-center justify-between gap-3 px-4 py-3">
                 <dt className="text-xs text-slate-500 shrink-0">Kecamatan</dt>
-                <dd className="text-right text-xs font-semibold text-slate-900">
+                <dd className="text-right text-xs font-medium text-slate-900">
                   {displayKecamatan}
                 </dd>
               </div>
             )}
             <div className="flex items-center justify-between gap-3 px-4 py-3">
               <dt className="text-xs text-slate-500 shrink-0">Pekerjaan</dt>
-              <dd className="text-right text-xs font-semibold text-slate-900">
+              <dd className="text-right text-xs font-medium text-slate-900">
                 {record.pekerjaan}
               </dd>
             </div>
             <div className="flex items-center justify-between gap-3 px-4 py-3">
               <dt className="text-xs text-slate-500 shrink-0">Pengelola</dt>
-              <dd className="text-right text-xs font-semibold text-slate-900">
+              <dd className="text-right text-xs font-medium text-slate-900">
                 {record.pengelola}
               </dd>
             </div>
             <div className="flex items-center justify-between gap-3 px-4 py-3">
               <dt className="text-xs text-slate-500 shrink-0">Nomor HP</dt>
-              <dd className="text-right text-xs font-semibold text-slate-900 tabular-nums">
+              <dd className="text-right text-xs font-medium text-slate-900 tabular-nums">
                 {(() => {
                   const waUrl = formatWhatsAppUrl(record.kontak);
                   if (!waUrl || !record.kontak) return '-';
@@ -684,7 +805,7 @@ export function KpmDetailView({
                       href={waUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700 transition-colors hover:bg-emerald-100"
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-100"
                     >
                       <MessageCircle className="h-3.5 w-3.5 shrink-0" />
                       <span>{record.kontak}</span>
@@ -815,12 +936,12 @@ export function KpmDetailView({
                 <Clock className="h-3.5 w-3.5 text-teal-700" />
                 <span>Waktu Input Awal</span>
               </div>
-              <p className="mt-1 text-xs font-bold text-slate-900 tabular-nums">
+              <p className="mt-1 text-xs font-medium text-slate-900 tabular-nums">
                 {formatUploadDateTime(initialCreationEntry.timestamp)} · Oleh{' '}
                 {initialCreationEntry.actorName}
               </p>
               <p className="mt-0.5 text-xs text-slate-600">
-                Masuk ke <strong>{initialCreationEntry.proposal}</strong> · Tahun{' '}
+                Masuk ke <span className="font-medium text-slate-800">{initialCreationEntry.proposal}</span> · Tahun{' '}
                 {initialCreationEntry.tahun}
               </p>
             </div>
@@ -839,42 +960,205 @@ export function KpmDetailView({
         </section>
 
         {/* Action Footer (Safe Delete) */}
-        <section className="pt-1">
-          {!confirmDelete ? (
-            <button
-              type="button"
-              disabled={isProposalLocked}
-              onClick={() => setConfirmDelete(true)}
-              className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-4 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Trash2 className="h-4 w-4" />
-              <span>Hapus Data KPM</span>
-            </button>
-          ) : (
-            <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3.5">
-              <p className="text-xs font-bold text-rose-900">
-                Hapus calon KPM "{record.nama}" dari daftar?
-              </p>
-              <div className="mt-2.5 flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setConfirmDelete(false)}
-                  className="min-h-[40px] flex-1 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                >
-                  Batal
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onDeleteRecord(record.id)}
-                  className="min-h-[40px] flex-1 rounded-xl bg-rose-600 text-xs font-semibold text-white hover:bg-rose-700"
-                >
-                  Ya, Hapus Data
-                </button>
+        {canDelete && (
+          <section className="pt-1">
+            {!confirmDelete ? (
+              <button
+                type="button"
+                disabled={isProposalLocked}
+                onClick={() => setConfirmDelete(true)}
+                className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-4 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Trash2 className="h-4 w-4" />
+                <span>Hapus Data KPM</span>
+              </button>
+            ) : (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3.5">
+                <p className="text-xs font-bold text-rose-900">
+                  Hapus calon KPM "{record.nama}" dari daftar?
+                </p>
+                <div className="mt-2.5 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(false)}
+                    className="min-h-[40px] flex-1 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onDeleteRecord(record.id)}
+                    className="min-h-[40px] flex-1 rounded-xl bg-rose-600 text-xs font-semibold text-white hover:bg-rose-700"
+                  >
+                    Ya, Hapus Data
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+      </main>
+
+      {/* Persistent Bottom-Right Floating Pencil Edit KPM Button */}
+      <div className="pointer-events-none fixed bottom-6 left-1/2 z-30 flex w-full max-w-md -translate-x-1/2 justify-end px-4">
+        <button
+          type="button"
+          onClick={() => onEditRecord(record)}
+          disabled={isProposalLocked || !canUpdate}
+          aria-label={
+            isProposalLocked
+              ? 'Proposal Terkunci'
+              : !canUpdate
+                ? 'Akses Edit Dinonaktifkan'
+                : 'Edit Data KPM'
+          }
+          title={
+            isProposalLocked
+              ? 'Proposal Terkunci'
+              : !canUpdate
+                ? 'Akses Edit Dinonaktifkan'
+                : 'Edit Data KPM'
+          }
+          className={`pointer-events-auto inline-flex h-12 w-12 items-center justify-center rounded-full shadow-lg transition-all active:scale-95 ${
+            isProposalLocked || !canUpdate
+              ? 'cursor-not-allowed border border-slate-300 bg-slate-200 text-slate-500 shadow-slate-900/10'
+              : 'bg-teal-700 text-white shadow-teal-900/25 hover:bg-teal-800'
+          }`}
+        >
+          {isProposalLocked || !canUpdate ? <Lock className="h-5 w-5" /> : <Pencil className="h-5 w-5" />}
+        </button>
+      </div>
+
+      {/* Share KPM Card to Direct Chat Bottom-Sheet Modal */}
+      {isShareModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 backdrop-blur-xs sm:items-center sm:p-4"
+          onClick={() => setIsShareModalOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Bagikan Kartu KPM ke Chat"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl"
+          >
+            <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+            <div className="flex items-center justify-between pb-3">
+              <h2 className="text-base font-bold text-slate-900">Bagikan Kartu KPM ke Chat</h2>
+              <button
+                type="button"
+                onClick={() => setIsShareModalOpen(false)}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100"
+                aria-label="Tutup"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Compact Card Preview */}
+            <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+              <div className="flex h-12 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white text-slate-400">
+                {heroPhotoDoc ? (
+                  <img
+                    src={heroPhotoDoc.dataUrl}
+                    alt={record.nama}
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <User className="h-5 w-5" />
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[11px] font-medium text-teal-700 tabular-nums">
+                  {record.registerCode} · {record.tahun}
+                </p>
+                <p className="truncate text-sm font-bold text-slate-900">{record.nama}</p>
+                <p className="truncate text-xs text-slate-500">
+                  {itemName} · {record.proposal}
+                </p>
               </div>
             </div>
-          )}
-        </section>
-      </main>
+
+            {chatRecipients.length === 0 ? (
+              <p className="py-6 text-center text-xs text-slate-500">
+                Belum ada akun Admin atau SuperAdmin aktif lainnya untuk diajak chat.
+              </p>
+            ) : (
+              <div className="mt-4 space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Pilih Penerima Chat
+                  </label>
+                  <div className="mt-1.5 max-h-44 space-y-1.5 overflow-y-auto pr-0.5">
+                    {chatRecipients.map((recipient) => {
+                      const selected = shareRecipientId === recipient.id;
+                      return (
+                        <button
+                          key={recipient.id}
+                          type="button"
+                          onClick={() => setShareRecipientId(recipient.id)}
+                          className={`flex w-full items-center justify-between gap-2.5 rounded-xl border px-3 py-2 text-left transition-colors ${
+                            selected
+                              ? 'border-teal-700 bg-teal-50'
+                              : 'border-slate-200 bg-white hover:bg-slate-50'
+                          }`}
+                        >
+                          <div className="flex min-w-0 items-center gap-2.5">
+                            <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-100 text-slate-500">
+                              {recipient.fotoDataUrl ? (
+                                <img
+                                  src={recipient.fotoDataUrl}
+                                  alt={recipient.nama}
+                                  referrerPolicy="no-referrer"
+                                  className="h-full w-full object-cover"
+                                />
+                              ) : (
+                                <User className="h-4 w-4" />
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="truncate text-xs font-semibold text-slate-900">
+                                {recipient.nama}
+                              </p>
+                              <p className="truncate text-[11px] text-slate-500">
+                                {recipient.role} · {recipient.email}
+                              </p>
+                            </div>
+                          </div>
+                          {selected && <CheckCircle2 className="h-4 w-4 shrink-0 text-teal-700" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Catatan / Pertanyaan (Opsional)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={shareMessage}
+                    onChange={(e) => setShareMessage(e.target.value)}
+                    placeholder="Tulis pertanyaan atau catatan terkait KPM ini..."
+                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  disabled={!shareRecipientId || sharingChat}
+                  onClick={handleConfirmShare}
+                  className="inline-flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-60"
+                >
+                  <Send className="h-4 w-4" />
+                  <span>{sharingChat ? 'Mengirim...' : 'Kirim Kartu ke Chat'}</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -20,29 +20,30 @@ const REMEMBER_LOGIN_KEY = 'masdeta_remember_login_v1';
 interface SavedLoginPrefs {
   remember: boolean;
   email: string;
-  password: string;
 }
 
 function loadRememberedLogin(): SavedLoginPrefs {
   try {
     const raw = localStorage.getItem(REMEMBER_LOGIN_KEY);
-    if (!raw) return { remember: true, email: '', password: '' };
-    const parsed = JSON.parse(raw) as Partial<SavedLoginPrefs>;
+    if (!raw) return { remember: true, email: '' };
+    const parsed = JSON.parse(raw) as Partial<SavedLoginPrefs> & { password?: string };
+    // Strip legacy plaintext password if previously stored
+    if (parsed.password) {
+      localStorage.setItem(
+        REMEMBER_LOGIN_KEY,
+        JSON.stringify({
+          remember: parsed.remember !== false,
+          email: typeof parsed.email === 'string' ? parsed.email : '',
+        })
+      );
+    }
     return {
       remember: parsed.remember !== false,
       email: typeof parsed.email === 'string' ? parsed.email : '',
-      password: typeof parsed.password === 'string' ? parsed.password : '',
     };
   } catch {
-    return { remember: true, email: '', password: '' };
+    return { remember: true, email: '' };
   }
-}
-
-interface ForgotLookupResult {
-  nama: string;
-  email: string;
-  role: string;
-  password: string | null;
 }
 
 interface AuthViewProps {
@@ -61,7 +62,7 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
   const initialSaved = loadRememberedLogin();
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
   const [email, setEmail] = useState(initialSaved.email);
-  const [password, setPassword] = useState(initialSaved.password);
+  const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(initialSaved.remember);
   const [showPassword, setShowPassword] = useState(false);
 
@@ -73,12 +74,9 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
   const [regPassword, setRegPassword] = useState('');
   const [regConfirm, setRegConfirm] = useState('');
 
-  // Internal Forgot Password state
+  // Internal Forgot Password state (guidance only)
   const [forgotEmail, setForgotEmail] = useState(initialSaved.email);
-  const [forgotLookup, setForgotLookup] = useState<ForgotLookupResult | null>(null);
-  const [forgotNewPassword, setForgotNewPassword] = useState('');
-  const [forgotConfirmPassword, setForgotConfirmPassword] = useState('');
-  const [showForgotNewPassword, setShowForgotNewPassword] = useState(false);
+  const [forgotNotice, setForgotNotice] = useState<string | null>(null);
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -109,7 +107,6 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
           JSON.stringify({
             remember: true,
             email: email.trim(),
-            password,
           })
         );
       } else {
@@ -177,7 +174,7 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
     e.preventDefault();
     setError(null);
     setSuccessMsg(null);
-    setForgotLookup(null);
+    setForgotNotice(null);
 
     if (!forgotEmail.trim()) {
       setError('Masukkan email akun Anda.');
@@ -193,58 +190,14 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data?.error || 'Email tidak ditemukan.');
+        setError(data?.error || 'Gagal memproses permintaan.');
         setSubmitting(false);
         return;
       }
-      setForgotLookup(data as ForgotLookupResult);
-      setForgotNewPassword('');
-      setForgotConfirmPassword('');
-    } catch {
-      setError('Gagal terhubung ke server.');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleForgotResetSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setSuccessMsg(null);
-
-    if (!forgotLookup?.email) return;
-    if (forgotNewPassword.length < 6) {
-      setError('Kata sandi baru minimal 6 karakter.');
-      return;
-    }
-    if (forgotNewPassword !== forgotConfirmPassword) {
-      setError('Konfirmasi kata sandi baru tidak cocok.');
-      return;
-    }
-
-    setSubmitting(true);
-    try {
-      const res = await fetch('/api/auth/reset-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: forgotLookup.email,
-          newPassword: forgotNewPassword,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data?.error || 'Gagal mengganti kata sandi.');
-        setSubmitting(false);
-        return;
-      }
-
-      setForgotLookup((prev) => (prev ? { ...prev, password: forgotNewPassword } : null));
-      setEmail(forgotLookup.email);
-      setPassword(forgotNewPassword);
-      setForgotNewPassword('');
-      setForgotConfirmPassword('');
-      setSuccessMsg(data?.message || 'Kata sandi berhasil diperbarui.');
+      setForgotNotice(
+        data?.message ||
+          'Hubungi SuperAdmin internal untuk mereset kata sandi akun Anda melalui Manajemen User & Akses.'
+      );
     } catch {
       setError('Gagal terhubung ke server.');
     } finally {
@@ -352,7 +305,7 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
                       onClick={() => {
                         setMode('forgot');
                         setForgotEmail(email.trim());
-                        setForgotLookup(null);
+                        setForgotNotice(null);
                         setError(null);
                         setSuccessMsg(null);
                       }}
@@ -391,9 +344,9 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
                       onChange={(e) => setRememberMe(e.target.checked)}
                       className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-700"
                     />
-                    <span className="text-xs font-semibold text-slate-700">Ingat Saya</span>
+                    <span className="text-xs font-semibold text-slate-700">Ingat Email</span>
                   </div>
-                  <span className="text-[11px] text-slate-400">Tetap masuk otomatis</span>
+                  <span className="text-[11px] text-slate-400">Simpan email masuk cepat</span>
                 </label>
 
                 <button
@@ -456,99 +409,25 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
                   className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 text-sm font-semibold text-white transition-colors hover:bg-teal-800 disabled:opacity-60"
                 >
                   <KeyRound className="h-4 w-4" />
-                  <span>{submitting ? 'Mencari...' : 'Cek Password'}</span>
+                  <span>{submitting ? 'Memproses...' : 'Minta Reset Kata Sandi'}</span>
                 </button>
               </form>
 
-              {forgotLookup && (
-                <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-4">
-                  <div className="rounded-xl border border-teal-200 bg-teal-50/70 p-3.5 space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-bold text-slate-900">{forgotLookup.nama}</span>
-                      <span className="rounded-md bg-slate-900 px-2 py-0.5 text-[10px] font-bold text-white">
-                        {forgotLookup.role}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-500">{forgotLookup.email}</p>
-                    <div className="rounded-lg border border-teal-200 bg-white px-3 py-2">
-                      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                        Password Saat Ini
-                      </p>
-                      <p className="mt-0.5 font-mono text-sm font-bold text-teal-800 select-all">
-                        {forgotLookup.password || 'Belum tersimpan — atur password baru di bawah'}
-                      </p>
-                    </div>
-                    {forgotLookup.password && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEmail(forgotLookup.email);
-                          setPassword(forgotLookup.password || '');
-                          setMode('login');
-                          setError(null);
-                          setSuccessMsg(null);
-                        }}
-                        className="min-h-[38px] w-full rounded-xl border border-teal-300 bg-white text-xs font-bold text-teal-800 hover:bg-teal-50"
-                      >
-                        Gunakan Password Ini &amp; Masuk
-                      </button>
-                    )}
-                  </div>
-
-                  <form onSubmit={handleForgotResetSubmit} className="space-y-3 border-t border-slate-100 pt-3">
-                    <p className="text-xs font-bold text-slate-900">Ganti Password Baru (Opsional)</p>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700">
-                        Password Baru
-                      </label>
-                      <div className="relative mt-1">
-                        <input
-                          type={showForgotNewPassword ? 'text' : 'password'}
-                          minLength={6}
-                          required
-                          value={forgotNewPassword}
-                          onChange={(e) => setForgotNewPassword(e.target.value)}
-                          placeholder="Minimal 6 karakter"
-                          className="min-h-[42px] w-full rounded-xl border border-slate-300 bg-white pr-10 pl-3.5 text-sm focus:border-teal-700 focus:outline-none"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowForgotNewPassword((prev) => !prev)}
-                          className="absolute top-1/2 right-2 -translate-y-1/2 rounded-lg p-1.5 text-slate-400 hover:text-slate-700"
-                          aria-label={showForgotNewPassword ? 'Sembunyikan sandi' : 'Lihat sandi'}
-                        >
-                          {showForgotNewPassword ? (
-                            <EyeOff className="h-4 w-4" />
-                          ) : (
-                            <Eye className="h-4 w-4" />
-                          )}
-                        </button>
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700">
-                        Konfirmasi Password Baru
-                      </label>
-                      <input
-                        type={showForgotNewPassword ? 'text' : 'password'}
-                        minLength={6}
-                        required
-                        value={forgotConfirmPassword}
-                        onChange={(e) => setForgotConfirmPassword(e.target.value)}
-                        placeholder="Ulangi password baru"
-                        className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-3.5 text-sm focus:border-teal-700 focus:outline-none"
-                      />
-                    </div>
-
-                    <button
-                      type="submit"
-                      disabled={submitting}
-                      className="min-h-[42px] w-full rounded-xl bg-slate-900 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-60"
-                    >
-                      {submitting ? 'Menyimpan...' : 'Simpan Password Baru'}
-                    </button>
-                  </form>
+              {forgotNotice && (
+                <div className="rounded-2xl border border-teal-200 bg-teal-50 p-4 space-y-2">
+                  <p className="text-xs font-bold text-teal-900">Prosedur Keamanan Akun</p>
+                  <p className="text-xs leading-relaxed text-teal-800">{forgotNotice}</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMode('login');
+                      setError(null);
+                      setSuccessMsg(null);
+                    }}
+                    className="mt-1 min-h-[38px] w-full rounded-xl border border-teal-300 bg-white text-xs font-bold text-teal-800 hover:bg-teal-100/50"
+                  >
+                    Kembali ke Halaman Masuk
+                  </button>
                 </div>
               )}
             </div>
@@ -619,7 +498,7 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
                     autoCapitalize="words"
                     value={regNama}
                     onChange={(e) => setRegNama(capitalizeWords(e.target.value))}
-                    placeholder="Contoh: Zahra Pariska"
+                    placeholder="Isi nama lengkap Anda"
                     className="min-h-[44px] w-full rounded-xl border border-slate-300 bg-white pr-3.5 pl-10 text-sm focus:border-teal-700 focus:outline-none"
                   />
                 </div>

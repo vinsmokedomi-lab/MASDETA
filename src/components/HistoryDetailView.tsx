@@ -89,7 +89,7 @@ export function HistoryDetailView({
 
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-2">
-                          <p className="truncate text-sm font-bold text-slate-900">
+                          <p className="truncate text-sm font-medium text-slate-900">
                             {entry.kpmName}
                           </p>
                           <span
@@ -152,7 +152,7 @@ export function HistoryDetailView({
                 <Clock className="h-3.5 w-3.5 text-teal-700" />
                 <span>Waktu Input Awal</span>
               </div>
-              <p className="mt-1 text-xs font-bold text-slate-900 tabular-nums">
+              <p className="mt-1 text-xs font-medium text-slate-900 tabular-nums">
                 {formatUploadDateTime(initialCreationEntry.timestamp)} · Oleh{' '}
                 {initialCreationEntry.actorName}
               </p>
@@ -181,7 +181,7 @@ export function HistoryDetailView({
                   <div key={entry.id} className="px-4 py-3.5">
                     <div className="flex items-start justify-between gap-2">
                       <div>
-                        <p className="text-sm font-bold text-slate-900">{title}</p>
+                        <p className="text-sm font-medium text-slate-900">{title}</p>
                         <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
                           {formatUploadDateTime(entry.timestamp)} · Oleh{' '}
                           <span className="font-semibold text-slate-700">{entry.actorName}</span>

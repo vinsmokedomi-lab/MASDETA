@@ -186,7 +186,7 @@ export function SubItemRecapView({
         {/* Hero Summary Card */}
         <section className="rounded-3xl bg-slate-900 p-5 text-white">
           <p className="text-xs font-medium text-slate-300">
-            Akumulasi Penyaluran · {yearLabel} ({scopedRecords.length} KPM)
+            Akumulasi Penyaluran · {yearLabel} ({scopedRecords.length})
           </p>
 
           <div className="mt-2 flex items-baseline justify-between gap-2">
@@ -291,7 +291,7 @@ export function SubItemRecapView({
                             <Package className="h-4 w-4" />
                           </div>
                           <div className="min-w-0">
-                            <p className="text-sm font-bold text-slate-900">{row.name}</p>
+                            <p className="text-sm font-medium text-slate-900">{row.name}</p>
                             <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
                               Dari paket:{' '}
                               {row.packageSources
@@ -303,7 +303,7 @@ export function SubItemRecapView({
 
                         <div className="flex items-center gap-1.5 shrink-0">
                           <div className="text-right">
-                            <p className="text-sm font-bold text-slate-900 tabular-nums">
+                            <p className="text-sm font-medium text-slate-900 tabular-nums">
                               {row.totalNeeded} Unit
                             </p>
                             <p
@@ -404,8 +404,8 @@ export function SubItemRecapView({
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
-                        <p className="truncate text-sm font-bold text-slate-900">
-                          {row.record.registerCode} · {row.record.nama}
+                        <p className="truncate text-sm font-medium text-slate-900">
+                          {row.record.nama} · {row.record.registerCode}
                         </p>
                         {row.debtStatus === 'complete' ? (
                           <span className="inline-flex shrink-0 items-center gap-1 text-xs font-bold text-teal-700">

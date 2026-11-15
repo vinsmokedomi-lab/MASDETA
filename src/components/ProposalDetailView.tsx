@@ -5,9 +5,9 @@ import {
   ArrowUpRight,
   CheckCircle2,
   ChevronRight,
-  Edit3,
   History,
   Lock,
+  Pencil,
   Unlock,
   UserPlus,
   Users,
@@ -30,6 +30,8 @@ interface ProposalDetailViewProps {
   records: KpmRecord[];
   items: ItemBantuan[];
   historyEntries: ProposalKpmHistoryEntry[];
+  canAdd?: boolean;
+  canUpdate?: boolean;
   onBack: () => void;
   onEditProposal: (proposalId: string) => void;
   onAddKpmInProposal: (proposalName: string, tahun: string) => void;
@@ -43,6 +45,8 @@ export function ProposalDetailView({
   records,
   items,
   historyEntries,
+  canAdd = true,
+  canUpdate = true,
   onBack,
   onEditProposal,
   onAddKpmInProposal,
@@ -219,7 +223,7 @@ export function ProposalDetailView({
   let runningOffset = 0;
 
   return (
-    <div className="min-h-screen pb-10">
+    <div className="min-h-screen pb-24">
       {/* Sub-Screen Header: hanya panah kembali + judul */}
       <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
         <button
@@ -252,7 +256,7 @@ export function ProposalDetailView({
                       : 'font-medium text-slate-700'
                   }
                 >
-                  {proposal.checklist.dinas ? 'Sudah ke Dinas' : 'Belum ke Dinas'}
+                  {proposal.checklist.dinas ? 'Sudah diantar ke Dinas' : 'Belum diantar ke Dinas'}
                 </span>
               </p>
               <p className="text-xs text-slate-400 tabular-nums">
@@ -284,7 +288,7 @@ export function ProposalDetailView({
           <div className="mt-4 grid grid-cols-3 divide-x divide-slate-100 border-t border-b border-slate-100 py-3.5">
             <div className="flex flex-col items-center justify-start px-2 text-center">
               <div className="flex min-h-[28px] items-center justify-center">
-                <p className="text-[11px] font-medium leading-tight text-slate-500">Total KPM</p>
+                <p className="text-[11px] font-medium leading-tight text-slate-500">Total</p>
               </div>
               <p className="mt-1.5 text-lg font-bold leading-none text-slate-900 tabular-nums">
                 {kpmCounts.total}{' '}
@@ -338,21 +342,12 @@ export function ProposalDetailView({
           </div>
 
           {kpmCounts.total === 0 ? (
-            <div className="mt-4 flex items-center gap-2.5">
+            <div className="mt-4">
               <button
                 type="button"
-                onClick={() => onEditProposal(proposal.id)}
-                className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3.5 text-xs font-semibold text-slate-800 transition-colors hover:bg-slate-100 whitespace-nowrap"
-              >
-                <Edit3 className="h-4 w-4 text-teal-700" />
-                <span>Edit Proposal</span>
-              </button>
-
-              <button
-                type="button"
-                disabled={proposal.status === 'locked'}
+                disabled={proposal.status === 'locked' || !canAdd}
                 onClick={() => onAddKpmInProposal(proposal.namaProposal, proposal.tahun)}
-                className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 whitespace-nowrap"
+                className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 whitespace-nowrap"
               >
                 <UserPlus className="h-4 w-4" />
                 <span>Tambah Calon KPM</span>
@@ -369,7 +364,7 @@ export function ProposalDetailView({
                 <span>Lihat Daftar Calon KPM ({kpmCounts.total})</span>
               </button>
 
-              {kpmCounts.pending + kpmCounts.rejected > 0 && proposal.status !== 'locked' && (
+              {kpmCounts.pending + kpmCounts.rejected > 0 && proposal.status !== 'locked' && canUpdate && (
                 !confirmAcceptAll ? (
                   <button
                     type="button"
@@ -384,7 +379,7 @@ export function ProposalDetailView({
                 ) : (
                   <div className="rounded-xl border border-teal-200 bg-teal-50 p-3">
                     <p className="text-xs font-bold text-teal-950">
-                      Ubah status {kpmCounts.pending + kpmCounts.rejected} KPM (Menunggu / Ditolak)
+                      Ubah status {kpmCounts.pending + kpmCounts.rejected} (Menunggu / Ditolak)
                       menjadi Diterima?
                     </p>
                     <div className="mt-2.5 flex items-center gap-2">
@@ -409,15 +404,6 @@ export function ProposalDetailView({
                   </div>
                 )
               )}
-
-              <button
-                type="button"
-                onClick={() => onEditProposal(proposal.id)}
-                className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-4 text-xs font-semibold text-slate-800 transition-colors hover:bg-slate-100"
-              >
-                <Edit3 className="h-4 w-4 text-teal-700" />
-                <span>Edit Proposal</span>
-              </button>
             </div>
           )}
         </section>
@@ -483,7 +469,7 @@ export function ProposalDetailView({
                       <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${seg.dotClass}`} />
                       <span className="truncate text-slate-700">{seg.label}</span>
                     </div>
-                    <span className="shrink-0 font-bold text-slate-900 tabular-nums">
+                    <span className="shrink-0 font-medium text-slate-900 tabular-nums">
                       {seg.count} ({seg.pct}%)
                     </span>
                   </div>
@@ -498,7 +484,7 @@ export function ProposalDetailView({
           <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
             <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
               <h2 className="text-sm font-bold text-slate-900">Kelurahan</h2>
-              <span className="shrink-0 whitespace-nowrap text-xs font-semibold text-slate-500 tabular-nums">
+              <span className="shrink-0 whitespace-nowrap text-xs font-medium text-slate-500 tabular-nums">
                 {kelurahanBreakdown.length} Kelurahan
               </span>
             </div>
@@ -515,11 +501,11 @@ export function ProposalDetailView({
                   return (
                     <div key={kel.name} className="px-4 py-3">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="truncate text-sm font-semibold text-slate-900">
+                        <span className="truncate text-sm font-normal text-slate-800">
                           {kel.name}
                         </span>
-                        <span className="shrink-0 text-xs font-bold text-slate-900 tabular-nums">
-                          {kel.total} KPM
+                        <span className="shrink-0 text-xs font-medium text-slate-700 tabular-nums">
+                          {kel.total}
                         </span>
                       </div>
                       <div className="mt-1.5 flex items-center gap-2.5">
@@ -545,7 +531,7 @@ export function ProposalDetailView({
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
           <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
             <h2 className="text-sm font-bold text-slate-900">Item</h2>
-            <span className="text-xs font-semibold text-slate-500 tabular-nums">
+            <span className="text-xs font-medium text-slate-500 tabular-nums">
               {itemBreakdown.length} Item
             </span>
           </div>
@@ -558,17 +544,17 @@ export function ProposalDetailView({
               {itemBreakdown.map((row) => (
                 <div key={row.code} className="flex items-center justify-between gap-3 px-4 py-3">
                   <div className="flex min-w-0 items-center gap-3">
-                    <span className="flex h-9 w-11 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-xs font-bold text-teal-800">
+                    <span className="flex h-9 w-11 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-xs font-semibold text-teal-800">
                       {row.code}
                     </span>
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-slate-900">{row.name}</p>
+                      <p className="truncate text-sm font-normal text-slate-800">{row.name}</p>
                       <p className="text-[11px] text-slate-500 tabular-nums">
                         {row.accepted} Diterima
                       </p>
                     </div>
                   </div>
-                  <span className="shrink-0 text-sm font-bold text-slate-900 tabular-nums">
+                  <span className="shrink-0 text-sm font-medium text-slate-700 tabular-nums">
                     {row.total}
                   </span>
                 </div>
@@ -590,15 +576,15 @@ export function ProposalDetailView({
               {subItemRecap.aggregates.map((sub) => (
                 <div key={sub.key} className="flex items-center justify-between gap-3 px-4 py-3">
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-900">{sub.name}</p>
+                    <p className="truncate text-sm font-normal text-slate-800">{sub.name}</p>
                     <p className="truncate text-[11px] text-slate-500 tabular-nums">
                       {sub.packageSources.map((p) => `${p.code} (${p.total})`).join(' · ')}
                     </p>
                   </div>
                   <div className="shrink-0 text-right tabular-nums">
-                    <p className="text-sm font-bold text-slate-900">{sub.totalNeeded} Unit</p>
+                    <p className="text-sm font-medium text-slate-800">{sub.totalNeeded} Unit</p>
                     <p
-                      className={`text-[11px] font-semibold ${
+                      className={`text-[11px] font-medium ${
                         sub.pendingCount > 0 ? 'text-amber-700' : 'text-teal-700'
                       }`}
                     >
@@ -615,7 +601,7 @@ export function ProposalDetailView({
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
           <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
             <h2 className="text-sm font-bold text-slate-900">Pengelola</h2>
-            <span className="text-xs font-semibold text-slate-500 tabular-nums">
+            <span className="text-xs font-medium text-slate-500 tabular-nums">
               {pengelolaBreakdown.length} Pengelola
             </span>
           </div>
@@ -627,9 +613,9 @@ export function ProposalDetailView({
             <div className="divide-y divide-slate-100">
               {pengelolaBreakdown.map((row) => (
                 <div key={row.name} className="flex items-center justify-between gap-3 px-4 py-3">
-                  <span className="truncate text-sm font-medium text-slate-900">{row.name}</span>
-                  <span className="shrink-0 text-sm font-bold text-slate-900 tabular-nums">
-                    {row.count} KPM
+                  <span className="truncate text-sm font-normal text-slate-800">{row.name}</span>
+                  <span className="shrink-0 text-sm font-medium text-slate-700 tabular-nums">
+                    {row.count}
                   </span>
                 </div>
               ))}
@@ -641,7 +627,7 @@ export function ProposalDetailView({
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
           <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
             <h2 className="text-sm font-bold text-slate-900">Pekerjaan</h2>
-            <span className="text-xs font-semibold text-slate-500 tabular-nums">
+            <span className="text-xs font-medium text-slate-500 tabular-nums">
               {pekerjaanBreakdown.length} Jenis
             </span>
           </div>
@@ -653,8 +639,8 @@ export function ProposalDetailView({
             <div className="divide-y divide-slate-100">
               {pekerjaanBreakdown.map((row) => (
                 <div key={row.name} className="flex items-center justify-between gap-3 px-4 py-3">
-                  <span className="truncate text-sm font-medium text-slate-900">{row.name}</span>
-                  <span className="shrink-0 text-sm font-bold text-slate-900 tabular-nums">
+                  <span className="truncate text-sm font-normal text-slate-800">{row.name}</span>
+                  <span className="shrink-0 text-sm font-medium text-slate-700 tabular-nums">
                     {row.count}
                   </span>
                 </div>
@@ -718,18 +704,18 @@ export function ProposalDetailView({
 
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-2">
-                          <p className="truncate text-sm font-bold text-slate-900">
+                          <p className="truncate text-sm font-medium text-slate-900">
                             {entry.kpmName}
                           </p>
                           <span
-                            className={`shrink-0 text-xs font-bold ${
+                            className={`shrink-0 text-xs font-semibold ${
                               isIncoming ? 'text-teal-700' : 'text-amber-700'
                             }`}
                           >
                             {isIncoming ? 'Masuk' : 'Keluar'}
                           </span>
                         </div>
-                        <p className="mt-0.5 text-xs text-slate-700">{actionSummary}</p>
+                        <p className="mt-0.5 text-xs text-slate-600">{actionSummary}</p>
                         <p className="mt-1 text-xs text-slate-500 tabular-nums">
                           {formatUploadDateTime(entry.timestamp)} · Oleh {entry.actorName}
                         </p>
@@ -751,6 +737,21 @@ export function ProposalDetailView({
           )}
         </section>
       </main>
+
+      {/* Persistent Bottom-Right Floating Pencil Edit Proposal Button */}
+      {canUpdate && (
+        <div className="pointer-events-none fixed bottom-6 left-1/2 z-30 flex w-full max-w-md -translate-x-1/2 justify-end px-4">
+          <button
+            type="button"
+            onClick={() => onEditProposal(proposal.id)}
+            aria-label="Edit Proposal"
+            title="Edit Proposal"
+            className="pointer-events-auto inline-flex h-12 w-12 items-center justify-center rounded-full bg-teal-700 text-white shadow-lg shadow-teal-900/25 transition-all hover:bg-teal-800 active:scale-95"
+          >
+            <Pencil className="h-5 w-5" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

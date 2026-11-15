@@ -10,6 +10,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 type InternalUserRole = 'SuperAdmin' | 'Admin' | 'Viewer';
 type InternalUserStatus = 'pending' | 'active' | 'rejected';
 type UserPresenceStatus = 'online' | 'idle' | 'offline';
+type PermissionAction = 'add' | 'update' | 'delete';
 
 interface UserPermissions {
   add: boolean;
@@ -38,24 +39,58 @@ interface StoredUser {
 
 type PublicUser = Omit<StoredUser, 'passwordHash' | 'passwordPlain'>;
 
+interface SharedKpmCard {
+  kpmId: string;
+  registerCode: string;
+  nama: string;
+  tahun: string;
+  item: string;
+  itemName?: string;
+  proposal: string;
+  kontak?: string;
+  validasi: 'pending' | 'accepted' | 'rejected';
+  fotoDataUrl?: string;
+}
+
 interface DirectChatMessage {
   id: string;
   conversationKey: string;
   senderId: string;
   recipientId: string;
   text: string;
+  sharedKpm?: SharedKpmCard;
   createdAt: string;
   readAt?: string;
+}
+
+interface SessionEntry {
+  userId: string;
+  createdAt: string;
 }
 
 interface CollabStore {
   users: StoredUser[];
   messages: DirectChatMessage[];
+  sessions: Record<string, SessionEntry>;
+}
+
+interface OperationalDataStore {
+  initialized: boolean;
+  updatedAt: string;
+  records: unknown[];
+  proposals: unknown[];
+  items: unknown[];
+  pengelolaList: unknown[];
+  pekerjaanList: string[];
+  wilayahList: unknown[];
+  proposalHistory: unknown[];
+  kpmAuditLogs: unknown[];
 }
 
 const PORT = 3000;
 const DATA_DIR = path.resolve(process.cwd(), '.data');
 const DATA_FILE = path.join(DATA_DIR, 'masdeta-collab.json');
+const OPERATIONAL_DATA_FILE = path.join(DATA_DIR, 'masdeta-data.json');
 
 function hashPassword(password: string): string {
   const salt = crypto.randomBytes(16).toString('hex');
@@ -64,7 +99,7 @@ function hashPassword(password: string): string {
 }
 
 function verifyPassword(password: string, storedHash: string): boolean {
-  const [salt, keyHex] = storedHash.split(':');
+  const [salt, keyHex] = (storedHash || '').split(':');
   if (!salt || !keyHex) return false;
   const derived = crypto.scryptSync(password, salt, 64);
   const keyBuf = Buffer.from(keyHex, 'hex');
@@ -79,6 +114,33 @@ function makeConversationKey(a: string, b: string): string {
 function sanitizeUser(user: StoredUser): PublicUser {
   const { passwordHash: _passwordHash, passwordPlain: _passwordPlain, ...rest } = user;
   return rest;
+}
+
+function sanitizeSharedKpm(raw: unknown): SharedKpmCard | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const obj = raw as Record<string, unknown>;
+  const kpmId = String(obj.kpmId || '').trim();
+  const nama = String(obj.nama || '').trim();
+  if (!kpmId || !nama) return undefined;
+  const val = obj.validasi;
+  const validasi: 'pending' | 'accepted' | 'rejected' =
+    val === 'accepted' || val === 'rejected' || val === 'pending' ? val : 'pending';
+  const fotoRaw =
+    typeof obj.fotoDataUrl === 'string' && obj.fotoDataUrl.startsWith('data:image/')
+      ? obj.fotoDataUrl
+      : undefined;
+  return {
+    kpmId,
+    registerCode: String(obj.registerCode || '').trim(),
+    nama,
+    tahun: String(obj.tahun || '').trim(),
+    item: String(obj.item || '').trim(),
+    itemName: obj.itemName ? String(obj.itemName).trim() : undefined,
+    proposal: String(obj.proposal || '').trim(),
+    kontak: obj.kontak ? String(obj.kontak).trim() : undefined,
+    validasi,
+    fotoDataUrl: fotoRaw,
+  };
 }
 
 function createSeedUsers(): StoredUser[] {
@@ -189,7 +251,6 @@ function createSeedUsers(): StoredUser[] {
     return {
       ...u,
       passwordHash: isVinsmoke ? vinsmokeHash : defaultHash,
-      passwordPlain: isVinsmoke ? 'germa666' : 'masdeta123',
     };
   });
 }
@@ -202,11 +263,14 @@ function loadStore(): CollabStore {
     if (fs.existsSync(DATA_FILE)) {
       const raw = fs.readFileSync(DATA_FILE, 'utf8');
       const parsed = JSON.parse(raw) as Partial<CollabStore>;
-      const users = Array.isArray(parsed.users) && parsed.users.length > 0
-        ? parsed.users
-        : createSeedUsers();
+      const users =
+        Array.isArray(parsed.users) && parsed.users.length > 0
+          ? parsed.users
+          : createSeedUsers();
       const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
-      return { users, messages };
+      const sessions =
+        parsed.sessions && typeof parsed.sessions === 'object' ? parsed.sessions : {};
+      return { users, messages, sessions };
     }
   } catch (err) {
     console.error('Failed to load collab store:', err);
@@ -214,6 +278,7 @@ function loadStore(): CollabStore {
   const initial: CollabStore = {
     users: createSeedUsers(),
     messages: [],
+    sessions: {},
   };
   saveStore(initial);
   return initial;
@@ -230,32 +295,102 @@ function saveStore(store: CollabStore): void {
   }
 }
 
+function createEmptyDataStore(): OperationalDataStore {
+  return {
+    initialized: false,
+    updatedAt: new Date().toISOString(),
+    records: [],
+    proposals: [],
+    items: [],
+    pengelolaList: [],
+    pekerjaanList: [],
+    wilayahList: [],
+    proposalHistory: [],
+    kpmAuditLogs: [],
+  };
+}
+
+function loadDataStore(): OperationalDataStore {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    if (fs.existsSync(OPERATIONAL_DATA_FILE)) {
+      const raw = fs.readFileSync(OPERATIONAL_DATA_FILE, 'utf8');
+      const parsed = JSON.parse(raw) as Partial<OperationalDataStore>;
+      return {
+        initialized: Boolean(parsed.initialized),
+        updatedAt:
+          typeof parsed.updatedAt === 'string' ? parsed.updatedAt : new Date().toISOString(),
+        records: Array.isArray(parsed.records) ? parsed.records : [],
+        proposals: Array.isArray(parsed.proposals) ? parsed.proposals : [],
+        items: Array.isArray(parsed.items) ? parsed.items : [],
+        pengelolaList: Array.isArray(parsed.pengelolaList) ? parsed.pengelolaList : [],
+        pekerjaanList: Array.isArray(parsed.pekerjaanList)
+          ? parsed.pekerjaanList.map((s) => String(s))
+          : [],
+        wilayahList: Array.isArray(parsed.wilayahList) ? parsed.wilayahList : [],
+        proposalHistory: Array.isArray(parsed.proposalHistory) ? parsed.proposalHistory : [],
+        kpmAuditLogs: Array.isArray(parsed.kpmAuditLogs) ? parsed.kpmAuditLogs : [],
+      };
+    }
+  } catch (err) {
+    console.error('Failed to load operational data store:', err);
+  }
+  const initial = createEmptyDataStore();
+  saveDataStore(initial);
+  return initial;
+}
+
+function saveDataStore(dataStore: OperationalDataStore): void {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(OPERATIONAL_DATA_FILE, JSON.stringify(dataStore), 'utf8');
+  } catch (err) {
+    console.error('Failed to persist operational data store:', err);
+  }
+}
+
 async function startServer() {
   const store = loadStore();
-  // Ensure SuperAdmin accounts exist, migrate vinsmoke.domi@gmail.com -> SuperAdmin (germa666), and normalize roles
+  const dataStore = loadDataStore();
+
   const seedUsers = createSeedUsers();
-  for (const seed of seedUsers) {
-    if (!store.users.some((u) => u.email.toLowerCase() === seed.email.toLowerCase())) {
-      store.users.push(seed);
+  if (store.users.length === 0) {
+    store.users.push(...seedUsers);
+  } else {
+    const hasSuperAdmin = store.users.some(
+      (u) => u.role === 'SuperAdmin' && u.status === 'active'
+    );
+    if (!hasSuperAdmin) {
+      for (const seed of seedUsers) {
+        if (!store.users.some((u) => u.email.toLowerCase() === seed.email.toLowerCase())) {
+          store.users.push(seed);
+        }
+      }
     }
   }
+
   store.users = store.users.map((u) => {
     const emailLower = u.email.toLowerCase();
-    let next = u.presenceManual ? u : { ...u, presenceStatus: 'offline' as UserPresenceStatus };
+    const { passwordPlain: _removedPlain, ...cleanUser } = u;
+    let next: StoredUser = cleanUser.presenceManual
+      ? { ...cleanUser }
+      : { ...cleanUser, presenceStatus: 'offline' as UserPresenceStatus };
+
     if (emailLower === 'vinsmoke.domi@gmail.com') {
-      const hasCustomPlain = Boolean(u.passwordPlain);
       next = {
         ...next,
         role: 'SuperAdmin',
         jabatan: 'SuperAdmin',
         status: 'active',
         permissions: { add: true, update: true, delete: true },
-        passwordHash: hasCustomPlain
-          ? u.passwordHash
-          : verifyPassword('germa666', u.passwordHash)
-            ? u.passwordHash
+        passwordHash:
+          next.passwordHash && next.passwordHash.includes(':')
+            ? next.passwordHash
             : hashPassword('germa666'),
-        passwordPlain: hasCustomPlain ? u.passwordPlain : 'germa666',
       };
     } else if (emailLower === 'la.qsas@gmail.com') {
       next = {
@@ -264,23 +399,16 @@ async function startServer() {
         jabatan: 'SuperAdmin',
         status: 'active',
         permissions: { add: true, update: true, delete: true },
-        passwordPlain:
-          u.passwordPlain ?? (verifyPassword('masdeta123', u.passwordHash) ? 'masdeta123' : undefined),
       };
-    } else {
-      if (!u.passwordPlain && verifyPassword('masdeta123', u.passwordHash)) {
-        next = { ...next, passwordPlain: 'masdeta123' };
-      }
-      if ((next.role as string) === 'Verifikator' || (next.role as string) === 'Petugas') {
-        next = { ...next, role: 'Admin' };
-      }
+    } else if ((next.role as string) === 'Verifikator' || (next.role as string) === 'Petugas') {
+      next = { ...next, role: 'Admin' };
     }
     return next;
   });
   saveStore(store);
 
   const app = express();
-  app.use(express.json({ limit: '5mb' }));
+  app.use(express.json({ limit: '50mb' }));
 
   const server = http.createServer(app);
   const wss = new WebSocketServer({ noServer: true });
@@ -294,7 +422,8 @@ async function startServer() {
     }
   });
 
-  const socketsByUser = new Map<string, Set<WebSocket>>();
+  // Multi-tab WebSocket presence map: userId -> Map<WebSocket, UserPresenceStatus>
+  const socketStatesByUser = new Map<string, Map<WebSocket, UserPresenceStatus>>();
   const userDisconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   function broadcastAll(payload: unknown) {
@@ -309,13 +438,13 @@ async function startServer() {
   function sendToUsers(userIds: string[], payload: unknown) {
     const json = JSON.stringify(payload);
     for (const uid of new Set(userIds)) {
-      const sockets = socketsByUser.get(uid);
-      if (!sockets) continue;
-      sockets.forEach((sock) => {
+      const socketMap = socketStatesByUser.get(uid);
+      if (!socketMap) continue;
+      for (const sock of socketMap.keys()) {
         if (sock.readyState === WebSocket.OPEN) {
           sock.send(json);
         }
-      });
+      }
     }
   }
 
@@ -326,10 +455,69 @@ async function startServer() {
     });
   }
 
+  function computeAutoPresence(userId: string): UserPresenceStatus {
+    const socketMap = socketStatesByUser.get(userId);
+    if (!socketMap || socketMap.size === 0) return 'offline';
+    let hasIdle = false;
+    for (const status of socketMap.values()) {
+      if (status === 'online') return 'online';
+      if (status === 'idle') hasIdle = true;
+    }
+    return hasIdle ? 'idle' : 'offline';
+  }
+
+  function syncUserPresence(userId: string) {
+    const user = store.users.find((u) => u.id === userId);
+    if (!user || user.presenceManual) return;
+    const nextPresence = computeAutoPresence(userId);
+    if (user.presenceStatus !== nextPresence) {
+      user.presenceStatus = nextPresence;
+      user.lastActiveAt = new Date().toISOString();
+      saveStore(store);
+      broadcastUsers();
+    }
+  }
+
   function getUserMessages(userId: string): DirectChatMessage[] {
     return store.messages.filter(
       (m) => m.senderId === userId || m.recipientId === userId
     );
+  }
+
+  function extractBearerToken(req: Request): string {
+    const authHeader = String(req.headers.authorization || '');
+    if (authHeader.startsWith('Bearer ')) {
+      return authHeader.slice(7).trim();
+    }
+    return '';
+  }
+
+  function getAuthenticatedUser(req: Request): StoredUser | null {
+    const token = extractBearerToken(req);
+    if (!token) return null;
+    const session = store.sessions[token];
+    if (!session) return null;
+    const user = store.users.find((u) => u.id === session.userId);
+    if (!user || user.status !== 'active') return null;
+    return user;
+  }
+
+  function requireAuth(req: Request, res: Response): StoredUser | null {
+    const user = getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: 'Sesi login tidak valid atau telah berakhir. Silakan masuk kembali.' });
+      return null;
+    }
+    return user;
+  }
+
+  function hasDataPermission(user: StoredUser, action?: PermissionAction): boolean {
+    if (user.role === 'SuperAdmin') return true;
+    if (user.role === 'Viewer') return false;
+    if (!action) {
+      return Boolean(user.permissions?.add || user.permissions?.update || user.permissions?.delete);
+    }
+    return Boolean(user.permissions?.[action]);
   }
 
   // REST: Login
@@ -362,7 +550,10 @@ async function startServer() {
       return;
     }
 
+    const token = crypto.randomBytes(32).toString('hex');
     const now = new Date().toISOString();
+    store.sessions[token] = { userId: user.id, createdAt: now };
+
     if (!user.presenceManual) {
       user.presenceStatus = 'online';
     }
@@ -371,13 +562,49 @@ async function startServer() {
     broadcastUsers();
 
     res.json({
+      token,
       user: sanitizeUser(user),
       users: store.users.map(sanitizeUser),
       messages: getUserMessages(user.id),
     });
   });
 
-  // REST: Register new account (pending SuperAdmin approval; jabatan/role assigned by SuperAdmin)
+  // REST: Logout
+  app.post('/api/auth/logout', (req: Request, res: Response) => {
+    const token = extractBearerToken(req);
+    if (token && store.sessions[token]) {
+      const uid = store.sessions[token].userId;
+      delete store.sessions[token];
+      saveStore(store);
+      const sockMap = socketStatesByUser.get(uid);
+      if (!sockMap || sockMap.size === 0) {
+        const user = store.users.find((u) => u.id === uid);
+        if (user && !user.presenceManual) {
+          user.presenceStatus = 'offline';
+          user.lastActiveAt = new Date().toISOString();
+          saveStore(store);
+          broadcastUsers();
+        }
+      }
+    }
+    res.json({ ok: true });
+  });
+
+  // REST: Verify current user's login password (used to unlock Kontrol Super Admin)
+  app.post('/api/auth/verify-password', (req: Request, res: Response) => {
+    const authUser = requireAuth(req, res);
+    if (!authUser) return;
+
+    const password = String(req.body?.password || '');
+    if (!password || !verifyPassword(password, authUser.passwordHash)) {
+      res.status(401).json({ error: 'Kata sandi salah. Gunakan password login Anda.' });
+      return;
+    }
+
+    res.json({ ok: true });
+  });
+
+  // REST: Register new account (pending SuperAdmin approval)
   app.post('/api/auth/register', (req: Request, res: Response) => {
     const nama = String(req.body?.nama || '').trim();
     const email = String(req.body?.email || '').trim().toLowerCase();
@@ -416,7 +643,6 @@ async function startServer() {
       registeredAt: now,
       updatedAt: now,
       passwordHash: hashPassword(password),
-      passwordPlain: password,
     };
 
     store.users.unshift(created);
@@ -429,7 +655,7 @@ async function startServer() {
     });
   });
 
-  // REST: Internal forgot password lookup by email
+  // REST: Safe forgot-password guidance (never leaks passwords)
   app.post('/api/auth/forgot-password', (req: Request, res: Response) => {
     const email = String(req.body?.email || '').trim().toLowerCase();
     if (!email) {
@@ -438,63 +664,116 @@ async function startServer() {
     }
 
     const user = store.users.find((u) => u.email.toLowerCase() === email);
-    if (!user) {
-      res.status(404).json({ error: 'Email tidak ditemukan di sistem MASDETA.' });
-      return;
-    }
-
     res.json({
-      nama: user.nama,
-      email: user.email,
-      role: user.role,
-      password: user.passwordPlain || null,
+      exists: Boolean(user),
+      message:
+        'Demi keamanan akun, reset kata sandi hanya dapat dilakukan oleh SuperAdmin melalui menu Manajemen User & Akses.',
     });
   });
 
-  // REST: Internal password reset by email
-  app.post('/api/auth/reset-password', (req: Request, res: Response) => {
-    const email = String(req.body?.email || '').trim().toLowerCase();
-    const newPassword = String(req.body?.newPassword || '');
-
-    if (!email || newPassword.length < 6) {
-      res.status(400).json({
-        error: 'Email dan kata sandi baru (minimal 6 karakter) wajib diisi.',
-      });
-      return;
-    }
-
-    const user = store.users.find((u) => u.email.toLowerCase() === email);
-    if (!user) {
-      res.status(404).json({ error: 'Email tidak ditemukan di sistem MASDETA.' });
-      return;
-    }
-
-    user.passwordHash = hashPassword(newPassword);
-    user.passwordPlain = newPassword;
-    user.updatedAt = new Date().toISOString();
-    saveStore(store);
-
-    res.json({
-      ok: true,
-      message: 'Kata sandi berhasil diperbarui. Silakan masuk dengan kata sandi baru.',
+  // REST: Unauthenticated reset disabled
+  app.post('/api/auth/reset-password', (_req: Request, res: Response) => {
+    res.status(403).json({
+      error: 'Reset kata sandi mandiri dinonaktifkan. Hubungi SuperAdmin untuk mengatur ulang kata sandi.',
     });
   });
 
-  // REST: Full collaboration state sync
+  // REST: Full collaboration state sync (requires Bearer token)
   app.get('/api/collab/state', (req: Request, res: Response) => {
-    const userId = String(req.query.userId || '').trim();
-    const currentUser = userId ? store.users.find((u) => u.id === userId) : undefined;
+    const authUser = requireAuth(req, res);
+    if (!authUser) return;
 
     res.json({
-      user: currentUser ? sanitizeUser(currentUser) : null,
+      user: sanitizeUser(authUser),
       users: store.users.map(sanitizeUser),
-      messages: userId ? getUserMessages(userId) : [],
+      messages: getUserMessages(authUser.id),
+    });
+  });
+
+  // REST: SuperAdmin directly adds an active internal user with initial password
+  app.post('/api/admin/users', (req: Request, res: Response) => {
+    const actor = requireAuth(req, res);
+    if (!actor) return;
+    if (actor.role !== 'SuperAdmin') {
+      res.status(403).json({ error: 'Hanya SuperAdmin yang berhak menambah akun internal.' });
+      return;
+    }
+
+    const nama = String(req.body?.nama || '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const kontak = String(req.body?.kontak || '').trim();
+    const passwordRaw = String(req.body?.password || '').trim();
+    const password = passwordRaw || 'masdeta123';
+    const roleInput = req.body?.role;
+    const role: InternalUserRole =
+      roleInput === 'SuperAdmin' || roleInput === 'Admin' || roleInput === 'Viewer'
+        ? roleInput
+        : 'Admin';
+    const jabatan = String(req.body?.jabatan || '').trim() || role;
+
+    if (!nama || !email) {
+      res.status(400).json({ error: 'Nama lengkap dan email wajib diisi.' });
+      return;
+    }
+    if (password.length < 6) {
+      res.status(400).json({ error: 'Kata sandi minimal 6 karakter.' });
+      return;
+    }
+    if (store.users.some((u) => u.email.toLowerCase() === email)) {
+      res.status(409).json({ error: 'Email sudah terdaftar di sistem.' });
+      return;
+    }
+
+    const reqPerms = req.body?.permissions;
+    const permissions: UserPermissions =
+      role === 'SuperAdmin'
+        ? { add: true, update: true, delete: true }
+        : role === 'Viewer'
+          ? { add: false, update: false, delete: false }
+          : {
+              add: Boolean(reqPerms?.add ?? true),
+              update: Boolean(reqPerms?.update ?? true),
+              delete: Boolean(reqPerms?.delete ?? false),
+            };
+
+    const now = new Date().toISOString();
+    const created: StoredUser = {
+      id: `usr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      nama,
+      email,
+      jabatan,
+      kontak,
+      role,
+      status: 'active',
+      permissions,
+      presenceStatus: 'offline',
+      presenceManual: false,
+      registeredAt: now,
+      updatedAt: now,
+      passwordHash: hashPassword(password),
+    };
+
+    store.users.unshift(created);
+    saveStore(store);
+    broadcastUsers();
+
+    res.status(201).json({
+      user: sanitizeUser(created),
+      users: store.users.map(sanitizeUser),
     });
   });
 
   // REST: Update own profile & presence setting
   app.patch('/api/users/:id/profile', (req: Request, res: Response) => {
+    const authUser = requireAuth(req, res);
+    if (!authUser) return;
+
     const { id } = req.params;
+    if (authUser.id !== id) {
+      res.status(403).json({ error: 'Anda hanya dapat mengubah profil akun Anda sendiri.' });
+      return;
+    }
+
     const user = store.users.find((u) => u.id === id);
     if (!user) {
       res.status(404).json({ error: 'Pengguna tidak ditemukan.' });
@@ -514,9 +793,12 @@ async function startServer() {
     if (typeof req.body?.fotoDataUrl === 'string' || req.body?.fotoDataUrl === null) {
       user.fotoDataUrl = req.body.fotoDataUrl || undefined;
     }
-    if (typeof req.body?.newPassword === 'string' && req.body.newPassword.length >= 6) {
-      user.passwordHash = hashPassword(req.body.newPassword);
-      user.passwordPlain = req.body.newPassword;
+    if (typeof req.body?.newPassword === 'string' && req.body.newPassword.trim()) {
+      if (req.body.newPassword.trim().length < 6) {
+        res.status(400).json({ error: 'Kata sandi baru minimal 6 karakter.' });
+        return;
+      }
+      user.passwordHash = hashPassword(req.body.newPassword.trim());
     }
     if (typeof req.body?.presenceManual === 'boolean') {
       user.presenceManual = req.body.presenceManual;
@@ -537,19 +819,19 @@ async function startServer() {
     res.json({ user: sanitizeUser(user) });
   });
 
-  // REST: SuperAdmin controls an Admin (status, role, ADD/UPDATE/DELETE permissions)
+  // REST: SuperAdmin controls an Admin (status, role, permissions, optional password reset)
   app.patch('/api/users/:id/admin-control', (req: Request, res: Response) => {
-    const { id } = req.params;
-    const actorId = String(req.body?.actorId || '').trim();
-    const actor = store.users.find((u) => u.id === actorId);
+    const actor = requireAuth(req, res);
+    if (!actor) return;
 
-    if (!actor || actor.role !== 'SuperAdmin') {
+    if (actor.role !== 'SuperAdmin') {
       res.status(403).json({
         error: 'Hanya SuperAdmin yang berhak mengontrol akses dan izin Admin.',
       });
       return;
     }
 
+    const { id } = req.params;
     const target = store.users.find((u) => u.id === id);
     if (!target) {
       res.status(404).json({ error: 'Pengguna tidak ditemukan.' });
@@ -568,6 +850,30 @@ async function startServer() {
       req.body?.status === 'rejected'
     ) {
       target.status = req.body.status;
+      if (req.body.status !== 'active') {
+        for (const [tok, sess] of Object.entries(store.sessions)) {
+          if (sess.userId === target.id) {
+            delete store.sessions[tok];
+          }
+        }
+      }
+    }
+    if (typeof req.body?.nama === 'string' && req.body.nama.trim()) {
+      target.nama = req.body.nama.trim();
+    }
+    if (typeof req.body?.jabatan === 'string' && req.body.jabatan.trim()) {
+      target.jabatan = req.body.jabatan.trim();
+    }
+    if (typeof req.body?.kontak === 'string') {
+      target.kontak = req.body.kontak.trim();
+    }
+    if (typeof req.body?.newPassword === 'string' && req.body.newPassword.trim()) {
+      const nextPwd = req.body.newPassword.trim();
+      if (nextPwd.length < 6) {
+        res.status(400).json({ error: 'Kata sandi baru minimal 6 karakter.' });
+        return;
+      }
+      target.passwordHash = hashPassword(nextPwd);
     }
     if (
       req.body?.role === 'SuperAdmin' ||
@@ -576,12 +882,18 @@ async function startServer() {
     ) {
       const nextRole = req.body.role as InternalUserRole;
       target.role = nextRole;
-      target.jabatan = nextRole === 'SuperAdmin' ? 'SuperAdmin' : nextRole;
+      if (typeof req.body?.jabatan !== 'string' || !req.body.jabatan.trim()) {
+        target.jabatan = nextRole === 'SuperAdmin' ? 'SuperAdmin' : nextRole;
+      }
       if (nextRole === 'SuperAdmin') {
         target.permissions = { add: true, update: true, delete: true };
       } else if (nextRole === 'Viewer') {
         target.permissions = { add: false, update: false, delete: false };
-      } else if (!target.permissions.add && !target.permissions.update && !target.permissions.delete) {
+      } else if (
+        !target.permissions.add &&
+        !target.permissions.update &&
+        !target.permissions.delete
+      ) {
         target.permissions = { add: true, update: true, delete: false };
       }
     }
@@ -606,22 +918,99 @@ async function startServer() {
     res.json({ user: sanitizeUser(target), users: store.users.map(sanitizeUser) });
   });
 
-  // REST: Send 1-on-1 direct message (strictly sender -> recipient, never group chat)
-  app.post('/api/chat/send', (req: Request, res: Response) => {
-    const senderId = String(req.body?.senderId || '').trim();
-    const recipientId = String(req.body?.recipientId || '').trim();
-    const text = String(req.body?.text || '').trim();
-    const clientMsgId = String(req.body?.id || '').trim();
+  // REST: SuperAdmin deletes a user account
+  app.delete('/api/users/:id', (req: Request, res: Response) => {
+    const actor = requireAuth(req, res);
+    if (!actor) return;
 
-    if (!senderId || !recipientId || senderId === recipientId || !text) {
-      res.status(400).json({ error: 'Pengirim, penerima, dan isi pesan wajib valid.' });
+    if (actor.role !== 'SuperAdmin') {
+      res.status(403).json({
+        error: 'Hanya SuperAdmin yang berhak menghapus akun pengguna.',
+      });
       return;
     }
 
-    const sender = store.users.find((u) => u.id === senderId);
-    const recipient = store.users.find((u) => u.id === recipientId);
-    if (!sender || !recipient) {
-      res.status(404).json({ error: 'Pengirim atau penerima tidak ditemukan.' });
+    const { id } = req.params;
+    if (id === actor.id) {
+      res.status(400).json({ error: 'Tidak dapat menghapus akun yang sedang aktif digunakan.' });
+      return;
+    }
+
+    const idx = store.users.findIndex((u) => u.id === id);
+    if (idx < 0) {
+      res.status(404).json({ error: 'Pengguna tidak ditemukan.' });
+      return;
+    }
+
+    const target = store.users[idx];
+    if (
+      target.role === 'SuperAdmin' &&
+      store.users.filter((u) => u.role === 'SuperAdmin' && u.status === 'active').length <= 1
+    ) {
+      res.status(400).json({ error: 'Minimal harus tersisa satu SuperAdmin aktif.' });
+      return;
+    }
+
+    store.users.splice(idx, 1);
+    for (const [tok, sess] of Object.entries(store.sessions)) {
+      if (sess.userId === id) {
+        delete store.sessions[tok];
+      }
+    }
+    const activeSockets = socketStatesByUser.get(id);
+    if (activeSockets) {
+      for (const sock of activeSockets.keys()) {
+        try {
+          sock.close();
+        } catch {
+          // Ignore socket close error
+        }
+      }
+      socketStatesByUser.delete(id);
+    }
+
+    saveStore(store);
+    broadcastUsers();
+
+    res.json({ ok: true, users: store.users.map(sanitizeUser) });
+  });
+
+  // REST: SuperAdmin resets all chat history
+  app.post('/api/admin/reset-chat', (req: Request, res: Response) => {
+    const actor = requireAuth(req, res);
+    if (!actor) return;
+
+    if (actor.role !== 'SuperAdmin') {
+      res.status(403).json({ error: 'Hanya SuperAdmin yang berhak mereset riwayat chat.' });
+      return;
+    }
+
+    store.messages = [];
+    saveStore(store);
+    broadcastAll({ type: 'chat:reset' });
+
+    res.json({ ok: true });
+  });
+
+  // REST: Send 1-on-1 direct message
+  app.post('/api/chat/send', (req: Request, res: Response) => {
+    const sender = requireAuth(req, res);
+    if (!sender) return;
+
+    const senderId = sender.id;
+    const recipientId = String(req.body?.recipientId || '').trim();
+    const text = String(req.body?.text || '').trim();
+    const sharedKpm = sanitizeSharedKpm(req.body?.sharedKpm);
+    const clientMsgId = String(req.body?.id || '').trim();
+
+    if (!recipientId || senderId === recipientId || (!text && !sharedKpm)) {
+      res.status(400).json({ error: 'Penerima dan isi pesan wajib valid.' });
+      return;
+    }
+
+    const recipient = store.users.find((u) => u.id === recipientId && u.status === 'active');
+    if (!recipient) {
+      res.status(404).json({ error: 'Penerima aktif tidak ditemukan.' });
       return;
     }
 
@@ -639,6 +1028,7 @@ async function startServer() {
       senderId,
       recipientId,
       text,
+      ...(sharedKpm ? { sharedKpm } : {}),
       createdAt: new Date().toISOString(),
     };
 
@@ -657,10 +1047,13 @@ async function startServer() {
 
   // REST: Mark 1-on-1 conversation messages as read
   app.post('/api/chat/read', (req: Request, res: Response) => {
-    const userId = String(req.body?.userId || '').trim();
+    const authUser = requireAuth(req, res);
+    if (!authUser) return;
+
+    const userId = authUser.id;
     const peerId = String(req.body?.peerId || '').trim();
-    if (!userId || !peerId) {
-      res.status(400).json({ error: 'userId dan peerId wajib diisi.' });
+    if (!peerId) {
+      res.status(400).json({ error: 'peerId wajib diisi.' });
       return;
     }
 
@@ -690,7 +1083,155 @@ async function startServer() {
     res.json({ updatedCount: updatedIds.length, readAt: now });
   });
 
-  // WebSocket handling for real-time presence & 1-on-1 chat push
+  // REST: Get full operational KPM/Proposal/Master data state
+  app.get('/api/data/state', (req: Request, res: Response) => {
+    const authUser = requireAuth(req, res);
+    if (!authUser) return;
+    res.json(dataStore);
+  });
+
+  // REST: Bootstrap operational data once when server store is not yet initialized
+  app.post('/api/data/bootstrap', (req: Request, res: Response) => {
+    const authUser = requireAuth(req, res);
+    if (!authUser) return;
+
+    if (dataStore.initialized) {
+      res.json({ bootstrapped: false, state: dataStore });
+      return;
+    }
+
+    const body = req.body || {};
+    if (Array.isArray(body.records)) dataStore.records = body.records;
+    if (Array.isArray(body.proposals)) dataStore.proposals = body.proposals;
+    if (Array.isArray(body.items)) dataStore.items = body.items;
+    if (Array.isArray(body.pengelolaList)) dataStore.pengelolaList = body.pengelolaList;
+    if (Array.isArray(body.pekerjaanList)) {
+      dataStore.pekerjaanList = body.pekerjaanList.map((s: unknown) => String(s));
+    }
+    if (Array.isArray(body.wilayahList)) dataStore.wilayahList = body.wilayahList;
+    if (Array.isArray(body.proposalHistory)) dataStore.proposalHistory = body.proposalHistory;
+    if (Array.isArray(body.kpmAuditLogs)) dataStore.kpmAuditLogs = body.kpmAuditLogs;
+
+    dataStore.initialized = true;
+    dataStore.updatedAt = new Date().toISOString();
+    saveDataStore(dataStore);
+
+    broadcastAll({
+      type: 'data:updated',
+      state: dataStore,
+      updatedBy: authUser.id,
+    });
+
+    res.json({ bootstrapped: true, state: dataStore });
+  });
+
+  // REST: Sync operational data changes (enforces server-side RBAC)
+  app.put('/api/data/sync', (req: Request, res: Response) => {
+    const authUser = requireAuth(req, res);
+    if (!authUser) return;
+
+    const reqPermRaw = req.body?.requiredPermission;
+    const reqPerm: PermissionAction | undefined =
+      reqPermRaw === 'add' || reqPermRaw === 'update' || reqPermRaw === 'delete'
+        ? reqPermRaw
+        : undefined;
+
+    if (!hasDataPermission(authUser, reqPerm)) {
+      res.status(403).json({
+        error: `Izin ${reqPerm ? reqPerm.toUpperCase() : 'ubah data'} Anda dinonaktifkan oleh SuperAdmin.`,
+      });
+      return;
+    }
+
+    const body = req.body || {};
+    if (Array.isArray(body.records)) dataStore.records = body.records;
+    if (Array.isArray(body.proposals)) dataStore.proposals = body.proposals;
+    if (Array.isArray(body.items)) dataStore.items = body.items;
+    if (Array.isArray(body.pengelolaList)) dataStore.pengelolaList = body.pengelolaList;
+    if (Array.isArray(body.pekerjaanList)) {
+      dataStore.pekerjaanList = body.pekerjaanList.map((s: unknown) => String(s));
+    }
+    if (Array.isArray(body.wilayahList)) dataStore.wilayahList = body.wilayahList;
+    if (Array.isArray(body.proposalHistory)) dataStore.proposalHistory = body.proposalHistory;
+    if (Array.isArray(body.kpmAuditLogs)) dataStore.kpmAuditLogs = body.kpmAuditLogs;
+
+    dataStore.initialized = true;
+    dataStore.updatedAt = new Date().toISOString();
+    saveDataStore(dataStore);
+
+    broadcastAll({
+      type: 'data:updated',
+      state: dataStore,
+      updatedBy: authUser.id,
+    });
+
+    res.json({ ok: true, state: dataStore });
+  });
+
+  // REST: SuperAdmin destructive data actions (delete all KPM/proposal/items/data or reset total)
+  app.post('/api/admin/data-action', (req: Request, res: Response) => {
+    const actor = requireAuth(req, res);
+    if (!actor) return;
+
+    if (actor.role !== 'SuperAdmin') {
+      res.status(403).json({
+        error: 'Hanya SuperAdmin yang berhak menjalankan aksi reset/hapus massal.',
+      });
+      return;
+    }
+
+    const action = String(req.body?.action || '').trim();
+    if (action === 'delete_all_kpm') {
+      dataStore.records = [];
+      dataStore.proposalHistory = [];
+      dataStore.kpmAuditLogs = [];
+    } else if (action === 'delete_all_proposal') {
+      dataStore.proposals = [];
+      dataStore.records = [];
+      dataStore.proposalHistory = [];
+      dataStore.kpmAuditLogs = [];
+    } else if (action === 'delete_all_items') {
+      dataStore.items = [];
+    } else if (action === 'delete_all_data') {
+      dataStore.records = [];
+      dataStore.proposals = [];
+      dataStore.items = [];
+      dataStore.pengelolaList = [];
+      dataStore.pekerjaanList = [];
+      dataStore.wilayahList = [];
+      dataStore.proposalHistory = [];
+      dataStore.kpmAuditLogs = [];
+    } else if (action === 'reset_total') {
+      dataStore.records = [];
+      dataStore.proposals = [];
+      dataStore.items = [];
+      dataStore.pengelolaList = [];
+      dataStore.pekerjaanList = [];
+      dataStore.wilayahList = [];
+      dataStore.proposalHistory = [];
+      dataStore.kpmAuditLogs = [];
+      store.messages = [];
+      saveStore(store);
+      broadcastAll({ type: 'chat:reset' });
+    } else {
+      res.status(400).json({ error: 'Aksi tidak dikenal.' });
+      return;
+    }
+
+    dataStore.initialized = true;
+    dataStore.updatedAt = new Date().toISOString();
+    saveDataStore(dataStore);
+
+    broadcastAll({
+      type: 'data:updated',
+      state: dataStore,
+      updatedBy: actor.id,
+    });
+
+    res.json({ ok: true, state: dataStore });
+  });
+
+  // WebSocket handling for multi-tab presence & real-time push
   wss.on('connection', (ws: WebSocket) => {
     let boundUserId: string | null = null;
 
@@ -700,23 +1241,25 @@ async function startServer() {
         const eventType = String(parsed.type || '');
 
         if (eventType === 'auth') {
-          const userId = String(parsed.userId || '').trim();
-          const user = store.users.find((u) => u.id === userId);
+          const token = String(parsed.token || '').trim();
+          const session = token ? store.sessions[token] : undefined;
+          const userId = session?.userId || '';
+          const user = store.users.find((u) => u.id === userId && u.status === 'active');
           if (!user) return;
 
-          boundUserId = userId;
-          const pendingTimer = userDisconnectTimers.get(userId);
+          boundUserId = user.id;
+          const pendingTimer = userDisconnectTimers.get(user.id);
           if (pendingTimer) {
             clearTimeout(pendingTimer);
-            userDisconnectTimers.delete(userId);
+            userDisconnectTimers.delete(user.id);
           }
 
-          let set = socketsByUser.get(userId);
-          if (!set) {
-            set = new Set();
-            socketsByUser.set(userId, set);
+          let sockMap = socketStatesByUser.get(user.id);
+          if (!sockMap) {
+            sockMap = new Map<WebSocket, UserPresenceStatus>();
+            socketStatesByUser.set(user.id, sockMap);
           }
-          set.add(ws);
+          sockMap.set(ws, 'online');
 
           if (!user.presenceManual) {
             user.presenceStatus = 'online';
@@ -728,16 +1271,13 @@ async function startServer() {
         }
 
         if (eventType === 'presence:activity' && boundUserId) {
-          const user = store.users.find((u) => u.id === boundUserId);
-          if (!user) return;
           const status = parsed.status;
-          if (!user.presenceManual && (status === 'online' || status === 'idle' || status === 'offline')) {
-            if (user.presenceStatus !== status) {
-              user.presenceStatus = status;
-              user.lastActiveAt = new Date().toISOString();
-              saveStore(store);
-              broadcastUsers();
+          if (status === 'online' || status === 'idle' || status === 'offline') {
+            const sockMap = socketStatesByUser.get(boundUserId);
+            if (sockMap) {
+              sockMap.set(ws, status);
             }
+            syncUserPresence(boundUserId);
           }
           return;
         }
@@ -745,11 +1285,12 @@ async function startServer() {
         if (eventType === 'chat:send' && boundUserId) {
           const recipientId = String(parsed.recipientId || '').trim();
           const text = String(parsed.text || '').trim();
+          const sharedKpm = sanitizeSharedKpm(parsed.sharedKpm);
           const clientMsgId = String(parsed.id || '').trim();
-          if (!recipientId || recipientId === boundUserId || !text) return;
+          if (!recipientId || recipientId === boundUserId || (!text && !sharedKpm)) return;
 
-          const sender = store.users.find((u) => u.id === boundUserId);
-          const recipient = store.users.find((u) => u.id === recipientId);
+          const sender = store.users.find((u) => u.id === boundUserId && u.status === 'active');
+          const recipient = store.users.find((u) => u.id === recipientId && u.status === 'active');
           if (!sender || !recipient) return;
 
           if (clientMsgId && store.messages.some((m) => m.id === clientMsgId)) {
@@ -762,6 +1303,7 @@ async function startServer() {
             senderId: boundUserId,
             recipientId,
             text,
+            ...(sharedKpm ? { sharedKpm } : {}),
             createdAt: new Date().toISOString(),
           };
           store.messages.push(msg);
@@ -782,21 +1324,17 @@ async function startServer() {
     ws.on('close', () => {
       if (!boundUserId) return;
       const uid = boundUserId;
-      const set = socketsByUser.get(uid);
-      if (set) {
-        set.delete(ws);
-        if (set.size === 0) {
-          socketsByUser.delete(uid);
+      const sockMap = socketStatesByUser.get(uid);
+      if (sockMap) {
+        sockMap.delete(ws);
+        if (sockMap.size > 0) {
+          syncUserPresence(uid);
+        } else {
+          socketStatesByUser.delete(uid);
           const timer = setTimeout(() => {
-            const activeSet = socketsByUser.get(uid);
-            if (!activeSet || activeSet.size === 0) {
-              const user = store.users.find((u) => u.id === uid);
-              if (user && !user.presenceManual) {
-                user.presenceStatus = 'offline';
-                user.lastActiveAt = new Date().toISOString();
-                saveStore(store);
-                broadcastUsers();
-              }
+            const activeMap = socketStatesByUser.get(uid);
+            if (!activeMap || activeMap.size === 0) {
+              syncUserPresence(uid);
             }
             userDisconnectTimers.delete(uid);
           }, 5000);
@@ -811,6 +1349,10 @@ async function startServer() {
       server: {
         middlewareMode: true,
         hmr: false,
+        ws: {
+          server,
+          path: '/__vite_hmr',
+        },
       },
       appType: 'spa',
     });

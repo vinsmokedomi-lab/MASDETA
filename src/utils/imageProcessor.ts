@@ -367,7 +367,10 @@ export function blockNonNumericKeyDown(e: KeyboardEvent<HTMLInputElement>): void
   }
 }
 
-export async function processImageUpload(file: File): Promise<KpmDocumentFile> {
+export async function processImageUpload(
+  file: File,
+  options?: { maxDimension?: number; quality?: number }
+): Promise<KpmDocumentFile> {
   if (!file.type.startsWith('image/')) {
     throw new Error('Format file harus berupa gambar (JPG, PNG, atau WebP).');
   }
@@ -376,14 +379,17 @@ export async function processImageUpload(file: File): Promise<KpmDocumentFile> {
     throw new Error('Ukuran file terlalu besar. Maksimal 15 MB per dokumen.');
   }
 
+  const maxDim = options?.maxDimension ?? MAX_DIMENSION;
+  const quality = options?.quality ?? JPEG_QUALITY;
+
   const rawDataUrl = await readFileAsDataUrl(file);
   const image = await loadImage(rawDataUrl);
 
   let targetWidth = image.naturalWidth || image.width;
   let targetHeight = image.naturalHeight || image.height;
 
-  if (targetWidth > MAX_DIMENSION || targetHeight > MAX_DIMENSION) {
-    const scale = Math.min(MAX_DIMENSION / targetWidth, MAX_DIMENSION / targetHeight);
+  if (targetWidth > maxDim || targetHeight > maxDim) {
+    const scale = Math.min(maxDim / targetWidth, maxDim / targetHeight);
     targetWidth = Math.round(targetWidth * scale);
     targetHeight = Math.round(targetHeight * scale);
   }
@@ -401,7 +407,7 @@ export async function processImageUpload(file: File): Promise<KpmDocumentFile> {
   ctx.fillRect(0, 0, targetWidth, targetHeight);
   ctx.drawImage(image, 0, 0, targetWidth, targetHeight);
 
-  const compressedDataUrl = canvas.toDataURL('image/jpeg', JPEG_QUALITY);
+  const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
   const compressedSize = estimateDataUrlByteSize(compressedDataUrl);
 
   return {
@@ -549,7 +555,7 @@ export function loadPengelolaList(fallback: PengelolaProfile[]): PengelolaProfil
     const raw = localStorage.getItem(PENGELOLA_STORAGE_KEY);
     if (!raw) return fallback;
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed) || parsed.length === 0) return fallback;
+    if (!Array.isArray(parsed)) return fallback;
     return parsed;
   } catch {
     return fallback;
@@ -570,7 +576,7 @@ export function loadProposals(fallback: ProposalRecord[]): ProposalRecord[] {
     const raw = localStorage.getItem(PROPOSAL_STORAGE_KEY);
     if (!raw) return fallback;
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed) || parsed.length === 0) return fallback;
+    if (!Array.isArray(parsed)) return fallback;
     const validTipes = new Set(['Murni', 'Perubahan', 'Database', 'Arsip']);
     return parsed.map((prop: ProposalRecord) => ({
       ...prop,
@@ -631,19 +637,7 @@ export function recalculateProposalRegisterCodes(
   const nextCodeById = new Map<string, string>();
 
   for (const group of groups.values()) {
-    const sample = group[0];
-    const matchedProposal =
-      proposals.find(
-        (p) => p.namaProposal === sample.proposal && p.tahun === sample.tahun
-      ) ?? proposals.find((p) => p.namaProposal === sample.proposal);
-    const targetCount = matchedProposal?.jumlahKpm ?? 66;
-    const isFinalizedOrder = targetCount > 0 && group.length >= targetCount;
-
     const sorted = [...group].sort((a, b) => {
-      if (!isFinalizedOrder) {
-        return a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
-      }
-
       // Hierarchy: Item (per year) -> Kecamatan -> RW -> RT -> Kelurahan -> Inisial/Nama KPM
       const rankA = getItemHierarchyRank(a.item, a.tahun, catalog);
       const rankB = getItemHierarchyRank(b.item, b.tahun, catalog);
@@ -705,7 +699,7 @@ export function loadItemList(fallback: ItemBantuan[]): ItemBantuan[] {
     const raw = localStorage.getItem(ITEM_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
+      if (Array.isArray(parsed)) {
         return parsed.map((item: Partial<ItemBantuan>) => ({
           id: item.id || `${item.tahun || '2026'}-${item.code || 'ITEM'}`,
           tahun: String(item.tahun || '2026'),
@@ -989,7 +983,7 @@ export function loadPekerjaanList(fallback: string[]): string[] {
     const raw = localStorage.getItem(PEKERJAAN_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed)) return parsed;
     }
 
     // Migrate any custom entries from v1 key into comprehensive default list
@@ -1030,7 +1024,7 @@ export function loadWilayahList(fallback: WilayahKabKota[]): WilayahKabKota[] {
     const raw = localStorage.getItem(WILAYAH_STORAGE_KEY);
     if (!raw) return fallback;
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed) || parsed.length === 0) return fallback;
+    if (!Array.isArray(parsed)) return fallback;
     return parsed;
   } catch {
     return fallback;
@@ -1097,11 +1091,12 @@ export function exportKpmRecordsToCsv(
   ];
 
   const escapeCsv = (val: string | number | undefined) => {
-    const str = String(val ?? '');
-    if (/[",\n]/.test(str)) {
-      return `"${str.replace(/"/g, '""')}"`;
+    const raw = String(val ?? '');
+    const safe = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+    if (/[",\n\r]/.test(safe)) {
+      return `"${safe.replace(/"/g, '""')}"`;
     }
-    return str;
+    return safe;
   };
 
   const rows = records.map((r) => {
@@ -1167,11 +1162,12 @@ export function exportSubItemRecapToCsv(
   ];
 
   const escapeCsv = (val: string | number | undefined) => {
-    const str = String(val ?? '');
-    if (/[",\n]/.test(str)) {
-      return `"${str.replace(/"/g, '""')}"`;
+    const raw = String(val ?? '');
+    const safe = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+    if (/[",\n\r]/.test(safe)) {
+      return `"${safe.replace(/"/g, '""')}"`;
     }
-    return str;
+    return safe;
   };
 
   const rows = aggregates.map((row) => [

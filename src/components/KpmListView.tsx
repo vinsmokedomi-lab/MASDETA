@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Lock, Search, SlidersHorizontal, User, X } from 'lucide-react';
 import { INITIAL_WILAYAH_LIST, TAHUN_OPTIONS } from '../data/kpmOptions';
 import {
@@ -59,6 +59,22 @@ export function KpmListView({
   const [pengelolaFilter, setPengelolaFilter] = useState<string>('all');
   const [pekerjaanFilter, setPekerjaanFilter] = useState<string>('all');
   const [showExtraFilters, setShowExtraFilters] = useState(false);
+  const [visibleLimit, setVisibleLimit] = useState(40);
+
+  useEffect(() => {
+    setVisibleLimit(40);
+  }, [
+    query,
+    selectedYear,
+    statusFilter,
+    itemFilter,
+    proposalFilter,
+    kelurahanFilter,
+    rtRwFilter,
+    pengelolaFilter,
+    pekerjaanFilter,
+    sortBy,
+  ]);
 
   const isRecordProposalLocked = (rec: KpmRecord) => {
     const match =
@@ -475,7 +491,7 @@ export function KpmListView({
           </div>
         ) : (
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
-            {filteredRecords.map((rec) => {
+            {filteredRecords.slice(0, visibleLimit).map((rec) => {
               const thumb = rec.documents.penerima || rec.documents.ktp;
               const locked = isRecordProposalLocked(rec);
               const absenSeq = getAbsenSeq(rec.registerCode);
@@ -524,7 +540,7 @@ export function KpmListView({
                     {/* Baris 1: Nama + Item & Angka Desil */}
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex min-w-0 items-center gap-1">
-                        <span className="truncate text-[13px] font-bold leading-tight text-slate-900">
+                        <span className="truncate text-[13px] font-medium leading-tight text-slate-900">
                           {rec.nama}
                         </span>
                         {locked && <Lock className="h-3 w-3 shrink-0 text-slate-400" />}
@@ -556,6 +572,17 @@ export function KpmListView({
                 </button>
               );
             })}
+            {filteredRecords.length > visibleLimit && (
+              <div className="bg-slate-50/70 p-3">
+                <button
+                  type="button"
+                  onClick={() => setVisibleLimit((prev) => prev + 40)}
+                  className="inline-flex min-h-[42px] w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-50"
+                >
+                  Muat Lebih Banyak ({filteredRecords.length - visibleLimit} tersisa)
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

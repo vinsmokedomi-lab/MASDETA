@@ -31,6 +31,7 @@ import { PlaceholderSelect } from './FormControls';
 
 interface ProposalFormProps {
   proposal: ProposalRecord;
+  existingProposals?: ProposalRecord[];
   feedback?: { type: 'success' | 'error'; message: string } | null;
   onDismissFeedback?: () => void;
   onBack: () => void;
@@ -155,6 +156,7 @@ function SwitchToggle({
 
 export function ProposalForm({
   proposal,
+  existingProposals = [],
   feedback,
   onDismissFeedback,
   onBack,
@@ -262,7 +264,20 @@ export function ProposalForm({
 
   const validate = (): ProposalErrors => {
     const nextErrors: ProposalErrors = {};
-    if (!values.tahun) nextErrors.tahun = 'Pilih tahun anggaran.';
+    if (!values.tahun) {
+      nextErrors.tahun = 'Pilih tahun anggaran.';
+    } else {
+      const targetName = proposal.namaProposal.trim().toLowerCase();
+      const hasDuplicate = existingProposals.some(
+        (p) =>
+          p.id !== proposal.id &&
+          p.tahun === values.tahun &&
+          p.namaProposal.trim().toLowerCase() === targetName
+      );
+      if (hasDuplicate) {
+        nextErrors.tahun = `Proposal "${proposal.namaProposal}" sudah ada pada tahun ${values.tahun}.`;
+      }
+    }
     if (!values.tipe) nextErrors.tipe = 'Pilih tipe proposal.';
     const parsedJumlah = Number(jumlahKpmInput);
     if (!jumlahKpmInput || !Number.isFinite(parsedJumlah) || parsedJumlah < 1) {

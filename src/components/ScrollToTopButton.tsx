@@ -3,9 +3,13 @@ import { ArrowUp } from 'lucide-react';
 
 interface ScrollToTopButtonProps {
   hasBottomNav?: boolean;
+  hasFloatingAction?: boolean;
 }
 
-export function ScrollToTopButton({ hasBottomNav = false }: ScrollToTopButtonProps) {
+export function ScrollToTopButton({
+  hasBottomNav = false,
+  hasFloatingAction = false,
+}: ScrollToTopButtonProps) {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
@@ -33,7 +37,7 @@ export function ScrollToTopButton({ hasBottomNav = false }: ScrollToTopButtonPro
   return (
     <div
       className={`pointer-events-none fixed left-1/2 z-30 flex w-full max-w-md -translate-x-1/2 justify-end px-4 transition-all ${
-        hasBottomNav ? 'bottom-22' : 'bottom-6'
+        hasBottomNav || hasFloatingAction ? 'bottom-21' : 'bottom-6'
       }`}
     >
       <button

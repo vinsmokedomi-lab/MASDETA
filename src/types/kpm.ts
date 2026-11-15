@@ -202,12 +202,26 @@ export interface InternalUser {
   updatedAt: string;
 }
 
+export interface SharedKpmCard {
+  kpmId: string;
+  registerCode: string;
+  nama: string;
+  tahun: string;
+  item: string;
+  itemName?: string;
+  proposal: string;
+  kontak?: string;
+  validasi: ValidationStatus;
+  fotoDataUrl?: string;
+}
+
 export interface DirectChatMessage {
   id: string;
   conversationKey: string;
   senderId: string;
   recipientId: string;
   text: string;
+  sharedKpm?: SharedKpmCard;
   createdAt: string;
   readAt?: string;
 }

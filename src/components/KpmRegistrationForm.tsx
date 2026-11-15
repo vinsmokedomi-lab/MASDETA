@@ -52,6 +52,7 @@ import { PlaceholderSelect } from './FormControls';
 
 interface KpmRegistrationFormProps {
   editingRecord: KpmRecord | null;
+  existingRecords?: KpmRecord[];
   pengelolaList: PengelolaProfile[];
   proposals: ProposalRecord[];
   wilayahList?: WilayahKabKota[];
@@ -65,7 +66,7 @@ interface KpmRegistrationFormProps {
   onBack?: () => void;
   onOpenAddProposal: () => void;
   onCreatePengelola: (profile: PengelolaProfile) => void;
-  onSave: (values: KpmFormValues, editingId?: string) => void;
+  onSave: (values: KpmFormValues, editingId?: string) => Promise<boolean> | boolean | void;
   onCancelEdit: () => void;
   onPreviewDocument: (file: KpmDocumentFile, title: string) => void;
 }
@@ -74,6 +75,7 @@ type FormErrors = Partial<Record<keyof KpmFormValues | 'docKtp' | 'docKk', strin
 
 export function KpmRegistrationForm({
   editingRecord,
+  existingRecords = [],
   pengelolaList,
   proposals,
   wilayahList = INITIAL_WILAYAH_LIST,
@@ -105,6 +107,7 @@ export function KpmRegistrationForm({
   });
   const [errors, setErrors] = useState<FormErrors>({});
   const [isPengelolaModalOpen, setIsPengelolaModalOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const resolvedPekerjaanOptions =
     pekerjaanOptions && pekerjaanOptions.length > 0 ? pekerjaanOptions : PEKERJAAN_OPTIONS;
@@ -195,20 +198,39 @@ export function KpmRegistrationForm({
   const proposalMenuItems = useMemo(() => {
     const map = new Map<string, { name: string; locked: boolean }>();
     for (const prop of proposals) {
-      const existing = map.get(prop.namaProposal);
-      const matchesYear = prop.tahun === values.tahun;
-      if (!existing || matchesYear) {
-        map.set(prop.namaProposal, {
-          name: prop.namaProposal,
-          locked: prop.status === 'locked',
-        });
-      }
+      if (values.tahun && prop.tahun !== values.tahun) continue;
+      map.set(prop.namaProposal, {
+        name: prop.namaProposal,
+        locked: prop.status === 'locked',
+      });
     }
-    if (values.proposal && !map.has(values.proposal)) {
-      map.set(values.proposal, { name: values.proposal, locked: false });
+    if ((editingRecord || isProposalScopeLocked) && values.proposal && !map.has(values.proposal)) {
+      const legacy = proposals.find((p) => p.namaProposal === values.proposal);
+      map.set(values.proposal, {
+        name: values.proposal,
+        locked: legacy?.status === 'locked',
+      });
     }
     return Array.from(map.values());
-  }, [proposals, values.tahun, values.proposal]);
+  }, [proposals, values.tahun, values.proposal, editingRecord, isProposalScopeLocked]);
+
+  const duplicateKkMatch = useMemo(() => {
+    if (!isValidNik16(values.nikKk)) return null;
+    const matches = existingRecords.filter(
+      (r) => r.id !== editingRecord?.id && r.nikKk === values.nikKk
+    );
+    if (matches.length === 0) return null;
+    return matches.find((r) => r.tahun === values.tahun) ?? matches[0];
+  }, [existingRecords, editingRecord?.id, values.nikKk, values.tahun]);
+
+  const duplicateKtpMatch = useMemo(() => {
+    if (!isValidNik16(values.nikKtp)) return null;
+    const matches = existingRecords.filter(
+      (r) => r.id !== editingRecord?.id && r.nikKtp === values.nikKtp
+    );
+    if (matches.length === 0) return null;
+    return matches.find((r) => r.tahun === values.tahun) ?? matches[0];
+  }, [existingRecords, editingRecord?.id, values.nikKtp, values.tahun]);
 
   const selectedProposalRecord = useMemo(
     () =>
@@ -247,6 +269,22 @@ export function KpmRegistrationForm({
     if (errors[key]) {
       setErrors((prev) => ({ ...prev, [key]: undefined }));
     }
+  };
+
+  const handleYearChange = (nextYear: string) => {
+    setValues((prev) => {
+      const keepProposal =
+        editingRecord ||
+        isProposalScopeLocked ||
+        proposals.some((p) => p.tahun === nextYear && p.namaProposal === prev.proposal);
+      return {
+        ...prev,
+        tahun: nextYear,
+        proposal: keepProposal ? prev.proposal : '',
+        kelurahan: keepProposal ? prev.kelurahan : '',
+      };
+    });
+    setErrors((prev) => ({ ...prev, tahun: undefined, proposal: undefined, kelurahan: undefined }));
   };
 
   const handleProposalChange = (nextProposal: string) => {
@@ -378,9 +416,9 @@ export function KpmRegistrationForm({
     return nextErrors;
   };
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (editingProposalLocked) return;
+    if (editingProposalLocked || isSubmitting) return;
     const validationErrors = validate();
     if (Object.keys(validationErrors).length > 0) {
       setErrors(validationErrors);
@@ -403,33 +441,38 @@ export function KpmRegistrationForm({
       wilayahList
     );
 
-    onSave(
-      {
-        ...values,
-        kecamatan: resolvedDomicile.kecamatan || values.kecamatan || '',
-        kelurahan: showKelurahanField
-          ? values.kelurahan
-          : resolvedDomicile.kelurahan || values.kelurahan || '',
-        nama: values.nama.trim().toUpperCase(),
-        alamat: formatAlamatLengkap(values.alamat, true),
-        catatan: values.catatan.trim(),
-        rt: values.rt.trim().padStart(3, '0'),
-        rw: values.rw.trim().padStart(3, '0'),
-      },
-      editingRecord?.id
-    );
-
-    if (!editingRecord) {
-      setValues(
-        lockedProposalScope
-          ? {
-              ...INITIAL_FORM_VALUES,
-              tahun: lockedProposalScope.tahun || INITIAL_FORM_VALUES.tahun,
-              proposal: lockedProposalScope.namaProposal,
-            }
-          : INITIAL_FORM_VALUES
+    setIsSubmitting(true);
+    try {
+      const saveResult = await onSave(
+        {
+          ...values,
+          kecamatan: resolvedDomicile.kecamatan || values.kecamatan || '',
+          kelurahan: showKelurahanField
+            ? values.kelurahan
+            : resolvedDomicile.kelurahan || values.kelurahan || '',
+          nama: values.nama.trim().toUpperCase(),
+          alamat: formatAlamatLengkap(values.alamat, true),
+          catatan: values.catatan.trim(),
+          rt: values.rt.trim().padStart(3, '0'),
+          rw: values.rw.trim().padStart(3, '0'),
+        },
+        editingRecord?.id
       );
-      setErrors({});
+
+      if (saveResult !== false && !editingRecord) {
+        setValues(
+          lockedProposalScope
+            ? {
+                ...INITIAL_FORM_VALUES,
+                tahun: lockedProposalScope.tahun || INITIAL_FORM_VALUES.tahun,
+                proposal: lockedProposalScope.namaProposal,
+              }
+            : INITIAL_FORM_VALUES
+        );
+        setErrors({});
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -565,7 +608,7 @@ export function KpmRegistrationForm({
                   id="input-tahun"
                   disabled={editingProposalLocked || isProposalScopeLocked}
                   value={values.tahun}
-                  onChange={(v) => updateField('tahun', v)}
+                  onChange={handleYearChange}
                   className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-700 ${
                     errors.tahun ? 'border-rose-400' : 'border-slate-300'
                   }`}
@@ -707,6 +750,15 @@ export function KpmRegistrationForm({
                     }`}
                   />
                   {errors.nikKk && <p className="mt-1 text-xs text-rose-600">{errors.nikKk}</p>}
+                  {duplicateKkMatch && (
+                    <p className="mt-1.5 flex items-start gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] font-medium text-amber-900">
+                      <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+                      <span>
+                        No. KK ini sudah terdaftar atas nama{' '}
+                        <span className="font-bold">{duplicateKkMatch.nama}</span> ({duplicateKkMatch.proposal} · {duplicateKkMatch.tahun}).
+                      </span>
+                    </p>
+                  )}
                 </div>
 
                 <div id="field-nikKtp" className="col-span-2">
@@ -738,6 +790,15 @@ export function KpmRegistrationForm({
                     }`}
                   />
                   {errors.nikKtp && <p className="mt-1 text-xs text-rose-600">{errors.nikKtp}</p>}
+                  {duplicateKtpMatch && (
+                    <p className="mt-1.5 flex items-start gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] font-medium text-amber-900">
+                      <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+                      <span>
+                        NIK KTP ini sudah terdaftar atas nama{' '}
+                        <span className="font-bold">{duplicateKtpMatch.nama}</span> ({duplicateKtpMatch.proposal} · {duplicateKtpMatch.tahun}).
+                      </span>
+                    </p>
+                  )}
                 </div>
 
                 <div id="field-nama" className="col-span-2">
@@ -1204,7 +1265,7 @@ export function KpmRegistrationForm({
 
             <button
               type="submit"
-              disabled={editingProposalLocked}
+              disabled={editingProposalLocked || isSubmitting}
               className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-5 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 whitespace-nowrap"
             >
               {editingProposalLocked ? (

@@ -25,6 +25,7 @@ import {
   ProposalFormValues,
   ProposalKpmHistoryEntry,
   ProposalRecord,
+  SharedKpmCard,
   UserPermissions,
   UserPresenceStatus,
   ValidationStatus,
@@ -44,6 +45,7 @@ import {
   loadProposalHistory,
   loadProposals,
   loadWilayahList,
+  normalizeSubItemKey,
   recalculateProposalRegisterCodes,
   resolvePackageForKpm,
   saveInternalUsers,
@@ -69,7 +71,7 @@ import { BottomNavBar, MainTab, QuickAddSheet } from './components/BottomNavBar'
 import { DashboardView } from './components/DashboardView';
 import { KpmListView } from './components/KpmListView';
 import { ProposalListView } from './components/ProposalListView';
-import { MenuHubView, MenuSection } from './components/MenuHubView';
+import { AdminDataActionType, MenuHubView, MenuSection } from './components/MenuHubView';
 import { HistoryDetailView } from './components/HistoryDetailView';
 import { ScrollToTopButton } from './components/ScrollToTopButton';
 import { AuthView } from './components/AuthView';
@@ -102,7 +104,21 @@ interface IncomingToastBanner {
   text: string;
 }
 
+interface OperationalDataPayload {
+  initialized?: boolean;
+  updatedAt?: string;
+  records: KpmRecord[];
+  proposals: ProposalRecord[];
+  items: ItemBantuan[];
+  pengelolaList: PengelolaProfile[];
+  pekerjaanList: string[];
+  wilayahList: WilayahKabKota[];
+  proposalHistory: ProposalKpmHistoryEntry[];
+  kpmAuditLogs: KpmAuditLogEntry[];
+}
+
 const SESSION_STORAGE_KEY = 'masdeta_session_user_id_v1';
+const SESSION_TOKEN_STORAGE_KEY = 'masdeta_session_token_v1';
 const PUSH_ENABLED_STORAGE_KEY = 'masdeta_push_enabled_v1';
 
 function playMessageChime() {
@@ -193,8 +209,10 @@ export default function App() {
   const [kpmFormReturnToProposalDetail, setKpmFormReturnToProposalDetail] = useState(false);
   const [kpmDetailReturnToRecap, setKpmDetailReturnToRecap] = useState(false);
   const [kpmDetailReturnToProposalDetail, setKpmDetailReturnToProposalDetail] = useState(false);
+  const [kpmDetailReturnToChatPeerId, setKpmDetailReturnToChatPeerId] = useState<string | null>(null);
   const [addProposalFromKpmForm, setAddProposalFromKpmForm] = useState(false);
   const [menuSection, setMenuSection] = useState<MenuSection>('root');
+  const [menuOpenedFromDashboard, setMenuOpenedFromDashboard] = useState(false);
   const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
 
   const [selectedYear, setSelectedYear] = useState<string>('2026');
@@ -247,6 +265,13 @@ export default function App() {
   );
 
   // Auth, 1-on-1 Direct Chat, Presence & Push Notification states
+  const [sessionToken, setSessionToken] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(SESSION_TOKEN_STORAGE_KEY);
+    } catch {
+      return null;
+    }
+  });
   const [sessionUserId, setSessionUserId] = useState<string | null>(() => {
     try {
       return localStorage.getItem(SESSION_STORAGE_KEY);
@@ -278,14 +303,39 @@ export default function App() {
   const subViewRef = useRef<SubView>(subView);
   const activeChatPeerIdRef = useRef<string | null>(activeChatPeerId);
   const pushEnabledRef = useRef<boolean>(pushEnabled);
+  const sessionTokenRef = useRef<string | null>(sessionToken);
+  const currentUserIdRef = useRef<string | null>(sessionUserId);
   subViewRef.current = subView;
   activeChatPeerIdRef.current = activeChatPeerId;
   pushEnabledRef.current = pushEnabled;
+  sessionTokenRef.current = sessionToken;
 
   const currentUser = useMemo(() => {
     if (!sessionUserId) return null;
     return internalUsers.find((u) => u.id === sessionUserId && u.status === 'active') ?? null;
   }, [internalUsers, sessionUserId]);
+  currentUserIdRef.current = currentUser?.id ?? null;
+
+  const latestDataRef = useRef<OperationalDataPayload>({
+    records,
+    proposals,
+    items,
+    pengelolaList,
+    pekerjaanList,
+    wilayahList,
+    proposalHistory,
+    kpmAuditLogs,
+  });
+  latestDataRef.current = {
+    records,
+    proposals,
+    items,
+    pengelolaList,
+    pekerjaanList,
+    wilayahList,
+    proposalHistory,
+    kpmAuditLogs,
+  };
 
   const activeProposal = useMemo(
     () => (activeProposalId ? proposals.find((p) => p.id === activeProposalId) ?? null : null),
@@ -340,6 +390,7 @@ export default function App() {
     const ktpCounts = new Map<string, number>();
     const kkCounts = new Map<string, number>();
     for (const r of records) {
+      if (selectedYear !== 'all' && r.tahun !== selectedYear) continue;
       if (r.nikKtp) ktpCounts.set(r.nikKtp, (ktpCounts.get(r.nikKtp) ?? 0) + 1);
       if (r.nikKk) kkCounts.set(r.nikKk, (kkCounts.get(r.nikKk) ?? 0) + 1);
     }
@@ -351,7 +402,7 @@ export default function App() {
       if (c > 1) dupes += 1;
     });
     return dupes;
-  }, [records]);
+  }, [records, selectedYear]);
 
   useEffect(() => {
     const saved = saveKpmRecords(records);
@@ -402,40 +453,218 @@ export default function App() {
     saveInternalUsers(internalUsers);
   }, [internalUsers]);
 
-  // Sinkronisasi awal state user & pesan 1-on-1 dari server
+  const clearSessionState = useCallback(() => {
+    setSessionToken(null);
+    setSessionUserId(null);
+    setDirectMessages([]);
+    setActiveChatPeerId(null);
+    try {
+      localStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+    } catch {
+      // Ignore storage error
+    }
+  }, []);
+
+  const authFetch = useCallback(
+    async (
+      url: string,
+      options: RequestInit = {},
+      overrideToken?: string,
+      preserveSessionOn401 = false
+    ) => {
+      const token = overrideToken ?? sessionTokenRef.current;
+      const headers = new Headers(options.headers || undefined);
+      if (token) {
+        headers.set('Authorization', `Bearer ${token}`);
+      }
+      const res = await fetch(url, { ...options, headers });
+      if (res.status === 401 && !preserveSessionOn401) {
+        clearSessionState();
+      }
+      return res;
+    },
+    [clearSessionState]
+  );
+
+  const applyRemoteOperationalState = useCallback((state: Partial<OperationalDataPayload>) => {
+    const nextProposals = Array.isArray(state.proposals) ? state.proposals : latestDataRef.current.proposals;
+    const nextItems = Array.isArray(state.items) ? state.items : latestDataRef.current.items;
+    const nextWilayah = Array.isArray(state.wilayahList) ? state.wilayahList : latestDataRef.current.wilayahList;
+    const rawRecords = Array.isArray(state.records) ? state.records : latestDataRef.current.records;
+
+    setProposals(nextProposals);
+    setItems(nextItems);
+    setWilayahList(nextWilayah);
+    setRecords(recalculateProposalRegisterCodes(rawRecords, nextProposals, nextItems, nextWilayah));
+    if (Array.isArray(state.pengelolaList)) setPengelolaList(state.pengelolaList);
+    if (Array.isArray(state.pekerjaanList)) setPekerjaanList(state.pekerjaanList);
+    if (Array.isArray(state.proposalHistory)) setProposalHistory(state.proposalHistory);
+    if (Array.isArray(state.kpmAuditLogs)) setKpmAuditLogs(state.kpmAuditLogs);
+  }, []);
+
+  const loadOrBootstrapOperationalData = useCallback(
+    async (token: string, actor?: { nama: string; email?: string }) => {
+      try {
+        const res = await authFetch('/api/data/state', {}, token);
+        if (!res.ok) return;
+        const remote = (await res.json()) as OperationalDataPayload;
+        if (remote.initialized) {
+          applyRemoteOperationalState(remote);
+          return;
+        }
+
+        let seedPayload: OperationalDataPayload = { ...latestDataRef.current };
+        const SEED_FLAG_KEY = 'masdeta_csv_seed_ptk_kota_2026_v1';
+        let seedDone = false;
+        try {
+          seedDone = localStorage.getItem(SEED_FLAG_KEY) === 'done';
+        } catch {
+          seedDone = false;
+        }
+
+        if (seedPayload.records.length === 0 && !seedDone) {
+          try {
+            const csvRes = await fetch('/assets/aistudio/Kecamatan_Pontianak_Kota_2026_ab18452d.csv');
+            if (csvRes.ok) {
+              const csvText = await csvRes.text();
+              if (csvText) {
+                const imported = importProposalKpmFromCsv({
+                  csvText,
+                  existingRecords: seedPayload.records,
+                  existingProposals: seedPayload.proposals,
+                  existingPengelolaList: seedPayload.pengelolaList,
+                  existingPekerjaanList: seedPayload.pekerjaanList,
+                  items: seedPayload.items,
+                  wilayahList: seedPayload.wilayahList,
+                  actorName: actor?.nama ?? 'SuperAdmin',
+                  actorEmail: actor?.email,
+                });
+                if (imported.importedRecordsCount > 0) {
+                  seedPayload = {
+                    ...seedPayload,
+                    records: imported.nextRecords,
+                    proposals: imported.nextProposals,
+                    pengelolaList: imported.nextPengelolaList,
+                    pekerjaanList: imported.nextPekerjaanList,
+                    kpmAuditLogs: [...imported.newAuditLogs, ...seedPayload.kpmAuditLogs],
+                    proposalHistory: [...imported.newProposalHistory, ...seedPayload.proposalHistory],
+                  };
+                  try {
+                    localStorage.setItem(SEED_FLAG_KEY, 'done');
+                  } catch {
+                    // Ignore storage write error
+                  }
+                }
+              }
+            }
+          } catch {
+            // Ignore CSV seed error
+          }
+        }
+
+        const bootRes = await authFetch(
+          '/api/data/bootstrap',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(seedPayload),
+          },
+          token
+        );
+        if (bootRes.ok) {
+          const bootData = (await bootRes.json()) as { state?: OperationalDataPayload };
+          if (bootData.state) {
+            applyRemoteOperationalState(bootData.state);
+          }
+        }
+      } catch {
+        // Fallback ke state lokal jika server data sementara tidak terjangkau
+      }
+    },
+    [authFetch, applyRemoteOperationalState]
+  );
+
+  const syncOperationalData = useCallback(
+    async (
+      patch: Partial<OperationalDataPayload>,
+      requiredPermission: keyof UserPermissions
+    ): Promise<boolean> => {
+      if (!sessionTokenRef.current) return false;
+      const merged: OperationalDataPayload = {
+        ...latestDataRef.current,
+        ...patch,
+      };
+      try {
+        const res = await authFetch('/api/data/sync', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...merged,
+            requiredPermission,
+          }),
+        });
+        if (!res.ok) {
+          const errData = (await res.json().catch(() => ({}))) as { error?: string };
+          setFeedback({
+            type: 'error',
+            message: errData.error || 'Gagal menyimpan perubahan ke server.',
+          });
+          return false;
+        }
+        return true;
+      } catch {
+        setFeedback({
+          type: 'error',
+          message: 'Koneksi ke server terputus. Perubahan belum tersinkron ke pengguna lain.',
+        });
+        return false;
+      }
+    },
+    [authFetch]
+  );
+
+  // Sinkronisasi awal state user, pesan 1-on-1 & data operasional dari server
   useEffect(() => {
     let cancelled = false;
-    const url = sessionUserId
-      ? `/api/collab/state?userId=${encodeURIComponent(sessionUserId)}`
-      : '/api/collab/state';
+    if (!sessionToken) {
+      if (sessionUserId) {
+        clearSessionState();
+      }
+      setAuthReady(true);
+      return;
+    }
 
-    fetch(url)
+    authFetch('/api/collab/state', {}, sessionToken)
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error('Sync gagal'))))
       .then(
-        (data: {
+        async (data: {
           user?: InternalUser | null;
           users?: InternalUser[];
           messages?: DirectChatMessage[];
         }) => {
           if (cancelled) return;
+          if (!data.user || data.user.status !== 'active') {
+            clearSessionState();
+            return;
+          }
           if (Array.isArray(data.users) && data.users.length > 0) {
             setInternalUsers(data.users);
           }
           if (Array.isArray(data.messages)) {
             setDirectMessages(data.messages);
           }
-          if (sessionUserId && (!data.user || data.user.status !== 'active')) {
-            setSessionUserId(null);
-            try {
-              localStorage.removeItem(SESSION_STORAGE_KEY);
-            } catch {
-              // Ignore
-            }
+          setSessionUserId(data.user.id);
+          try {
+            localStorage.setItem(SESSION_STORAGE_KEY, data.user.id);
+          } catch {
+            // Ignore
           }
+          await loadOrBootstrapOperationalData(sessionToken, data.user);
         }
       )
       .catch(() => {
-        // Fallback ke cache lokal bila offline
+        // Fallback diam-diam jika offline sementara
       })
       .finally(() => {
         if (!cancelled) setAuthReady(true);
@@ -444,7 +673,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [sessionUserId]);
+  }, [sessionToken, authFetch, clearSessionState, loadOrBootstrapOperationalData, sessionUserId]);
 
   const handleMarkChatRead = useCallback(
     async (peerId: string) => {
@@ -464,22 +693,23 @@ export default function App() {
       );
 
       try {
-        await fetch('/api/chat/read', {
+        await authFetch('/api/chat/read', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: currentUser.id, peerId }),
+          body: JSON.stringify({ peerId }),
         });
       } catch {
         // Abaikan jika offline sementara
       }
     },
-    [currentUser, directMessages]
+    [currentUser, directMessages, authFetch]
   );
 
-  // Koneksi WebSocket Real-time (Presence Dot & 1-on-1 Direct Chat Push)
+  // Koneksi WebSocket Real-time (Presence Dot, 1-on-1 Direct Chat & Data Sync)
   useEffect(() => {
     const uid = currentUser?.id;
-    if (!uid) {
+    const token = sessionToken;
+    if (!uid || !token) {
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
@@ -498,7 +728,7 @@ export default function App() {
       wsRef.current = socket;
 
       socket.onopen = () => {
-        socket.send(JSON.stringify({ type: 'auth', userId: uid }));
+        socket.send(JSON.stringify({ type: 'auth', token: sessionTokenRef.current || token }));
       };
 
       socket.onmessage = (event) => {
@@ -509,8 +739,22 @@ export default function App() {
             return;
           }
 
+          if (data.type === 'data:updated' && data.state) {
+            if (data.updatedBy && data.updatedBy === currentUserIdRef.current) {
+              return;
+            }
+            applyRemoteOperationalState(data.state as Partial<OperationalDataPayload>);
+            return;
+          }
+
           if (data.type === 'chat:message' && data.message) {
             const msg = data.message as DirectChatMessage;
+            const displayMsgText =
+              msg.text ||
+              (msg.sharedKpm
+                ? `Kartu KPM: ${msg.sharedKpm.nama} (${msg.sharedKpm.proposal})`
+                : 'Pesan baru');
+
             setDirectMessages((prev) => {
               if (prev.some((m) => m.id === msg.id)) return prev;
               return [...prev, msg];
@@ -523,10 +767,10 @@ export default function App() {
                 document.visibilityState === 'visible';
 
               if (isViewingThread) {
-                fetch('/api/chat/read', {
+                authFetch('/api/chat/read', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ userId: uid, peerId: msg.senderId }),
+                  body: JSON.stringify({ peerId: msg.senderId }),
                 }).catch(() => {});
               } else {
                 const senderName = String(data.senderName || 'Pengguna Internal');
@@ -537,7 +781,7 @@ export default function App() {
                   senderId: msg.senderId,
                   senderName,
                   senderRole,
-                  text: msg.text,
+                  text: displayMsgText,
                 });
                 if (toastTimer) window.clearTimeout(toastTimer);
                 toastTimer = window.setTimeout(() => {
@@ -547,7 +791,7 @@ export default function App() {
                 if (pushEnabledRef.current) {
                   void triggerPushNotification(
                     `Pesan dari ${senderName} (${senderRole})`,
-                    msg.text
+                    displayMsgText
                   );
                 }
               }
@@ -561,6 +805,11 @@ export default function App() {
             setDirectMessages((prev) =>
               prev.map((m) => (ids.has(m.id) ? { ...m, readAt } : m))
             );
+            return;
+          }
+
+          if (data.type === 'chat:reset') {
+            setDirectMessages([]);
           }
         } catch {
           // Abaikan payload tidak valid
@@ -586,7 +835,7 @@ export default function App() {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [currentUser?.id]);
+  }, [currentUser?.id, sessionToken, authFetch, applyRemoteOperationalState]);
 
   // Pelacak Aktivitas Otomatis untuk Presence Dot (Hijau = Aktif, Oranye = Idle)
   useEffect(() => {
@@ -704,6 +953,24 @@ export default function App() {
     };
   }, []);
 
+  // Fallback navigasi jika data KPM atau Proposal target terhapus saat sedang dilihat
+  useEffect(() => {
+    if ((subView === 'kpm-detail' || subView === 'kpm-history') && !activeKpmRecord) {
+      setActiveKpmId(null);
+      setSubView('none');
+      setActiveTab(returnToTab);
+    } else if (
+      (subView === 'proposal-detail' ||
+        subView === 'proposal-history' ||
+        subView === 'edit-proposal') &&
+      !activeProposal
+    ) {
+      setActiveProposalId(null);
+      setSubView('none');
+      setActiveTab(returnToTab);
+    }
+  }, [subView, activeKpmRecord, activeProposal, returnToTab]);
+
   useEffect(() => {
     setRecords((prev) => recalculateProposalRegisterCodes(prev, proposals, items, wilayahList));
   }, [proposals, items, wilayahList]);
@@ -738,7 +1005,10 @@ export default function App() {
     skipped: number;
     error?: string;
   } => {
-    if (sourceLabel !== 'Kecamatan Pontianak Kota 2026.csv' && !requirePermission('add', 'mengimpor data CSV')) {
+    if (
+      sourceLabel !== 'Kecamatan Pontianak Kota 2026.csv' &&
+      !requirePermission('add', 'mengimpor data CSV')
+    ) {
       return {
         importedRecords: 0,
         importedProposals: 0,
@@ -761,16 +1031,30 @@ export default function App() {
     });
 
     if (result.importedRecordsCount > 0) {
+      const nextAuditLogs = [...result.newAuditLogs, ...kpmAuditLogs];
+      const nextProposalHistory = [...result.newProposalHistory, ...proposalHistory];
+
       setProposals(result.nextProposals);
       setPengelolaList(result.nextPengelolaList);
       setPekerjaanList(result.nextPekerjaanList);
       setRecords(result.nextRecords);
       if (result.newAuditLogs.length > 0) {
-        setKpmAuditLogs((prev) => [...result.newAuditLogs, ...prev]);
+        setKpmAuditLogs(nextAuditLogs);
       }
       if (result.newProposalHistory.length > 0) {
-        setProposalHistory((prev) => [...result.newProposalHistory, ...prev]);
+        setProposalHistory(nextProposalHistory);
       }
+      void syncOperationalData(
+        {
+          records: result.nextRecords,
+          proposals: result.nextProposals,
+          pengelolaList: result.nextPengelolaList,
+          pekerjaanList: result.nextPekerjaanList,
+          kpmAuditLogs: nextAuditLogs,
+          proposalHistory: nextProposalHistory,
+        },
+        'add'
+      );
       setFeedback({
         type: 'success',
         message: `${result.importedRecordsCount} calon KPM${
@@ -790,50 +1074,17 @@ export default function App() {
     };
   };
 
-  const seedCsvAttemptedRef = useRef(false);
-
-  useEffect(() => {
-    if (seedCsvAttemptedRef.current) return;
-    seedCsvAttemptedRef.current = true;
-
-    const SEED_FLAG_KEY = 'masdeta_csv_seed_ptk_kota_2026_v1';
-    try {
-      if (localStorage.getItem(SEED_FLAG_KEY) === 'done') return;
-    } catch {
-      // Ignore storage access errors
-    }
-
-    let cancelled = false;
-    fetch('/assets/aistudio/Kecamatan_Pontianak_Kota_2026_ab18452d.csv')
-      .then((res) => (res.ok ? res.text() : Promise.reject(new Error('CSV tidak ditemukan'))))
-      .then((csvText) => {
-        if (cancelled || !csvText) return;
-        const summary = handleImportCsv(csvText, 'Kecamatan Pontianak Kota 2026.csv');
-        if (summary.importedRecords > 0 || summary.skipped > 0) {
-          try {
-            localStorage.setItem(SEED_FLAG_KEY, 'done');
-          } catch {
-            // Ignore storage access errors
-          }
-        }
-      })
-      .catch(() => {
-        // Ignore seed fetch failure silently
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const openKpmDetail = (
     record: KpmRecord,
     fromTab: MainTab = activeTab,
-    fromRecap = false
+    fromRecap = false,
+    fromChatPeerId: string | null = null
   ) => {
     setFeedback(null);
     setReturnToTab(fromTab);
     setKpmDetailReturnToRecap(fromRecap);
+    setKpmDetailReturnToProposalDetail(false);
+    setKpmDetailReturnToChatPeerId(fromChatPeerId);
     setActiveKpmId(record.id);
     setSubView('kpm-detail');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -902,6 +1153,7 @@ export default function App() {
     if (existing) {
       openProposalDetailById(existing.id, returnToTab);
     } else {
+      if (!requirePermission('add', 'membuat proposal baru')) return;
       const now = new Date().toISOString();
       const created: ProposalRecord = {
         id: `prop-${Date.now()}`,
@@ -924,21 +1176,28 @@ export default function App() {
         createdAt: now,
         updatedAt: now,
       };
-      setProposals((prev) => [created, ...prev]);
+      const nextProposals = [created, ...proposals];
+      setProposals(nextProposals);
+      void syncOperationalData({ proposals: nextProposals }, 'add');
       openProposalDetailById(created.id, returnToTab);
     }
   };
 
   const handleCreatePengelola = (profile: PengelolaProfile) => {
     if (!requirePermission('add', 'menambah pengelola lapangan')) return;
-    setPengelolaList((prev) => [profile, ...prev]);
+    const nextPengelola = [profile, ...pengelolaList];
+    setPengelolaList(nextPengelola);
+    void syncOperationalData({ pengelolaList: nextPengelola }, 'add');
   };
 
-  const handleSaveKpm = (values: KpmFormValues, editingId?: string) => {
+  const handleSaveKpm = async (
+    values: KpmFormValues,
+    editingId?: string
+  ): Promise<boolean> => {
     if (editingId) {
-      if (!requirePermission('update', 'memperbarui data calon KPM')) return;
+      if (!requirePermission('update', 'memperbarui data calon KPM')) return false;
     } else {
-      if (!requirePermission('add', 'menyimpan calon KPM baru')) return;
+      if (!requirePermission('add', 'menyimpan calon KPM baru')) return false;
     }
 
     const matchingProposal =
@@ -950,13 +1209,16 @@ export default function App() {
         type: 'error',
         message: `Proposal "${matchingProposal.namaProposal}" berstatus Terkunci. Data KPM tidak dapat ditambahkan atau diubah.`,
       });
-      return;
+      return false;
     }
 
     const now = new Date().toISOString();
 
     if (editingId) {
       const previousRecord = records.find((r) => r.id === editingId);
+      let nextAuditLogs = kpmAuditLogs;
+      let nextProposalHistory = proposalHistory;
+
       if (previousRecord) {
         const prevProp =
           proposals.find(
@@ -968,10 +1230,9 @@ export default function App() {
             type: 'error',
             message: `Proposal "${prevProp.namaProposal}" berstatus Terkunci. Calon KPM tidak dapat dipindahkan atau diubah.`,
           });
-          return;
+          return false;
         }
 
-        // Field-level diff audit log for this KPM
         const fieldChanges = diffKpmRecordChanges(previousRecord, values);
         if (fieldChanges.length > 0) {
           const auditEntry: KpmAuditLogEntry = {
@@ -985,10 +1246,9 @@ export default function App() {
             tahun: values.tahun,
             changes: fieldChanges,
           };
-          setKpmAuditLogs((prev) => [auditEntry, ...prev]);
+          nextAuditLogs = [auditEntry, ...kpmAuditLogs];
         }
 
-        // Track proposal move history if proposal or tahun changed
         if (
           previousRecord.proposal !== values.proposal ||
           previousRecord.tahun !== values.tahun
@@ -1019,23 +1279,35 @@ export default function App() {
             actorName: currentActor.nama,
             timestamp: now,
           };
-          setProposalHistory((prev) => [moveInEntry, moveOutEntry, ...prev]);
+          nextProposalHistory = [moveInEntry, moveOutEntry, ...proposalHistory];
         }
       }
 
-      setRecords((prev) => {
-        const mapped = prev.map((rec) =>
-          rec.id === editingId
-            ? {
-                ...rec,
-                ...values,
-                validasi: values.validasi || rec.validasi,
-                updatedAt: now,
-              }
-            : rec
-        );
-        return recalculateProposalRegisterCodes(mapped, proposals, items, wilayahList);
-      });
+      const mapped = records.map((rec) =>
+        rec.id === editingId
+          ? {
+              ...rec,
+              ...values,
+              validasi: values.validasi || rec.validasi,
+              updatedAt: now,
+            }
+          : rec
+      );
+      const nextRecords = recalculateProposalRegisterCodes(mapped, proposals, items, wilayahList);
+
+      const ok = await syncOperationalData(
+        {
+          records: nextRecords,
+          kpmAuditLogs: nextAuditLogs,
+          proposalHistory: nextProposalHistory,
+        },
+        'update'
+      );
+      if (!ok) return false;
+
+      setKpmAuditLogs(nextAuditLogs);
+      setProposalHistory(nextProposalHistory);
+      setRecords(nextRecords);
       setEditingKpmRecord(null);
       if (kpmFormReturnToDetail && activeKpmId) {
         setKpmFormReturnToDetail(false);
@@ -1049,7 +1321,7 @@ export default function App() {
         message: `Data calon KPM "${values.nama}" berhasil diperbarui.`,
       });
       window.scrollTo({ top: 0, behavior: 'smooth' });
-      return;
+      return true;
     }
 
     const rawNewRecord: KpmRecord = {
@@ -1117,14 +1389,28 @@ export default function App() {
       timestamp: now,
     };
 
+    const nextAuditLogs = [createdAuditEntry, ...kpmAuditLogs];
+    const nextProposalHistory = [enteredHistory, ...proposalHistory];
+
+    const ok = await syncOperationalData(
+      {
+        records: nextRecordsList,
+        kpmAuditLogs: nextAuditLogs,
+        proposalHistory: nextProposalHistory,
+      },
+      'add'
+    );
+    if (!ok) return false;
+
     setRecords(nextRecordsList);
-    setKpmAuditLogs((prev) => [createdAuditEntry, ...prev]);
-    setProposalHistory((prev) => [enteredHistory, ...prev]);
+    setKpmAuditLogs(nextAuditLogs);
+    setProposalHistory(nextProposalHistory);
     setPendingSelectedProposal(null);
     setLockedKpmProposalScope(null);
     setSelectedYear(savedNewRecord.tahun);
     setActiveKpmId(savedNewRecord.id);
     setKpmDetailReturnToRecap(false);
+    setKpmDetailReturnToChatPeerId(null);
     if (kpmFormReturnToProposalDetail && activeProposal) {
       setKpmFormReturnToProposalDetail(false);
       setKpmDetailReturnToProposalDetail(true);
@@ -1138,6 +1424,7 @@ export default function App() {
       message: `Calon KPM "${savedNewRecord.nama}" (${savedNewRecord.registerCode}) berhasil disimpan.`,
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
+    return true;
   };
 
   const handleDeleteKpm = (id: string) => {
@@ -1169,15 +1456,18 @@ export default function App() {
       timestamp: now,
     };
 
-    setProposalHistory((prev) => [removedHistory, ...prev]);
-    setRecords((prev) =>
-      recalculateProposalRegisterCodes(
-        prev.filter((r) => r.id !== id),
-        proposals,
-        items,
-        wilayahList
-      )
+    const nextHistory = [removedHistory, ...proposalHistory];
+    const nextRecords = recalculateProposalRegisterCodes(
+      records.filter((r) => r.id !== id),
+      proposals,
+      items,
+      wilayahList
     );
+
+    setProposalHistory(nextHistory);
+    setRecords(nextRecords);
+    void syncOperationalData({ records: nextRecords, proposalHistory: nextHistory }, 'delete');
+
     if (activeKpmId === id) {
       setActiveKpmId(null);
       setSubView('none');
@@ -1217,10 +1507,13 @@ export default function App() {
       ],
     };
 
-    setKpmAuditLogs((prev) => [statusAudit, ...prev]);
-    setRecords((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, validasi: status, updatedAt: now } : r))
+    const nextLogs = [statusAudit, ...kpmAuditLogs];
+    const nextRecords = records.map((r) =>
+      r.id === id ? { ...r, validasi: status, updatedAt: now } : r
     );
+    setKpmAuditLogs(nextLogs);
+    setRecords(nextRecords);
+    void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
   };
 
   const handleToggleSubItem = (
@@ -1260,25 +1553,26 @@ export default function App() {
       ],
     };
 
-    setKpmAuditLogs((prev) => [auditEntry, ...prev]);
-    setRecords((prev) =>
-      prev.map((r) =>
-        r.id === kpmId
-          ? {
-              ...r,
-              subItemDeliveries: {
-                ...(r.subItemDeliveries || {}),
-                [subItemKey]: {
-                  delivered: nextDelivered,
-                  updatedAt: now,
-                  updatedBy: currentActor.nama,
-                },
+    const nextLogs = [auditEntry, ...kpmAuditLogs];
+    const nextRecords = records.map((r) =>
+      r.id === kpmId
+        ? {
+            ...r,
+            subItemDeliveries: {
+              ...(r.subItemDeliveries || {}),
+              [subItemKey]: {
+                delivered: nextDelivered,
+                updatedAt: now,
+                updatedBy: currentActor.nama,
               },
-              updatedAt: now,
-            }
-          : r
-      )
+            },
+            updatedAt: now,
+          }
+        : r
     );
+    setKpmAuditLogs(nextLogs);
+    setRecords(nextRecords);
+    void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
   };
 
   const handleMarkAllSubItemsDelivered = (
@@ -1324,18 +1618,40 @@ export default function App() {
       })),
     };
 
-    setKpmAuditLogs((prev) => [auditEntry, ...prev]);
-    setRecords((prev) =>
-      prev.map((r) =>
-        r.id === kpmId
-          ? {
-              ...r,
-              subItemDeliveries: nextDeliveries,
-              updatedAt: now,
-            }
-          : r
-      )
+    const nextLogs = [auditEntry, ...kpmAuditLogs];
+    const nextRecords = records.map((r) =>
+      r.id === kpmId
+        ? {
+            ...r,
+            subItemDeliveries: nextDeliveries,
+            updatedAt: now,
+          }
+        : r
     );
+    setKpmAuditLogs(nextLogs);
+    setRecords(nextRecords);
+    void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
+  };
+
+  const remapSubItemDeliveries = (
+    prevDeliveries: KpmRecord['subItemDeliveries'],
+    oldSubItems: string[],
+    newSubItems: string[]
+  ): KpmRecord['subItemDeliveries'] => {
+    if (!prevDeliveries) return prevDeliveries;
+    const next = { ...prevDeliveries };
+    const oldKeys = oldSubItems.map((s) => normalizeSubItemKey(s));
+    const newKeys = newSubItems.map((s) => normalizeSubItemKey(s));
+    if (oldKeys.length === newKeys.length) {
+      oldKeys.forEach((ok, idx) => {
+        const nk = newKeys[idx];
+        const state = prevDeliveries[ok] ?? prevDeliveries[oldSubItems[idx]];
+        if (ok !== nk && state && !next[nk]) {
+          next[nk] = state;
+        }
+      });
+    }
+    return next;
   };
 
   const handleSaveCatalogItem = (
@@ -1348,73 +1664,116 @@ export default function App() {
     } else {
       if (!requirePermission('add', 'menambah master item')) return;
     }
-    setItems((prev) => {
-      const codeToRemove = originalCode || savedItem.code;
-      const remaining = prev.filter(
-        (i) => !(i.tahun === savedItem.tahun && i.code === codeToRemove)
-      );
-      const otherYears = remaining.filter((i) => i.tahun !== savedItem.tahun);
-      const sameYear = remaining.filter((i) => i.tahun === savedItem.tahun);
-      const clampedIndex = Math.max(0, Math.min(orderIndex, sameYear.length));
-      const reorderedSameYear = [
-        ...sameYear.slice(0, clampedIndex),
-        savedItem,
-        ...sameYear.slice(clampedIndex),
-      ];
-      return [...otherYears, ...reorderedSameYear];
-    });
+    const codeToRemove = originalCode || savedItem.code;
+    const oldItem = items.find((i) => i.tahun === savedItem.tahun && i.code === codeToRemove);
+    const remaining = items.filter(
+      (i) => !(i.tahun === savedItem.tahun && i.code === codeToRemove)
+    );
+    const otherYears = remaining.filter((i) => i.tahun !== savedItem.tahun);
+    const sameYear = remaining.filter((i) => i.tahun === savedItem.tahun);
+    const clampedIndex = Math.max(0, Math.min(orderIndex, sameYear.length));
+    const nextItems = [
+      ...otherYears,
+      ...sameYear.slice(0, clampedIndex),
+      savedItem,
+      ...sameYear.slice(clampedIndex),
+    ];
+
+    let nextRecords = records;
+    if (originalCode) {
+      const codeChanged = originalCode !== savedItem.code;
+      const oldSubs = oldItem?.subItems ?? [];
+      const mappedRecords = records.map((rec) => {
+        if (rec.tahun !== savedItem.tahun || rec.item !== originalCode) return rec;
+        return {
+          ...rec,
+          item: savedItem.code,
+          subItemDeliveries: remapSubItemDeliveries(
+            rec.subItemDeliveries,
+            oldSubs,
+            savedItem.subItems
+          ),
+        };
+      });
+      nextRecords = codeChanged
+        ? recalculateProposalRegisterCodes(mappedRecords, proposals, nextItems, wilayahList)
+        : mappedRecords;
+      setRecords(nextRecords);
+    }
+
+    setItems(nextItems);
+    void syncOperationalData(
+      { items: nextItems, records: nextRecords },
+      originalCode ? 'update' : 'add'
+    );
   };
 
   const handleDeleteCatalogItem = (tahun: string, code: string) => {
     if (!requirePermission('delete', 'menghapus master item')) return;
-    setItems((prev) => prev.filter((i) => !(i.tahun === tahun && i.code === code)));
+    const nextItems = items.filter((i) => !(i.tahun === tahun && i.code === code));
+    setItems(nextItems);
+    void syncOperationalData({ items: nextItems }, 'delete');
   };
 
   const handleMoveItemOrder = (tahun: string, code: string, direction: 'up' | 'down') => {
     if (!requirePermission('update', 'mengubah urutan item')) return;
-    setItems((prev) => {
-      const yearIndices: number[] = [];
-      prev.forEach((item, idx) => {
-        if (item.tahun === tahun) yearIndices.push(idx);
-      });
-      const pos = yearIndices.findIndex((idx) => prev[idx].code === code);
-      if (pos < 0) return prev;
-      const targetPos = direction === 'up' ? pos - 1 : pos + 1;
-      if (targetPos < 0 || targetPos >= yearIndices.length) return prev;
-      const next = [...prev];
-      const idxA = yearIndices[pos];
-      const idxB = yearIndices[targetPos];
-      [next[idxA], next[idxB]] = [next[idxB], next[idxA]];
-      return next;
+    const yearIndices: number[] = [];
+    items.forEach((item, idx) => {
+      if (item.tahun === tahun) yearIndices.push(idx);
     });
+    const pos = yearIndices.findIndex((idx) => items[idx].code === code);
+    if (pos < 0) return;
+    const targetPos = direction === 'up' ? pos - 1 : pos + 1;
+    if (targetPos < 0 || targetPos >= yearIndices.length) return;
+    const nextItems = [...items];
+    const idxA = yearIndices[pos];
+    const idxB = yearIndices[targetPos];
+    [nextItems[idxA], nextItems[idxB]] = [nextItems[idxB], nextItems[idxA]];
+    setItems(nextItems);
+    void syncOperationalData({ items: nextItems }, 'update');
   };
 
   const handleUpdateItemSubItems = (tahun: string, code: string, subItems: string[]) => {
     if (!requirePermission('update', 'mengubah sub-item bantuan')) return;
-    setItems((prev) =>
-      prev.map((i) =>
-        i.tahun === tahun && i.code === code
-          ? { ...i, subItems }
-          : i
-      )
+    const oldItem = items.find((i) => i.tahun === tahun && i.code === code);
+    const nextItems = items.map((i) =>
+      i.tahun === tahun && i.code === code ? { ...i, subItems } : i
     );
+    const nextRecords = oldItem
+      ? records.map((rec) =>
+          rec.tahun === tahun && rec.item === code
+            ? {
+                ...rec,
+                subItemDeliveries: remapSubItemDeliveries(
+                  rec.subItemDeliveries,
+                  oldItem.subItems,
+                  subItems
+                ),
+              }
+            : rec
+        )
+      : records;
+
+    setItems(nextItems);
+    if (oldItem) setRecords(nextRecords);
+    void syncOperationalData({ items: nextItems, records: nextRecords }, 'update');
   };
 
   const handleCopyItemsFromYear = (fromYear: string, toYear: string) => {
     if (!requirePermission('add', 'menyalin item antar tahun')) return;
-    setItems((prev) => {
-      const source = prev.filter((i) => i.tahun === fromYear);
-      const existingCodes = new Set(prev.filter((i) => i.tahun === toYear).map((i) => i.code));
-      const additions = source
-        .filter((s) => !existingCodes.has(s.code))
-        .map((s) => ({
-          ...s,
-          id: `${toYear}-${s.code}`,
-          tahun: toYear,
-          subItems: [...s.subItems],
-        }));
-      return [...prev, ...additions];
-    });
+    const source = items.filter((i) => i.tahun === fromYear);
+    const existingCodes = new Set(items.filter((i) => i.tahun === toYear).map((i) => i.code));
+    const additions = source
+      .filter((s) => !existingCodes.has(s.code))
+      .map((s) => ({
+        ...s,
+        id: `${toYear}-${s.code}`,
+        tahun: toYear,
+        subItems: [...s.subItems],
+      }));
+    const nextItems = [...items, ...additions];
+    setItems(nextItems);
+    void syncOperationalData({ items: nextItems }, 'add');
   };
 
   const handleCreateProposal = (values: ProposalFormValues) => {
@@ -1440,7 +1799,9 @@ export default function App() {
       updatedAt: now,
     };
 
-    setProposals((prev) => [newProposal, ...prev]);
+    const nextProposals = [newProposal, ...proposals];
+    setProposals(nextProposals);
+    void syncOperationalData({ proposals: nextProposals }, 'add');
 
     if (addProposalFromKpmForm && newProposal.status === 'unlocked') {
       setPendingSelectedProposal({
@@ -1483,22 +1844,62 @@ export default function App() {
     }
 
     const now = new Date().toISOString();
-    setProposals((prev) =>
-      prev.map((p) =>
-        p.id === proposalId
-          ? {
-              ...p,
-              tahun: values.tahun,
-              tipe: values.tipe as ProposalRecord['tipe'],
-              jumlahKpm: values.jumlahKpm ?? p.jumlahKpm ?? 66,
-              status: values.status,
-              checklist: values.checklist,
-              catatan: values.catatan,
-              documents: values.documents,
-              updatedAt: now,
-            }
-          : p
-      )
+    const nextProposals = proposals.map((p) =>
+      p.id === proposalId
+        ? {
+            ...p,
+            tahun: values.tahun,
+            tipe: values.tipe as ProposalRecord['tipe'],
+            jumlahKpm: values.jumlahKpm ?? p.jumlahKpm ?? 66,
+            status: values.status,
+            checklist: values.checklist,
+            catatan: values.catatan,
+            documents: values.documents,
+            updatedAt: now,
+          }
+        : p
+    );
+
+    let nextRecords = records;
+    let nextProposalHistory = proposalHistory;
+    let nextKpmAuditLogs = kpmAuditLogs;
+
+    if (values.tahun !== existing.tahun) {
+      const updatedRecords = records.map((rec) =>
+        rec.proposal === existing.namaProposal && rec.tahun === existing.tahun
+          ? { ...rec, tahun: values.tahun, updatedAt: now }
+          : rec
+      );
+      nextRecords = recalculateProposalRegisterCodes(
+        updatedRecords,
+        nextProposals,
+        items,
+        wilayahList
+      );
+      nextProposalHistory = proposalHistory.map((h) =>
+        h.proposalName === existing.namaProposal && h.tahun === existing.tahun
+          ? { ...h, tahun: values.tahun }
+          : h
+      );
+      nextKpmAuditLogs = kpmAuditLogs.map((l) =>
+        l.proposal === existing.namaProposal && l.tahun === existing.tahun
+          ? { ...l, tahun: values.tahun }
+          : l
+      );
+      setRecords(nextRecords);
+      setProposalHistory(nextProposalHistory);
+      setKpmAuditLogs(nextKpmAuditLogs);
+    }
+
+    setProposals(nextProposals);
+    void syncOperationalData(
+      {
+        proposals: nextProposals,
+        records: nextRecords,
+        proposalHistory: nextProposalHistory,
+        kpmAuditLogs: nextKpmAuditLogs,
+      },
+      'update'
     );
 
     setSubView('proposal-detail');
@@ -1515,17 +1916,17 @@ export default function App() {
     if (!target) return;
 
     const nextStatus = target.status === 'locked' ? 'unlocked' : 'locked';
-    setProposals((prev) =>
-      prev.map((p) =>
-        p.id === proposalId
-          ? {
-              ...p,
-              status: nextStatus,
-              updatedAt: new Date().toISOString(),
-            }
-          : p
-      )
+    const nextProposals: ProposalRecord[] = proposals.map((p) =>
+      p.id === proposalId
+        ? {
+            ...p,
+            status: nextStatus,
+            updatedAt: new Date().toISOString(),
+          }
+        : p
     );
+    setProposals(nextProposals);
+    void syncOperationalData({ proposals: nextProposals }, 'update');
     setFeedback({
       type: 'success',
       message:
@@ -1547,11 +1948,12 @@ export default function App() {
       });
       const data = (await res.json()) as {
         error?: string;
+        token?: string;
         user?: InternalUser;
         users?: InternalUser[];
         messages?: DirectChatMessage[];
       };
-      if (!res.ok || !data.user) {
+      if (!res.ok || !data.user || !data.token) {
         return { ok: false, error: data.error || 'Email atau kata sandi tidak sesuai.' };
       }
 
@@ -1561,12 +1963,15 @@ export default function App() {
       if (Array.isArray(data.messages)) {
         setDirectMessages(data.messages);
       }
+      setSessionToken(data.token);
       setSessionUserId(data.user.id);
       try {
+        localStorage.setItem(SESSION_TOKEN_STORAGE_KEY, data.token);
         localStorage.setItem(SESSION_STORAGE_KEY, data.user.id);
       } catch {
         // Ignore
       }
+      await loadOrBootstrapOperationalData(data.token, data.user);
       setSubView('none');
       setActiveTab('dashboard');
       return { ok: true };
@@ -1596,7 +2001,10 @@ export default function App() {
       if (!res.ok || !data.user) {
         return { ok: false, error: data.error || 'Gagal mendaftar.' };
       }
-      setInternalUsers((prev) => [data.user as InternalUser, ...prev.filter((u) => u.id !== data.user?.id)]);
+      setInternalUsers((prev) => [
+        data.user as InternalUser,
+        ...prev.filter((u) => u.id !== data.user?.id),
+      ]);
       return {
         ok: true,
         message:
@@ -1608,27 +2016,43 @@ export default function App() {
     }
   };
 
+  const handleVerifySuperAdminPassword = async (
+    password: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await authFetch(
+        '/api/auth/verify-password',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password }),
+        },
+        undefined,
+        true
+      );
+      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) {
+        return { ok: false, error: data.error || 'Kata sandi salah.' };
+      }
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'Gagal terhubung ke server autentikasi.' };
+    }
+  };
+
   const handleLogout = async () => {
-    const uid = currentUser?.id;
-    if (uid) {
-      fetch(`/api/users/${encodeURIComponent(uid)}/profile`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ presenceManual: false, presenceStatus: 'offline' }),
+    const token = sessionTokenRef.current;
+    if (token) {
+      fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
       }).catch(() => {});
     }
     wsRef.current?.close();
     wsRef.current = null;
-    setSessionUserId(null);
-    setDirectMessages([]);
-    setActiveChatPeerId(null);
+    clearSessionState();
     setSubView('none');
     setActiveTab('dashboard');
-    try {
-      localStorage.removeItem(SESSION_STORAGE_KEY);
-    } catch {
-      // Ignore
-    }
   };
 
   const handleUpdateProfile = async (patch: {
@@ -1642,7 +2066,7 @@ export default function App() {
   }): Promise<{ ok: boolean; error?: string }> => {
     if (!currentUser) return { ok: false, error: 'Sesi tidak ditemukan.' };
     try {
-      const res = await fetch(`/api/users/${encodeURIComponent(currentUser.id)}/profile`, {
+      const res = await authFetch(`/api/users/${encodeURIComponent(currentUser.id)}/profile`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(patch),
@@ -1652,7 +2076,9 @@ export default function App() {
         return { ok: false, error: data.error || 'Gagal memperbarui profil.' };
       }
       setInternalUsers((prev) =>
-        prev.map((u) => (u.id === data.user?.id ? data.user : u))
+        prev.some((u) => u.id === data.user?.id)
+          ? prev.map((u) => (u.id === data.user?.id ? (data.user as InternalUser) : u))
+          : [...prev, data.user as InternalUser]
       );
       return { ok: true };
     } catch {
@@ -1666,6 +2092,10 @@ export default function App() {
       status?: InternalUserStatus;
       role?: InternalUserRole;
       permissions?: UserPermissions;
+      nama?: string;
+      jabatan?: string;
+      kontak?: string;
+      newPassword?: string;
     }
   ) => {
     if (!currentUser || currentUser.role !== 'SuperAdmin') {
@@ -1677,10 +2107,10 @@ export default function App() {
     }
 
     try {
-      const res = await fetch(`/api/users/${encodeURIComponent(userId)}/admin-control`, {
+      const res = await authFetch(`/api/users/${encodeURIComponent(userId)}/admin-control`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ actorId: currentUser.id, ...patch }),
+        body: JSON.stringify(patch),
       });
       const data = (await res.json()) as { error?: string; users?: InternalUser[] };
       if (!res.ok) {
@@ -1695,53 +2125,178 @@ export default function App() {
     }
   };
 
+  const handleDeleteInternalUser = async (userId: string) => {
+    if (!currentUser || currentUser.role !== 'SuperAdmin') {
+      setFeedback({
+        type: 'error',
+        message: 'Hanya SuperAdmin yang dapat menghapus akun pengguna.',
+      });
+      return;
+    }
+    try {
+      const res = await authFetch(`/api/users/${encodeURIComponent(userId)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = (await res.json()) as { error?: string; users?: InternalUser[] };
+      if (!res.ok) {
+        setFeedback({ type: 'error', message: data.error || 'Gagal menghapus akun pengguna.' });
+        return;
+      }
+      if (Array.isArray(data.users)) {
+        setInternalUsers(data.users);
+      }
+      setFeedback({ type: 'success', message: 'Akun pengguna berhasil dihapus.' });
+    } catch {
+      setFeedback({ type: 'error', message: 'Gagal terhubung ke server saat menghapus akun.' });
+    }
+  };
+
+  const handleAdminDataAction = async (action: AdminDataActionType) => {
+    if (!currentUser || currentUser.role !== 'SuperAdmin') {
+      setFeedback({
+        type: 'error',
+        message: 'Hanya SuperAdmin yang berhak menjalankan kontrol reset data.',
+      });
+      return;
+    }
+
+    try {
+      const res = await authFetch('/api/admin/data-action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        state?: OperationalDataPayload;
+      };
+      if (!res.ok || !data.state) {
+        setFeedback({
+          type: 'error',
+          message: data.error || 'Gagal menjalankan kontrol data pada server.',
+        });
+        return;
+      }
+
+      try {
+        localStorage.setItem('masdeta_csv_seed_ptk_kota_2026_v1', 'done');
+      } catch {
+        // Ignore storage write error
+      }
+
+      applyRemoteOperationalState(data.state);
+
+      if (action === 'delete_all_kpm') {
+        setActiveKpmId(null);
+        setFeedback({
+          type: 'success',
+          message: 'Seluruh data calon KPM dan log audit KPM telah dihapus.',
+        });
+      } else if (action === 'delete_all_proposal') {
+        setActiveProposalId(null);
+        setActiveKpmId(null);
+        setFeedback({
+          type: 'success',
+          message: 'Seluruh daftar proposal, KPM terkait, dan rekam jejak telah dihapus.',
+        });
+      } else if (action === 'delete_all_items') {
+        setFeedback({
+          type: 'success',
+          message: 'Seluruh katalog item dan sub-item telah dikosongkan.',
+        });
+      } else if (action === 'delete_all_data') {
+        setActiveKpmId(null);
+        setActiveProposalId(null);
+        setFeedback({
+          type: 'success',
+          message: 'Seluruh data KPM, proposal, item, wilayah, pengelola, dan riwayat telah dihapus.',
+        });
+      } else if (action === 'reset_total') {
+        setDirectMessages([]);
+        setActiveKpmId(null);
+        setActiveProposalId(null);
+        setFeedback({
+          type: 'success',
+          message: 'Reset total selesai. Seluruh data aplikasi dan riwayat chat telah dikosongkan.',
+        });
+      }
+    } catch {
+      setFeedback({
+        type: 'error',
+        message: 'Gagal terhubung ke server saat menjalankan kontrol reset data.',
+      });
+    }
+  };
+
   const handleRegisterInternalUser = async (user: {
     nama: string;
     email: string;
     jabatan: string;
     kontak: string;
     role: InternalUserRole;
-  }) => {
+    password?: string;
+  }): Promise<{ ok: boolean; error?: string }> => {
+    const initialPassword = user.password?.trim() || 'masdeta123';
     try {
-      const res = await fetch('/api/auth/register', {
+      const res = await authFetch('/api/admin/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...user, password: 'masdeta123' }),
+        body: JSON.stringify({
+          ...user,
+          password: initialPassword,
+          permissions:
+            user.role === 'SuperAdmin'
+              ? { add: true, update: true, delete: true }
+              : user.role === 'Viewer'
+                ? { add: false, update: false, delete: false }
+                : { add: true, update: true, delete: false },
+        }),
       });
-      const data = (await res.json()) as { error?: string; user?: InternalUser };
+      const data = (await res.json()) as {
+        error?: string;
+        user?: InternalUser;
+        users?: InternalUser[];
+      };
       if (!res.ok || !data.user) {
-        setFeedback({ type: 'error', message: data.error || 'Gagal menambahkan user baru.' });
-        return;
+        const errMsg = data.error || 'Gagal menambahkan user baru.';
+        setFeedback({ type: 'error', message: errMsg });
+        return { ok: false, error: errMsg };
       }
-      setInternalUsers((prev) => [data.user as InternalUser, ...prev]);
 
-      if (currentUser?.role === 'SuperAdmin') {
-        await handleAdminControlUser(data.user.id, {
-          status: 'active',
-          role: user.role,
-          permissions: { add: true, update: true, delete: false },
-        });
+      if (Array.isArray(data.users)) {
+        setInternalUsers(data.users);
+      } else {
+        setInternalUsers((prev) => [data.user as InternalUser, ...prev]);
       }
+
       setFeedback({
         type: 'success',
-        message: `Akun "${user.nama}" (${user.email}) ditambahkan dengan kata sandi awal: masdeta123`,
+        message: `Akun "${user.nama}" (${user.email}) aktif ditambahkan dengan kata sandi awal: ${initialPassword}`,
       });
+      return { ok: true };
     } catch {
-      setFeedback({ type: 'error', message: 'Gagal terhubung ke server.' });
+      const errMsg = 'Gagal terhubung ke server.';
+      setFeedback({ type: 'error', message: errMsg });
+      return { ok: false, error: errMsg };
     }
   };
 
-  const handleSendChatMessage = async (recipientId: string, text: string) => {
+  const handleSendChatMessage = async (
+    recipientId: string,
+    text: string,
+    sharedKpm?: SharedKpmCard
+  ) => {
     if (!currentUser) return;
     const clientMsgId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const res = await fetch('/api/chat/send', {
+    const res = await authFetch('/api/chat/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         id: clientMsgId,
-        senderId: currentUser.id,
         recipientId,
         text,
+        sharedKpm,
       }),
     });
     const data = (await res.json()) as { message?: DirectChatMessage };
@@ -1751,6 +2306,19 @@ export default function App() {
         prev.some((m) => m.id === savedMsg.id) ? prev : [...prev, savedMsg]
       );
     }
+  };
+
+  const handleShareKpmToChat = async (
+    recipientId: string,
+    card: SharedKpmCard,
+    messageText: string
+  ) => {
+    await handleSendChatMessage(recipientId, messageText, card);
+    openChatView(recipientId);
+    setFeedback({
+      type: 'success',
+      message: `Kartu KPM "${card.nama}" berhasil dikirim ke chat.`,
+    });
   };
 
   const handleRequestPushPermission = async () => {
@@ -1847,12 +2415,13 @@ export default function App() {
       ],
     }));
 
-    setKpmAuditLogs((prev) => [...newLogs, ...prev]);
-    setRecords((prev) =>
-      prev.map((r) =>
-        targetIds.has(r.id) ? { ...r, validasi: 'accepted', updatedAt: now } : r
-      )
+    const nextLogs = [...newLogs, ...kpmAuditLogs];
+    const nextRecords = records.map((r) =>
+      targetIds.has(r.id) ? { ...r, validasi: 'accepted' as ValidationStatus, updatedAt: now } : r
     );
+    setKpmAuditLogs(nextLogs);
+    setRecords(nextRecords);
+    void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
     setFeedback({
       type: 'success',
       message: `${targets.length} calon KPM pada "${proposalName}" (${tahun}) disetujui menjadi Diterima.`,
@@ -1883,25 +2452,26 @@ export default function App() {
       ],
     };
 
-    setKpmAuditLogs((prev) => [auditEntry, ...prev]);
-    setRecords((prev) =>
-      prev.map((r) =>
-        r.id === kpmId
-          ? {
-              ...r,
-              berkasDikembalikan: nextValue,
-              berkasDikembalikanAt: nextValue ? now : undefined,
-              berkasDikembalikanBy: nextValue ? currentActor.nama : undefined,
-              updatedAt: now,
-            }
-          : r
-      )
+    const nextLogs = [auditEntry, ...kpmAuditLogs];
+    const nextRecords = records.map((r) =>
+      r.id === kpmId
+        ? {
+            ...r,
+            berkasDikembalikan: nextValue,
+            berkasDikembalikanAt: nextValue ? now : undefined,
+            berkasDikembalikanBy: nextValue ? currentActor.nama : undefined,
+            updatedAt: now,
+          }
+        : r
     );
+    setKpmAuditLogs(nextLogs);
+    setRecords(nextRecords);
+    void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
   };
 
   const showBottomNav = subView === 'none' && !(activeTab === 'menu' && menuSection !== 'root');
 
-  if (sessionUserId && !authReady && !currentUser) {
+  if (sessionToken && !authReady && !currentUser) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-100 p-4">
         <div className="flex flex-col items-center gap-3 rounded-3xl border border-slate-200 bg-white px-8 py-6 shadow-xs">
@@ -2012,6 +2582,17 @@ export default function App() {
             }}
             onSendMessage={handleSendChatMessage}
             onMarkConversationRead={handleMarkChatRead}
+            onOpenSharedKpm={(kpmId) => {
+              const found = records.find((r) => r.id === kpmId);
+              if (found) {
+                openKpmDetail(found, returnToTab, false, activeChatPeerId || '__list__');
+              } else {
+                setFeedback({
+                  type: 'error',
+                  message: 'Data KPM ini sudah tidak tersedia atau telah dihapus.',
+                });
+              }
+            }}
             pushPermission={pushPermission}
             onRequestPushPermission={handleRequestPushPermission}
             onBack={() => {
@@ -2048,12 +2629,23 @@ export default function App() {
             items={items}
             wilayahList={wilayahList}
             auditLogs={kpmAuditLogs}
+            currentUserId={currentUser.id}
+            internalUsers={internalUsers}
+            canUpdate={hasPermission('update')}
+            canDelete={hasPermission('delete')}
             feedback={feedback}
             onDismissFeedback={() => setFeedback(null)}
             onBack={() => {
               setFeedback(null);
               setActiveKpmId(null);
-              if (kpmDetailReturnToProposalDetail && activeProposal) {
+              if (kpmDetailReturnToChatPeerId) {
+                const peer =
+                  kpmDetailReturnToChatPeerId === '__list__' ? null : kpmDetailReturnToChatPeerId;
+                setKpmDetailReturnToChatPeerId(null);
+                setActiveChatPeerId(peer);
+                setSubView('chat');
+                if (peer) void handleMarkChatRead(peer);
+              } else if (kpmDetailReturnToProposalDetail && activeProposal) {
                 setKpmDetailReturnToProposalDetail(false);
                 setSubView('proposal-detail');
               } else if (kpmDetailReturnToRecap) {
@@ -2070,6 +2662,7 @@ export default function App() {
             onUpdateStatus={handleUpdateKpmStatus}
             onToggleSubItem={handleToggleSubItem}
             onMarkAllSubItemsDelivered={handleMarkAllSubItemsDelivered}
+            onShareToChat={handleShareKpmToChat}
             onSelectDuplicateRecord={(dup) => {
               setActiveKpmId(dup.id);
               window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2117,6 +2710,7 @@ export default function App() {
           <div className={subView === 'kpm-form' ? '' : 'hidden'}>
             <KpmRegistrationForm
               editingRecord={editingKpmRecord}
+              existingRecords={records}
               pengelolaList={pengelolaList}
               proposals={proposals}
               itemOptions={items}
@@ -2190,6 +2784,8 @@ export default function App() {
             records={records}
             items={items}
             historyEntries={proposalHistory}
+            canAdd={hasPermission('add')}
+            canUpdate={hasPermission('update')}
             onBack={() => {
               setFeedback(null);
               setSubView('none');
@@ -2240,6 +2836,7 @@ export default function App() {
         {subView === 'edit-proposal' && activeProposal && (
           <ProposalForm
             proposal={activeProposal}
+            existingProposals={proposals}
             feedback={feedback}
             onDismissFeedback={() => setFeedback(null)}
             onBack={() => {
@@ -2278,6 +2875,7 @@ export default function App() {
               setActiveTab('kpm');
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
+            onOpenKpmDetail={(rec) => openKpmDetail(rec, 'dashboard')}
             onOpenSubItemRecap={() => openSubItemRecap('dashboard')}
             onOpenProposalList={() => {
               setActiveTab('proposal');
@@ -2286,12 +2884,32 @@ export default function App() {
             onOpenProposalDetail={(id) => openProposalDetailById(id, 'dashboard')}
             onOpenAddProposal={() => openAddProposalForm('dashboard')}
             onOpenUserApproval={() => {
+              setMenuOpenedFromDashboard(true);
               setMenuSection('users');
               setActiveTab('menu');
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onOpenDuplicateCheck={() => {
+              setMenuOpenedFromDashboard(true);
               setMenuSection('duplikasi');
+              setActiveTab('menu');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            onOpenArsip={() => {
+              setMenuOpenedFromDashboard(true);
+              setMenuSection('arsip');
+              setActiveTab('menu');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            onOpenDtsen={() => {
+              setMenuOpenedFromDashboard(true);
+              setMenuSection('dtsen');
+              setActiveTab('menu');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            onOpenAdministrasi={() => {
+              setMenuOpenedFromDashboard(true);
+              setMenuSection('administrasi');
               setActiveTab('menu');
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
@@ -2339,7 +2957,16 @@ export default function App() {
         {subView === 'none' && activeTab === 'menu' && (
           <MenuHubView
             activeSection={menuSection}
-            onChangeSection={setMenuSection}
+            onChangeSection={(section) => {
+              if (section === 'root' && menuOpenedFromDashboard) {
+                setMenuOpenedFromDashboard(false);
+                setMenuSection('root');
+                setActiveTab('dashboard');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+                return;
+              }
+              setMenuSection(section);
+            }}
             currentUser={currentUser}
             unreadChatCount={unreadChatCount}
             records={records}
@@ -2358,16 +2985,22 @@ export default function App() {
             onCopyItemsFromYear={handleCopyItemsFromYear}
             onAddPekerjaan={(job) => {
               if (!requirePermission('add', 'menambah daftar pekerjaan')) return;
-              setPekerjaanList((prev) => [...prev, job]);
+              const nextPekerjaan = [...pekerjaanList, job];
+              setPekerjaanList(nextPekerjaan);
+              void syncOperationalData({ pekerjaanList: nextPekerjaan }, 'add');
             }}
             onUpdateWilayahList={(nextList) => {
               if (!requirePermission('update', 'mengubah data wilayah')) return;
               setWilayahList(nextList);
+              void syncOperationalData({ wilayahList: nextList }, 'update');
             }}
             onOpenAddProposal={() => openAddProposalForm('menu')}
             onOpenSubItemRecap={() => openSubItemRecap('menu')}
             onAddPengelola={handleCreatePengelola}
             onAdminControlUser={handleAdminControlUser}
+            onDeleteInternalUser={handleDeleteInternalUser}
+            onAdminDataAction={handleAdminDataAction}
+            onVerifySuperAdminPassword={handleVerifySuperAdminPassword}
             onRegisterInternalUser={handleRegisterInternalUser}
             onImportCsv={handleImportCsv}
             onSelectKpm={(rec) => openKpmDetail(rec, 'menu')}
@@ -2379,7 +3012,10 @@ export default function App() {
       </div>
 
       {/* Floating Scroll-To-Top Hover Button */}
-      <ScrollToTopButton hasBottomNav={showBottomNav} />
+      <ScrollToTopButton
+        hasBottomNav={showBottomNav}
+        hasFloatingAction={subView === 'kpm-detail' || subView === 'proposal-detail'}
+      />
 
       {/* Bottom Navigation Bar with Central Circular Add Button */}
       {showBottomNav && (
@@ -2389,6 +3025,7 @@ export default function App() {
           unreadChatCount={unreadChatCount}
           onSelectTab={(tab) => {
             setFeedback(null);
+            setMenuOpenedFromDashboard(false);
             if (tab === 'menu') setMenuSection('root');
             setActiveTab(tab);
             window.scrollTo({ top: 0, behavior: 'smooth' });

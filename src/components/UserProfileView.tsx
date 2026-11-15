@@ -1,10 +1,11 @@
-import { ChangeEvent, FormEvent, useState } from 'react';
+import { ChangeEvent, FormEvent, useEffect, useState } from 'react';
 import {
   ArrowLeft,
   Bell,
   BellRing,
   Camera,
   CheckCircle2,
+  Loader2,
   LogOut,
   Shield,
   User,
@@ -47,19 +48,46 @@ export function UserProfileView({
   const [fotoDataUrl, setFotoDataUrl] = useState<string | undefined>(user.fotoDataUrl);
   const [newPassword, setNewPassword] = useState('');
   const [saving, setSaving] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(
     null
   );
+
+  useEffect(() => {
+    setFotoDataUrl(user.fotoDataUrl);
+  }, [user.fotoDataUrl]);
+
+  useEffect(() => {
+    setNama(user.nama);
+    setKontak(user.kontak || '');
+  }, [user.id, user.nama, user.kontak]);
 
   const handlePhotoChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    setFeedback(null);
+    setUploadingPhoto(true);
     try {
-      const compressed = await processImageUpload(file);
+      const compressed = await processImageUpload(file, { maxDimension: 512, quality: 0.85 });
       setFotoDataUrl(compressed.dataUrl);
+      const res = await onUpdateProfile({
+        nama: capitalizeWords((nama.trim() || user.nama).trim()),
+        jabatan: user.jabatan,
+        kontak: kontak.trim(),
+        fotoDataUrl: compressed.dataUrl,
+        presenceManual: false,
+        presenceStatus: user.presenceStatus || 'online',
+      });
+      if (res.ok) {
+        setFeedback({ type: 'success', message: 'Foto profil berhasil disimpan.' });
+      } else {
+        setFeedback({ type: 'error', message: res.error || 'Gagal menyimpan foto profil.' });
+      }
     } catch {
       setFeedback({ type: 'error', message: 'Gagal memproses foto profil.' });
+    } finally {
+      setUploadingPhoto(false);
     }
   };
 
@@ -130,38 +158,54 @@ export function UserProfileView({
           <label className="relative flex h-24 w-24 cursor-pointer items-center justify-center overflow-visible">
             <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-3xl border-2 border-slate-200 bg-slate-100 text-slate-500 shadow-xs">
               {fotoDataUrl ? (
-                <img src={fotoDataUrl} alt={nama} className="h-full w-full object-cover" />
+                <img
+                  src={fotoDataUrl}
+                  alt={nama}
+                  referrerPolicy="no-referrer"
+                  className={`h-full w-full object-cover transition-opacity ${
+                    uploadingPhoto ? 'opacity-50' : 'opacity-100'
+                  }`}
+                />
               ) : (
                 <User className="h-10 w-10" />
               )}
             </div>
             <span className="absolute -right-1.5 -bottom-1.5 flex h-8 w-8 items-center justify-center rounded-full border-2 border-white bg-teal-700 text-white shadow-sm">
-              <Camera className="h-4 w-4" />
+              {uploadingPhoto ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Camera className="h-4 w-4" />
+              )}
             </span>
             <PresenceDot
               status={user.presenceStatus || 'online'}
               size="lg"
-              className="absolute -top-1 -right-1"
+              className="absolute -bottom-1 -left-1"
             />
-            <input type="file" accept="image/*" className="hidden" onChange={handlePhotoChange} />
+            <input
+              type="file"
+              accept="image/*"
+              disabled={uploadingPhoto}
+              className="hidden"
+              onChange={handlePhotoChange}
+            />
           </label>
 
-          <div className="mt-3.5 flex items-center justify-center gap-2">
-            <p className="text-lg font-bold text-slate-900">{user.nama}</p>
-            <span
-              className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-bold ${
-                user.role === 'SuperAdmin'
-                  ? 'bg-slate-900 text-white'
-                  : user.role === 'Admin'
-                    ? 'bg-teal-50 text-teal-800'
-                    : 'bg-slate-100 text-slate-600'
-              }`}
-            >
-              {user.role}
-            </span>
-          </div>
+          <p className="mt-3.5 text-lg font-bold text-slate-900">{user.nama}</p>
 
-          <p className="mt-0.5 text-xs text-slate-500">{user.email}</p>
+          <span
+            className={`mt-1.5 inline-block shrink-0 rounded-md px-2.5 py-0.5 text-[11px] font-bold ${
+              user.role === 'SuperAdmin'
+                ? 'bg-slate-900 text-white'
+                : user.role === 'Admin'
+                  ? 'bg-teal-50 text-teal-800'
+                  : 'bg-slate-100 text-slate-600'
+            }`}
+          >
+            {user.role}
+          </span>
+
+          <p className="mt-1.5 text-xs text-slate-500">{user.email}</p>
 
           <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-slate-50 px-3 py-1">
             <span className={`h-2 w-2 rounded-full ${presenceMeta.dotClass}`} />
@@ -174,20 +218,20 @@ export function UserProfileView({
         {/* Push Notification Settings */}
         <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
           <div className="flex items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-2.5">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+            <div className="flex min-w-0 flex-1 items-start gap-2.5">
+              <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
                 {pushEnabled ? <BellRing className="h-4 w-4" /> : <Bell className="h-4 w-4" />}
               </div>
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <p className="text-sm font-bold text-slate-900">Push Notification Chat</p>
-                <p className="truncate text-xs text-slate-500">
+                <p className="mt-0.5 text-xs leading-snug text-slate-500">
                   {pushPermission === 'granted'
                     ? 'Izin notifikasi perangkat aktif'
                     : pushPermission === 'denied'
                       ? 'Diblokir browser (aktif via notis in-app)'
                       : pushPermission === 'unsupported'
                         ? 'Notifikasi aktif di dalam aplikasi'
-                        : 'Ketuk Aktifkan untuk push notis chat'}
+                        : 'Ketuk Aktifkan untuk menerima push notifikasi chat'}
                 </p>
               </div>
             </div>
@@ -220,46 +264,56 @@ export function UserProfileView({
           </div>
         </section>
 
-        {/* Permissions Summary */}
-        <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
-          <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
-            <Shield className="h-4 w-4 text-teal-700" />
-            <span>Hak Akses Akun ({user.role})</span>
-          </div>
-          <div className="grid grid-cols-3 gap-2.5 text-center">
-            {[
-              { label: 'ADD', allowed: user.role === 'SuperAdmin' || user.permissions?.add },
-              { label: 'UPDATE', allowed: user.role === 'SuperAdmin' || user.permissions?.update },
-              { label: 'DELETE', allowed: user.role === 'SuperAdmin' || user.permissions?.delete },
-            ].map((perm) => (
-              <div
-                key={perm.label}
-                className={`flex flex-col items-center justify-center rounded-xl border px-2 py-2.5 ${
-                  perm.allowed
-                    ? 'border-teal-200 bg-teal-50/70'
-                    : 'border-slate-200 bg-slate-50'
-                }`}
-              >
-                <span
-                  className={`text-[11px] font-bold tracking-wider ${
-                    perm.allowed ? 'text-teal-900' : 'text-slate-500'
-                  }`}
-                >
-                  {perm.label}
-                </span>
-                <span
-                  className={`mt-1 inline-block rounded-md px-2 py-0.5 text-[10px] font-bold ${
-                    perm.allowed
-                      ? 'bg-teal-700 text-white'
-                      : 'bg-slate-200 text-slate-500'
-                  }`}
-                >
-                  {perm.allowed ? 'Aktif' : 'Nonaktif'}
-                </span>
+        {/* Permissions Summary (Read-only for Admin & Viewer; hidden for SuperAdmin) */}
+        {user.role !== 'SuperAdmin' && (
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
+                <Shield className="h-4 w-4 text-teal-700" />
+                <span>Hak Akses Akun ({user.role})</span>
               </div>
-            ))}
-          </div>
-        </section>
+              <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">
+                Hanya Baca
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-2.5 text-center">
+              {[
+                { label: 'ADD', allowed: Boolean(user.permissions?.add) },
+                { label: 'UPDATE', allowed: Boolean(user.permissions?.update) },
+                { label: 'DELETE', allowed: Boolean(user.permissions?.delete) },
+              ].map((perm) => (
+                <div
+                  key={perm.label}
+                  className={`flex flex-col items-center justify-center rounded-xl border px-2 py-2.5 ${
+                    perm.allowed
+                      ? 'border-teal-200 bg-teal-50/70'
+                      : 'border-slate-200 bg-slate-50'
+                  }`}
+                >
+                  <span
+                    className={`text-[11px] font-semibold tracking-wider ${
+                      perm.allowed ? 'text-teal-900' : 'text-slate-500'
+                    }`}
+                  >
+                    {perm.label}
+                  </span>
+                  <span
+                    className={`mt-1 inline-block rounded-md px-2 py-0.5 text-[10px] font-semibold ${
+                      perm.allowed
+                        ? 'bg-teal-700 text-white'
+                        : 'bg-slate-200 text-slate-500'
+                    }`}
+                  >
+                    {perm.allowed ? 'Aktif' : 'Nonaktif'}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <p className="text-[11px] leading-snug text-slate-500">
+              Izin akses ditetapkan oleh SuperAdmin dan tidak dapat diubah langsung dari akun ini.
+            </p>
+          </section>
+        )}
 
         {/* Edit Profile Form */}
         <form
