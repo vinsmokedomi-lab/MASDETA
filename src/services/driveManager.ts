@@ -14,8 +14,13 @@ export interface DriveDeleteResult {
 }
 
 function getGasConfig(): { uploadUrl: string; apiKey: string } {
-  const uploadUrl = (import.meta.env.VITE_GAS_UPLOAD_URL || '').trim();
-  const apiKey = (import.meta.env.VITE_GAS_API_KEY || '').trim();
+  const uploadUrl = (
+    import.meta.env.VITE_GAS_UPLOAD_URL ||
+    'https://script.google.com/macros/s/AKfycbzWA6Nea-ScYwzEOfAueQ5r0UOTScVk17ty5AXizM85Wxl0r5w4I6XYgN_Jz4OF2QJi/exec'
+  ).trim();
+  const apiKey = (
+    import.meta.env.VITE_GAS_API_KEY || 'MASDETA_DRIVE_KEY_2026_AMAN'
+  ).trim();
 
   if (!uploadUrl) {
     throw new Error('VITE_GAS_UPLOAD_URL belum dikonfigurasi pada environment.');
