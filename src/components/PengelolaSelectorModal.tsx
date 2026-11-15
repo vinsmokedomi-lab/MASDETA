@@ -15,6 +15,7 @@ import {
   sanitizeDigits,
 } from '../utils/imageProcessor';
 import { DocumentUploadCard } from './DocumentUploadCard';
+import { DriveImage } from './DriveImage';
 import { PlaceholderSelect } from './FormControls';
 
 interface AddPengelolaFormContentProps {
@@ -480,10 +481,9 @@ export function PengelolaSelectorModal({
                       <div className="flex items-center gap-3 min-w-0">
                         <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
                           {item.foto ? (
-                            <img
-                              src={item.foto.dataUrl}
+                            <DriveImage
+                              doc={item.foto}
                               alt={item.displayName}
-                              referrerPolicy="no-referrer"
                               className="h-full w-full object-cover"
                             />
                           ) : (

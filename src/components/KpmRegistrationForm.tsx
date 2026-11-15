@@ -24,6 +24,7 @@ import {
 import {
   ItemBantuan,
   KpmDocumentFile,
+  KpmDocuments,
   KpmFormValues,
   KpmRecord,
   PengelolaProfile,
@@ -46,6 +47,7 @@ import {
   sanitizeDigits,
 } from '../utils/imageProcessor';
 import { DocumentUploadCard } from './DocumentUploadCard';
+import { DriveImage } from './DriveImage';
 import { MultiDocumentUploadCard } from './MultiDocumentUploadCard';
 import { PengelolaSelectorModal } from './PengelolaSelectorModal';
 import { PlaceholderSelect } from './FormControls';
@@ -67,6 +69,7 @@ interface KpmRegistrationFormProps {
   onOpenAddProposal: () => void;
   onCreatePengelola: (profile: PengelolaProfile) => void;
   onSave: (values: KpmFormValues, editingId?: string) => Promise<boolean> | boolean | void;
+  onQuickSyncKpmDocuments?: (kpmId: string, nextDocuments: KpmDocuments) => Promise<void> | void;
   onCancelEdit: () => void;
   onPreviewDocument: (file: KpmDocumentFile, title: string) => void;
 }
@@ -90,6 +93,7 @@ export function KpmRegistrationForm({
   onOpenAddProposal,
   onCreatePengelola,
   onSave,
+  onQuickSyncKpmDocuments,
   onCancelEdit,
   onPreviewDocument,
 }: KpmRegistrationFormProps) {
@@ -326,13 +330,19 @@ export function KpmRegistrationForm({
   };
 
   const updateSingleDocument = (key: SingleDocumentKey, file?: KpmDocumentFile) => {
-    setValues((prev) => ({
-      ...prev,
-      documents: {
+    setValues((prev) => {
+      const nextDocuments: KpmDocuments = {
         ...prev.documents,
         [key]: file,
-      },
-    }));
+      };
+      if (editingRecord && onQuickSyncKpmDocuments) {
+        void onQuickSyncKpmDocuments(editingRecord.id, nextDocuments);
+      }
+      return {
+        ...prev,
+        documents: nextDocuments,
+      };
+    });
     if (key === 'ktp' && errors.docKtp) {
       setErrors((prev) => ({ ...prev, docKtp: undefined }));
     }
@@ -342,23 +352,35 @@ export function KpmRegistrationForm({
   };
 
   const updateRumahDocuments = (files: KpmDocumentFile[]) => {
-    setValues((prev) => ({
-      ...prev,
-      documents: {
+    setValues((prev) => {
+      const nextDocuments: KpmDocuments = {
         ...prev.documents,
         rumah: files,
-      },
-    }));
+      };
+      if (editingRecord && onQuickSyncKpmDocuments) {
+        void onQuickSyncKpmDocuments(editingRecord.id, nextDocuments);
+      }
+      return {
+        ...prev,
+        documents: nextDocuments,
+      };
+    });
   };
 
   const updateLainnyaDocuments = (files: KpmDocumentFile[]) => {
-    setValues((prev) => ({
-      ...prev,
-      documents: {
+    setValues((prev) => {
+      const nextDocuments: KpmDocuments = {
         ...prev.documents,
         lainnya: files,
-      },
-    }));
+      };
+      if (editingRecord && onQuickSyncKpmDocuments) {
+        void onQuickSyncKpmDocuments(editingRecord.id, nextDocuments);
+      }
+      return {
+        ...prev,
+        documents: nextDocuments,
+      };
+    });
   };
 
   const validate = (): FormErrors => {
@@ -999,10 +1021,9 @@ export function KpmRegistrationForm({
                   >
                     <span className="flex items-center gap-2.5 min-w-0">
                       {selectedPengelolaObj?.foto ? (
-                        <img
-                          src={selectedPengelolaObj.foto.dataUrl}
+                        <DriveImage
+                          doc={selectedPengelolaObj.foto}
                           alt={selectedPengelolaObj.displayName}
-                          referrerPolicy="no-referrer"
                           className="h-6 w-6 rounded-full object-cover shrink-0"
                         />
                       ) : (

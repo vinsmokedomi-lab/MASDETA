@@ -32,6 +32,7 @@ import {
   isArchivedKpm,
   resolvePackageForKpm,
 } from '../utils/imageProcessor';
+import { DriveImage } from './DriveImage';
 import { PresenceDot } from './PresenceDot';
 
 interface DashboardViewProps {
@@ -381,10 +382,10 @@ export function DashboardView({
           >
             <div className="relative flex h-8 w-8 items-center justify-center overflow-visible rounded-lg bg-teal-50 text-teal-800">
               {currentUser.fotoDataUrl ? (
-                <img
+                <DriveImage
                   src={currentUser.fotoDataUrl}
+                  thumbnailUrl={currentUser.fotoThumbnailUrl}
                   alt={currentUser.nama}
-                  referrerPolicy="no-referrer"
                   className="h-full w-full rounded-lg object-cover"
                 />
               ) : (

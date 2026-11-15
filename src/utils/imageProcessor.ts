@@ -5,6 +5,16 @@ import {
   KELURAHAN_BY_KECAMATAN,
 } from '../data/kpmOptions';
 import {
+  buildDriveDownloadUrl,
+  buildDriveFallbackThumbnailUrl,
+  deleteMediaFromDrive,
+  DriveMediaResult,
+  extractDriveFileId,
+  measureImageFileDimensions,
+  replaceMediaInDrive,
+  uploadMediaToDrive,
+} from '../services/driveManager';
+import {
   InternalUser,
   ItemBantuan,
   KpmAuditLogEntry,
@@ -433,24 +443,40 @@ const ALLOWED_PROPOSAL_DOC_MIME = [
 
 const ALLOWED_PROPOSAL_DOC_EXT = ['.pdf', '.doc', '.docx', '.xls', '.xlsx'];
 
-export async function processProposalDocumentUpload(file: File): Promise<KpmDocumentFile> {
-  if (file.type.startsWith('image/')) {
-    return processImageUpload(file);
-  }
+export function getDocumentDirectUrl(doc?: KpmDocumentFile | null): string {
+  if (!doc) return '';
+  return (doc.directUrl || doc.dataUrl || '').trim();
+}
 
+export function getDocumentThumbnailUrl(doc?: KpmDocumentFile | null): string {
+  if (!doc) return '';
+  if (doc.thumbnailUrl) return doc.thumbnailUrl;
+  const target = doc.fileId || doc.directUrl || doc.dataUrl;
+  return buildDriveFallbackThumbnailUrl(target) || doc.dataUrl || '';
+}
+
+export function getDocumentViewUrl(doc?: KpmDocumentFile | null): string {
+  if (!doc) return '';
+  if (doc.viewUrl) return doc.viewUrl;
+  const fileId = doc.fileId || extractDriveFileId(doc.directUrl || doc.dataUrl);
+  if (fileId) return `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/view`;
+  return doc.directUrl || doc.dataUrl || '';
+}
+
+export function getDocumentDownloadHref(doc?: KpmDocumentFile | null): string {
+  if (!doc) return '';
+  const target = doc.fileId || doc.directUrl || doc.dataUrl;
+  if (target.startsWith('data:')) return target;
+  return buildDriveDownloadUrl(target);
+}
+
+export function buildKpmDocumentFileFromDrive(
+  file: File,
+  driveResult: DriveMediaResult,
+  dims: { width: number; height: number } = { width: 0, height: 0 },
+  prefix = 'doc'
+): KpmDocumentFile {
   const lowerName = file.name.toLowerCase();
-  const hasAllowedExt = ALLOWED_PROPOSAL_DOC_EXT.some((ext) => lowerName.endsWith(ext));
-  const hasAllowedMime = ALLOWED_PROPOSAL_DOC_MIME.includes(file.type);
-
-  if (!hasAllowedExt && !hasAllowedMime) {
-    throw new Error('Format file harus PDF, Word (.doc/.docx), Excel (.xls/.xlsx), atau gambar.');
-  }
-
-  if (file.size > 5 * 1024 * 1024) {
-    throw new Error('Ukuran dokumen terlalu besar. Maksimal 5 MB per berkas.');
-  }
-
-  const dataUrl = await readFileAsDataUrl(file);
   const fallbackMime = lowerName.endsWith('.pdf')
     ? 'application/pdf'
     : lowerName.endsWith('.docx')
@@ -461,19 +487,94 @@ export async function processProposalDocumentUpload(file: File): Promise<KpmDocu
           ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
           : lowerName.endsWith('.xls')
             ? 'application/vnd.ms-excel'
-            : 'application/octet-stream';
+            : 'image/jpeg';
 
   return {
-    id: `pdoc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    dataUrl,
+    id: `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    dataUrl: driveResult.directUrl,
+    fileId: driveResult.fileId,
+    directUrl: driveResult.directUrl,
+    thumbnailUrl: driveResult.thumbnailUrl,
+    viewUrl: driveResult.viewUrl,
     fileName: file.name,
     originalSize: file.size,
     compressedSize: file.size,
-    width: 0,
-    height: 0,
+    width: dims.width,
+    height: dims.height,
     mimeType: file.type || fallbackMime,
     uploadedAt: new Date().toISOString(),
   };
+}
+
+export function validateImageUploadFile(file: File): void {
+  if (!file.type.startsWith('image/')) {
+    throw new Error('Format file harus berupa gambar (JPG, PNG, atau WebP).');
+  }
+  if (file.size > MAX_RAW_SIZE_BYTES) {
+    throw new Error('Ukuran file terlalu besar. Maksimal 15 MB per dokumen.');
+  }
+}
+
+export function validateProposalDocumentFile(file: File): void {
+  if (file.type.startsWith('image/')) {
+    if (file.size > MAX_RAW_SIZE_BYTES) {
+      throw new Error('Ukuran gambar terlalu besar. Maksimal 15 MB per file.');
+    }
+    return;
+  }
+
+  const lowerName = file.name.toLowerCase();
+  const hasAllowedExt = ALLOWED_PROPOSAL_DOC_EXT.some((ext) => lowerName.endsWith(ext));
+  const hasAllowedMime = ALLOWED_PROPOSAL_DOC_MIME.includes(file.type);
+
+  if (!hasAllowedExt && !hasAllowedMime) {
+    throw new Error('Format file harus PDF, Word (.doc/.docx), Excel (.xls/.xlsx), atau gambar.');
+  }
+
+  if (file.size > MAX_RAW_SIZE_BYTES) {
+    throw new Error('Ukuran dokumen terlalu besar. Maksimal 15 MB per berkas.');
+  }
+}
+
+export async function uploadImageDocumentToDrive(
+  file: File,
+  existingDoc?: KpmDocumentFile | null
+): Promise<KpmDocumentFile> {
+  validateImageUploadFile(file);
+  const dims = await measureImageFileDimensions(file);
+  const existingTarget = existingDoc?.fileId || existingDoc?.directUrl || existingDoc?.dataUrl || '';
+  const driveResult =
+    existingTarget && !existingTarget.startsWith('data:')
+      ? await replaceMediaInDrive(file, existingTarget)
+      : await uploadMediaToDrive(file);
+  return buildKpmDocumentFileFromDrive(file, driveResult, dims, 'doc');
+}
+
+export async function uploadProposalDocumentToDrive(
+  file: File,
+  existingDoc?: KpmDocumentFile | null
+): Promise<KpmDocumentFile> {
+  validateProposalDocumentFile(file);
+  const dims = file.type.startsWith('image/')
+    ? await measureImageFileDimensions(file)
+    : { width: 0, height: 0 };
+  const existingTarget = existingDoc?.fileId || existingDoc?.directUrl || existingDoc?.dataUrl || '';
+  const driveResult =
+    existingTarget && !existingTarget.startsWith('data:')
+      ? await replaceMediaInDrive(file, existingTarget)
+      : await uploadMediaToDrive(file);
+  return buildKpmDocumentFileFromDrive(file, driveResult, dims, 'pdoc');
+}
+
+export async function removeDocumentFromDrive(doc?: KpmDocumentFile | null): Promise<void> {
+  if (!doc) return;
+  const target = doc.fileId || doc.directUrl || doc.dataUrl;
+  if (!target || target.startsWith('data:')) return;
+  await deleteMediaFromDrive(target);
+}
+
+export async function processProposalDocumentUpload(file: File): Promise<KpmDocumentFile> {
+  return uploadProposalDocumentToDrive(file);
 }
 
 function readFileAsDataUrl(file: File): Promise<string> {

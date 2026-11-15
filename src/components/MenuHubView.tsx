@@ -38,6 +38,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import { DriveImage } from './DriveImage';
 import { FilterSelect, SegmentedTabs } from './FormControls';
 import { ItemManagerView } from './ItemManagerView';
 import { AddPengelolaModal } from './PengelolaSelectorModal';
@@ -526,10 +527,10 @@ export function MenuHubView({
           >
             <div className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
               {currentUser.fotoDataUrl ? (
-                <img
+                <DriveImage
                   src={currentUser.fotoDataUrl}
+                  thumbnailUrl={currentUser.fotoThumbnailUrl}
                   alt={currentUser.nama}
-                  referrerPolicy="no-referrer"
                   className="h-full w-full rounded-xl object-cover"
                 />
               ) : (
@@ -1205,10 +1206,10 @@ export function MenuHubView({
                       <div className="flex min-w-0 items-start gap-3">
                         <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
                           {user.fotoDataUrl ? (
-                            <img
+                            <DriveImage
                               src={user.fotoDataUrl}
+                              thumbnailUrl={user.fotoThumbnailUrl}
                               alt={user.nama}
-                              referrerPolicy="no-referrer"
                               className="h-full w-full rounded-xl object-cover"
                             />
                           ) : (
@@ -2429,10 +2430,9 @@ export function MenuHubView({
 
                       <div className="flex w-11 shrink-0 items-center justify-center self-stretch overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
                         {thumb ? (
-                          <img
-                            src={thumb.dataUrl}
+                          <DriveImage
+                            doc={thumb}
                             alt={rec.nama}
-                            referrerPolicy="no-referrer"
                             className="h-full w-full object-cover"
                           />
                         ) : (
@@ -2629,10 +2629,9 @@ export function MenuHubView({
                         className="h-10 w-10 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100"
                         aria-label={`Lihat foto ${p.displayName}`}
                       >
-                        <img
-                          src={p.foto.dataUrl}
+                        <DriveImage
+                          doc={p.foto}
                           alt={p.displayName}
-                          referrerPolicy="no-referrer"
                           className="h-full w-full object-cover"
                         />
                       </button>

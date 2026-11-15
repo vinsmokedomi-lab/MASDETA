@@ -9,8 +9,14 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
+import { DriveImage } from './DriveImage';
 import { KpmDocumentFile } from '../types/kpm';
-import { formatBytes, formatUploadDateTime, processImageUpload } from '../utils/imageProcessor';
+import {
+  formatBytes,
+  formatUploadDateTime,
+  removeDocumentFromDrive,
+  uploadImageDocumentToDrive,
+} from '../utils/imageProcessor';
 
 interface MultiDocumentUploadCardProps {
   id: string;
@@ -35,16 +41,20 @@ export function MultiDocumentUploadCard({
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
+  const [confirmDeleteDoc, setConfirmDeleteDoc] = useState<KpmDocumentFile | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
 
   const remainingSlots = Math.max(0, maxFiles - values.length);
   const isAtLimit = remainingSlots === 0;
 
   const handleFiles = async (fileList: FileList | null) => {
-    if (!fileList || fileList.length === 0) return;
+    if (!fileList || fileList.length === 0 || isProcessing) return;
 
     if (values.length >= maxFiles) {
-      setLocalError(`Maksimal ${maxFiles} foto sudah tercapai. Hapus salah satu foto terlebih dahulu.`);
+      setLocalError(
+        `Maksimal ${maxFiles} foto sudah tercapai. Hapus salah satu foto terlebih dahulu.`
+      );
       return;
     }
 
@@ -62,7 +72,7 @@ export function MultiDocumentUploadCard({
 
       for (const file of filesToProcess) {
         try {
-          const processed = await processImageUpload(file);
+          const processed = await uploadImageDocumentToDrive(file);
           processedList.push(processed);
         } catch {
           failedNames.push(file.name);
@@ -75,7 +85,7 @@ export function MultiDocumentUploadCard({
 
       if (failedNames.length > 0) {
         setLocalError(
-          `Sebagian file gagal diproses (${failedNames.join(', ')}). Pastikan format JPG/PNG/WebP dan ukuran maks 15 MB.`
+          `Sebagian file gagal diunggah ke Drive (${failedNames.join(', ')}). Pastikan format JPG/PNG/WebP dan ukuran maks 15 MB.`
         );
       } else if (skippedDueToLimit) {
         setLocalError(
@@ -108,9 +118,21 @@ export function MultiDocumentUploadCard({
     void handleFiles(e.dataTransfer.files);
   };
 
-  const handleRemove = (docId: string) => {
+  const handleConfirmRemove = async () => {
+    if (!confirmDeleteDoc || deletingDocId) return;
     setLocalError(null);
-    onChange(values.filter((item) => item.id !== docId));
+    setDeletingDocId(confirmDeleteDoc.id);
+    try {
+      await removeDocumentFromDrive(confirmDeleteDoc);
+      onChange(values.filter((item) => item.id !== confirmDeleteDoc.id));
+      setConfirmDeleteDoc(null);
+    } catch (err) {
+      setLocalError(
+        err instanceof Error ? err.message : 'Gagal menghapus foto dari Google Drive.'
+      );
+    } finally {
+      setDeletingDocId(null);
+    }
   };
 
   return (
@@ -120,7 +142,7 @@ export function MultiDocumentUploadCard({
         <span className="text-xs text-slate-500 tabular-nums">
           {values.length > 0 ? (
             <span className="font-medium text-teal-700">
-              {values.length}/{maxFiles} foto terunggah
+              {values.length}/{maxFiles} foto di Drive
             </span>
           ) : (
             `Maks. ${maxFiles} foto · Opsional`
@@ -128,7 +150,6 @@ export function MultiDocumentUploadCard({
         </span>
       </div>
 
-      {/* Hidden inputs: multiple file picker & direct camera */}
       <input
         ref={fileInputRef}
         type="file"
@@ -151,48 +172,93 @@ export function MultiDocumentUploadCard({
       {/* Uploaded Photos Grid */}
       {values.length > 0 && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          {values.map((doc, idx) => (
-            <div
-              key={doc.id}
-              className="overflow-hidden rounded-xl border border-slate-200 bg-white"
-            >
-              <div className="relative aspect-[4/3] w-full overflow-hidden bg-slate-100">
-                <img
-                  src={doc.dataUrl}
-                  alt={`${label} ${idx + 1}`}
-                  referrerPolicy="no-referrer"
-                  className="h-full w-full object-cover"
-                />
-                <button
-                  type="button"
-                  onClick={() => onPreview(doc, `${label} #${idx + 1}`)}
-                  className="absolute right-1.5 bottom-1.5 inline-flex min-h-[36px] min-w-[36px] items-center justify-center rounded-lg bg-slate-900/80 text-white backdrop-blur-sm transition-colors hover:bg-slate-900"
-                  aria-label={`Perbesar ${label} ${idx + 1}`}
-                >
-                  <Eye className="h-4 w-4" />
-                </button>
-              </div>
-              <div className="flex items-center justify-between gap-1.5 border-t border-slate-100 px-2.5 py-2">
-                <div className="min-w-0 flex-1 space-y-0.5">
-                  <p className="truncate text-[11px] font-semibold text-slate-900" title={doc.fileName}>
-                    {doc.fileName}
-                  </p>
-                  <p className="truncate text-[10px] text-slate-500 tabular-nums">
-                    {formatBytes(doc.compressedSize)}
-                    {doc.uploadedAt ? ` · ${formatUploadDateTime(doc.uploadedAt)}` : ''}
-                  </p>
+          {values.map((doc, idx) => {
+            const isDeletingThis = deletingDocId === doc.id;
+            return (
+              <div
+                key={doc.id}
+                className="overflow-hidden rounded-xl border border-slate-200 bg-white"
+              >
+                <div className="relative aspect-[4/3] w-full overflow-hidden bg-slate-100">
+                  <DriveImage
+                    doc={doc}
+                    alt={`${label} ${idx + 1}`}
+                    className="h-full w-full object-cover"
+                  />
+                  {isDeletingThis && (
+                    <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-1 bg-slate-950/65 text-white">
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                      <span className="text-[10px] font-semibold">Menghapus...</span>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    disabled={isDeletingThis}
+                    onClick={() => onPreview(doc, `${label} #${idx + 1}`)}
+                    className="absolute right-1.5 bottom-1.5 inline-flex min-h-[36px] min-w-[36px] items-center justify-center rounded-lg bg-slate-900/80 text-white backdrop-blur-sm transition-colors hover:bg-slate-900 disabled:opacity-50"
+                    aria-label={`Perbesar ${label} ${idx + 1}`}
+                  >
+                    <Eye className="h-4 w-4" />
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => handleRemove(doc.id)}
-                  className="inline-flex min-h-[36px] min-w-[36px] items-center justify-center rounded-lg text-rose-600 transition-colors hover:bg-rose-50 shrink-0"
-                  aria-label={`Hapus ${label} ${idx + 1}`}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                <div className="flex items-center justify-between gap-1.5 border-t border-slate-100 px-2.5 py-2">
+                  <div className="min-w-0 flex-1 space-y-0.5">
+                    <p
+                      className="truncate text-[11px] font-semibold text-slate-900"
+                      title={doc.fileName}
+                    >
+                      {doc.fileName}
+                    </p>
+                    <p className="truncate text-[10px] text-slate-500 tabular-nums">
+                      {doc.compressedSize > 0 ? formatBytes(doc.compressedSize) : 'Google Drive'}
+                      {doc.uploadedAt ? ` · ${formatUploadDateTime(doc.uploadedAt)}` : ''}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={Boolean(deletingDocId)}
+                    onClick={() => setConfirmDeleteDoc(doc)}
+                    className="inline-flex min-h-[36px] min-w-[36px] items-center justify-center rounded-lg text-rose-600 transition-colors hover:bg-rose-50 shrink-0 disabled:opacity-50"
+                    aria-label={`Hapus ${label} ${idx + 1}`}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
+        </div>
+      )}
+
+      {/* Delete confirmation inline box */}
+      {confirmDeleteDoc && (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 p-3">
+          <p className="text-xs font-semibold text-rose-900">
+            Hapus foto <strong>{confirmDeleteDoc.fileName}</strong> dari Google Drive?
+          </p>
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              type="button"
+              disabled={Boolean(deletingDocId)}
+              onClick={() => setConfirmDeleteDoc(null)}
+              className="min-h-[36px] flex-1 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              Batal
+            </button>
+            <button
+              type="button"
+              disabled={Boolean(deletingDocId)}
+              onClick={() => void handleConfirmRemove()}
+              className="inline-flex min-h-[36px] flex-1 items-center justify-center gap-1.5 rounded-lg bg-rose-600 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+            >
+              {deletingDocId ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Trash2 className="h-3.5 w-3.5" />
+              )}
+              <span>Ya, Hapus Foto</span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -209,7 +275,7 @@ export function MultiDocumentUploadCard({
           }`}
         >
           <div className="flex flex-col items-center text-center">
-            {values.length === 0 && (
+            {(values.length === 0 || isProcessing) && (
               <div className="mb-2.5 flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 bg-white text-teal-700">
                 {isProcessing ? (
                   <Loader2 className="h-5 w-5 animate-spin" />
@@ -221,13 +287,13 @@ export function MultiDocumentUploadCard({
 
             <p className="text-xs font-medium text-slate-700">
               {isProcessing
-                ? 'Mengoptimalkan foto...'
+                ? 'Mengunggah foto ke Google Drive...'
                 : values.length > 0
                   ? `Tambah foto lagi (sisa kuota ${remainingSlots} dari ${maxFiles} foto)`
                   : helperText}
             </p>
             <p className="mt-0.5 text-[11px] text-slate-500">
-              Maksimal {maxFiles} foto · Format JPG, PNG, WebP
+              Maksimal {maxFiles} foto · JPG, PNG, WebP · Maks 15 MB/file
             </p>
 
             <div className="mt-3 grid w-full grid-cols-2 gap-2">
@@ -259,7 +325,8 @@ export function MultiDocumentUploadCard({
         </div>
       ) : (
         <p className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs text-slate-600 tabular-nums">
-          Batas maksimal {maxFiles}/{maxFiles} foto sudah tercapai. Hapus salah satu foto di atas jika ingin mengganti.
+          Batas maksimal {maxFiles}/{maxFiles} foto sudah tercapai. Hapus salah satu foto di atas
+          jika ingin mengganti.
         </p>
       )}
 

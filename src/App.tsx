@@ -1,5 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MessageSquare, X } from 'lucide-react';
+import { Database, MessageSquare, X } from 'lucide-react';
+import { isSupabaseConfigured, supabase } from './lib/supabaseClient';
+import {
+  checkSupabaseSchemaReady,
+  deleteKpmRecordInSupabase,
+  fetchOperationalDataFromSupabase,
+  isSchemaMissingError,
+  runAdminDataActionInSupabase,
+  supabaseAdminControlInternalUser,
+  supabaseCreateInternalUserBySuperAdmin,
+  supabaseDeleteInternalUser,
+  supabaseFetchDirectMessages,
+  supabaseFetchInternalUsers,
+  supabaseLogin,
+  supabaseMarkDirectMessagesRead,
+  supabaseRegisterInternalUser,
+  supabaseSendDirectMessage,
+  supabaseSetUserPresence,
+  supabaseUpdateInternalUserProfile,
+  supabaseVerifyUserPassword,
+  syncAllOperationalDataToSupabase,
+  updateKpmDocumentsInSupabase,
+  upsertProposalInSupabase,
+} from './services/supabaseData';
 import {
   INITIAL_INTERNAL_USERS,
   INITIAL_ITEM_LIST,
@@ -19,9 +42,12 @@ import {
   ItemBantuan,
   KpmAuditLogEntry,
   KpmDocumentFile,
+  KpmDocuments,
   KpmFormValues,
   KpmRecord,
   PengelolaProfile,
+  ProposalChecklist,
+  ProposalDocuments,
   ProposalFormValues,
   ProposalKpmHistoryEntry,
   ProposalRecord,
@@ -47,6 +73,7 @@ import {
   loadWilayahList,
   normalizeSubItemKey,
   recalculateProposalRegisterCodes,
+  removeDocumentFromDrive,
   resolvePackageForKpm,
   saveInternalUsers,
   saveItemList,
@@ -298,6 +325,9 @@ export default function App() {
     }
   );
   const [incomingToast, setIncomingToast] = useState<IncomingToastBanner | null>(null);
+  const [supabaseReady, setSupabaseReady] = useState<boolean>(false);
+  const [supabaseSchemaMissing, setSupabaseSchemaMissing] = useState<boolean>(false);
+  const [dismissedSchemaNotice, setDismissedSchemaNotice] = useState<boolean>(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const subViewRef = useRef<SubView>(subView);
@@ -305,10 +335,14 @@ export default function App() {
   const pushEnabledRef = useRef<boolean>(pushEnabled);
   const sessionTokenRef = useRef<string | null>(sessionToken);
   const currentUserIdRef = useRef<string | null>(sessionUserId);
+  const supabaseReadyRef = useRef<boolean>(supabaseReady);
+  const lastLocalSyncAtRef = useRef<number>(0);
+  const prevMessageIdsRef = useRef<Set<string>>(new Set());
   subViewRef.current = subView;
   activeChatPeerIdRef.current = activeChatPeerId;
   pushEnabledRef.current = pushEnabled;
   sessionTokenRef.current = sessionToken;
+  supabaseReadyRef.current = supabaseReady;
 
   const currentUser = useMemo(() => {
     if (!sessionUserId) return null;
@@ -504,7 +538,115 @@ export default function App() {
   }, []);
 
   const loadOrBootstrapOperationalData = useCallback(
-    async (token: string, actor?: { nama: string; email?: string }) => {
+    async (
+      token: string,
+      actor?: { nama: string; email?: string },
+      useSupabaseOverride?: boolean
+    ) => {
+      const useSupabase = useSupabaseOverride ?? supabaseReadyRef.current;
+
+      if (useSupabase) {
+        try {
+          const snapshot = await fetchOperationalDataFromSupabase();
+          const hasSupabaseOperational =
+            snapshot.records.length > 0 || snapshot.proposals.length > 0;
+
+          if (hasSupabaseOperational) {
+            applyRemoteOperationalState({
+              records: snapshot.records,
+              proposals: snapshot.proposals,
+              items: snapshot.items.length > 0 ? snapshot.items : latestDataRef.current.items,
+              pekerjaanList:
+                snapshot.pekerjaanList.length > 0
+                  ? snapshot.pekerjaanList
+                  : latestDataRef.current.pekerjaanList,
+              wilayahList:
+                snapshot.wilayahList.length > 0
+                  ? snapshot.wilayahList
+                  : latestDataRef.current.wilayahList,
+              pengelolaList: snapshot.pengelolaList,
+              proposalHistory: snapshot.proposalHistory,
+              kpmAuditLogs: snapshot.kpmAuditLogs,
+            });
+            return;
+          }
+
+          // Supabase tables exist but are empty -> seed CSV + master data once
+          let seedPayload: OperationalDataPayload = {
+            records: latestDataRef.current.records,
+            proposals: latestDataRef.current.proposals,
+            items: snapshot.items.length > 0 ? snapshot.items : latestDataRef.current.items,
+            pekerjaanList:
+              snapshot.pekerjaanList.length > 0
+                ? snapshot.pekerjaanList
+                : latestDataRef.current.pekerjaanList,
+            wilayahList:
+              snapshot.wilayahList.length > 0
+                ? snapshot.wilayahList
+                : latestDataRef.current.wilayahList,
+            pengelolaList:
+              snapshot.pengelolaList.length > 0
+                ? snapshot.pengelolaList
+                : latestDataRef.current.pengelolaList,
+            proposalHistory: latestDataRef.current.proposalHistory,
+            kpmAuditLogs: latestDataRef.current.kpmAuditLogs,
+          };
+
+          const SEED_FLAG_KEY = 'masdeta_csv_seed_ptk_kota_2026_v1';
+          if (seedPayload.records.length === 0) {
+            try {
+              const csvRes = await fetch('/assets/aistudio/Kecamatan_Pontianak_Kota_2026_ab18452d.csv');
+              if (csvRes.ok) {
+                const csvText = await csvRes.text();
+                if (csvText) {
+                  const imported = importProposalKpmFromCsv({
+                    csvText,
+                    existingRecords: seedPayload.records,
+                    existingProposals: seedPayload.proposals,
+                    existingPengelolaList: seedPayload.pengelolaList,
+                    existingPekerjaanList: seedPayload.pekerjaanList,
+                    items: seedPayload.items,
+                    wilayahList: seedPayload.wilayahList,
+                    actorName: actor?.nama ?? 'SuperAdmin',
+                    actorEmail: actor?.email,
+                  });
+                  if (imported.importedRecordsCount > 0) {
+                    seedPayload = {
+                      ...seedPayload,
+                      records: imported.nextRecords,
+                      proposals: imported.nextProposals,
+                      pengelolaList: imported.nextPengelolaList,
+                      pekerjaanList: imported.nextPekerjaanList,
+                      kpmAuditLogs: [...imported.newAuditLogs, ...seedPayload.kpmAuditLogs],
+                      proposalHistory: [...imported.newProposalHistory, ...seedPayload.proposalHistory],
+                    };
+                    try {
+                      localStorage.setItem(SEED_FLAG_KEY, 'done');
+                    } catch {
+                      // Ignore storage write error
+                    }
+                  }
+                }
+              }
+            } catch {
+              // Ignore CSV seed error
+            }
+          }
+
+          lastLocalSyncAtRef.current = Date.now();
+          await syncAllOperationalDataToSupabase(seedPayload);
+          applyRemoteOperationalState(seedPayload);
+          return;
+        } catch (err) {
+          if (isSchemaMissingError(err)) {
+            setSupabaseSchemaMissing(true);
+            setSupabaseReady(false);
+          } else {
+            console.error('Supabase operational load error:', err);
+          }
+        }
+      }
+
       try {
         const res = await authFetch('/api/data/state', {}, token);
         if (!res.ok) return;
@@ -590,11 +732,33 @@ export default function App() {
       patch: Partial<OperationalDataPayload>,
       requiredPermission: keyof UserPermissions
     ): Promise<boolean> => {
-      if (!sessionTokenRef.current) return false;
+      if (!sessionTokenRef.current && !supabaseReadyRef.current) return false;
       const merged: OperationalDataPayload = {
         ...latestDataRef.current,
         ...patch,
       };
+
+      if (supabaseReadyRef.current) {
+        try {
+          lastLocalSyncAtRef.current = Date.now();
+          await syncAllOperationalDataToSupabase(merged);
+          return true;
+        } catch (err) {
+          const msg =
+            err instanceof Error
+              ? err.message
+              : err && typeof err === 'object' && 'message' in err
+                ? String((err as { message: unknown }).message)
+                : 'Gagal menyimpan perubahan ke Supabase.';
+          setFeedback({
+            type: 'error',
+            message: `Gagal sinkronisasi ke Supabase: ${msg}`,
+          });
+          return false;
+        }
+      }
+
+      if (!sessionTokenRef.current) return false;
       try {
         const res = await authFetch('/api/data/sync', {
           method: 'PUT',
@@ -624,51 +788,121 @@ export default function App() {
     [authFetch]
   );
 
-  // Sinkronisasi awal state user, pesan 1-on-1 & data operasional dari server
+  // Sinkronisasi awal Supabase / Server: status schema, user, pesan 1-on-1 & data operasional
   useEffect(() => {
     let cancelled = false;
-    if (!sessionToken) {
-      if (sessionUserId) {
-        clearSessionState();
-      }
-      setAuthReady(true);
-      return;
-    }
 
-    authFetch('/api/collab/state', {}, sessionToken)
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('Sync gagal'))))
-      .then(
-        async (data: {
-          user?: InternalUser | null;
-          users?: InternalUser[];
-          messages?: DirectChatMessage[];
-        }) => {
+    async function bootstrapSession() {
+      let useSupabase = false;
+      if (isSupabaseConfigured) {
+        const check = await checkSupabaseSchemaReady();
+        if (cancelled) return;
+        if (check.ready) {
+          useSupabase = true;
+          setSupabaseReady(true);
+          setSupabaseSchemaMissing(false);
+        } else {
+          setSupabaseReady(false);
+          setSupabaseSchemaMissing(check.schemaMissing);
+        }
+      }
+
+      if (useSupabase) {
+        try {
+          const users = await supabaseFetchInternalUsers();
           if (cancelled) return;
-          if (!data.user || data.user.status !== 'active') {
-            clearSessionState();
+          if (users.length > 0) {
+            setInternalUsers(users);
+          }
+
+          if (!sessionUserId) {
+            setAuthReady(true);
             return;
           }
-          if (Array.isArray(data.users) && data.users.length > 0) {
-            setInternalUsers(data.users);
+
+          const activeUser = users.find((u) => u.id === sessionUserId && u.status === 'active');
+          if (!activeUser) {
+            clearSessionState();
+            setAuthReady(true);
+            return;
           }
-          if (Array.isArray(data.messages)) {
-            setDirectMessages(data.messages);
+
+          const msgs = await supabaseFetchDirectMessages();
+          if (cancelled) return;
+          const userMsgs = msgs.filter(
+            (m) => m.senderId === activeUser.id || m.recipientId === activeUser.id
+          );
+          prevMessageIdsRef.current = new Set(userMsgs.map((m) => m.id));
+          setDirectMessages(userMsgs);
+
+          if (!sessionToken) {
+            const supaTok = `supabase-session-${activeUser.id}`;
+            setSessionToken(supaTok);
+            try {
+              localStorage.setItem(SESSION_TOKEN_STORAGE_KEY, supaTok);
+            } catch {
+              // Ignore
+            }
           }
-          setSessionUserId(data.user.id);
-          try {
-            localStorage.setItem(SESSION_STORAGE_KEY, data.user.id);
-          } catch {
-            // Ignore
-          }
-          await loadOrBootstrapOperationalData(sessionToken, data.user);
+
+          await loadOrBootstrapOperationalData(
+            sessionToken || `supabase-session-${activeUser.id}`,
+            activeUser,
+            true
+          );
+        } catch (err) {
+          console.error('Supabase initial sync error:', err);
+        } finally {
+          if (!cancelled) setAuthReady(true);
         }
-      )
-      .catch(() => {
-        // Fallback diam-diam jika offline sementara
-      })
-      .finally(() => {
-        if (!cancelled) setAuthReady(true);
-      });
+        return;
+      }
+
+      if (!sessionToken) {
+        if (sessionUserId) {
+          clearSessionState();
+        }
+        setAuthReady(true);
+        return;
+      }
+
+      authFetch('/api/collab/state', {}, sessionToken)
+        .then((res) => (res.ok ? res.json() : Promise.reject(new Error('Sync gagal'))))
+        .then(
+          async (data: {
+            user?: InternalUser | null;
+            users?: InternalUser[];
+            messages?: DirectChatMessage[];
+          }) => {
+            if (cancelled) return;
+            if (!data.user || data.user.status !== 'active') {
+              clearSessionState();
+              return;
+            }
+            if (Array.isArray(data.users) && data.users.length > 0) {
+              setInternalUsers(data.users);
+            }
+            if (Array.isArray(data.messages)) {
+              setDirectMessages(data.messages);
+            }
+            setSessionUserId(data.user.id);
+            try {
+              localStorage.setItem(SESSION_STORAGE_KEY, data.user.id);
+            } catch {
+              // Ignore
+            }
+            await loadOrBootstrapOperationalData(sessionToken, data.user, false);
+          }
+        )
+        .catch(() => {
+          // Fallback diam-diam jika offline sementara
+        })
+        .finally(() => {
+          if (!cancelled) setAuthReady(true);
+        });
+    }
+
+    void bootstrapSession();
 
     return () => {
       cancelled = true;
@@ -692,6 +926,16 @@ export default function App() {
         )
       );
 
+      if (supabaseReadyRef.current) {
+        try {
+          const sorted = [currentUser.id, peerId].sort();
+          await supabaseMarkDirectMessagesRead(`${sorted[0]}::${sorted[1]}`, currentUser.id);
+        } catch {
+          // Abaikan jika offline sementara
+        }
+        return;
+      }
+
       try {
         await authFetch('/api/chat/read', {
           method: 'POST',
@@ -705,11 +949,159 @@ export default function App() {
     [currentUser, directMessages, authFetch]
   );
 
-  // Koneksi WebSocket Real-time (Presence Dot, 1-on-1 Direct Chat & Data Sync)
+  // Supabase Realtime Multi-Admin Sync (saat supabaseReady = true)
+  useEffect(() => {
+    const uid = currentUser?.id;
+    if (!uid || !supabaseReady) return;
+
+    let refreshTimer: number | undefined;
+    let toastTimer: number | undefined;
+
+    const scheduleOperationalRefresh = () => {
+      if (Date.now() - lastLocalSyncAtRef.current < 1500) return;
+      if (refreshTimer) window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(async () => {
+        try {
+          const snapshot = await fetchOperationalDataFromSupabase();
+          applyRemoteOperationalState({
+            records: snapshot.records,
+            proposals: snapshot.proposals,
+            items: snapshot.items.length > 0 ? snapshot.items : latestDataRef.current.items,
+            pekerjaanList:
+              snapshot.pekerjaanList.length > 0
+                ? snapshot.pekerjaanList
+                : latestDataRef.current.pekerjaanList,
+            wilayahList:
+              snapshot.wilayahList.length > 0
+                ? snapshot.wilayahList
+                : latestDataRef.current.wilayahList,
+            pengelolaList: snapshot.pengelolaList,
+            proposalHistory: snapshot.proposalHistory,
+            kpmAuditLogs: snapshot.kpmAuditLogs,
+          });
+        } catch {
+          // Abaikan gangguan jaringan sementara
+        }
+      }, 500);
+    };
+
+    const syncMessagesFromSupabase = async () => {
+      try {
+        const all = await supabaseFetchDirectMessages();
+        const mine = all.filter((m) => m.senderId === uid || m.recipientId === uid);
+        const latestNew = mine.find(
+          (m) => m.recipientId === uid && !prevMessageIdsRef.current.has(m.id)
+        );
+        prevMessageIdsRef.current = new Set(mine.map((m) => m.id));
+        setDirectMessages(mine);
+
+        if (latestNew) {
+          const isViewingThread =
+            subViewRef.current === 'chat' &&
+            activeChatPeerIdRef.current === latestNew.senderId &&
+            document.visibilityState === 'visible';
+
+          if (isViewingThread) {
+            const sorted = [uid, latestNew.senderId].sort();
+            void supabaseMarkDirectMessagesRead(`${sorted[0]}::${sorted[1]}`, uid);
+          } else {
+            const sender = internalUsers.find((u) => u.id === latestNew.senderId);
+            const senderName = sender?.nama || 'Pengguna Internal';
+            const senderRole = sender?.role || 'Admin';
+            const displayMsgText =
+              latestNew.text ||
+              (latestNew.sharedKpm
+                ? `Kartu KPM: ${latestNew.sharedKpm.nama} (${latestNew.sharedKpm.proposal})`
+                : 'Pesan baru');
+
+            playMessageChime();
+            setIncomingToast({
+              id: latestNew.id,
+              senderId: latestNew.senderId,
+              senderName,
+              senderRole,
+              text: displayMsgText,
+            });
+            if (toastTimer) window.clearTimeout(toastTimer);
+            toastTimer = window.setTimeout(() => {
+              setIncomingToast((curr) => (curr?.id === latestNew.id ? null : curr));
+            }, 6500);
+
+            if (pushEnabledRef.current) {
+              void triggerPushNotification(
+                `Pesan dari ${senderName} (${senderRole})`,
+                displayMsgText
+              );
+            }
+          }
+        }
+      } catch {
+        // Ignore
+      }
+    };
+
+    const channel = supabase
+      .channel('masdeta-realtime-sync')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'internal_users' },
+        () => {
+          void supabaseFetchInternalUsers().then((users) => {
+            if (users.length > 0) setInternalUsers(users);
+          });
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'direct_chat_messages' },
+        () => {
+          void syncMessagesFromSupabase();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'kpm_records' },
+        scheduleOperationalRefresh
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'kpm_documents' },
+        scheduleOperationalRefresh
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'proposals' },
+        scheduleOperationalRefresh
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'proposal_documents' },
+        scheduleOperationalRefresh
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'pengelola' },
+        scheduleOperationalRefresh
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'item_bantuan' },
+        scheduleOperationalRefresh
+      )
+      .subscribe();
+
+    return () => {
+      if (refreshTimer) window.clearTimeout(refreshTimer);
+      if (toastTimer) window.clearTimeout(toastTimer);
+      void supabase.removeChannel(channel);
+    };
+  }, [currentUser?.id, supabaseReady, applyRemoteOperationalState, internalUsers]);
+
+  // Koneksi WebSocket Real-time (Fallback saat schema Supabase belum dijalankan)
   useEffect(() => {
     const uid = currentUser?.id;
     const token = sessionToken;
-    if (!uid || !token) {
+    if (supabaseReady || !uid || !token) {
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
@@ -835,7 +1227,7 @@ export default function App() {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [currentUser?.id, sessionToken, authFetch, applyRemoteOperationalState]);
+  }, [currentUser?.id, sessionToken, supabaseReady, authFetch, applyRemoteOperationalState]);
 
   // Pelacak Aktivitas Otomatis untuk Presence Dot (Hijau = Aktif, Oranye = Idle)
   useEffect(() => {
@@ -847,6 +1239,10 @@ export default function App() {
     const sendPresence = (status: UserPresenceStatus) => {
       if (lastSent === status) return;
       lastSent = status;
+      if (supabaseReadyRef.current) {
+        void supabaseSetUserPresence(currentUser.id, status, false);
+        return;
+      }
       const sock = wsRef.current;
       if (sock && sock.readyState === WebSocket.OPEN) {
         sock.send(JSON.stringify({ type: 'presence:activity', status }));
@@ -1442,6 +1838,19 @@ export default function App() {
       return;
     }
 
+    // Hapus seluruh foto KPM dari Google Drive agar tidak meninggalkan berkas yatim
+    const docsToTrash: (KpmDocumentFile | undefined)[] = [
+      target.documents.ktp,
+      target.documents.kk,
+      target.documents.penerima,
+      target.documents.survey,
+      ...(target.documents.rumah || []),
+      ...(target.documents.lainnya || []),
+    ];
+    void Promise.allSettled(
+      docsToTrash.filter((d): d is KpmDocumentFile => Boolean(d)).map((d) => removeDocumentFromDrive(d))
+    );
+
     const now = new Date().toISOString();
     const removedHistory: ProposalKpmHistoryEntry = {
       id: `hist-del-${Date.now()}`,
@@ -1466,7 +1875,19 @@ export default function App() {
 
     setProposalHistory(nextHistory);
     setRecords(nextRecords);
-    void syncOperationalData({ records: nextRecords, proposalHistory: nextHistory }, 'delete');
+
+    if (supabaseReadyRef.current) {
+      lastLocalSyncAtRef.current = Date.now();
+      void deleteKpmRecordInSupabase(id)
+        .then(() =>
+          syncOperationalData({ records: nextRecords, proposalHistory: nextHistory }, 'delete')
+        )
+        .catch(() => {
+          void syncOperationalData({ records: nextRecords, proposalHistory: nextHistory }, 'delete');
+        });
+    } else {
+      void syncOperationalData({ records: nextRecords, proposalHistory: nextHistory }, 'delete');
+    }
 
     if (activeKpmId === id) {
       setActiveKpmId(null);
@@ -1475,8 +1896,118 @@ export default function App() {
     }
     setFeedback({
       type: 'success',
-      message: `Data calon KPM "${target.nama}" telah dihapus.`,
+      message: `Data calon KPM "${target.nama}" dan foto terkait telah dihapus.`,
     });
+  };
+
+  const handleUpdateKpmDocuments = async (
+    kpmId: string,
+    nextDocuments: KpmDocuments,
+    auditChange: { field: string; before: string; after: string }
+  ) => {
+    if (!requirePermission('update', 'mengubah foto/dokumen calon KPM')) return;
+    const target = records.find((r) => r.id === kpmId);
+    if (!target) return;
+
+    const now = new Date().toISOString();
+    const updatedRecord: KpmRecord = {
+      ...target,
+      documents: nextDocuments,
+      updatedAt: now,
+    };
+
+    const auditEntry: KpmAuditLogEntry = {
+      id: `audit-doc-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      kpmId: target.id,
+      action: 'updated',
+      actorName: currentActor.nama,
+      actorEmail: currentActor.email,
+      timestamp: now,
+      proposal: target.proposal,
+      tahun: target.tahun,
+      changes: [auditChange],
+    };
+
+    const nextLogs = [auditEntry, ...kpmAuditLogs];
+    const nextRecords = records.map((r) => (r.id === kpmId ? updatedRecord : r));
+    setKpmAuditLogs(nextLogs);
+    setRecords(nextRecords);
+
+    if (supabaseReadyRef.current) {
+      try {
+        lastLocalSyncAtRef.current = Date.now();
+        await updateKpmDocumentsInSupabase(updatedRecord, proposals, pengelolaList);
+        await syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
+        setFeedback({
+          type: 'success',
+          message: `${auditChange.field} berhasil diperbarui di Google Drive & Supabase.`,
+        });
+        return;
+      } catch (err) {
+        console.error('Supabase doc update failed:', err);
+      }
+    }
+
+    await syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
+    setFeedback({
+      type: 'success',
+      message: `${auditChange.field} berhasil diperbarui.`,
+    });
+  };
+
+  const handleQuickSyncKpmDocuments = async (
+    kpmId: string,
+    nextDocuments: KpmDocuments
+  ) => {
+    const target = records.find((r) => r.id === kpmId);
+    if (!target) return;
+    const now = new Date().toISOString();
+    const updatedRecord: KpmRecord = {
+      ...target,
+      documents: nextDocuments,
+      updatedAt: now,
+    };
+    const nextRecords = records.map((r) => (r.id === kpmId ? updatedRecord : r));
+    setRecords(nextRecords);
+
+    if (supabaseReadyRef.current) {
+      try {
+        lastLocalSyncAtRef.current = Date.now();
+        await updateKpmDocumentsInSupabase(updatedRecord, proposals, pengelolaList);
+        return;
+      } catch {
+        // Fallback ke full sync
+      }
+    }
+    await syncOperationalData({ records: nextRecords }, 'update');
+  };
+
+  const handleQuickSyncProposalDocuments = async (
+    proposalId: string,
+    documents: ProposalDocuments,
+    checklist: ProposalChecklist
+  ) => {
+    const target = proposals.find((p) => p.id === proposalId);
+    if (!target) return;
+    const updatedProposal: ProposalRecord = {
+      ...target,
+      documents,
+      checklist,
+      updatedAt: new Date().toISOString(),
+    };
+    const nextProposals = proposals.map((p) => (p.id === proposalId ? updatedProposal : p));
+    setProposals(nextProposals);
+
+    if (supabaseReadyRef.current) {
+      try {
+        lastLocalSyncAtRef.current = Date.now();
+        await upsertProposalInSupabase(updatedProposal);
+        return;
+      } catch {
+        // Fallback ke full sync
+      }
+    }
+    await syncOperationalData({ proposals: nextProposals }, 'update');
   };
 
   const handleUpdateKpmStatus = (id: string, status: ValidationStatus) => {
@@ -1940,6 +2471,44 @@ export default function App() {
     email: string,
     password: string
   ): Promise<{ ok: boolean; error?: string }> => {
+    if (supabaseReadyRef.current) {
+      try {
+        const res = await supabaseLogin(email, password);
+        if (!res.ok || !res.user) {
+          return { ok: false, error: res.error || 'Email atau kata sandi tidak sesuai.' };
+        }
+        const [users, msgs] = await Promise.all([
+          supabaseFetchInternalUsers(),
+          supabaseFetchDirectMessages(),
+        ]);
+        const userMsgs = msgs.filter(
+          (m) => m.senderId === res.user!.id || m.recipientId === res.user!.id
+        );
+        prevMessageIdsRef.current = new Set(userMsgs.map((m) => m.id));
+        if (users.length > 0) setInternalUsers(users);
+        setDirectMessages(userMsgs);
+
+        const supaToken = `supabase-session-${res.user.id}`;
+        setSessionToken(supaToken);
+        setSessionUserId(res.user.id);
+        try {
+          localStorage.setItem(SESSION_TOKEN_STORAGE_KEY, supaToken);
+          localStorage.setItem(SESSION_STORAGE_KEY, res.user.id);
+        } catch {
+          // Ignore
+        }
+        await loadOrBootstrapOperationalData(supaToken, res.user, true);
+        setSubView('none');
+        setActiveTab('dashboard');
+        return { ok: true };
+      } catch (err) {
+        return {
+          ok: false,
+          error: err instanceof Error ? err.message : 'Gagal masuk ke Supabase.',
+        };
+      }
+    }
+
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
@@ -1971,7 +2540,7 @@ export default function App() {
       } catch {
         // Ignore
       }
-      await loadOrBootstrapOperationalData(data.token, data.user);
+      await loadOrBootstrapOperationalData(data.token, data.user, false);
       setSubView('none');
       setActiveTab('dashboard');
       return { ok: true };
@@ -1986,7 +2555,35 @@ export default function App() {
     kontak: string;
     password: string;
     fotoDataUrl?: string;
+    fotoThumbnailUrl?: string;
+    fotoFileId?: string;
   }): Promise<{ ok: boolean; error?: string; message?: string }> => {
+    if (supabaseReadyRef.current) {
+      try {
+        const res = await supabaseRegisterInternalUser({
+          ...payload,
+          jabatan: 'Menunggu Penetapan SuperAdmin',
+        });
+        if (!res.ok || !res.user) {
+          return { ok: false, error: res.error || 'Gagal mendaftar.' };
+        }
+        setInternalUsers((prev) => [
+          res.user as InternalUser,
+          ...prev.filter((u) => u.id !== res.user?.id),
+        ]);
+        return {
+          ok: true,
+          message:
+            'Pendaftaran berhasil dikirim ke Supabase. Menunggu persetujuan & penetapan jabatan oleh SuperAdmin.',
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          error: err instanceof Error ? err.message : 'Gagal mendaftar.',
+        };
+      }
+    }
+
     try {
       const res = await fetch('/api/auth/register', {
         method: 'POST',
@@ -2019,6 +2616,10 @@ export default function App() {
   const handleVerifySuperAdminPassword = async (
     password: string
   ): Promise<{ ok: boolean; error?: string }> => {
+    if (supabaseReadyRef.current && currentUser) {
+      return supabaseVerifyUserPassword(currentUser.id, password);
+    }
+
     try {
       const res = await authFetch(
         '/api/auth/verify-password',
@@ -2041,8 +2642,11 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    if (supabaseReadyRef.current && currentUser && !currentUser.presenceManual) {
+      await supabaseSetUserPresence(currentUser.id, 'offline', false).catch(() => {});
+    }
     const token = sessionTokenRef.current;
-    if (token) {
+    if (token && !supabaseReadyRef.current) {
       fetch('/api/auth/logout', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
@@ -2060,11 +2664,38 @@ export default function App() {
     jabatan: string;
     kontak: string;
     fotoDataUrl?: string | null;
+    fotoThumbnailUrl?: string | null;
+    fotoFileId?: string | null;
     newPassword?: string;
     presenceManual: boolean;
     presenceStatus: UserPresenceStatus;
   }): Promise<{ ok: boolean; error?: string }> => {
     if (!currentUser) return { ok: false, error: 'Sesi tidak ditemukan.' };
+
+    if (supabaseReadyRef.current) {
+      try {
+        if (patch.newPassword?.trim()) {
+          await supabaseAdminControlInternalUser(currentUser.id, {
+            newPassword: patch.newPassword.trim(),
+          });
+        }
+        const updated = await supabaseUpdateInternalUserProfile(currentUser.id, patch);
+        if (updated) {
+          setInternalUsers((prev) =>
+            prev.some((u) => u.id === updated.id)
+              ? prev.map((u) => (u.id === updated.id ? updated : u))
+              : [...prev, updated]
+          );
+        }
+        return { ok: true };
+      } catch (err) {
+        return {
+          ok: false,
+          error: err instanceof Error ? err.message : 'Gagal memperbarui profil di Supabase.',
+        };
+      }
+    }
+
     try {
       const res = await authFetch(`/api/users/${encodeURIComponent(currentUser.id)}/profile`, {
         method: 'PATCH',
@@ -2106,6 +2737,20 @@ export default function App() {
       return;
     }
 
+    if (supabaseReadyRef.current) {
+      try {
+        await supabaseAdminControlInternalUser(userId, patch);
+        const freshUsers = await supabaseFetchInternalUsers();
+        setInternalUsers(freshUsers);
+      } catch (err) {
+        setFeedback({
+          type: 'error',
+          message: err instanceof Error ? err.message : 'Gagal memperbarui akses user.',
+        });
+      }
+      return;
+    }
+
     try {
       const res = await authFetch(`/api/users/${encodeURIComponent(userId)}/admin-control`, {
         method: 'PATCH',
@@ -2133,6 +2778,22 @@ export default function App() {
       });
       return;
     }
+
+    if (supabaseReadyRef.current) {
+      try {
+        await supabaseDeleteInternalUser(userId);
+        const freshUsers = await supabaseFetchInternalUsers();
+        setInternalUsers(freshUsers);
+        setFeedback({ type: 'success', message: 'Akun pengguna berhasil dihapus dari Supabase.' });
+      } catch (err) {
+        setFeedback({
+          type: 'error',
+          message: err instanceof Error ? err.message : 'Gagal menghapus akun pengguna.',
+        });
+      }
+      return;
+    }
+
     try {
       const res = await authFetch(`/api/users/${encodeURIComponent(userId)}`, {
         method: 'DELETE',
@@ -2158,6 +2819,60 @@ export default function App() {
         type: 'error',
         message: 'Hanya SuperAdmin yang berhak menjalankan kontrol reset data.',
       });
+      return;
+    }
+
+    if (supabaseReadyRef.current) {
+      try {
+        lastLocalSyncAtRef.current = Date.now();
+        await runAdminDataActionInSupabase(action);
+        const freshSnapshot = await fetchOperationalDataFromSupabase();
+        try {
+          localStorage.setItem('masdeta_csv_seed_ptk_kota_2026_v1', 'done');
+        } catch {
+          // Ignore storage write error
+        }
+        applyRemoteOperationalState(freshSnapshot);
+        if (action === 'delete_all_kpm') {
+          setActiveKpmId(null);
+          setFeedback({
+            type: 'success',
+            message: 'Seluruh data calon KPM dan log audit KPM telah dihapus.',
+          });
+        } else if (action === 'delete_all_proposal') {
+          setActiveProposalId(null);
+          setActiveKpmId(null);
+          setFeedback({
+            type: 'success',
+            message: 'Seluruh daftar proposal, KPM terkait, dan rekam jejak telah dihapus.',
+          });
+        } else if (action === 'delete_all_items') {
+          setFeedback({
+            type: 'success',
+            message: 'Seluruh katalog item dan sub-item telah dikosongkan.',
+          });
+        } else if (action === 'delete_all_data') {
+          setActiveKpmId(null);
+          setActiveProposalId(null);
+          setFeedback({
+            type: 'success',
+            message: 'Seluruh data KPM, proposal, item, wilayah, pengelola, dan riwayat telah dihapus.',
+          });
+        } else if (action === 'reset_total') {
+          setDirectMessages([]);
+          setActiveKpmId(null);
+          setActiveProposalId(null);
+          setFeedback({
+            type: 'success',
+            message: 'Reset total selesai. Seluruh data aplikasi dan riwayat chat telah dikosongkan.',
+          });
+        }
+      } catch (err) {
+        setFeedback({
+          type: 'error',
+          message: err instanceof Error ? err.message : 'Gagal menjalankan kontrol data Supabase.',
+        });
+      }
       return;
     }
 
@@ -2238,6 +2953,32 @@ export default function App() {
     password?: string;
   }): Promise<{ ok: boolean; error?: string }> => {
     const initialPassword = user.password?.trim() || 'masdeta123';
+
+    if (supabaseReadyRef.current) {
+      try {
+        const res = await supabaseCreateInternalUserBySuperAdmin({
+          ...user,
+          password: initialPassword,
+        });
+        if (!res.ok || !res.user) {
+          const errMsg = res.error || 'Gagal menambahkan user baru.';
+          setFeedback({ type: 'error', message: errMsg });
+          return { ok: false, error: errMsg };
+        }
+        const freshUsers = await supabaseFetchInternalUsers();
+        setInternalUsers(freshUsers.length > 0 ? freshUsers : [res.user, ...internalUsers]);
+        setFeedback({
+          type: 'success',
+          message: `Akun "${user.nama}" (${user.email}) aktif ditambahkan di Supabase dengan kata sandi awal: ${initialPassword}`,
+        });
+        return { ok: true };
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : 'Gagal terhubung ke Supabase.';
+        setFeedback({ type: 'error', message: errMsg });
+        return { ok: false, error: errMsg };
+      }
+    }
+
     try {
       const res = await authFetch('/api/admin/users', {
         method: 'POST',
@@ -2288,6 +3029,21 @@ export default function App() {
     sharedKpm?: SharedKpmCard
   ) => {
     if (!currentUser) return;
+
+    if (supabaseReadyRef.current) {
+      const savedMsg = await supabaseSendDirectMessage({
+        senderId: currentUser.id,
+        recipientId,
+        text,
+        sharedKpm,
+      });
+      prevMessageIdsRef.current.add(savedMsg.id);
+      setDirectMessages((prev) =>
+        prev.some((m) => m.id === savedMsg.id) ? prev : [...prev, savedMsg]
+      );
+      return;
+    }
+
     const clientMsgId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const res = await authFetch('/api/chat/send', {
       method: 'POST',
@@ -2471,7 +3227,7 @@ export default function App() {
 
   const showBottomNav = subView === 'none' && !(activeTab === 'menu' && menuSection !== 'root');
 
-  if (sessionToken && !authReady && !currentUser) {
+  if ((sessionToken || supabaseReady) && !authReady && !currentUser) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-100 p-4">
         <div className="flex flex-col items-center gap-3 rounded-3xl border border-slate-200 bg-white px-8 py-6 shadow-xs">
@@ -2487,6 +3243,25 @@ export default function App() {
       <div className="min-h-screen bg-slate-200/70 sm:py-3">
         <OfflineIndicator />
         <div className="mx-auto min-h-screen w-full max-w-md overflow-x-hidden bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm">
+          {supabaseSchemaMissing && !dismissedSchemaNotice && (
+            <div className="mx-4 mt-3 flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+              <Database className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+              <div className="min-w-0 flex-1">
+                <p className="font-bold">Tabel Supabase belum dibuat</p>
+                <p className="mt-0.5 leading-snug text-amber-800">
+                  Jalankan skrip <span className="font-mono font-semibold">supabase/schema.sql</span> pada Supabase SQL Editor agar seluruh data multi-admin tersimpan di PostgreSQL. Mode lokal sementara aktif.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDismissedSchemaNotice(true)}
+                className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-amber-700 hover:bg-amber-100"
+                aria-label="Tutup pemberitahuan"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
           <AuthView
             logo={<MasdetaLogo />}
             onLogin={handleLogin}
@@ -2500,6 +3275,28 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-200/70 sm:py-3">
       <OfflineIndicator />
+
+      {supabaseSchemaMissing && !dismissedSchemaNotice && (
+        <div className="mx-auto mb-2 w-full max-w-md px-3 sm:px-0">
+          <div className="flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 shadow-xs">
+            <Database className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+            <div className="min-w-0 flex-1">
+              <p className="font-bold">Skema SQL Supabase belum dijalankan</p>
+              <p className="mt-0.5 leading-snug text-amber-800">
+                Tempel &amp; jalankan <span className="font-mono font-semibold">supabase/schema.sql</span> di Supabase SQL Editor untuk mengaktifkan database PostgreSQL multi-admin.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setDismissedSchemaNotice(true)}
+              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-amber-700 hover:bg-amber-100"
+              aria-label="Tutup pemberitahuan"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Global Feedback Banner for views without inline feedback slot */}
       {feedback &&
@@ -2675,6 +3472,7 @@ export default function App() {
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
+            onUpdateKpmDocuments={handleUpdateKpmDocuments}
           />
         )}
 
@@ -2740,6 +3538,7 @@ export default function App() {
               onOpenAddProposal={() => openAddProposalForm('kpm', true)}
               onCreatePengelola={handleCreatePengelola}
               onSave={handleSaveKpm}
+              onQuickSyncKpmDocuments={handleQuickSyncKpmDocuments}
               onCancelEdit={() => {
                 setEditingKpmRecord(null);
                 setLockedKpmProposalScope(null);
@@ -2845,6 +3644,7 @@ export default function App() {
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onSaveProposal={handleUpdateProposal}
+            onQuickSyncProposalDocuments={handleQuickSyncProposalDocuments}
             onToggleProposalLock={handleToggleProposalLock}
             onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
           />

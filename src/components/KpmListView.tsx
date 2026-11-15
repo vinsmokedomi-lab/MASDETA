@@ -15,6 +15,7 @@ import {
   isKecamatanProposal,
   resolveProposalDomicile,
 } from '../utils/imageProcessor';
+import { DriveImage } from './DriveImage';
 import { FilterSelect, SegmentedTabs } from './FormControls';
 
 type KpmSortKey = 'absen' | 'item' | 'rtrw' | 'pengelola' | 'pekerjaan' | 'kelurahan';
@@ -524,10 +525,9 @@ export function KpmListView({
                   {/* Foto Thumbnail Persegi Panjang (sejajar ujung atas judul s.d. ujung bawah subjudul) */}
                   <div className="flex w-11 shrink-0 items-center justify-center self-stretch overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
                     {thumb ? (
-                      <img
-                        src={thumb.dataUrl}
+                      <DriveImage
+                        doc={thumb}
                         alt={rec.nama}
-                        referrerPolicy="no-referrer"
                         className="h-full w-full object-cover"
                       />
                     ) : (

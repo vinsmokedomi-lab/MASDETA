@@ -30,6 +30,8 @@ interface StoredUser {
   presenceStatus: UserPresenceStatus;
   presenceManual?: boolean;
   fotoDataUrl?: string;
+  fotoThumbnailUrl?: string;
+  fotoFileId?: string;
   lastActiveAt?: string;
   registeredAt: string;
   updatedAt: string;
@@ -50,6 +52,7 @@ interface SharedKpmCard {
   kontak?: string;
   validasi: 'pending' | 'accepted' | 'rejected';
   fotoDataUrl?: string;
+  fotoThumbnailUrl?: string;
 }
 
 interface DirectChatMessage {
@@ -116,6 +119,16 @@ function sanitizeUser(user: StoredUser): PublicUser {
   return rest;
 }
 
+function sanitizeMediaUrlOrDataImage(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.startsWith('https://') || trimmed.startsWith('http://') || trimmed.startsWith('data:image/')) {
+    return trimmed;
+  }
+  return undefined;
+}
+
 function sanitizeSharedKpm(raw: unknown): SharedKpmCard | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const obj = raw as Record<string, unknown>;
@@ -125,10 +138,8 @@ function sanitizeSharedKpm(raw: unknown): SharedKpmCard | undefined {
   const val = obj.validasi;
   const validasi: 'pending' | 'accepted' | 'rejected' =
     val === 'accepted' || val === 'rejected' || val === 'pending' ? val : 'pending';
-  const fotoRaw =
-    typeof obj.fotoDataUrl === 'string' && obj.fotoDataUrl.startsWith('data:image/')
-      ? obj.fotoDataUrl
-      : undefined;
+  const fotoRaw = sanitizeMediaUrlOrDataImage(obj.fotoDataUrl);
+  const fotoThumbRaw = sanitizeMediaUrlOrDataImage(obj.fotoThumbnailUrl);
   return {
     kpmId,
     registerCode: String(obj.registerCode || '').trim(),
@@ -140,6 +151,7 @@ function sanitizeSharedKpm(raw: unknown): SharedKpmCard | undefined {
     kontak: obj.kontak ? String(obj.kontak).trim() : undefined,
     validasi,
     fotoDataUrl: fotoRaw,
+    fotoThumbnailUrl: fotoThumbRaw,
   };
 }
 
@@ -610,9 +622,11 @@ async function startServer() {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const kontak = String(req.body?.kontak || '').trim();
     const password = String(req.body?.password || '');
-    const fotoDataUrl =
-      typeof req.body?.fotoDataUrl === 'string' && req.body.fotoDataUrl.startsWith('data:image/')
-        ? req.body.fotoDataUrl
+    const fotoDataUrl = sanitizeMediaUrlOrDataImage(req.body?.fotoDataUrl);
+    const fotoThumbnailUrl = sanitizeMediaUrlOrDataImage(req.body?.fotoThumbnailUrl);
+    const fotoFileId =
+      typeof req.body?.fotoFileId === 'string' && req.body.fotoFileId.trim()
+        ? req.body.fotoFileId.trim()
         : undefined;
 
     if (!nama || !email || password.length < 6) {
@@ -640,6 +654,8 @@ async function startServer() {
       presenceStatus: 'offline',
       presenceManual: false,
       fotoDataUrl,
+      fotoThumbnailUrl,
+      fotoFileId,
       registeredAt: now,
       updatedAt: now,
       passwordHash: hashPassword(password),
@@ -791,7 +807,17 @@ async function startServer() {
       user.kontak = req.body.kontak.trim();
     }
     if (typeof req.body?.fotoDataUrl === 'string' || req.body?.fotoDataUrl === null) {
-      user.fotoDataUrl = req.body.fotoDataUrl || undefined;
+      user.fotoDataUrl = sanitizeMediaUrlOrDataImage(req.body.fotoDataUrl);
+      if (!user.fotoDataUrl) {
+        user.fotoThumbnailUrl = undefined;
+        user.fotoFileId = undefined;
+      }
+    }
+    if (typeof req.body?.fotoThumbnailUrl === 'string' || req.body?.fotoThumbnailUrl === null) {
+      user.fotoThumbnailUrl = sanitizeMediaUrlOrDataImage(req.body.fotoThumbnailUrl);
+    }
+    if (typeof req.body?.fotoFileId === 'string' || req.body?.fotoFileId === null) {
+      user.fotoFileId = req.body.fotoFileId ? String(req.body.fotoFileId).trim() : undefined;
     }
     if (typeof req.body?.newPassword === 'string' && req.body.newPassword.trim()) {
       if (req.body.newPassword.trim().length < 6) {

@@ -6,6 +6,7 @@ import {
   Eye,
   EyeOff,
   KeyRound,
+  Loader2,
   Lock,
   Mail,
   Phone,
@@ -13,7 +14,13 @@ import {
   User,
   UserPlus,
 } from 'lucide-react';
-import { capitalizeWords, processImageUpload } from '../utils/imageProcessor';
+import { DriveImage } from './DriveImage';
+import {
+  deleteMediaFromDrive,
+  replaceMediaInDrive,
+  uploadMediaToDrive,
+} from '../services/driveManager';
+import { capitalizeWords, validateImageUploadFile } from '../utils/imageProcessor';
 
 const REMEMBER_LOGIN_KEY = 'masdeta_remember_login_v1';
 
@@ -55,6 +62,8 @@ interface AuthViewProps {
     kontak: string;
     password: string;
     fotoDataUrl?: string;
+    fotoThumbnailUrl?: string;
+    fotoFileId?: string;
   }) => Promise<{ ok: boolean; error?: string; message?: string }>;
 }
 
@@ -71,6 +80,9 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
   const [regEmail, setRegEmail] = useState('');
   const [regKontak, setRegKontak] = useState('');
   const [regFotoDataUrl, setRegFotoDataUrl] = useState<string | undefined>(undefined);
+  const [regFotoThumbUrl, setRegFotoThumbUrl] = useState<string | undefined>(undefined);
+  const [regFotoFileId, setRegFotoFileId] = useState<string | undefined>(undefined);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [regPassword, setRegPassword] = useState('');
   const [regConfirm, setRegConfirm] = useState('');
 
@@ -121,11 +133,42 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    setError(null);
+    setUploadingPhoto(true);
     try {
-      const processed = await processImageUpload(file);
-      setRegFotoDataUrl(processed.dataUrl);
+      validateImageUploadFile(file);
+      const oldTarget = regFotoFileId || regFotoDataUrl;
+      const driveRes =
+        oldTarget && !oldTarget.startsWith('data:')
+          ? await replaceMediaInDrive(file, oldTarget)
+          : await uploadMediaToDrive(file);
+      setRegFotoDataUrl(driveRes.directUrl);
+      setRegFotoThumbUrl(driveRes.thumbnailUrl);
+      setRegFotoFileId(driveRes.fileId);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Gagal mengunggah foto profil ke Google Drive.'
+      );
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const handleRemoveRegPhoto = async () => {
+    const target = regFotoFileId || regFotoDataUrl;
+    if (!target) return;
+    setUploadingPhoto(true);
+    try {
+      await deleteMediaFromDrive(target);
+      setRegFotoDataUrl(undefined);
+      setRegFotoThumbUrl(undefined);
+      setRegFotoFileId(undefined);
     } catch {
-      setError('Gagal memproses foto profil. Pastikan file berupa gambar yang valid.');
+      setError('Gagal menghapus foto dari Google Drive.');
+    } finally {
+      setUploadingPhoto(false);
     }
   };
 
@@ -150,6 +193,8 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
       kontak: regKontak.trim(),
       password: regPassword,
       fotoDataUrl: regFotoDataUrl,
+      fotoThumbnailUrl: regFotoThumbUrl,
+      fotoFileId: regFotoFileId,
     });
     setSubmitting(false);
 
@@ -166,6 +211,8 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
     setRegEmail('');
     setRegKontak('');
     setRegFotoDataUrl(undefined);
+    setRegFotoThumbUrl(undefined);
+    setRegFotoFileId(undefined);
     setRegPassword('');
     setRegConfirm('');
   };
@@ -447,11 +494,14 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
               <div className="flex items-center gap-3.5 rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
                 <div className="relative flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-white text-slate-400">
                   {regFotoDataUrl ? (
-                    <img
+                    <DriveImage
                       src={regFotoDataUrl}
+                      thumbnailUrl={regFotoThumbUrl}
                       alt="Foto Profil"
                       className="h-full w-full object-cover"
                     />
+                  ) : uploadingPhoto ? (
+                    <Loader2 className="h-5 w-5 animate-spin text-teal-700" />
                   ) : (
                     <User className="h-6 w-6" />
                   )}
@@ -459,15 +509,22 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-bold text-slate-800">Foto Profil (Opsional)</p>
                   <p className="mt-0.5 text-[11px] text-slate-500">
-                    JPG / PNG untuk profil dan chat tim.
+                    {uploadingPhoto
+                      ? 'Mengunggah ke Google Drive...'
+                      : 'JPG / PNG untuk profil dan chat tim.'}
                   </p>
                   <div className="mt-2 flex items-center gap-2">
                     <label className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-[11px] font-semibold text-teal-800 hover:bg-teal-100">
-                      <Camera className="h-3.5 w-3.5" />
+                      {uploadingPhoto ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Camera className="h-3.5 w-3.5" />
+                      )}
                       <span>{regFotoDataUrl ? 'Ganti Foto' : 'Pilih Foto'}</span>
                       <input
                         type="file"
                         accept="image/*"
+                        disabled={uploadingPhoto}
                         onChange={handleRegPhotoChange}
                         className="sr-only"
                       />
@@ -475,8 +532,9 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
                     {regFotoDataUrl && (
                       <button
                         type="button"
-                        onClick={() => setRegFotoDataUrl(undefined)}
-                        className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100"
+                        disabled={uploadingPhoto}
+                        onClick={() => void handleRemoveRegPhoto()}
+                        className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
                       >
                         <Trash2 className="h-3 w-3" />
                         <span>Hapus</span>

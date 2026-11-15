@@ -8,10 +8,17 @@ import {
   Loader2,
   LogOut,
   Shield,
+  Trash2,
   User,
 } from 'lucide-react';
+import { DriveImage } from './DriveImage';
+import {
+  deleteMediaFromDrive,
+  replaceMediaInDrive,
+  uploadMediaToDrive,
+} from '../services/driveManager';
 import { InternalUser, UserPresenceStatus } from '../types/kpm';
-import { capitalizeWords, processImageUpload } from '../utils/imageProcessor';
+import { capitalizeWords, validateImageUploadFile } from '../utils/imageProcessor';
 import { PresenceDot, getPresenceMeta } from './PresenceDot';
 
 interface UserProfileViewProps {
@@ -25,6 +32,8 @@ interface UserProfileViewProps {
     jabatan: string;
     kontak: string;
     fotoDataUrl?: string | null;
+    fotoThumbnailUrl?: string | null;
+    fotoFileId?: string | null;
     newPassword?: string;
     presenceManual: boolean;
     presenceStatus: UserPresenceStatus;
@@ -46,6 +55,11 @@ export function UserProfileView({
   const [nama, setNama] = useState(user.nama);
   const [kontak, setKontak] = useState(user.kontak || '');
   const [fotoDataUrl, setFotoDataUrl] = useState<string | undefined>(user.fotoDataUrl);
+  const [fotoThumbnailUrl, setFotoThumbnailUrl] = useState<string | undefined>(
+    user.fotoThumbnailUrl
+  );
+  const [fotoFileId, setFotoFileId] = useState<string | undefined>(user.fotoFileId);
+  const [confirmDeleteFoto, setConfirmDeleteFoto] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [saving, setSaving] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
@@ -55,7 +69,9 @@ export function UserProfileView({
 
   useEffect(() => {
     setFotoDataUrl(user.fotoDataUrl);
-  }, [user.fotoDataUrl]);
+    setFotoThumbnailUrl(user.fotoThumbnailUrl);
+    setFotoFileId(user.fotoFileId);
+  }, [user.fotoDataUrl, user.fotoThumbnailUrl, user.fotoFileId]);
 
   useEffect(() => {
     setNama(user.nama);
@@ -67,25 +83,76 @@ export function UserProfileView({
     e.target.value = '';
     if (!file) return;
     setFeedback(null);
+    setConfirmDeleteFoto(false);
     setUploadingPhoto(true);
     try {
-      const compressed = await processImageUpload(file, { maxDimension: 512, quality: 0.85 });
-      setFotoDataUrl(compressed.dataUrl);
+      validateImageUploadFile(file);
+      const oldTarget = fotoFileId || fotoDataUrl;
+      const driveRes =
+        oldTarget && !oldTarget.startsWith('data:')
+          ? await replaceMediaInDrive(file, oldTarget)
+          : await uploadMediaToDrive(file);
+
+      setFotoDataUrl(driveRes.directUrl);
+      setFotoThumbnailUrl(driveRes.thumbnailUrl);
+      setFotoFileId(driveRes.fileId);
+
       const res = await onUpdateProfile({
         nama: capitalizeWords((nama.trim() || user.nama).trim()),
         jabatan: user.jabatan,
         kontak: kontak.trim(),
-        fotoDataUrl: compressed.dataUrl,
+        fotoDataUrl: driveRes.directUrl,
+        fotoThumbnailUrl: driveRes.thumbnailUrl,
+        fotoFileId: driveRes.fileId,
         presenceManual: false,
         presenceStatus: user.presenceStatus || 'online',
       });
       if (res.ok) {
-        setFeedback({ type: 'success', message: 'Foto profil berhasil disimpan.' });
+        setFeedback({ type: 'success', message: 'Foto profil berhasil disimpan ke Google Drive.' });
       } else {
         setFeedback({ type: 'error', message: res.error || 'Gagal menyimpan foto profil.' });
       }
-    } catch {
-      setFeedback({ type: 'error', message: 'Gagal memproses foto profil.' });
+    } catch (err) {
+      setFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Gagal mengunggah foto profil ke Google Drive.',
+      });
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const handleDeletePhoto = async () => {
+    const target = fotoFileId || fotoDataUrl;
+    if (!target) return;
+    setFeedback(null);
+    setUploadingPhoto(true);
+    try {
+      await deleteMediaFromDrive(target);
+      setFotoDataUrl(undefined);
+      setFotoThumbnailUrl(undefined);
+      setFotoFileId(undefined);
+      setConfirmDeleteFoto(false);
+      const res = await onUpdateProfile({
+        nama: capitalizeWords((nama.trim() || user.nama).trim()),
+        jabatan: user.jabatan,
+        kontak: kontak.trim(),
+        fotoDataUrl: null,
+        fotoThumbnailUrl: null,
+        fotoFileId: null,
+        presenceManual: false,
+        presenceStatus: user.presenceStatus || 'online',
+      });
+      if (res.ok) {
+        setFeedback({ type: 'success', message: 'Foto profil dihapus dari Drive & database.' });
+      } else {
+        setFeedback({ type: 'error', message: res.error || 'Gagal menghapus foto profil.' });
+      }
+    } catch (err) {
+      setFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Gagal menghapus foto dari Google Drive.',
+      });
     } finally {
       setUploadingPhoto(false);
     }
@@ -109,6 +176,8 @@ export function UserProfileView({
       jabatan: user.jabatan,
       kontak: kontak.trim(),
       fotoDataUrl: fotoDataUrl ?? null,
+      fotoThumbnailUrl: fotoThumbnailUrl ?? null,
+      fotoFileId: fotoFileId ?? null,
       newPassword: newPassword.trim() || undefined,
       presenceManual: false,
       presenceStatus: user.presenceStatus || 'online',
@@ -158,10 +227,10 @@ export function UserProfileView({
           <label className="relative flex h-24 w-24 cursor-pointer items-center justify-center overflow-visible">
             <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-3xl border-2 border-slate-200 bg-slate-100 text-slate-500 shadow-xs">
               {fotoDataUrl ? (
-                <img
+                <DriveImage
                   src={fotoDataUrl}
+                  thumbnailUrl={fotoThumbnailUrl}
                   alt={nama}
-                  referrerPolicy="no-referrer"
                   className={`h-full w-full object-cover transition-opacity ${
                     uploadingPhoto ? 'opacity-50' : 'opacity-100'
                   }`}
@@ -190,6 +259,44 @@ export function UserProfileView({
               onChange={handlePhotoChange}
             />
           </label>
+
+          {fotoDataUrl && !confirmDeleteFoto && (
+            <button
+              type="button"
+              disabled={uploadingPhoto}
+              onClick={() => setConfirmDeleteFoto(true)}
+              className="mt-2.5 inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+            >
+              <Trash2 className="h-3 w-3" />
+              <span>Hapus Foto</span>
+            </button>
+          )}
+
+          {confirmDeleteFoto && (
+            <div className="mt-3 w-full max-w-xs rounded-xl border border-rose-200 bg-rose-50 p-2.5">
+              <p className="text-[11px] font-semibold text-rose-900">
+                Hapus foto profil dari Google Drive?
+              </p>
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  disabled={uploadingPhoto}
+                  onClick={() => setConfirmDeleteFoto(false)}
+                  className="min-h-[32px] flex-1 rounded-lg border border-slate-200 bg-white text-[11px] font-semibold text-slate-700"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={uploadingPhoto}
+                  onClick={() => void handleDeletePhoto()}
+                  className="min-h-[32px] flex-1 rounded-lg bg-rose-600 text-[11px] font-semibold text-white"
+                >
+                  {uploadingPhoto ? 'Menghapus...' : 'Ya, Hapus'}
+                </button>
+              </div>
+            </div>
+          )}
 
           <p className="mt-3.5 text-lg font-bold text-slate-900">{user.nama}</p>
 

@@ -1,34 +1,41 @@
-import { useMemo, useState } from 'react';
+import { ChangeEvent, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
+  Camera,
   CheckCircle2,
   ChevronRight,
   Clock,
   CreditCard,
   FileText,
   History,
+  Loader2,
   Lock,
   MessageCircle,
   Package,
   Pencil,
+  Plus,
   Send,
   Share2,
   ShieldCheck,
   Trash2,
+  Upload,
   User,
   X,
   XCircle,
 } from 'lucide-react';
+import { DriveImage } from './DriveImage';
 import { DTSEN_OPTION_ITEMS, INITIAL_WILAYAH_LIST } from '../data/kpmOptions';
 import {
   InternalUser,
   ItemBantuan,
   KpmAuditLogEntry,
   KpmDocumentFile,
+  KpmDocuments,
   KpmRecord,
   ProposalRecord,
   SharedKpmCard,
+  SingleDocumentKey,
   ValidationStatus,
   WilayahKabKota,
 } from '../types/kpm';
@@ -37,9 +44,13 @@ import {
   formatRupiah,
   formatUploadDateTime,
   formatWhatsAppUrl,
+  getDocumentDirectUrl,
+  getDocumentThumbnailUrl,
   getKpmSubItemStatusList,
+  removeDocumentFromDrive,
   resolvePackageForKpm,
   resolveProposalDomicile,
+  uploadImageDocumentToDrive,
 } from '../utils/imageProcessor';
 
 interface KpmDetailViewProps {
@@ -72,6 +83,11 @@ interface KpmDetailViewProps {
   onOpenProposal: (proposalName: string, tahun: string) => void;
   onOpenFullHistory: () => void;
   onPreviewDocument: (file: KpmDocumentFile, title: string) => void;
+  onUpdateKpmDocuments?: (
+    kpmId: string,
+    nextDocuments: KpmDocuments,
+    auditChange: { field: string; before: string; after: string }
+  ) => Promise<void> | void;
   feedback?: { type: 'success' | 'error'; message: string } | null;
   onDismissFeedback?: () => void;
 }
@@ -98,6 +114,7 @@ export function KpmDetailView({
   onOpenProposal,
   onOpenFullHistory,
   onPreviewDocument,
+  onUpdateKpmDocuments,
   feedback,
   onDismissFeedback,
 }: KpmDetailViewProps) {
@@ -106,6 +123,19 @@ export function KpmDetailView({
   const [shareRecipientId, setShareRecipientId] = useState<string>('');
   const [shareMessage, setShareMessage] = useState<string>('');
   const [sharingChat, setSharingChat] = useState(false);
+  const [docBusySlot, setDocBusySlot] = useState<string | null>(null);
+  const [docError, setDocError] = useState<string | null>(null);
+  const [pendingUploadTarget, setPendingUploadTarget] = useState<{
+    category: 'ktp' | 'kk' | 'penerima' | 'survey' | 'rumah' | 'lainnya';
+    label: string;
+    existingDoc?: KpmDocumentFile;
+  } | null>(null);
+  const [pendingDeleteDoc, setPendingDeleteDoc] = useState<{
+    category: 'ktp' | 'kk' | 'penerima' | 'survey' | 'rumah' | 'lainnya';
+    label: string;
+    doc: KpmDocumentFile;
+  } | null>(null);
+  const detailFileInputRef = useRef<HTMLInputElement>(null);
 
   const matchingProposal = useMemo(
     () =>
@@ -299,6 +329,100 @@ export function KpmDetailView({
     setIsShareModalOpen(true);
   };
 
+  const handleTriggerSingleOrMultiUpload = (
+    category: 'ktp' | 'kk' | 'penerima' | 'survey' | 'rumah' | 'lainnya',
+    label: string,
+    existingDoc?: KpmDocumentFile
+  ) => {
+    if (isProposalLocked || !canUpdate || docBusySlot) return;
+    setDocError(null);
+    setPendingUploadTarget({ category, label, existingDoc });
+    detailFileInputRef.current?.click();
+  };
+
+  const handleDetailDocFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    const target = pendingUploadTarget;
+    setPendingUploadTarget(null);
+    if (!file || !target || !onUpdateKpmDocuments) return;
+
+    setDocError(null);
+    setDocBusySlot(target.existingDoc ? `${target.category}:${target.existingDoc.id}` : target.category);
+    try {
+      const uploaded = await uploadImageDocumentToDrive(file, target.existingDoc);
+      const nextDocs: KpmDocuments = {
+        ...record.documents,
+        rumah: [...rumahDocs],
+        lainnya: [...lainnyaDocs],
+      };
+
+      if (
+        target.category === 'ktp' ||
+        target.category === 'kk' ||
+        target.category === 'penerima' ||
+        target.category === 'survey'
+      ) {
+        nextDocs[target.category] = uploaded;
+      } else if (target.category === 'rumah') {
+        nextDocs.rumah = [...rumahDocs, uploaded].slice(0, 3);
+      } else if (target.category === 'lainnya') {
+        nextDocs.lainnya = [...lainnyaDocs, uploaded].slice(0, 5);
+      }
+
+      await onUpdateKpmDocuments(record.id, nextDocs, {
+        field: target.label,
+        before: target.existingDoc ? target.existingDoc.fileName : 'Kosong',
+        after: uploaded.fileName,
+      });
+    } catch (err) {
+      setDocError(
+        err instanceof Error ? err.message : 'Gagal mengunggah atau mengganti foto ke Google Drive.'
+      );
+    } finally {
+      setDocBusySlot(null);
+    }
+  };
+
+  const handleConfirmDeleteDocument = async () => {
+    if (!pendingDeleteDoc || !onUpdateKpmDocuments || docBusySlot) return;
+    const { category, label, doc } = pendingDeleteDoc;
+    setDocError(null);
+    setDocBusySlot(`${category}:${doc.id}`);
+    try {
+      await removeDocumentFromDrive(doc);
+      const nextDocs: KpmDocuments = {
+        ...record.documents,
+        rumah: [...rumahDocs],
+        lainnya: [...lainnyaDocs],
+      };
+
+      if (
+        category === 'ktp' ||
+        category === 'kk' ||
+        category === 'penerima' ||
+        category === 'survey'
+      ) {
+        delete nextDocs[category as SingleDocumentKey];
+      } else if (category === 'rumah') {
+        nextDocs.rumah = rumahDocs.filter((d) => d.id !== doc.id);
+      } else if (category === 'lainnya') {
+        nextDocs.lainnya = lainnyaDocs.filter((d) => d.id !== doc.id);
+      }
+
+      await onUpdateKpmDocuments(record.id, nextDocs, {
+        field: label,
+        before: doc.fileName || 'Ada foto',
+        after: 'Dihapus',
+      });
+      setPendingDeleteDoc(null);
+    } catch (err) {
+      setDocError(err instanceof Error ? err.message : 'Gagal menghapus foto dari Google Drive.');
+    } finally {
+      setDocBusySlot(null);
+    }
+  };
+
   const handleConfirmShare = async () => {
     if (!shareRecipientId || sharingChat) return;
     setSharingChat(true);
@@ -312,7 +436,8 @@ export function KpmDetailView({
       proposal: record.proposal,
       kontak: record.kontak,
       validasi: record.validasi,
-      fotoDataUrl: heroPhotoDoc?.dataUrl,
+      fotoDataUrl: heroPhotoDoc ? getDocumentDirectUrl(heroPhotoDoc) : undefined,
+      fotoThumbnailUrl: heroPhotoDoc ? getDocumentThumbnailUrl(heroPhotoDoc) : undefined,
     };
     await onShareToChat(shareRecipientId, card, shareMessage.trim());
     setSharingChat(false);
@@ -397,10 +522,9 @@ export function KpmDetailView({
                   className="h-22 w-18 shrink-0 overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 shadow-xs"
                   aria-label={`Lihat foto ${record.nama}`}
                 >
-                  <img
-                    src={heroPhotoDoc.dataUrl}
+                  <DriveImage
+                    doc={heroPhotoDoc}
                     alt={record.nama}
-                    referrerPolicy="no-referrer"
                     className="h-full w-full object-cover"
                   />
                 </button>
@@ -825,7 +949,39 @@ export function KpmDetailView({
 
         {/* Dokumen & Foto Lapangan */}
         <section className="rounded-2xl border border-slate-200 bg-white p-4">
-          <h3 className="text-sm font-bold text-slate-900">Dokumen & Foto Lapangan</h3>
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">Dokumen &amp; Foto Lapangan</h3>
+              <p className="text-[11px] text-slate-500">
+                Disimpan langsung di Google Drive · Klik foto untuk pratinjau
+              </p>
+            </div>
+            {docBusySlot && (
+              <span className="inline-flex items-center gap-1.5 rounded-lg bg-teal-50 px-2.5 py-1 text-[11px] font-semibold text-teal-800">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <span>Memproses Drive...</span>
+              </span>
+            )}
+          </div>
+
+          <input
+            ref={detailFileInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleDetailDocFileChange}
+            className="sr-only"
+          />
+
+          {docError && (
+            <div
+              role="alert"
+              className="mt-3 flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-800"
+            >
+              <AlertTriangle className="h-4 w-4 shrink-0 text-rose-600" />
+              <span>{docError}</span>
+            </div>
+          )}
+
           <div className="mt-3 grid grid-cols-2 gap-2.5">
             {(
               [
@@ -837,7 +993,9 @@ export function KpmDetailView({
             ).map((item) => {
               const doc = record.documents[item.key];
               const Icon = item.icon;
-              if (!doc && item.key !== 'ktp' && item.key !== 'kk') return null;
+              const isSlotBusy =
+                docBusySlot === item.key || (doc && docBusySlot === `${item.key}:${doc.id}`);
+              const editableDocs = Boolean(!isProposalLocked && canUpdate && onUpdateKpmDocuments);
 
               return (
                 <div
@@ -845,71 +1003,214 @@ export function KpmDetailView({
                   className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50"
                 >
                   {doc ? (
-                    <button
-                      type="button"
-                      onClick={() => onPreviewDocument(doc, item.label)}
-                      className="relative block aspect-[1.45/1] w-full overflow-hidden bg-slate-200 text-left"
-                    >
-                      <img
-                        src={doc.dataUrl}
-                        alt={item.label}
-                        referrerPolicy="no-referrer"
-                        className="h-full w-full object-cover"
-                      />
-                      <span className="absolute bottom-1.5 left-1.5 rounded-md bg-slate-900/75 px-1.5 py-0.5 text-[10px] font-medium text-white">
-                        {item.label}
-                      </span>
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        disabled={Boolean(docBusySlot)}
+                        onClick={() => onPreviewDocument(doc, item.label)}
+                        className="relative block aspect-[1.45/1] w-full overflow-hidden bg-slate-200 text-left"
+                      >
+                        <DriveImage
+                          doc={doc}
+                          alt={item.label}
+                          className="h-full w-full object-cover"
+                        />
+                        {isSlotBusy && (
+                          <div className="absolute inset-0 flex items-center justify-center bg-slate-950/60 text-white">
+                            <Loader2 className="h-5 w-5 animate-spin" />
+                          </div>
+                        )}
+                        <span className="absolute bottom-1.5 left-1.5 rounded-md bg-slate-900/75 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                          {item.label}
+                        </span>
+                      </button>
+                      {editableDocs && (
+                        <div className="flex items-center gap-1 border-t border-slate-200 bg-white p-1.5">
+                          <button
+                            type="button"
+                            disabled={Boolean(docBusySlot)}
+                            onClick={() =>
+                              handleTriggerSingleOrMultiUpload(item.key, item.label, doc)
+                            }
+                            className="inline-flex min-h-[30px] flex-1 items-center justify-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                          >
+                            <Upload className="h-3 w-3" />
+                            <span>Ganti</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={Boolean(docBusySlot)}
+                            onClick={() =>
+                              setPendingDeleteDoc({
+                                category: item.key,
+                                label: item.label,
+                                doc,
+                              })
+                            }
+                            aria-label={`Hapus Foto ${item.label}`}
+                            title="Hapus Foto"
+                            className="inline-flex min-h-[30px] items-center justify-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                            <span>Hapus</span>
+                          </button>
+                        </div>
+                      )}
+                    </>
                   ) : (
                     <div className="flex aspect-[1.45/1] flex-col items-center justify-center p-2 text-center text-slate-400">
-                      <Icon className="h-5 w-5" />
+                      {isSlotBusy ? (
+                        <Loader2 className="h-5 w-5 animate-spin text-teal-700" />
+                      ) : (
+                        <Icon className="h-5 w-5" />
+                      )}
                       <p className="mt-1 text-[10px] font-medium text-slate-500">
-                        {item.label} kosong
+                        {isSlotBusy ? 'Mengunggah...' : `${item.label} kosong`}
                       </p>
+                      {editableDocs && !isSlotBusy && (
+                        <button
+                          type="button"
+                          disabled={Boolean(docBusySlot)}
+                          onClick={() => handleTriggerSingleOrMultiUpload(item.key, item.label)}
+                          className="mt-2 inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-[11px] font-semibold text-teal-800 hover:bg-teal-100"
+                        >
+                          <Camera className="h-3 w-3" />
+                          <span>Unggah</span>
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
               );
             })}
 
-            {rumahDocs.map((doc, idx) => (
-              <button
-                key={doc.id}
-                type="button"
-                onClick={() => onPreviewDocument(doc, `Foto Rumah #${idx + 1}`)}
-                className="relative block aspect-[1.45/1] w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-200 text-left"
-              >
-                <img
-                  src={doc.dataUrl}
-                  alt={`Foto Rumah ${idx + 1}`}
-                  referrerPolicy="no-referrer"
-                  className="h-full w-full object-cover"
-                />
-                <span className="absolute bottom-1.5 left-1.5 rounded-md bg-slate-900/75 px-1.5 py-0.5 text-[10px] font-medium text-white">
-                  Rumah #{idx + 1}
-                </span>
-              </button>
-            ))}
+            {rumahDocs.map((doc, idx) => {
+              const isBusy = docBusySlot === `rumah:${doc.id}`;
+              const editableDocs = Boolean(!isProposalLocked && canUpdate && onUpdateKpmDocuments);
+              return (
+                <div
+                  key={doc.id}
+                  className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50"
+                >
+                  <button
+                    type="button"
+                    onClick={() => onPreviewDocument(doc, `Foto Rumah #${idx + 1}`)}
+                    className="relative block aspect-[1.45/1] w-full overflow-hidden bg-slate-200 text-left"
+                  >
+                    <DriveImage
+                      doc={doc}
+                      alt={`Foto Rumah ${idx + 1}`}
+                      className="h-full w-full object-cover"
+                    />
+                    {isBusy && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-slate-950/60 text-white">
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                      </div>
+                    )}
+                    <span className="absolute bottom-1.5 left-1.5 rounded-md bg-slate-900/75 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                      Rumah #{idx + 1}
+                    </span>
+                  </button>
+                  {editableDocs && (
+                    <div className="flex items-center justify-end border-t border-slate-200 bg-white p-1.5">
+                      <button
+                        type="button"
+                        disabled={Boolean(docBusySlot)}
+                        onClick={() =>
+                          setPendingDeleteDoc({
+                            category: 'rumah',
+                            label: `Foto Rumah #${idx + 1}`,
+                            doc,
+                          })
+                        }
+                        className="inline-flex min-h-[28px] w-full items-center justify-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                        <span>Hapus Foto</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
 
-            {lainnyaDocs.map((doc, idx) => (
-              <button
-                key={doc.id}
-                type="button"
-                onClick={() => onPreviewDocument(doc, `Foto Lainnya #${idx + 1}`)}
-                className="relative block aspect-[1.45/1] w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-200 text-left"
-              >
-                <img
-                  src={doc.dataUrl}
-                  alt={`Foto Lainnya ${idx + 1}`}
-                  referrerPolicy="no-referrer"
-                  className="h-full w-full object-cover"
-                />
-                <span className="absolute bottom-1.5 left-1.5 rounded-md bg-slate-900/75 px-1.5 py-0.5 text-[10px] font-medium text-white">
-                  Lainnya #{idx + 1}
-                </span>
-              </button>
-            ))}
+            {lainnyaDocs.map((doc, idx) => {
+              const isBusy = docBusySlot === `lainnya:${doc.id}`;
+              const editableDocs = Boolean(!isProposalLocked && canUpdate && onUpdateKpmDocuments);
+              return (
+                <div
+                  key={doc.id}
+                  className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50"
+                >
+                  <button
+                    type="button"
+                    onClick={() => onPreviewDocument(doc, `Foto Lainnya #${idx + 1}`)}
+                    className="relative block aspect-[1.45/1] w-full overflow-hidden bg-slate-200 text-left"
+                  >
+                    <DriveImage
+                      doc={doc}
+                      alt={`Foto Lainnya ${idx + 1}`}
+                      className="h-full w-full object-cover"
+                    />
+                    {isBusy && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-slate-950/60 text-white">
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                      </div>
+                    )}
+                    <span className="absolute bottom-1.5 left-1.5 rounded-md bg-slate-900/75 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                      Lainnya #{idx + 1}
+                    </span>
+                  </button>
+                  {editableDocs && (
+                    <div className="flex items-center justify-end border-t border-slate-200 bg-white p-1.5">
+                      <button
+                        type="button"
+                        disabled={Boolean(docBusySlot)}
+                        onClick={() =>
+                          setPendingDeleteDoc({
+                            category: 'lainnya',
+                            label: `Foto Lainnya #${idx + 1}`,
+                            doc,
+                          })
+                        }
+                        className="inline-flex min-h-[28px] w-full items-center justify-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                        <span>Hapus Foto</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
+
+          {!isProposalLocked && canUpdate && onUpdateKpmDocuments && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {rumahDocs.length < 3 && (
+                <button
+                  type="button"
+                  disabled={Boolean(docBusySlot)}
+                  onClick={() => handleTriggerSingleOrMultiUpload('rumah', 'Foto Rumah')}
+                  className="inline-flex min-h-[36px] flex-1 items-center justify-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                >
+                  <Plus className="h-3.5 w-3.5 text-teal-700" />
+                  <span>Tambah Foto Rumah ({rumahDocs.length}/3)</span>
+                </button>
+              )}
+              {lainnyaDocs.length < 5 && (
+                <button
+                  type="button"
+                  disabled={Boolean(docBusySlot)}
+                  onClick={() => handleTriggerSingleOrMultiUpload('lainnya', 'Foto Lainnya')}
+                  className="inline-flex min-h-[36px] flex-1 items-center justify-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                >
+                  <Plus className="h-3.5 w-3.5 text-teal-700" />
+                  <span>Tambah Foto Lainnya ({lainnyaDocs.length}/5)</span>
+                </button>
+              )}
+            </div>
+          )}
         </section>
 
         {/* Rekam Jejak */}
@@ -1059,8 +1360,8 @@ export function KpmDetailView({
             <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
               <div className="flex h-12 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white text-slate-400">
                 {heroPhotoDoc ? (
-                  <img
-                    src={heroPhotoDoc.dataUrl}
+                  <DriveImage
+                    doc={heroPhotoDoc}
                     alt={record.nama}
                     className="h-full w-full object-cover"
                   />
@@ -1106,10 +1407,10 @@ export function KpmDetailView({
                           <div className="flex min-w-0 items-center gap-2.5">
                             <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-100 text-slate-500">
                               {recipient.fotoDataUrl ? (
-                                <img
+                                <DriveImage
                                   src={recipient.fotoDataUrl}
+                                  thumbnailUrl={recipient.fotoThumbnailUrl}
                                   alt={recipient.nama}
-                                  referrerPolicy="no-referrer"
                                   className="h-full w-full object-cover"
                                 />
                               ) : (
@@ -1156,6 +1457,58 @@ export function KpmDetailView({
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal for Deleting KPM Photo from Drive + Supabase */}
+      {pendingDeleteDoc && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-4 backdrop-blur-xs sm:items-center"
+          onClick={() => !docBusySlot && setPendingDeleteDoc(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Konfirmasi Hapus Foto"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-3xl border border-slate-200 bg-white p-5 shadow-xl space-y-4"
+          >
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-100 text-rose-700">
+                <Trash2 className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Hapus Foto?</h3>
+                <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                  Foto <strong>{pendingDeleteDoc.label}</strong> akan dipindahkan ke Trash Google
+                  Drive dan kolom foto pada database Supabase akan dikosongkan.
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={Boolean(docBusySlot)}
+                onClick={() => setPendingDeleteDoc(null)}
+                className="min-h-[42px] flex-1 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={Boolean(docBusySlot)}
+                onClick={() => void handleConfirmDeleteDocument()}
+                className="inline-flex min-h-[42px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-rose-600 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+              >
+                {docBusySlot ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="h-3.5 w-3.5" />
+                )}
+                <span>{docBusySlot ? 'Menghapus...' : 'Ya, Hapus Foto'}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

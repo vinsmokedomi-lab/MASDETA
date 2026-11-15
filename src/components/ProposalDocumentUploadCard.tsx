@@ -11,11 +11,14 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
+import { DriveImage } from './DriveImage';
 import { KpmDocumentFile } from '../types/kpm';
 import {
   formatBytes,
   formatUploadDateTime,
-  processProposalDocumentUpload,
+  getDocumentDownloadHref,
+  removeDocumentFromDrive,
+  uploadProposalDocumentToDrive,
 } from '../utils/imageProcessor';
 
 interface ProposalDocumentUploadCardProps {
@@ -36,7 +39,7 @@ export function ProposalDocumentUploadCard({
   label,
   helperText,
   accept = '.pdf,.doc,.docx,image/*',
-  formatLabel = 'PDF, Word (.doc/.docx), atau Gambar · Maks 5 MB',
+  formatLabel = 'PDF, Word (.doc/.docx), atau Gambar · Maks 15 MB',
   variant = 'pdf',
   disabled = false,
   value,
@@ -46,17 +49,39 @@ export function ProposalDocumentUploadCard({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [statusLabel, setStatusLabel] = useState('Memproses berkas...');
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
   const handleFile = async (file?: File) => {
-    if (!file || disabled) return;
+    if (!file || disabled || isProcessing) return;
     setLocalError(null);
+    setConfirmDeleteOpen(false);
+    setStatusLabel(
+      value ? 'Mengganti berkas di Google Drive...' : 'Mengunggah berkas ke Google Drive...'
+    );
     setIsProcessing(true);
     try {
-      const processed = await processProposalDocumentUpload(file);
+      const processed = await uploadProposalDocumentToDrive(file, value);
       onChange(processed);
     } catch (err) {
-      setLocalError(err instanceof Error ? err.message : 'Gagal memproses berkas dokumen.');
+      setLocalError(err instanceof Error ? err.message : 'Gagal mengunggah berkas dokumen.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!value || disabled || isProcessing) return;
+    setLocalError(null);
+    setStatusLabel('Menghapus berkas dari Google Drive...');
+    setIsProcessing(true);
+    try {
+      await removeDocumentFromDrive(value);
+      setConfirmDeleteOpen(false);
+      onChange(undefined);
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : 'Gagal menghapus berkas dari Drive.');
     } finally {
       setIsProcessing(false);
     }
@@ -92,6 +117,7 @@ export function ProposalDocumentUploadCard({
     value?.mimeType === 'application/pdf' ||
     value?.fileName.toLowerCase().endsWith('.pdf');
   const fileExt = value?.fileName.split('.').pop()?.toUpperCase() || 'FILE';
+  const downloadHref = getDocumentDownloadHref(value);
 
   return (
     <div id={id} className="space-y-2">
@@ -101,7 +127,7 @@ export function ProposalDocumentUploadCard({
           {value ? (
             <span className="inline-flex items-center gap-1 font-medium text-teal-700">
               <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-              Terunggah
+              Tersimpan di Drive
             </span>
           ) : (
             'Opsional'
@@ -119,13 +145,19 @@ export function ProposalDocumentUploadCard({
       />
 
       {value ? (
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+        <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white">
+          {isProcessing && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-slate-950/60 text-xs font-semibold text-white backdrop-blur-[1px]">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>{statusLabel}</span>
+            </div>
+          )}
+
           <div className="flex items-start gap-3 p-3.5">
             {isImage ? (
-              <img
-                src={value.dataUrl}
+              <DriveImage
+                doc={value}
                 alt={`Pratinjau ${label}`}
-                referrerPolicy="no-referrer"
                 className="h-14 w-14 rounded-xl border border-slate-200 object-cover shrink-0"
               />
             ) : (
@@ -143,7 +175,8 @@ export function ProposalDocumentUploadCard({
               </p>
               <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] tabular-nums">
                 <span className="text-slate-500 whitespace-nowrap">
-                  {fileExt} · {formatBytes(value.compressedSize)}
+                  {fileExt} ·{' '}
+                  {value.compressedSize > 0 ? formatBytes(value.compressedSize) : 'Google Drive'}
                 </span>
                 {value.uploadedAt && (
                   <span className="inline-flex items-center gap-1 font-medium text-teal-700 whitespace-nowrap">
@@ -155,51 +188,79 @@ export function ProposalDocumentUploadCard({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-end gap-1.5 border-t border-slate-100 bg-slate-50/60 px-3.5 py-2.5">
-            {(isImage || isPdf) && (
-              <button
-                type="button"
-                onClick={() => onPreview(value, label)}
-                className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 whitespace-nowrap shrink-0"
-              >
-                <Eye className="h-3.5 w-3.5 text-slate-600" />
-                <span>Lihat</span>
-              </button>
-            )}
-
-            <a
-              href={value.dataUrl}
-              download={value.fileName}
-              className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 whitespace-nowrap shrink-0"
-            >
-              <Download className="h-3.5 w-3.5 text-slate-600" />
-              <span>Unduh</span>
-            </a>
-
-            {!disabled && (
-              <>
+          {confirmDeleteOpen ? (
+            <div className="border-t border-rose-200 bg-rose-50 px-3.5 py-2.5">
+              <p className="text-xs font-semibold text-rose-900">
+                Hapus berkas {label} dari Google Drive?
+              </p>
+              <div className="mt-2 flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isProcessing}
+                  onClick={() => setConfirmDeleteOpen(false)}
+                  className="min-h-[36px] flex-1 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={isProcessing}
+                  onClick={() => void handleConfirmDelete()}
+                  className="inline-flex min-h-[36px] flex-1 items-center justify-center gap-1.5 rounded-lg bg-rose-600 text-xs font-semibold text-white hover:bg-rose-700"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  <span>Ya, Hapus</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center justify-end gap-1.5 border-t border-slate-100 bg-slate-50/60 px-3.5 py-2.5">
+              {(isImage || isPdf) && (
+                <button
+                  type="button"
+                  onClick={() => onPreview(value, label)}
                   className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 whitespace-nowrap shrink-0"
                 >
-                  <Upload className="h-3.5 w-3.5 text-slate-600" />
-                  <span>Ganti</span>
+                  <Eye className="h-3.5 w-3.5 text-slate-600" />
+                  <span>Lihat</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLocalError(null);
-                    onChange(undefined);
-                  }}
-                  className="inline-flex min-h-[40px] min-w-[40px] items-center justify-center rounded-xl border border-rose-200 bg-rose-50/60 text-rose-600 transition-colors hover:bg-rose-100 shrink-0"
-                  aria-label={`Hapus ${label}`}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </>
-            )}
-          </div>
+              )}
+
+              <a
+                href={downloadHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                download={value.fileName}
+                className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 whitespace-nowrap shrink-0"
+              >
+                <Download className="h-3.5 w-3.5 text-slate-600" />
+                <span>Unduh</span>
+              </a>
+
+              {!disabled && (
+                <>
+                  <button
+                    type="button"
+                    disabled={isProcessing}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 whitespace-nowrap shrink-0 disabled:opacity-50"
+                  >
+                    <Upload className="h-3.5 w-3.5 text-slate-600" />
+                    <span>Ganti</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isProcessing}
+                    onClick={() => setConfirmDeleteOpen(true)}
+                    className="inline-flex min-h-[40px] min-w-[40px] items-center justify-center rounded-xl border border-rose-200 bg-rose-50/60 text-rose-600 transition-colors hover:bg-rose-100 shrink-0 disabled:opacity-50"
+                    aria-label={`Hapus ${label}`}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </>
+              )}
+            </div>
+          )}
         </div>
       ) : (
         <div
@@ -228,7 +289,7 @@ export function ProposalDocumentUploadCard({
                   {disabled
                     ? 'Proposal terkunci — unggahan dinonaktifkan'
                     : isProcessing
-                      ? 'Memproses berkas...'
+                      ? statusLabel
                       : helperText}
                 </p>
                 <p className="mt-0.5 text-[11px] text-slate-500">{formatLabel}</p>

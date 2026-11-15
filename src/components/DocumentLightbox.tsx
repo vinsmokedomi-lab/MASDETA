@@ -1,7 +1,14 @@
 import { useState, useEffect } from 'react';
 import { Download, RotateCw, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { DriveImage } from './DriveImage';
+import { extractDriveFileId } from '../services/driveManager';
 import { KpmDocumentFile } from '../types/kpm';
-import { formatBytes, formatUploadDateTime } from '../utils/imageProcessor';
+import {
+  formatBytes,
+  formatUploadDateTime,
+  getDocumentDirectUrl,
+  getDocumentDownloadHref,
+} from '../utils/imageProcessor';
 
 interface DocumentLightboxProps {
   documentFile: KpmDocumentFile | null;
@@ -34,6 +41,12 @@ export function DocumentLightbox({ documentFile, title, onClose }: DocumentLight
     documentFile.fileName.toLowerCase().endsWith('.pdf');
   const isImage = documentFile.mimeType.startsWith('image/');
   const uploadTimeText = formatUploadDateTime(documentFile.uploadedAt);
+  const directUrl = getDocumentDirectUrl(documentFile);
+  const downloadHref = getDocumentDownloadHref(documentFile);
+  const driveId = documentFile.fileId || extractDriveFileId(directUrl);
+  const pdfPreviewSrc = driveId
+    ? `https://drive.google.com/file/d/${encodeURIComponent(driveId)}/preview`
+    : directUrl;
 
   return (
     <div
@@ -50,7 +63,9 @@ export function DocumentLightbox({ documentFile, title, onClose }: DocumentLight
             {isImage && documentFile.width > 0
               ? `${documentFile.width} × ${documentFile.height} px · `
               : ''}
-            {formatBytes(documentFile.compressedSize)}
+            {documentFile.compressedSize > 0
+              ? formatBytes(documentFile.compressedSize)
+              : 'Google Drive'}
             {uploadTimeText ? ` · Diunggah ${uploadTimeText}` : ''}
           </p>
         </div>
@@ -81,7 +96,9 @@ export function DocumentLightbox({ documentFile, title, onClose }: DocumentLight
           )}
 
           <a
-            href={documentFile.dataUrl}
+            href={downloadHref}
+            target="_blank"
+            rel="noopener noreferrer"
             download={documentFile.fileName}
             className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-1.5 rounded-xl border border-white/15 bg-white/10 px-3 text-xs font-medium text-white transition-colors hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-400 whitespace-nowrap shrink-0"
             aria-label={`Unduh ${documentFile.fileName}`}
@@ -107,16 +124,16 @@ export function DocumentLightbox({ documentFile, title, onClose }: DocumentLight
       >
         {isPdf ? (
           <iframe
-            src={documentFile.dataUrl}
+            src={pdfPreviewSrc}
             title={title}
             onClick={(e) => e.stopPropagation()}
             className="h-full min-h-[70vh] w-full max-w-4xl rounded-xl bg-white"
           />
         ) : isImage ? (
-          <img
-            src={documentFile.dataUrl}
+          <DriveImage
+            doc={documentFile}
             alt={title}
-            referrerPolicy="no-referrer"
+            fallbackWidth={1600}
             onClick={(e) => {
               e.stopPropagation();
               setZoomed((prev) => !prev);
@@ -136,7 +153,9 @@ export function DocumentLightbox({ documentFile, title, onClose }: DocumentLight
               Pratinjau langsung tidak tersedia untuk format dokumen ini.
             </p>
             <a
-              href={documentFile.dataUrl}
+              href={downloadHref}
+              target="_blank"
+              rel="noopener noreferrer"
               download={documentFile.fileName}
               className="mt-4 inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-teal-600 px-4 text-xs font-semibold text-white hover:bg-teal-700"
             >
@@ -149,4 +168,3 @@ export function DocumentLightbox({ documentFile, title, onClose }: DocumentLight
     </div>
   );
 }
-

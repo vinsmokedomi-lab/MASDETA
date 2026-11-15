@@ -36,6 +36,11 @@ interface ProposalFormProps {
   onDismissFeedback?: () => void;
   onBack: () => void;
   onSaveProposal: (proposalId: string, values: ProposalFormValues) => void;
+  onQuickSyncProposalDocuments?: (
+    proposalId: string,
+    documents: ProposalDocuments,
+    checklist: ProposalChecklist
+  ) => Promise<void> | void;
   onToggleProposalLock: (proposalId: string) => void;
   onPreviewDocument: (file: KpmDocumentFile, title: string) => void;
 }
@@ -161,6 +166,7 @@ export function ProposalForm({
   onDismissFeedback,
   onBack,
   onSaveProposal,
+  onQuickSyncProposalDocuments,
   onToggleProposalLock,
   onPreviewDocument,
 }: ProposalFormProps) {
@@ -243,6 +249,10 @@ export function ProposalForm({
         nextChecklist.lurah = Boolean(nextDocs.capLurah);
       } else if (docKey === 'capCamat') {
         nextChecklist.camat = Boolean(nextDocs.capCamat);
+      }
+
+      if (onQuickSyncProposalDocuments) {
+        void onQuickSyncProposalDocuments(proposal.id, nextDocs, nextChecklist);
       }
 
       return {
@@ -624,7 +634,7 @@ export function ProposalForm({
                 label="Proposal OPD"
                 helperText="Unggah berkas Proposal OPD (PDF / DOCX / Scan)"
                 accept=".pdf,.doc,.docx,image/*"
-                formatLabel="PDF, Word (.doc/.docx), atau Gambar · Maks 5 MB"
+                formatLabel="PDF, Word (.doc/.docx), atau Gambar · Maks 15 MB"
                 variant="pdf"
                 disabled={isPersistedLocked}
                 value={values.documents.proposalOpd}
@@ -638,7 +648,7 @@ export function ProposalForm({
                   label="Proposal Lurah / Camat"
                   helperText="Unggah berkas Proposal Lurah atau Camat"
                   accept=".pdf,.doc,.docx,image/*"
-                  formatLabel="PDF, Word (.doc/.docx), atau Gambar · Maks 5 MB"
+                  formatLabel="PDF, Word (.doc/.docx), atau Gambar · Maks 15 MB"
                   variant="pdf"
                   disabled={isPersistedLocked}
                   value={values.documents.proposalLurahCamat}
@@ -653,7 +663,7 @@ export function ProposalForm({
                   label="Berkas RAB (Rencana Anggaran Biaya)"
                   helperText="Unggah dokumen RAB yang disertakan dalam proposal"
                   accept=".pdf,.xls,.xlsx,.doc,.docx,image/*"
-                  formatLabel="PDF, Excel (.xls/.xlsx), Word, atau Gambar · Maks 5 MB"
+                  formatLabel="PDF, Excel (.xls/.xlsx), Word, atau Gambar · Maks 15 MB"
                   variant="rab"
                   disabled={isPersistedLocked}
                   value={values.documents.rab}

@@ -10,6 +10,7 @@ import {
   User,
 } from 'lucide-react';
 import { DirectChatMessage, InternalUser, SharedKpmCard } from '../types/kpm';
+import { DriveImage } from './DriveImage';
 import { PresenceDot, getPresenceMeta } from './PresenceDot';
 
 interface ChatViewProps {
@@ -134,10 +135,10 @@ export function ChatView({
 
           <div className="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-visible rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
             {activePeer.fotoDataUrl ? (
-              <img
+              <DriveImage
                 src={activePeer.fotoDataUrl}
+                thumbnailUrl={activePeer.fotoThumbnailUrl}
                 alt={activePeer.nama}
-                referrerPolicy="no-referrer"
                 className="h-full w-full rounded-xl object-cover"
               />
             ) : (
@@ -222,10 +223,10 @@ export function ChatView({
                             }`}
                           >
                             {kpmCard.fotoDataUrl ? (
-                              <img
+                              <DriveImage
                                 src={kpmCard.fotoDataUrl}
+                                thumbnailUrl={kpmCard.fotoThumbnailUrl}
                                 alt={kpmCard.nama}
-                                referrerPolicy="no-referrer"
                                 className="h-full w-full object-cover"
                               />
                             ) : (
@@ -429,10 +430,10 @@ export function ChatView({
                 >
                   <div className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
                     {peer.fotoDataUrl ? (
-                      <img
+                      <DriveImage
                         src={peer.fotoDataUrl}
+                        thumbnailUrl={peer.fotoThumbnailUrl}
                         alt={peer.nama}
-                        referrerPolicy="no-referrer"
                         className="h-full w-full rounded-xl object-cover"
                       />
                     ) : (

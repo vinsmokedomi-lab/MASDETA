@@ -5,6 +5,10 @@ export type SingleDocumentKey = 'ktp' | 'kk' | 'penerima' | 'survey';
 export interface KpmDocumentFile {
   id: string;
   dataUrl: string;
+  fileId?: string;
+  directUrl?: string;
+  thumbnailUrl?: string;
+  viewUrl?: string;
   fileName: string;
   originalSize: number;
   compressedSize: number;
@@ -197,6 +201,8 @@ export interface InternalUser {
   presenceStatus: UserPresenceStatus;
   presenceManual?: boolean;
   fotoDataUrl?: string;
+  fotoThumbnailUrl?: string;
+  fotoFileId?: string;
   lastActiveAt?: string;
   registeredAt: string;
   updatedAt: string;
@@ -213,6 +219,7 @@ export interface SharedKpmCard {
   kontak?: string;
   validasi: ValidationStatus;
   fotoDataUrl?: string;
+  fotoThumbnailUrl?: string;
 }
 
 export interface DirectChatMessage {
