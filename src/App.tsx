@@ -3620,6 +3620,7 @@ export default function App() {
             onDismissFeedback={() => setFeedback(null)}
             onOpenChat={() => openChatView()}
             onOpenProfile={openProfileView}
+            onLogout={handleLogout}
             onOpenKpmList={(filter) => {
               setKpmStatusFilter(filter?.status ?? 'all');
               setKpmItemFilter(filter?.item ?? 'all');

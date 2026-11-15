@@ -1,0 +1,139 @@
+{
+  "users": [
+    {
+      "id": "usr-superadmin-domi",
+      "nama": "Domi",
+      "email": "la.qsas@gmail.com",
+      "jabatan": "SuperAdmin",
+      "kontak": "",
+      "role": "SuperAdmin",
+      "status": "active",
+      "permissions": {
+        "add": true,
+        "update": true,
+        "delete": true
+      },
+      "presenceStatus": "offline",
+      "presenceManual": false,
+      "registeredAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:00.000Z",
+      "passwordHash": "db118634a38b06b0356486d6c0b806b6:9caa06e58ae888303f7602eea223a2b14852209592f6365971e580f0cdfd4b611d1db1831b94698659f37c7a6740e994567c10deb3b0f5e7eaa2e10a936cafe8"
+    },
+    {
+      "id": "usr-admin-domi2",
+      "nama": "Domi",
+      "email": "vinsmoke.domi@gmail.com",
+      "jabatan": "SuperAdmin",
+      "kontak": "",
+      "role": "SuperAdmin",
+      "status": "active",
+      "permissions": {
+        "add": true,
+        "update": true,
+        "delete": true
+      },
+      "presenceStatus": "offline",
+      "presenceManual": false,
+      "registeredAt": "2026-01-02T00:00:00.000Z",
+      "updatedAt": "2026-01-02T00:00:00.000Z",
+      "passwordHash": "6c57521ff8dd562e409e5e9ad4836e38:323fea85b0c224e83374eb163d108b9fb99e1cb887b0943b989fc44d10687071a6a3744de620bb3228de455b823c66e7b03d544264a34c811e0d803913d4a5eb"
+    },
+    {
+      "id": "usr-admin-dea",
+      "nama": "Dea",
+      "email": "deacantik089689@gmail.com",
+      "jabatan": "Admin",
+      "kontak": "",
+      "role": "Admin",
+      "status": "active",
+      "permissions": {
+        "add": true,
+        "update": true,
+        "delete": true
+      },
+      "presenceStatus": "offline",
+      "presenceManual": false,
+      "registeredAt": "2026-01-02T00:00:00.000Z",
+      "updatedAt": "2026-01-02T00:00:00.000Z",
+      "passwordHash": "db118634a38b06b0356486d6c0b806b6:9caa06e58ae888303f7602eea223a2b14852209592f6365971e580f0cdfd4b611d1db1831b94698659f37c7a6740e994567c10deb3b0f5e7eaa2e10a936cafe8"
+    },
+    {
+      "id": "usr-admin-dina",
+      "nama": "Dina",
+      "email": "dinalestaryw123@gmail.com",
+      "jabatan": "Admin",
+      "kontak": "",
+      "role": "Admin",
+      "status": "active",
+      "permissions": {
+        "add": true,
+        "update": true,
+        "delete": true
+      },
+      "presenceStatus": "offline",
+      "presenceManual": false,
+      "registeredAt": "2026-01-02T00:00:00.000Z",
+      "updatedAt": "2026-01-02T00:00:00.000Z",
+      "passwordHash": "db118634a38b06b0356486d6c0b806b6:9caa06e58ae888303f7602eea223a2b14852209592f6365971e580f0cdfd4b611d1db1831b94698659f37c7a6740e994567c10deb3b0f5e7eaa2e10a936cafe8"
+    },
+    {
+      "id": "usr-admin-edo",
+      "nama": "Bg Edo",
+      "email": "rumahmakangratis55@gmail.com",
+      "jabatan": "Admin",
+      "kontak": "",
+      "role": "Admin",
+      "status": "active",
+      "permissions": {
+        "add": true,
+        "update": true,
+        "delete": true
+      },
+      "presenceStatus": "offline",
+      "presenceManual": false,
+      "registeredAt": "2026-01-02T00:00:00.000Z",
+      "updatedAt": "2026-01-02T00:00:00.000Z",
+      "passwordHash": "db118634a38b06b0356486d6c0b806b6:9caa06e58ae888303f7602eea223a2b14852209592f6365971e580f0cdfd4b611d1db1831b94698659f37c7a6740e994567c10deb3b0f5e7eaa2e10a936cafe8"
+    },
+    {
+      "id": "usr-admin-zahra",
+      "nama": "Zahra",
+      "email": "zahrapariska646@gmail.com",
+      "jabatan": "Admin",
+      "kontak": "",
+      "role": "Admin",
+      "status": "active",
+      "permissions": {
+        "add": true,
+        "update": true,
+        "delete": true
+      },
+      "presenceStatus": "offline",
+      "presenceManual": false,
+      "registeredAt": "2026-01-02T00:00:00.000Z",
+      "updatedAt": "2026-01-02T00:00:00.000Z",
+      "passwordHash": "db118634a38b06b0356486d6c0b806b6:9caa06e58ae888303f7602eea223a2b14852209592f6365971e580f0cdfd4b611d1db1831b94698659f37c7a6740e994567c10deb3b0f5e7eaa2e10a936cafe8"
+    },
+    {
+      "id": "usr-admin-iwan",
+      "nama": "Bg Iwan",
+      "email": "ridwanridwan8765@gmail.com",
+      "jabatan": "Admin",
+      "kontak": "",
+      "role": "Admin",
+      "status": "active",
+      "permissions": {
+        "add": true,
+        "update": true,
+        "delete": true
+      },
+      "presenceStatus": "offline",
+      "presenceManual": false,
+      "registeredAt": "2026-01-02T00:00:00.000Z",
+      "updatedAt": "2026-01-02T00:00:00.000Z",
+      "passwordHash": "db118634a38b06b0356486d6c0b806b6:9caa06e58ae888303f7602eea223a2b14852209592f6365971e580f0cdfd4b611d1db1831b94698659f37c7a6740e994567c10deb3b0f5e7eaa2e10a936cafe8"
+    }
+  ],
+  "messages": [],
+  "sessions": {}
+}

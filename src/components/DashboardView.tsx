@@ -13,6 +13,7 @@ import {
   FolderPlus,
   Layers,
   Lock,
+  LogOut,
   MessageSquare,
   Package,
   Unlock,
@@ -50,6 +51,7 @@ interface DashboardViewProps {
   onDismissFeedback?: () => void;
   onOpenChat: () => void;
   onOpenProfile: () => void;
+  onLogout: () => void;
   onOpenKpmList: (filter?: { status?: 'all' | ValidationStatus; item?: string }) => void;
   onOpenKpmDetail?: (record: KpmRecord) => void;
   onOpenSubItemRecap?: () => void;
@@ -78,6 +80,7 @@ export function DashboardView({
   onDismissFeedback,
   onOpenChat,
   onOpenProfile,
+  onLogout,
   onOpenKpmList,
   onOpenKpmDetail,
   onOpenSubItemRecap,
@@ -601,6 +604,17 @@ export function DashboardView({
                     </span>
                   )}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpenHeaderMenu('none');
+                    onLogout();
+                  }}
+                  className="flex min-h-[44px] w-full items-center gap-2.5 px-3.5 py-2.5 text-left text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-50"
+                >
+                  <LogOut className="h-4 w-4 text-rose-600" />
+                  <span>Keluar</span>
+                </button>
               </div>
             </div>
           )}
@@ -620,7 +634,7 @@ export function DashboardView({
               </p>
             </div>
 
-            <div className="relative inline-flex min-h-[44px] min-w-[104px] shrink-0 items-center rounded-xl border-2 border-white/90 bg-slate-800/90 transition-colors hover:border-white hover:bg-slate-800">
+            <div className="relative inline-flex min-h-[44px] min-w-[104px] shrink-0 items-center rounded-xl border border-white/50 bg-white/15 transition-colors hover:border-white/75 hover:bg-white/20">
               <select
                 aria-label="Pilih tahun anggaran"
                 value={selectedYear}
