@@ -28,6 +28,9 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Install SVG converter for Android Icon
+        run: sudo apt-get update && sudo apt-get install -y librsvg2-bin
+
       - name: Install dependencies
         run: npm install --legacy-peer-deps
 
@@ -58,6 +61,38 @@ jobs:
           if [ ! -d "android" ]; then
             npx cap add android
           fi
+
+      - name: Generate MASDETA Android Launcher Icons
+        run: |
+          SVG_PATH="public/masdeta-icon.svg"
+          if [ ! -f "$SVG_PATH" ]; then
+            cat << 'EOF' > /tmp/masdeta-fallback.svg
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+              <rect width="512" height="512" rx="112" fill="#0F766E"/>
+              <path d="M128 368V144h44l84 128 84-128h44v224h-44V222l-84 126-84-126v146h-44z" fill="#FFFFFF"/>
+            </svg>
+          EOF
+            SVG_PATH="/tmp/masdeta-fallback.svg"
+          fi
+
+          declare -A SIZES=( ["mdpi"]=48 ["hdpi"]=72 ["xhdpi"]=96 ["xxhdpi"]=144 ["xxxhdpi"]=192 )
+          declare -A FG_SIZES=( ["mdpi"]=108 ["hdpi"]=162 ["xhdpi"]=216 ["xxhdpi"]=324 ["xxxhdpi"]=432 )
+
+          for DENSITY in "${!SIZES[@]}"; do
+            RES_DIR="android/app/src/main/res/mipmap-${DENSITY}"
+            mkdir -p "$RES_DIR"
+            rsvg-convert -w ${SIZES[$DENSITY]} -h ${SIZES[$DENSITY]} "$SVG_PATH" -o "$RES_DIR/ic_launcher.png"
+            rsvg-convert -w ${SIZES[$DENSITY]} -h ${SIZES[$DENSITY]} "$SVG_PATH" -o "$RES_DIR/ic_launcher_round.png"
+            rsvg-convert -w ${FG_SIZES[$DENSITY]} -h ${FG_SIZES[$DENSITY]} "$SVG_PATH" -o "$RES_DIR/ic_launcher_foreground.png"
+          done
+
+          mkdir -p android/app/src/main/res/values
+          cat << 'EOF' > android/app/src/main/res/values/ic_launcher_background.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="ic_launcher_background">#0F766E</color>
+          </resources>
+          EOF
 
       - name: Inject CAMERA permission into AndroidManifest.xml
         run: |
