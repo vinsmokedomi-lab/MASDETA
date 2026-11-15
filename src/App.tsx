@@ -104,6 +104,9 @@ import { ScrollToTopButton } from './components/ScrollToTopButton';
 import { AuthView } from './components/AuthView';
 import { ChatView } from './components/ChatView';
 import { UserProfileView } from './components/UserProfileView';
+import { AppUpdateModal } from './components/AppUpdateModal';
+import { AppUpdateInfo, checkForAppUpdate } from './services/appUpdater';
+import { APP_VERSION } from './config/appVersion';
 
 type SubView =
   | 'none'
@@ -330,6 +333,9 @@ export default function App() {
   const [supabaseReady, setSupabaseReady] = useState<boolean>(false);
   const [supabaseSchemaMissing, setSupabaseSchemaMissing] = useState<boolean>(false);
   const [dismissedSchemaNotice, setDismissedSchemaNotice] = useState<boolean>(false);
+  const [appUpdateInfo, setAppUpdateInfo] = useState<AppUpdateInfo | null>(null);
+  const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
+  const [checkingAppUpdate, setCheckingAppUpdate] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const subViewRef = useRef<SubView>(subView);
@@ -339,6 +345,52 @@ export default function App() {
   const currentUserIdRef = useRef<string | null>(sessionUserId);
   const supabaseReadyRef = useRef<boolean>(supabaseReady);
   const lastLocalSyncAtRef = useRef<number>(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    const runStartupUpdateCheck = async () => {
+      try {
+        const info = await checkForAppUpdate();
+        if (!cancelled && info.hasUpdate) {
+          setAppUpdateInfo(info);
+          setIsUpdateModalOpen(true);
+        }
+      } catch {
+        // Abaikan error jaringan diam-diam saat pengecekan otomatis di latar
+      }
+    };
+    void runStartupUpdateCheck();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleManualCheckAppUpdate = async () => {
+    if (checkingAppUpdate) return;
+    setCheckingAppUpdate(true);
+    try {
+      const info = await checkForAppUpdate();
+      if (info.hasUpdate) {
+        setAppUpdateInfo(info);
+        setIsUpdateModalOpen(true);
+      } else {
+        setFeedback({
+          type: 'success',
+          message: `Aplikasi MASDETA sudah versi terbaru (v${APP_VERSION}).`,
+        });
+      }
+    } catch (err) {
+      setFeedback({
+        type: 'error',
+        message:
+          err instanceof Error
+            ? err.message
+            : 'Gagal memeriksa pembaruan aplikasi. Periksa koneksi internet Anda.',
+      });
+    } finally {
+      setCheckingAppUpdate(false);
+    }
+  };
   const prevMessageIdsRef = useRef<Set<string>>(new Set());
   subViewRef.current = subView;
   activeChatPeerIdRef.current = activeChatPeerId;
@@ -3207,6 +3259,11 @@ export default function App() {
             onLogin={handleLogin}
             onRegister={handleRegister}
           />
+          <AppUpdateModal
+            updateInfo={appUpdateInfo}
+            open={isUpdateModalOpen}
+            onDismiss={() => setIsUpdateModalOpen(false)}
+          />
         </div>
       </div>
     );
@@ -3363,6 +3420,8 @@ export default function App() {
             onTogglePushEnabled={handleTogglePushEnabled}
             onUpdateProfile={handleUpdateProfile}
             onLogout={handleLogout}
+            onCheckAppUpdate={() => void handleManualCheckAppUpdate()}
+            checkingAppUpdate={checkingAppUpdate}
             onBack={() => {
               setSubView('none');
               setActiveTab(returnToTab);
@@ -3732,6 +3791,8 @@ export default function App() {
             internalUsers={internalUsers}
             onOpenChat={(peerId) => openChatView(peerId)}
             onOpenProfile={openProfileView}
+            onCheckAppUpdate={() => void handleManualCheckAppUpdate()}
+            checkingAppUpdate={checkingAppUpdate}
             onSaveItem={handleSaveCatalogItem}
             onDeleteItem={handleDeleteCatalogItem}
             onMoveItemOrder={handleMoveItemOrder}
@@ -3804,6 +3865,13 @@ export default function App() {
         documentFile={lightboxDoc?.file ?? null}
         title={lightboxDoc?.title ?? ''}
         onClose={() => setLightboxDoc(null)}
+      />
+
+      {/* In-App Android APK Auto-Updater Modal */}
+      <AppUpdateModal
+        updateInfo={appUpdateInfo}
+        open={isUpdateModalOpen}
+        onDismiss={() => setIsUpdateModalOpen(false)}
       />
     </div>
   );

@@ -1,0 +1,8 @@
+{
+  "appId": "com.masdeta.app",
+  "appName": "MASDETA",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": true
+  }
+}

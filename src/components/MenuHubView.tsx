@@ -24,6 +24,7 @@ import {
   Package,
   PackagePlus,
   Plus,
+  RefreshCw,
   RotateCcw,
   Search,
   Settings,
@@ -43,6 +44,7 @@ import { FilterSelect, SegmentedTabs } from './FormControls';
 import { ItemManagerView } from './ItemManagerView';
 import { AddPengelolaModal } from './PengelolaSelectorModal';
 import { PresenceDot, getPresenceMeta } from './PresenceDot';
+import { APP_VERSION } from '../config/appVersion';
 import { DTSEN_OPTION_ITEMS } from '../data/kpmOptions';
 import {
   InternalUser,
@@ -102,6 +104,8 @@ interface MenuHubViewProps {
   internalUsers: InternalUser[];
   onOpenChat: (peerId?: string) => void;
   onOpenProfile: () => void;
+  onCheckAppUpdate?: () => void;
+  checkingAppUpdate?: boolean;
   onSaveItem: (item: ItemBantuan, orderIndex: number, originalCode?: string) => void;
   onDeleteItem: (tahun: string, code: string) => void;
   onMoveItemOrder: (tahun: string, code: string, direction: 'up' | 'down') => void;
@@ -165,6 +169,8 @@ export function MenuHubView({
   internalUsers,
   onOpenChat,
   onOpenProfile,
+  onCheckAppUpdate,
+  checkingAppUpdate = false,
   onSaveItem,
   onDeleteItem,
   onMoveItemOrder,
@@ -743,13 +749,13 @@ export function MenuHubView({
             </div>
           </section>
 
-          {/* Group 4: Administrasi Sistem & Pengaturan (Khusus SuperAdmin) */}
-          {currentUser.role === 'SuperAdmin' && (
-            <section>
-              <h2 className="mb-2 px-1 text-xs font-bold tracking-wide text-slate-500">
-                Sistem &amp; Pengaturan
-              </h2>
-              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+          {/* Group 4: Administrasi Sistem & Pengaturan */}
+          <section>
+            <h2 className="mb-2 px-1 text-xs font-bold tracking-wide text-slate-500">
+              Sistem &amp; Pengaturan
+            </h2>
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+              {currentUser.role === 'SuperAdmin' && (
                 <button
                   type="button"
                   onClick={() => onChangeSection('superadmin')}
@@ -766,9 +772,33 @@ export function MenuHubView({
                   </div>
                   <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
                 </button>
-              </div>
-            </section>
-          )}
+              )}
+
+              {onCheckAppUpdate && (
+                <button
+                  type="button"
+                  disabled={checkingAppUpdate}
+                  onClick={onCheckAppUpdate}
+                  className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 disabled:opacity-60"
+                >
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                    <RefreshCw
+                      className={`h-5 w-5 ${checkingAppUpdate ? 'animate-spin' : ''}`}
+                    />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-slate-900">
+                      {checkingAppUpdate ? 'Memeriksa Pembaruan...' : 'Cek Pembaruan Aplikasi'}
+                    </p>
+                    <p className="mt-0.5 truncate text-xs text-slate-500">
+                      Versi terpasang v{APP_VERSION} · Unduh rilis terbaru
+                    </p>
+                  </div>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                </button>
+              )}
+            </div>
+          </section>
         </div>
       </div>
     );

@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   Loader2,
   LogOut,
+  RefreshCw,
   Shield,
   Trash2,
   User,
@@ -21,6 +22,7 @@ import {
 import { InternalUser, UserPresenceStatus } from '../types/kpm';
 import { capitalizeWords, validateImageUploadFile } from '../utils/imageProcessor';
 import { PresenceDot, getPresenceMeta } from './PresenceDot';
+import { APP_VERSION } from '../config/appVersion';
 
 interface UserProfileViewProps {
   user: InternalUser;
@@ -41,6 +43,8 @@ interface UserProfileViewProps {
   }) => Promise<{ ok: boolean; error?: string }>;
   onLogout: () => void;
   onBack: () => void;
+  onCheckAppUpdate?: () => void;
+  checkingAppUpdate?: boolean;
 }
 
 export function UserProfileView({
@@ -52,6 +56,8 @@ export function UserProfileView({
   onUpdateProfile,
   onLogout,
   onBack,
+  onCheckAppUpdate,
+  checkingAppUpdate = false,
 }: UserProfileViewProps) {
   const [nama, setNama] = useState(user.nama);
   const [kontak, setKontak] = useState(user.kontak || '');
@@ -466,6 +472,27 @@ export function UserProfileView({
             {saving ? 'Menyimpan...' : 'Simpan Perubahan Profil'}
           </button>
         </form>
+
+        {onCheckAppUpdate && (
+          <button
+            type="button"
+            disabled={checkingAppUpdate}
+            onClick={onCheckAppUpdate}
+            className="inline-flex min-h-[46px] w-full items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-800 transition-colors hover:bg-slate-50 disabled:opacity-60"
+          >
+            <span className="flex items-center gap-2">
+              <RefreshCw
+                className={`h-4 w-4 text-teal-700 ${checkingAppUpdate ? 'animate-spin' : ''}`}
+              />
+              <span>
+                {checkingAppUpdate ? 'Memeriksa Pembaruan...' : 'Cek Pembaruan Aplikasi'}
+              </span>
+            </span>
+            <span className="text-[11px] font-bold tabular-nums text-teal-700">
+              v{APP_VERSION}
+            </span>
+          </button>
+        )}
 
         <button
           type="button"
