@@ -1,13 +1,16 @@
-name: Build MASDETA Android APK
+name: Build & Release MASDETA APK
 
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  build-apk:
-    name: Build Debug APK
+  build-release-apk:
+    name: Build & Publish MASDETA APK
     runs-on: ubuntu-latest
     env:
       CI: true
@@ -28,8 +31,25 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Install SVG converter for Android Icon
+      - name: Install SVG converter
         run: sudo apt-get update && sudo apt-get install -y librsvg2-bin
+
+      - name: Set Dynamic App Version
+        id: ver
+        run: |
+          BUILD_NUM=${{ github.run_number }}
+          VERSION_NAME="1.0.${BUILD_NUM}"
+          VERSION_CODE=$((100 + BUILD_NUM))
+          echo "version_name=${VERSION_NAME}" >> $GITHUB_OUTPUT
+          echo "version_code=${VERSION_CODE}" >> $GITHUB_OUTPUT
+
+          if [ -f "src/config/appVersion.ts" ]; then
+            cat << EOF > src/config/appVersion.ts
+          export const APP_VERSION = "${VERSION_NAME}";
+          export const APP_VERSION_CODE = ${VERSION_CODE};
+          export const GITHUB_REPO = "vinsmokedomi-lab/MASDETA";
+          EOF
+          fi
 
       - name: Install dependencies
         run: npm install --legacy-peer-deps
@@ -42,7 +62,7 @@ jobs:
           VITE_GAS_API_KEY: ${{ secrets.VITE_GAS_API_KEY }}
         run: npm run build
 
-      - name: Replace TS config with JSON config
+      - name: Ensure Capacitor JSON config
         run: |
           rm -f capacitor.config.ts
           cat << 'EOF' > capacitor.config.json
@@ -56,13 +76,13 @@ jobs:
           }
           EOF
 
-      - name: Add Android platform if missing
+      - name: Add Android platform
         run: |
           if [ ! -d "android" ]; then
             npx cap add android
           fi
 
-      - name: Generate MASDETA Android Launcher Icons
+      - name: Generate MASDETA Launcher Icons
         run: |
           SVG_PATH="public/masdeta-icon.svg"
           if [ ! -f "$SVG_PATH" ]; then
@@ -94,33 +114,91 @@ jobs:
           </resources>
           EOF
 
-      - name: Inject CAMERA permission into AndroidManifest.xml
+      - name: Configure Android Permissions, Versioning & Release Signing
+        env:
+          STORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS_NAME: ${{ secrets.KEY_ALIAS }}
+          VER_NAME: ${{ steps.ver.outputs.version_name }}
+          VER_CODE: ${{ steps.ver.outputs.version_code }}
         run: |
+          PASS="${STORE_PASS:-MasdetaRelease2026!}"
+          ALIAS="${KEY_ALIAS_NAME:-masdeta_key}"
+
+          keytool -genkeypair -v \
+            -keystore android/app/masdeta-release.jks \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass "$PASS" \
+            -keypass "$PASS" \
+            -alias "$ALIAS" \
+            -dname "CN=MASDETA, OU=IT, O=MASDETA, L=Pontianak, ST=Kalimantan Barat, C=ID"
+
           node -e '
             const fs = require("fs");
-            const path = "android/app/src/main/AndroidManifest.xml";
-            if (fs.existsSync(path)) {
-              let xml = fs.readFileSync(path, "utf8");
-              if (!xml.includes("android.permission.CAMERA")) {
-                xml = xml.replace("<application", "    <uses-permission android:name=\"android.permission.CAMERA\" />\n    <application");
-                fs.writeFileSync(path, xml);
+
+            // 1. Inject permissions into AndroidManifest.xml
+            const manifestPath = "android/app/src/main/AndroidManifest.xml";
+            let xml = fs.readFileSync(manifestPath, "utf8");
+            const perms = [
+              "android.permission.CAMERA",
+              "android.permission.REQUEST_INSTALL_PACKAGES"
+            ];
+            for (const p of perms) {
+              if (!xml.includes(p)) {
+                xml = xml.replace("<application", `    <uses-permission android:name="${p}" />\n    <application`);
               }
             }
+            fs.writeFileSync(manifestPath, xml);
+
+            // 2. Configure signingConfigs & version in android/app/build.gradle
+            const gradlePath = "android/app/build.gradle";
+            let gradle = fs.readFileSync(gradlePath, "utf8");
+            gradle = gradle.replace(/versionCode\s+\d+/, `versionCode ${process.env.VER_CODE}`);
+            gradle = gradle.replace(/versionName\s+"[^"]+"/, `versionName "${process.env.VER_NAME}"`);
+
+            const signingBlock = `
+                signingConfigs {
+                    release {
+                        storeFile file("masdeta-release.jks")
+                        storePassword "${process.env.STORE_PASS || "MasdetaRelease2026!"}"
+                        keyAlias "${process.env.KEY_ALIAS_NAME || "masdeta_key"}"
+                        keyPassword "${process.env.STORE_PASS || "MasdetaRelease2026!"}"
+                    }
+                }
+            `;
+
+            if (!gradle.includes("signingConfigs")) {
+              gradle = gradle.replace("buildTypes {", `${signingBlock}\n    buildTypes {`);
+              gradle = gradle.replace(
+                /release\s*\{/,
+                `release {\n            signingConfig signingConfigs.release`
+              );
+            }
+            fs.writeFileSync(gradlePath, gradle);
           '
 
       - name: Sync Capacitor Android
         run: npx cap sync android
 
-      - name: Make Gradle wrapper executable
-        run: chmod +x android/gradlew
-
-      - name: Compile Debug APK
+      - name: Build Signed Release APK
         run: |
+          chmod +x android/gradlew
           cd android
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          ./gradlew assembleRelease --no-daemon --stacktrace
 
-      - name: Upload MASDETA Android APK
-        uses: actions/upload-artifact@v4
+      - name: Rename Release APK
+        run: |
+          APK_FILE="MASDETA-v${{ steps.ver.outputs.version_name }}.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "${APK_FILE}"
+          ls -lh "${APK_FILE}"
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
         with:
-          name: MASDETA-Android-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          tag_name: "v${{ steps.ver.outputs.version_name }}"
+          name: "MASDETA v${{ steps.ver.outputs.version_name }}"
+          body: |
+            Pembaruan resmi aplikasi **MASDETA v${{ steps.ver.outputs.version_name }}**.
+            - Pembaruan antarmuka & fitur terbaru
+            - Mendukung pembaruan langsung dari dalam aplikasi Android
+          files: MASDETA-v${{ steps.ver.outputs.version_name }}.apk
+          generate_release_notes: false
