@@ -42,6 +42,7 @@ import { FilterSelect, SegmentedTabs } from './FormControls';
 import { ItemManagerView } from './ItemManagerView';
 import { AddPengelolaModal } from './PengelolaSelectorModal';
 import { PresenceDot, getPresenceMeta } from './PresenceDot';
+import { SwipeAction, SwipeableRow } from './SwipeableRow';
 import { APP_VERSION } from '../config/appVersion';
 import { CorrespondentKpmListPanel } from './CorrespondentKpmListPanel';
 import { DTSEN_OPTION_ITEMS } from '../data/kpmOptions';
@@ -118,9 +119,13 @@ interface MenuHubViewProps {
   onUpdateItemSubItems: (tahun: string, code: string, subItems: string[]) => void;
   onCopyItemsFromYear: (fromYear: string, toYear: string) => void;
   onAddPekerjaan: (name: string) => void;
+  onUpdatePekerjaan?: (oldName: string, newName: string) => void;
+  onDeletePekerjaan?: (name: string) => void;
   onUpdateWilayahList: (nextList: WilayahKabKota[]) => void;
   onOpenSubItemRecap: () => void;
   onAddPengelola: (profile: PengelolaProfile) => void;
+  onUpdatePengelola?: (profile: PengelolaProfile, previousDisplayName: string) => void;
+  onDeletePengelola?: (pengelolaId: string) => void;
   onAdminControlUser: (
     userId: string,
     patch: {
@@ -188,9 +193,13 @@ export function MenuHubView({
   onUpdateItemSubItems,
   onCopyItemsFromYear,
   onAddPekerjaan,
+  onUpdatePekerjaan,
+  onDeletePekerjaan,
   onUpdateWilayahList,
   onOpenSubItemRecap,
   onAddPengelola,
+  onUpdatePengelola,
+  onDeletePengelola,
   onAdminControlUser,
   onDeleteInternalUser,
   onAdminDataAction,
@@ -334,6 +343,12 @@ export function MenuHubView({
     'name_asc' | 'name_desc' | 'count_desc' | 'count_asc' | 'wilayah_asc'
   >('name_asc');
   const [showPengelolaFilters, setShowPengelolaFilters] = useState(false);
+  const [openPengelolaSwipeId, setOpenPengelolaSwipeId] = useState<string | null>(null);
+  const [editingPengelolaTarget, setEditingPengelolaTarget] = useState<PengelolaProfile | null>(null);
+  const [pendingDeletePengelola, setPendingDeletePengelola] = useState<{
+    profile: PengelolaProfile;
+    kpmCount: number;
+  } | null>(null);
 
   // Profesi & Pekerjaan search, filter & sorting
   const [pekerjaanQuery, setPekerjaanQuery] = useState('');
@@ -342,6 +357,14 @@ export function MenuHubView({
     'name_asc' | 'name_desc' | 'count_desc' | 'count_asc'
   >('name_asc');
   const [showPekerjaanFilters, setShowPekerjaanFilters] = useState(false);
+  const [openPekerjaanSwipeId, setOpenPekerjaanSwipeId] = useState<string | null>(null);
+  const [editingPekerjaanTarget, setEditingPekerjaanTarget] = useState<string | null>(null);
+  const [editPekerjaanValue, setEditPekerjaanValue] = useState('');
+  const [editPekerjaanError, setEditPekerjaanError] = useState<string | null>(null);
+  const [pendingDeletePekerjaan, setPendingDeletePekerjaan] = useState<{
+    name: string;
+    kpmCount: number;
+  } | null>(null);
 
   const archivedRecords = useMemo(
     () => records.filter((r) => isArchivedKpm(r)),
@@ -2887,77 +2910,104 @@ export function MenuHubView({
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
               {filteredPengelolaList.map((p) => {
                 const count = pengelolaKpmCounts.get(p.displayName.trim().toLowerCase()) ?? 0;
+                const swipeActions: SwipeAction[] = [];
+                if (canUpdate && onUpdatePengelola) {
+                  swipeActions.push({
+                    key: 'edit',
+                    label: 'Edit',
+                    icon: <Edit3 className="h-4 w-4" />,
+                    tone: 'teal',
+                    onClick: () => setEditingPengelolaTarget(p),
+                  });
+                }
+                if (canDelete && onDeletePengelola) {
+                  swipeActions.push({
+                    key: 'delete',
+                    label: 'Hapus',
+                    icon: <Trash2 className="h-4 w-4" />,
+                    tone: 'danger',
+                    onClick: () => setPendingDeletePengelola({ profile: p, kpmCount: count }),
+                  });
+                }
 
                 return (
-                  <div
+                  <SwipeableRow
                     key={p.id}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => setPengelolaDrill(p.displayName)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        setPengelolaDrill(p.displayName);
-                      }
-                    }}
-                    className="flex min-h-[56px] cursor-pointer items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70 focus:outline-none focus-visible:bg-slate-50"
+                    id={p.id}
+                    isOpen={openPengelolaSwipeId === p.id}
+                    onOpen={setOpenPengelolaSwipeId}
+                    onClose={() => setOpenPengelolaSwipeId(null)}
+                    actions={swipeActions}
                   >
-                    <div className="flex min-w-0 items-center gap-3">
-                      {p.foto ? (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onPreviewDocument(p.foto!, p.displayName);
-                          }}
-                          className="h-10 w-10 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100"
-                          aria-label={`Lihat foto ${p.displayName}`}
-                        >
-                          <DriveImage
-                            doc={p.foto}
-                            alt={p.displayName}
-                            className="h-full w-full object-cover"
-                          />
-                        </button>
-                      ) : (
-                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
-                          <User className="h-4 w-4" />
-                        </div>
-                      )}
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-slate-900">
-                          {p.displayName}
-                        </p>
-                        {(p.kelurahan || p.kecamatan || p.kabKota) && (
-                          <p className="truncate text-xs text-slate-500">
-                            {getPengelolaWilayahLabel(p)}
-                          </p>
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setPengelolaDrill(p.displayName)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          setPengelolaDrill(p.displayName);
+                        }
+                      }}
+                      className="flex min-h-[56px] cursor-pointer items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70 focus:outline-none focus-visible:bg-slate-50"
+                    >
+                      <div className="flex min-w-0 items-center gap-3">
+                        {p.foto ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onPreviewDocument(p.foto!, p.displayName);
+                            }}
+                            className="h-10 w-10 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100"
+                            aria-label={`Lihat foto ${p.displayName}`}
+                          >
+                            <DriveImage
+                              doc={p.foto}
+                              alt={p.displayName}
+                              className="h-full w-full object-cover"
+                            />
+                          </button>
+                        ) : (
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
+                            <User className="h-4 w-4" />
+                          </div>
                         )}
-                        {(() => {
-                          const waUrl = formatWhatsAppUrl(p.kontak);
-                          if (!waUrl || !p.kontak) return null;
-                          return (
-                            <a
-                              href={waUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              className="mt-0.5 inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:underline"
-                            >
-                              <MessageCircle className="h-3 w-3 shrink-0" />
-                              <span>{p.kontak}</span>
-                            </a>
-                          );
-                        })()}
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-slate-900">
+                            {p.displayName}
+                          </p>
+                          {(p.kelurahan || p.kecamatan || p.kabKota) && (
+                            <p className="truncate text-xs text-slate-500">
+                              {getPengelolaWilayahLabel(p)}
+                            </p>
+                          )}
+                          {(() => {
+                            const waUrl = formatWhatsAppUrl(p.kontak);
+                            if (!waUrl || !p.kontak) return null;
+                            return (
+                              <a
+                                href={waUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="mt-0.5 inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:underline"
+                              >
+                                <MessageCircle className="h-3 w-3 shrink-0" />
+                                <span>{p.kontak}</span>
+                              </a>
+                            );
+                          })()}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span className="text-xs font-semibold text-slate-700 tabular-nums">
+                          {count}
+                        </span>
+                        <ChevronRight className="h-4 w-4 text-slate-400" />
                       </div>
                     </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <span className="text-xs font-semibold text-slate-700 tabular-nums">
-                        {count}
-                      </span>
-                      <ChevronRight className="h-4 w-4 text-slate-400" />
-                    </div>
-                  </div>
+                  </SwipeableRow>
                 );
               })}
             </div>
@@ -2965,12 +3015,79 @@ export function MenuHubView({
         </div>
 
         <AddPengelolaModal
-          isOpen={isAddPengelolaOpen}
+          isOpen={isAddPengelolaOpen || Boolean(editingPengelolaTarget)}
+          editingProfile={editingPengelolaTarget}
           wilayahList={wilayahList}
-          onClose={() => setIsAddPengelolaOpen(false)}
-          onCreatePengelola={onAddPengelola}
+          onClose={() => {
+            setIsAddPengelolaOpen(false);
+            setEditingPengelolaTarget(null);
+          }}
+          onCreatePengelola={(profile) => {
+            if (editingPengelolaTarget && onUpdatePengelola) {
+              onUpdatePengelola(profile, editingPengelolaTarget.displayName);
+              setEditingPengelolaTarget(null);
+            } else {
+              onAddPengelola(profile);
+            }
+          }}
           onPreviewDocument={onPreviewDocument}
         />
+
+        {pendingDeletePengelola && (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 backdrop-blur-xs sm:items-center sm:p-4"
+            onClick={() => setPendingDeletePengelola(null)}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Konfirmasi Hapus Pengelola"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-sm rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl space-y-4"
+            >
+              <div className="mx-auto h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
+                  <AlertTriangle className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <h2 className="text-base font-bold text-slate-900">Hapus Pengelola?</h2>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                    Apakah Anda yakin ingin menghapus pengelola{' '}
+                    <strong>&ldquo;{pendingDeletePengelola.profile.displayName}&rdquo;</strong> dari
+                    daftar master?
+                  </p>
+                  {pendingDeletePengelola.kpmCount > 0 && (
+                    <p className="mt-1.5 text-[11px] leading-relaxed text-amber-700">
+                      Terdapat {pendingDeletePengelola.kpmCount} data KPM yang tercatat dengan
+                      pengelola ini. Data KPM tetap tersimpan.
+                    </p>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setPendingDeletePengelola(null)}
+                  className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const id = pendingDeletePengelola.profile.id;
+                    setPendingDeletePengelola(null);
+                    onDeletePengelola?.(id);
+                  }}
+                  className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-rose-600 px-4 text-sm font-semibold text-white hover:bg-rose-700"
+                >
+                  Ya, Hapus
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -3189,23 +3306,55 @@ export function MenuHubView({
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
               {filteredPekerjaanList.map((job) => {
                 const count = jobCounts.get(job.trim().toLowerCase()) ?? 0;
+                const swipeActions: SwipeAction[] = [];
+                if (canUpdate && onUpdatePekerjaan) {
+                  swipeActions.push({
+                    key: 'edit',
+                    label: 'Edit',
+                    icon: <Edit3 className="h-4 w-4" />,
+                    tone: 'teal',
+                    onClick: () => {
+                      setEditingPekerjaanTarget(job);
+                      setEditPekerjaanValue(job);
+                      setEditPekerjaanError(null);
+                    },
+                  });
+                }
+                if (canDelete && onDeletePekerjaan) {
+                  swipeActions.push({
+                    key: 'delete',
+                    label: 'Hapus',
+                    icon: <Trash2 className="h-4 w-4" />,
+                    tone: 'danger',
+                    onClick: () => setPendingDeletePekerjaan({ name: job, kpmCount: count }),
+                  });
+                }
+
                 return (
-                  <button
+                  <SwipeableRow
                     key={job}
-                    type="button"
-                    onClick={() => setPekerjaanDrill(job)}
-                    className="flex min-h-[52px] w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
+                    id={job}
+                    isOpen={openPekerjaanSwipeId === job}
+                    onOpen={setOpenPekerjaanSwipeId}
+                    onClose={() => setOpenPekerjaanSwipeId(null)}
+                    actions={swipeActions}
                   >
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-900">
-                      {job}
-                    </span>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <span className="text-xs font-semibold text-slate-700 tabular-nums">
-                        {count}
+                    <button
+                      type="button"
+                      onClick={() => setPekerjaanDrill(job)}
+                      className="flex min-h-[52px] w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
+                    >
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-900">
+                        {job}
                       </span>
-                      <ChevronRight className="h-4 w-4 text-slate-400" />
-                    </div>
-                  </button>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span className="text-xs font-semibold text-slate-700 tabular-nums">
+                          {count}
+                        </span>
+                        <ChevronRight className="h-4 w-4 text-slate-400" />
+                      </div>
+                    </button>
+                  </SwipeableRow>
                 );
               })}
             </div>
@@ -3282,6 +3431,148 @@ export function MenuHubView({
                 </button>
               </div>
             </form>
+          </div>
+        )}
+
+        {/* Edit Pekerjaan Modal */}
+        {editingPekerjaanTarget !== null && (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 backdrop-blur-xs sm:items-center sm:p-4"
+            onClick={() => setEditingPekerjaanTarget(null)}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Edit Profesi & Pekerjaan"
+          >
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const clean = capitalizeWords(editPekerjaanValue.trim());
+                if (!clean) {
+                  setEditPekerjaanError('Nama pekerjaan wajib diisi.');
+                  return;
+                }
+                const duplicate = pekerjaanList.some(
+                  (p) => p !== editingPekerjaanTarget && p.toLowerCase() === clean.toLowerCase()
+                );
+                if (duplicate) {
+                  setEditPekerjaanError(`Pekerjaan "${clean}" sudah terdaftar.`);
+                  return;
+                }
+                onUpdatePekerjaan?.(editingPekerjaanTarget, clean);
+                setEditingPekerjaanTarget(null);
+              }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-md rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl"
+            >
+              <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+              <div className="flex items-center justify-between pb-3">
+                <h2 className="text-base font-bold text-slate-900">Edit Pekerjaan</h2>
+                <button
+                  type="button"
+                  onClick={() => setEditingPekerjaanTarget(null)}
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100"
+                  aria-label="Tutup"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div>
+                <label htmlFor="modal-edit-pekerjaan-nama" className="block text-xs font-semibold text-slate-700">
+                  Nama Pekerjaan <span className="text-rose-600">*</span>
+                </label>
+                <input
+                  id="modal-edit-pekerjaan-nama"
+                  type="text"
+                  autoFocus
+                  autoCapitalize="words"
+                  value={editPekerjaanValue}
+                  onChange={(e) => {
+                    setEditPekerjaanValue(capitalizeWords(e.target.value));
+                    if (editPekerjaanError) setEditPekerjaanError(null);
+                  }}
+                  placeholder="Contoh: Penjahit Rumahan"
+                  className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                    editPekerjaanError ? 'border-rose-400' : 'border-slate-300'
+                  }`}
+                />
+                {editPekerjaanError && (
+                  <p className="mt-1 text-xs text-rose-600">{editPekerjaanError}</p>
+                )}
+              </div>
+
+              <div className="mt-4 flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setEditingPekerjaanTarget(null)}
+                  className="inline-flex min-h-[44px] items-center justify-center rounded-xl border border-slate-200 bg-white px-5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-teal-700 px-5 text-sm font-semibold text-white hover:bg-teal-800"
+                >
+                  Simpan Perubahan
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {/* Delete Pekerjaan Confirmation Modal */}
+        {pendingDeletePekerjaan && (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 backdrop-blur-xs sm:items-center sm:p-4"
+            onClick={() => setPendingDeletePekerjaan(null)}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Konfirmasi Hapus Pekerjaan"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-sm rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl space-y-4"
+            >
+              <div className="mx-auto h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
+                  <AlertTriangle className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <h2 className="text-base font-bold text-slate-900">Hapus Pekerjaan?</h2>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                    Apakah Anda yakin ingin menghapus pekerjaan{' '}
+                    <strong>&ldquo;{pendingDeletePekerjaan.name}&rdquo;</strong> dari daftar master?
+                  </p>
+                  {pendingDeletePekerjaan.kpmCount > 0 && (
+                    <p className="mt-1.5 text-[11px] leading-relaxed text-amber-700">
+                      Terdapat {pendingDeletePekerjaan.kpmCount} data KPM yang tercatat dengan
+                      pekerjaan ini. Data KPM tetap tersimpan.
+                    </p>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setPendingDeletePekerjaan(null)}
+                  className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const name = pendingDeletePekerjaan.name;
+                    setPendingDeletePekerjaan(null);
+                    onDeletePekerjaan?.(name);
+                  }}
+                  className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-rose-600 px-4 text-sm font-semibold text-white hover:bg-rose-700"
+                >
+                  Ya, Hapus
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>

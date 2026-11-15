@@ -1050,7 +1050,7 @@ export async function syncAllOperationalDataToSupabase(
     await upsertInChunks('wilayah_kelurahan', kelRows, 'id');
   }
 
-  // 2. Pekerjaan (deduplicated & preserving canonical DB IDs)
+  // 2. Pekerjaan (deduplicated, preserving canonical DB IDs, deleting removed rows)
   const existingJobsRes = await supabase.from('pekerjaan_master').select('id,nama');
   if (existingJobsRes.error) throw existingJobsRes.error;
   const existingJobByName = new Map<string, string>();
@@ -1080,6 +1080,12 @@ export async function syncAllOperationalDataToSupabase(
       sort_order: idx + 1,
     });
   });
+  const deleteJobIds = (existingJobsRes.data || [])
+    .map((r) => String(r.id))
+    .filter((id) => !usedJobIds.has(id));
+  if (deleteJobIds.length > 0) {
+    await deleteByIdsInChunks('pekerjaan_master', 'id', deleteJobIds);
+  }
   if (jobRows.length > 0) {
     await upsertInChunks('pekerjaan_master', jobRows, 'id');
   }
@@ -1153,12 +1159,15 @@ export async function syncAllOperationalDataToSupabase(
     await upsertInChunks('item_sub_items', subItemRows, 'item_id,sub_item_name');
   }
 
-  // 4. Pengelola (preserve canonical IDs keyed by display_name)
+  // 4. Pengelola (preserve existing IDs on edit, delete removed rows)
   const existingPengelolaRes = await supabase.from('pengelola').select('id,display_name');
   if (existingPengelolaRes.error) throw existingPengelolaRes.error;
+  const existingPengelolaIds = new Set<string>();
   const existingPengelolaByName = new Map<string, string>();
   (existingPengelolaRes.data || []).forEach((r) => {
-    existingPengelolaByName.set(String(r.display_name).trim().toLowerCase(), String(r.id));
+    const pid = String(r.id);
+    existingPengelolaIds.add(pid);
+    existingPengelolaByName.set(String(r.display_name).trim().toLowerCase(), pid);
   });
 
   const pengelolaRows: Record<string, unknown>[] = [];
@@ -1173,7 +1182,9 @@ export async function syncAllOperationalDataToSupabase(
     if (seenPengelolaNames.has(nameKey)) continue;
     seenPengelolaNames.add(nameKey);
 
-    let resolvedPglId = existingPengelolaByName.get(nameKey) || p.id;
+    let resolvedPglId = existingPengelolaIds.has(p.id)
+      ? p.id
+      : existingPengelolaByName.get(nameKey) || p.id;
     if (usedPengelolaIds.has(resolvedPglId)) {
       resolvedPglId = `${resolvedPglId}-${pengelolaRows.length + 1}`;
     }
@@ -1213,6 +1224,12 @@ export async function syncAllOperationalDataToSupabase(
       created_at: p.createdAt || nowIso,
       updated_at: nowIso,
     });
+  }
+  const deletePengelolaIds = Array.from(existingPengelolaIds).filter(
+    (id) => !usedPengelolaIds.has(id)
+  );
+  if (deletePengelolaIds.length > 0) {
+    await deleteByIdsInChunks('pengelola', 'id', deletePengelolaIds);
   }
   if (pengelolaRows.length > 0) {
     await upsertInChunks('pengelola', pengelolaRows, 'id');

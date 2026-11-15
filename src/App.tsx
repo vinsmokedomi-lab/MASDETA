@@ -1816,6 +1816,80 @@ export default function App() {
     void syncOperationalData({ pengelolaList: nextPengelola }, 'add');
   };
 
+  const handleUpdatePengelola = (profile: PengelolaProfile, previousDisplayName: string) => {
+    if (!requirePermission('update', 'mengubah data pengelola lapangan')) return;
+    const duplicate = pengelolaList.some(
+      (p) =>
+        p.id !== profile.id &&
+        p.displayName.trim().toLowerCase() === profile.displayName.trim().toLowerCase()
+    );
+    if (duplicate) {
+      setFeedback({
+        type: 'error',
+        message: `Pengelola "${profile.displayName}" sudah terdaftar.`,
+      });
+      return;
+    }
+
+    const nextPengelola = pengelolaList.map((p) => (p.id === profile.id ? profile : p));
+    setPengelolaList(nextPengelola);
+
+    const oldKey = previousDisplayName.trim().toLowerCase();
+    const nameChanged = oldKey !== profile.displayName.trim().toLowerCase();
+    const now = new Date().toISOString();
+    let nextRecords = records;
+    if (nameChanged) {
+      let anyRecordChanged = false;
+      nextRecords = records.map((rec) => {
+        if ((rec.pengelola || '').trim().toLowerCase() !== oldKey) return rec;
+        const prop =
+          proposals.find((p) => p.namaProposal === rec.proposal && p.tahun === rec.tahun) ??
+          proposals.find((p) => p.namaProposal === rec.proposal);
+        if (prop?.status === 'locked') return rec;
+        anyRecordChanged = true;
+        return { ...rec, pengelola: profile.displayName, updatedAt: now };
+      });
+      if (anyRecordChanged) {
+        setRecords(nextRecords);
+      }
+      if (selectedPengelolaDrill?.trim().toLowerCase() === oldKey) {
+        setSelectedPengelolaDrill(profile.displayName);
+      }
+    }
+
+    void syncOperationalData(
+      nameChanged ? { pengelolaList: nextPengelola, records: nextRecords } : { pengelolaList: nextPengelola },
+      'update'
+    );
+    setFeedback({
+      type: 'success',
+      message: `Data pengelola "${profile.displayName}" berhasil diperbarui.`,
+    });
+  };
+
+  const handleDeletePengelola = (pengelolaId: string) => {
+    if (!requirePermission('delete', 'menghapus pengelola lapangan')) return;
+    const target = pengelolaList.find((p) => p.id === pengelolaId);
+    if (!target) return;
+
+    if (target.foto) {
+      void removeDocumentFromDrive(target.foto);
+    }
+    const nextPengelola = pengelolaList.filter((p) => p.id !== pengelolaId);
+    setPengelolaList(nextPengelola);
+    if (
+      selectedPengelolaDrill &&
+      selectedPengelolaDrill.trim().toLowerCase() === target.displayName.trim().toLowerCase()
+    ) {
+      setSelectedPengelolaDrill(null);
+    }
+    void syncOperationalData({ pengelolaList: nextPengelola }, 'delete');
+    setFeedback({
+      type: 'success',
+      message: `Pengelola "${target.displayName}" berhasil dihapus.`,
+    });
+  };
+
   const handleSaveKpm = async (
     values: KpmFormValues,
     editingId?: string
@@ -2697,6 +2771,40 @@ export default function App() {
     });
   };
 
+  const handleDeleteProposal = (proposalId: string) => {
+    if (!requirePermission('delete', 'menghapus proposal')) return;
+    const target = proposals.find((p) => p.id === proposalId);
+    if (!target) return;
+
+    if (target.status === 'locked') {
+      setFeedback({
+        type: 'error',
+        message: `Proposal "${target.namaProposal}" sedang Terkunci. Buka kunci terlebih dahulu untuk menghapusnya.`,
+      });
+      return;
+    }
+
+    const docsToTrash = Object.values(target.documents || {}).filter(
+      (d): d is KpmDocumentFile => Boolean(d)
+    );
+    if (docsToTrash.length > 0) {
+      void Promise.allSettled(docsToTrash.map((d) => removeDocumentFromDrive(d)));
+    }
+
+    const nextProposals = proposals.filter((p) => p.id !== proposalId);
+    setProposals(nextProposals);
+    if (activeProposalId === proposalId) {
+      setActiveProposalId(null);
+      setSubView('none');
+      setActiveTab('proposal');
+    }
+    void syncOperationalData({ proposals: nextProposals }, 'delete');
+    setFeedback({
+      type: 'success',
+      message: `Proposal "${target.namaProposal}" (${target.tahun}) berhasil dihapus.`,
+    });
+  };
+
   const handleLogin = async (
     email: string,
     password: string
@@ -3425,6 +3533,16 @@ export default function App() {
     if (!requirePermission('update', 'mengubah status pengembalian berkas')) return;
     const target = records.find((r) => r.id === kpmId);
     if (!target) return;
+    const prop =
+      proposals.find((p) => p.namaProposal === target.proposal && p.tahun === target.tahun) ??
+      proposals.find((p) => p.namaProposal === target.proposal);
+    if (prop?.status === 'locked') {
+      setFeedback({
+        type: 'error',
+        message: `Proposal "${prop.namaProposal}" sedang Terkunci. Status berkas KPM tidak dapat diubah.`,
+      });
+      return;
+    }
     const now = new Date().toISOString();
 
     const auditEntry: KpmAuditLogEntry = {
@@ -3460,6 +3578,68 @@ export default function App() {
     setKpmAuditLogs(nextLogs);
     setRecords(nextRecords);
     void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
+  };
+
+  const handleUpdatePekerjaan = (oldName: string, newName: string) => {
+    if (!requirePermission('update', 'mengubah daftar pekerjaan')) return;
+    const duplicate = pekerjaanList.some(
+      (j) => j !== oldName && j.trim().toLowerCase() === newName.trim().toLowerCase()
+    );
+    if (duplicate) {
+      setFeedback({
+        type: 'error',
+        message: `Pekerjaan "${newName}" sudah terdaftar.`,
+      });
+      return;
+    }
+
+    const nextPekerjaan = pekerjaanList.map((j) => (j === oldName ? newName : j));
+    setPekerjaanList(nextPekerjaan);
+
+    const oldKey = oldName.trim().toLowerCase();
+    const now = new Date().toISOString();
+    let anyRecordChanged = false;
+    const nextRecords = records.map((rec) => {
+      if ((rec.pekerjaan || '').trim().toLowerCase() !== oldKey) return rec;
+      const prop =
+        proposals.find((p) => p.namaProposal === rec.proposal && p.tahun === rec.tahun) ??
+        proposals.find((p) => p.namaProposal === rec.proposal);
+      if (prop?.status === 'locked') return rec;
+      anyRecordChanged = true;
+      return { ...rec, pekerjaan: newName, updatedAt: now };
+    });
+    if (anyRecordChanged) {
+      setRecords(nextRecords);
+    }
+    if (selectedPekerjaanDrill?.trim().toLowerCase() === oldKey) {
+      setSelectedPekerjaanDrill(newName);
+    }
+
+    void syncOperationalData(
+      anyRecordChanged ? { pekerjaanList: nextPekerjaan, records: nextRecords } : { pekerjaanList: nextPekerjaan },
+      'update'
+    );
+    setFeedback({
+      type: 'success',
+      message: `Pekerjaan "${oldName}" berhasil diperbarui menjadi "${newName}".`,
+    });
+  };
+
+  const handleDeletePekerjaan = (name: string) => {
+    if (!requirePermission('delete', 'menghapus daftar pekerjaan')) return;
+    const nextPekerjaan = pekerjaanList.filter((j) => j !== name);
+    setPekerjaanList(nextPekerjaan);
+    if (
+      selectedPekerjaanDrill &&
+      selectedPekerjaanDrill.trim().toLowerCase() === name.trim().toLowerCase()
+    ) {
+      setSelectedPekerjaanDrill(null);
+    }
+    void syncOperationalData({ pekerjaanList: nextPekerjaan }, 'delete');
+    setFeedback({
+      type: 'success',
+      message: `Pekerjaan "${name}" berhasil dihapus.`,
+    });
   };
 
   const showBottomNav = subView === 'none' && !(activeTab === 'menu' && menuSection !== 'root');
@@ -4000,6 +4180,7 @@ export default function App() {
             onChangeItemFilter={setKpmItemFilter}
             proposalFilter={kpmProposalFilter}
             onChangeProposalFilter={setKpmProposalFilter}
+            canDelete={hasPermission('delete')}
             onBack={() => {
               if (kpmOpenedFromProposalDetail && activeProposal) {
                 setKpmOpenedFromProposalDetail(false);
@@ -4011,6 +4192,7 @@ export default function App() {
             }}
             onCreateNew={() => openKpmForm(null, 'kpm')}
             onSelectRecord={(rec) => openKpmDetail(rec, 'kpm')}
+            onDeleteRecord={handleDeleteKpm}
           />
         )}
 
@@ -4020,7 +4202,11 @@ export default function App() {
             records={records}
             selectedYear={selectedYear}
             onChangeYear={setSelectedYear}
+            canUpdate={hasPermission('update')}
+            canDelete={hasPermission('delete')}
             onOpenProposalDetail={(id) => openProposalDetailById(id, 'proposal')}
+            onToggleProposalLock={handleToggleProposalLock}
+            onDeleteProposal={handleDeleteProposal}
           />
         )}
 
@@ -4072,6 +4258,8 @@ export default function App() {
               setPekerjaanList(nextPekerjaan);
               void syncOperationalData({ pekerjaanList: nextPekerjaan }, 'add');
             }}
+            onUpdatePekerjaan={handleUpdatePekerjaan}
+            onDeletePekerjaan={handleDeletePekerjaan}
             onUpdateWilayahList={(nextList) => {
               if (!requirePermission('update', 'mengubah data wilayah')) return;
               setWilayahList(nextList);
@@ -4079,6 +4267,8 @@ export default function App() {
             }}
             onOpenSubItemRecap={() => openSubItemRecap('menu')}
             onAddPengelola={handleCreatePengelola}
+            onUpdatePengelola={handleUpdatePengelola}
+            onDeletePengelola={handleDeletePengelola}
             onAdminControlUser={handleAdminControlUser}
             onDeleteInternalUser={handleDeleteInternalUser}
             onAdminDataAction={handleAdminDataAction}

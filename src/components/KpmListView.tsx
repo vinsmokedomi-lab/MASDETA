@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Lock, Search, SlidersHorizontal, User, X } from 'lucide-react';
+import { AlertTriangle, Lock, Search, SlidersHorizontal, Trash2, User, X } from 'lucide-react';
 import { INITIAL_WILAYAH_LIST, TAHUN_OPTIONS } from '../data/kpmOptions';
 import {
   ItemBantuan,
@@ -17,6 +17,7 @@ import {
 } from '../utils/imageProcessor';
 import { DriveImage } from './DriveImage';
 import { FilterSelect, SegmentedTabs } from './FormControls';
+import { SwipeAction, SwipeableRow } from './SwipeableRow';
 
 type KpmSortKey = 'absen' | 'item' | 'rtrw' | 'pengelola' | 'pekerjaan' | 'kelurahan';
 
@@ -33,9 +34,11 @@ interface KpmListViewProps {
   onChangeItemFilter: (item: string) => void;
   proposalFilter?: string;
   onChangeProposalFilter?: (proposal: string) => void;
+  canDelete?: boolean;
   onBack?: () => void;
   onCreateNew: () => void;
   onSelectRecord: (record: KpmRecord) => void;
+  onDeleteRecord: (id: string) => void;
 }
 
 export function KpmListView({
@@ -51,7 +54,9 @@ export function KpmListView({
   onChangeItemFilter,
   proposalFilter = 'all',
   onChangeProposalFilter,
+  canDelete = true,
   onSelectRecord,
+  onDeleteRecord,
 }: KpmListViewProps) {
   const [query, setQuery] = useState('');
   const [sortBy, setSortBy] = useState<KpmSortKey>('absen');
@@ -61,6 +66,9 @@ export function KpmListView({
   const [pekerjaanFilter, setPekerjaanFilter] = useState<string>('all');
   const [showExtraFilters, setShowExtraFilters] = useState(false);
   const [visibleLimit, setVisibleLimit] = useState(40);
+  const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
+  const [pendingDeleteRecord, setPendingDeleteRecord] = useState<KpmRecord | null>(null);
+  const [lockedNoticeRecord, setLockedNoticeRecord] = useState<KpmRecord | null>(null);
 
   useEffect(() => {
     setVisibleLimit(40);
@@ -508,68 +516,98 @@ export function KpmListView({
                 .filter(Boolean)
                 .join(' · ');
 
+              const swipeActions: SwipeAction[] = locked
+                ? [
+                    {
+                      key: 'locked',
+                      label: 'Terkunci',
+                      icon: <Lock className="h-4 w-4" />,
+                      tone: 'locked',
+                      onClick: () => setLockedNoticeRecord(rec),
+                    },
+                  ]
+                : canDelete
+                  ? [
+                      {
+                        key: 'delete',
+                        label: 'Hapus',
+                        icon: <Trash2 className="h-4 w-4" />,
+                        tone: 'danger',
+                        onClick: () => setPendingDeleteRecord(rec),
+                      },
+                    ]
+                  : [];
+
               return (
-                <button
+                <SwipeableRow
                   key={rec.id}
-                  type="button"
-                  onClick={() => onSelectRecord(rec)}
-                  className="flex w-full items-stretch gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
+                  id={rec.id}
+                  isOpen={openSwipeId === rec.id}
+                  onOpen={setOpenSwipeId}
+                  onClose={() => setOpenSwipeId(null)}
+                  actions={swipeActions}
                 >
-                  {/* Nomor Absen sebelum Foto */}
-                  <div className="flex w-5 shrink-0 items-center justify-center">
-                    <span className="font-mono text-[11px] font-bold text-slate-500 tabular-nums">
-                      {absenLabel}
-                    </span>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onSelectRecord(rec)}
+                    className="flex w-full items-stretch gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
+                  >
+                    {/* Nomor Absen sebelum Foto */}
+                    <div className="flex w-5 shrink-0 items-center justify-center">
+                      <span className="font-mono text-[11px] font-bold text-slate-500 tabular-nums">
+                        {absenLabel}
+                      </span>
+                    </div>
 
-                  {/* Foto Thumbnail Persegi Panjang (sejajar ujung atas judul s.d. ujung bawah subjudul) */}
-                  <div className="flex w-11 shrink-0 items-center justify-center self-stretch overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
-                    {thumb ? (
-                      <DriveImage
-                        doc={thumb}
-                        alt={rec.nama}
-                        className="h-full w-full object-cover"
-                      />
-                    ) : (
-                      <User className="h-5 w-5" />
-                    )}
-                  </div>
+                    {/* Foto Thumbnail Persegi Panjang (sejajar ujung atas judul s.d. ujung bawah subjudul) */}
+                    <div className="flex w-11 shrink-0 items-center justify-center self-stretch overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
+                      {thumb ? (
+                        <DriveImage
+                          doc={thumb}
+                          alt={rec.nama}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <User className="h-5 w-5" />
+                      )}
+                    </div>
 
-                  {/* Konten Utama */}
-                  <div className="min-w-0 flex-1 flex flex-col justify-center">
-                    {/* Baris 1: Nama + Item & Angka Desil */}
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex min-w-0 items-center gap-1">
-                        <span className="truncate text-[13px] font-medium leading-tight text-slate-900">
-                          {rec.nama}
+                    {/* Konten Utama */}
+                    <div className="min-w-0 flex-1 flex flex-col justify-center">
+                      {/* Baris 1: Nama + Item & Angka Desil */}
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex min-w-0 items-center gap-1">
+                          <span className="truncate text-[13px] font-medium leading-tight text-slate-900">
+                            {rec.nama}
+                          </span>
+                          {locked && <Lock className="h-3 w-3 shrink-0 text-rose-600" />}
+                        </div>
+
+                        <span className="shrink-0 rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] font-bold leading-none text-slate-700 tabular-nums">
+                          {rec.item}
+                          {desilNumeric ? ` · ${desilNumeric}` : ''}
                         </span>
-                        {locked && <Lock className="h-3 w-3 shrink-0 text-slate-400" />}
                       </div>
 
-                      <span className="shrink-0 rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] font-bold leading-none text-slate-700 tabular-nums">
-                        {rec.item}
-                        {desilNumeric ? ` · ${desilNumeric}` : ''}
-                      </span>
-                    </div>
+                      {/* Baris 2: Proposal & Tahun */}
+                      <div className="mt-1 flex items-center justify-between gap-2 text-[11px] leading-tight">
+                        <span className="truncate font-medium text-slate-600">
+                          {rec.proposal}
+                        </span>
+                        <span className="shrink-0 font-semibold text-slate-400 tabular-nums">
+                          {rec.tahun}
+                        </span>
+                      </div>
 
-                    {/* Baris 2: Proposal & Tahun */}
-                    <div className="mt-1 flex items-center justify-between gap-2 text-[11px] leading-tight">
-                      <span className="truncate font-medium text-slate-600">
-                        {rec.proposal}
-                      </span>
-                      <span className="shrink-0 font-semibold text-slate-400 tabular-nums">
-                        {rec.tahun}
-                      </span>
+                      {/* Baris 3: Kelurahan (jika Proposal Kecamatan) · Pengelola */}
+                      {metaLine && (
+                        <p className="mt-0.5 truncate text-[11px] leading-tight text-slate-500">
+                          {metaLine}
+                        </p>
+                      )}
                     </div>
-
-                    {/* Baris 3: Kelurahan (jika Proposal Kecamatan) · Pengelola */}
-                    {metaLine && (
-                      <p className="mt-0.5 truncate text-[11px] leading-tight text-slate-500">
-                        {metaLine}
-                      </p>
-                    )}
-                  </div>
-                </button>
+                  </button>
+                </SwipeableRow>
               );
             })}
             {filteredRecords.length > visibleLimit && (
@@ -586,6 +624,103 @@ export function KpmListView({
           </div>
         )}
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {pendingDeleteRecord && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 backdrop-blur-xs sm:items-center sm:p-4"
+          onClick={() => setPendingDeleteRecord(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Konfirmasi Hapus KPM"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl space-y-4"
+          >
+            <div className="mx-auto h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-base font-bold text-slate-900">Hapus Calon KPM?</h2>
+                <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                  Apakah Anda yakin ingin menghapus data calon KPM{' '}
+                  <strong>&ldquo;{pendingDeleteRecord.nama}&rdquo;</strong> (
+                  {pendingDeleteRecord.registerCode})?
+                </p>
+                <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">
+                  Tindakan ini akan menghapus data KPM beserta dokumen foto terkait secara
+                  permanen.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => setPendingDeleteRecord(null)}
+                className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const id = pendingDeleteRecord.id;
+                  setPendingDeleteRecord(null);
+                  onDeleteRecord(id);
+                }}
+                className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-rose-600 px-4 text-sm font-semibold text-white hover:bg-rose-700"
+              >
+                Ya, Hapus
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Locked KPM Notice Modal */}
+      {lockedNoticeRecord && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 backdrop-blur-xs sm:items-center sm:p-4"
+          onClick={() => setLockedNoticeRecord(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Informasi KPM Terkunci"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl space-y-4"
+          >
+            <div className="mx-auto h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
+                <Lock className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-base font-bold text-slate-900">Data KPM Terkunci</h2>
+                <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                  Calon KPM <strong>&ldquo;{lockedNoticeRecord.nama}&rdquo;</strong> berada di
+                  dalam proposal <strong>&ldquo;{lockedNoticeRecord.proposal}&rdquo;</strong> yang
+                  sedang berstatus Terkunci, sehingga ikut terkunci dan tidak dapat diubah atau
+                  dihapus.
+                </p>
+                <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">
+                  Buka kunci proposal terkait terlebih dahulu apabila ingin menghapus data KPM ini.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setLockedNoticeRecord(null)}
+              className="inline-flex min-h-[44px] w-full items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800"
+            >
+              Mengerti
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

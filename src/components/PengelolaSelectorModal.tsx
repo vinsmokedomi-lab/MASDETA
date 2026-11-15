@@ -20,6 +20,7 @@ import { PlaceholderSelect } from './FormControls';
 
 interface AddPengelolaFormContentProps {
   initialNama?: string;
+  editingProfile?: PengelolaProfile | null;
   wilayahList?: WilayahKabKota[];
   showBackButton?: boolean;
   onBack?: () => void;
@@ -30,6 +31,7 @@ interface AddPengelolaFormContentProps {
 
 function AddPengelolaFormContent({
   initialNama = '',
+  editingProfile = null,
   wilayahList = INITIAL_WILAYAH_LIST,
   showBackButton = false,
   onBack,
@@ -37,14 +39,16 @@ function AddPengelolaFormContent({
   onCreatePengelola,
   onPreviewDocument,
 }: AddPengelolaFormContentProps) {
-  const [title, setTitle] = useState('');
-  const [nama, setNama] = useState(initialNama);
-  const [kabKota, setKabKota] = useState(() => wilayahList[0]?.nama || '');
-  const [kecamatan, setKecamatan] = useState('');
-  const [kelurahan, setKelurahan] = useState('');
-  const [alamat, setAlamat] = useState('');
-  const [kontak, setKontak] = useState('');
-  const [foto, setFoto] = useState<KpmDocumentFile | undefined>(undefined);
+  const [title, setTitle] = useState(() => editingProfile?.title ?? '');
+  const [nama, setNama] = useState(() => editingProfile?.nama ?? initialNama);
+  const [kabKota, setKabKota] = useState(
+    () => editingProfile?.kabKota ?? (wilayahList[0]?.nama || '')
+  );
+  const [kecamatan, setKecamatan] = useState(() => editingProfile?.kecamatan ?? '');
+  const [kelurahan, setKelurahan] = useState(() => editingProfile?.kelurahan ?? '');
+  const [alamat, setAlamat] = useState(() => editingProfile?.alamat ?? '');
+  const [kontak, setKontak] = useState(() => editingProfile?.kontak ?? '');
+  const [foto, setFoto] = useState<KpmDocumentFile | undefined>(() => editingProfile?.foto);
   const [namaError, setNamaError] = useState<string | null>(null);
 
   const kabKotaOptions = useMemo(() => wilayahList.map((w) => w.nama), [wilayahList]);
@@ -76,8 +80,8 @@ function AddPengelolaFormContent({
     }
 
     const displayName = title ? `${title} ${trimmedNama}` : trimmedNama;
-    const newProfile: PengelolaProfile = {
-      id: `peng-${Date.now()}`,
+    const savedProfile: PengelolaProfile = {
+      id: editingProfile?.id ?? `peng-${Date.now()}`,
       title,
       nama: trimmedNama,
       displayName,
@@ -87,10 +91,10 @@ function AddPengelolaFormContent({
       alamat: capitalizeWords(alamat.trim()),
       kontak: kontak.trim(),
       foto,
-      createdAt: new Date().toISOString(),
+      createdAt: editingProfile?.createdAt ?? new Date().toISOString(),
     };
 
-    onCreatePengelola(newProfile);
+    onCreatePengelola(savedProfile);
   };
 
   return (
@@ -114,7 +118,7 @@ function AddPengelolaFormContent({
             </button>
           )}
           <h2 className="truncate text-base font-bold text-slate-900">
-            Tambah Pengelola Baru
+            {editingProfile ? 'Edit Pengelola Lapangan' : 'Tambah Pengelola Baru'}
           </h2>
         </div>
 
@@ -303,7 +307,7 @@ function AddPengelolaFormContent({
           onClick={handleSave}
           className="inline-flex min-h-[44px] items-center justify-center rounded-xl bg-teal-700 px-6 text-sm font-semibold text-white hover:bg-teal-800"
         >
-          Simpan Pengelola
+          {editingProfile ? 'Simpan Perubahan' : 'Simpan Pengelola'}
         </button>
       </div>
     </>
@@ -312,6 +316,7 @@ function AddPengelolaFormContent({
 
 interface AddPengelolaModalProps {
   isOpen: boolean;
+  editingProfile?: PengelolaProfile | null;
   wilayahList?: WilayahKabKota[];
   onClose: () => void;
   onCreatePengelola: (profile: PengelolaProfile) => void;
@@ -320,6 +325,7 @@ interface AddPengelolaModalProps {
 
 export function AddPengelolaModal({
   isOpen,
+  editingProfile = null,
   wilayahList = INITIAL_WILAYAH_LIST,
   onClose,
   onCreatePengelola,
@@ -333,13 +339,15 @@ export function AddPengelolaModal({
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-label="Tambah Pengelola Baru"
+      aria-label={editingProfile ? 'Edit Pengelola Lapangan' : 'Tambah Pengelola Baru'}
     >
       <div
         className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-t-3xl bg-white shadow-xl sm:rounded-3xl"
         onClick={(e) => e.stopPropagation()}
       >
         <AddPengelolaFormContent
+          key={editingProfile?.id || 'create-pengelola'}
+          editingProfile={editingProfile}
           wilayahList={wilayahList}
           onClose={onClose}
           onCreatePengelola={(profile) => {
