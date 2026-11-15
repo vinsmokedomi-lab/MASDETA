@@ -43,7 +43,6 @@ import { FilterSelect, SegmentedTabs } from './FormControls';
 import { ItemManagerView } from './ItemManagerView';
 import { AddPengelolaModal } from './PengelolaSelectorModal';
 import { PresenceDot, getPresenceMeta } from './PresenceDot';
-import { PWAInstallButton } from './PWAInstallButton';
 import { DTSEN_OPTION_ITEMS } from '../data/kpmOptions';
 import {
   InternalUser,
@@ -770,10 +769,6 @@ export function MenuHubView({
               </div>
             </section>
           )}
-
-          <div className="flex justify-center">
-            <PWAInstallButton />
-          </div>
         </div>
       </div>
     );
