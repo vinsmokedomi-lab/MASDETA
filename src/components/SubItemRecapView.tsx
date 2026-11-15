@@ -207,8 +207,8 @@ export function SubItemRecapView({
           </div>
 
           <div className="mt-4 grid grid-cols-2 divide-x divide-slate-800 border-t border-slate-800 pt-3.5">
-            <div className="pr-3">
-              <p className="text-xs text-slate-400">Sudah Diterima KPM</p>
+            <div className="px-2 text-center">
+              <p className="text-xs text-slate-400">Sudah Diterima</p>
               <p className="mt-0.5 text-lg font-bold text-teal-300 tabular-nums">
                 {recap.totalDelivered} Unit
               </p>
@@ -219,9 +219,9 @@ export function SubItemRecapView({
                 setDebtFilter('pending_only');
                 setActiveTab('hutang');
               }}
-              className="pl-3 text-left transition-opacity hover:opacity-80"
+              className="px-2 text-center transition-opacity hover:opacity-80"
             >
-              <p className="text-xs text-slate-400">Belum Dibagikan / Hutang</p>
+              <p className="text-xs text-slate-400">Belum Di Bagikan</p>
               <p className="mt-0.5 text-lg font-bold text-amber-300 tabular-nums">
                 {recap.totalPending} Unit
               </p>

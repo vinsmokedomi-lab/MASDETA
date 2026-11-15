@@ -336,36 +336,6 @@ export function ProposalForm({
       </header>
 
       <div className="space-y-4 px-4 pt-4">
-        {feedback && (
-          <div
-            role="status"
-            className={`flex items-center justify-between gap-2.5 rounded-2xl border px-3.5 py-2.5 text-xs ${
-              feedback.type === 'success'
-                ? 'border-teal-200 bg-teal-50 text-teal-900'
-                : 'border-rose-200 bg-rose-50 text-rose-900'
-            }`}
-          >
-            <div className="flex items-start gap-2 min-w-0">
-              <CheckCircle2
-                className={`mt-0.5 h-4 w-4 shrink-0 ${
-                  feedback.type === 'success' ? 'text-teal-700' : 'text-rose-600'
-                }`}
-              />
-              <p className="font-medium leading-snug">{feedback.message}</p>
-            </div>
-            {onDismissFeedback && (
-              <button
-                type="button"
-                onClick={onDismissFeedback}
-                className="inline-flex min-h-[32px] min-w-[32px] items-center justify-center rounded-lg text-slate-500 hover:bg-black/5 shrink-0"
-                aria-label="Tutup pemberitahuan"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-        )}
-
         {/* Locked Proposal Guard Banner */}
         {isPersistedLocked && (
           <div

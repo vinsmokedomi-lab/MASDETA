@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Database, MessageSquare, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Database, MessageSquare, X } from 'lucide-react';
 import { isSupabaseConfigured, supabase } from './lib/supabaseClient';
 import {
   checkSupabaseSchemaReady,
@@ -264,9 +264,11 @@ export default function App() {
   const [kpmAuditLogs, setKpmAuditLogs] = useState<KpmAuditLogEntry[]>(() =>
     loadKpmAuditLogs(INITIAL_KPM_AUDIT_LOGS)
   );
-  const [items, setItems] = useState<ItemBantuan[]>(() => loadItemList(INITIAL_ITEM_LIST));
+  const [items, setItems] = useState<ItemBantuan[]>(() =>
+    loadItemList(isSupabaseConfigured ? [] : INITIAL_ITEM_LIST)
+  );
   const [pekerjaanList, setPekerjaanList] = useState<string[]>(() =>
-    loadPekerjaanList(PEKERJAAN_OPTIONS)
+    loadPekerjaanList(isSupabaseConfigured ? [] : PEKERJAAN_OPTIONS)
   );
   const [wilayahList, setWilayahList] = useState<WilayahKabKota[]>(() =>
     loadWilayahList(INITIAL_WILAYAH_LIST)
@@ -487,6 +489,12 @@ export default function App() {
     saveInternalUsers(internalUsers);
   }, [internalUsers]);
 
+  useEffect(() => {
+    if (!feedback) return;
+    const timer = window.setTimeout(() => setFeedback(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [feedback]);
+
   const clearSessionState = useCallback(() => {
     setSessionToken(null);
     setSessionUserId(null);
@@ -548,94 +556,19 @@ export default function App() {
       if (useSupabase) {
         try {
           const snapshot = await fetchOperationalDataFromSupabase();
-          const hasSupabaseOperational =
-            snapshot.records.length > 0 || snapshot.proposals.length > 0;
-
-          if (hasSupabaseOperational) {
-            applyRemoteOperationalState({
-              records: snapshot.records,
-              proposals: snapshot.proposals,
-              items: snapshot.items.length > 0 ? snapshot.items : latestDataRef.current.items,
-              pekerjaanList:
-                snapshot.pekerjaanList.length > 0
-                  ? snapshot.pekerjaanList
-                  : latestDataRef.current.pekerjaanList,
-              wilayahList:
-                snapshot.wilayahList.length > 0
-                  ? snapshot.wilayahList
-                  : latestDataRef.current.wilayahList,
-              pengelolaList: snapshot.pengelolaList,
-              proposalHistory: snapshot.proposalHistory,
-              kpmAuditLogs: snapshot.kpmAuditLogs,
-            });
-            return;
-          }
-
-          // Supabase tables exist but are empty -> seed CSV + master data once
-          let seedPayload: OperationalDataPayload = {
-            records: latestDataRef.current.records,
-            proposals: latestDataRef.current.proposals,
-            items: snapshot.items.length > 0 ? snapshot.items : latestDataRef.current.items,
-            pekerjaanList:
-              snapshot.pekerjaanList.length > 0
-                ? snapshot.pekerjaanList
-                : latestDataRef.current.pekerjaanList,
+          applyRemoteOperationalState({
+            records: snapshot.records,
+            proposals: snapshot.proposals,
+            items: snapshot.items,
+            pekerjaanList: snapshot.pekerjaanList,
             wilayahList:
               snapshot.wilayahList.length > 0
                 ? snapshot.wilayahList
                 : latestDataRef.current.wilayahList,
-            pengelolaList:
-              snapshot.pengelolaList.length > 0
-                ? snapshot.pengelolaList
-                : latestDataRef.current.pengelolaList,
-            proposalHistory: latestDataRef.current.proposalHistory,
-            kpmAuditLogs: latestDataRef.current.kpmAuditLogs,
-          };
-
-          const SEED_FLAG_KEY = 'masdeta_csv_seed_ptk_kota_2026_v1';
-          if (seedPayload.records.length === 0) {
-            try {
-              const csvRes = await fetch('/assets/aistudio/Kecamatan_Pontianak_Kota_2026_ab18452d.csv');
-              if (csvRes.ok) {
-                const csvText = await csvRes.text();
-                if (csvText) {
-                  const imported = importProposalKpmFromCsv({
-                    csvText,
-                    existingRecords: seedPayload.records,
-                    existingProposals: seedPayload.proposals,
-                    existingPengelolaList: seedPayload.pengelolaList,
-                    existingPekerjaanList: seedPayload.pekerjaanList,
-                    items: seedPayload.items,
-                    wilayahList: seedPayload.wilayahList,
-                    actorName: actor?.nama ?? 'SuperAdmin',
-                    actorEmail: actor?.email,
-                  });
-                  if (imported.importedRecordsCount > 0) {
-                    seedPayload = {
-                      ...seedPayload,
-                      records: imported.nextRecords,
-                      proposals: imported.nextProposals,
-                      pengelolaList: imported.nextPengelolaList,
-                      pekerjaanList: imported.nextPekerjaanList,
-                      kpmAuditLogs: [...imported.newAuditLogs, ...seedPayload.kpmAuditLogs],
-                      proposalHistory: [...imported.newProposalHistory, ...seedPayload.proposalHistory],
-                    };
-                    try {
-                      localStorage.setItem(SEED_FLAG_KEY, 'done');
-                    } catch {
-                      // Ignore storage write error
-                    }
-                  }
-                }
-              }
-            } catch {
-              // Ignore CSV seed error
-            }
-          }
-
-          lastLocalSyncAtRef.current = Date.now();
-          await syncAllOperationalDataToSupabase(seedPayload);
-          applyRemoteOperationalState(seedPayload);
+            pengelolaList: snapshot.pengelolaList,
+            proposalHistory: snapshot.proposalHistory,
+            kpmAuditLogs: snapshot.kpmAuditLogs,
+          });
           return;
         } catch (err) {
           if (isSchemaMissingError(err)) {
@@ -2864,13 +2797,20 @@ export default function App() {
           setActiveProposalId(null);
           setFeedback({
             type: 'success',
-            message: 'Reset total selesai. Seluruh data aplikasi dan riwayat chat telah dikosongkan.',
+            message:
+              'Reset total selesai. Seluruh data proposal, KPM, item, pengelola, pekerjaan, dan riwayat chat telah dikosongkan.',
           });
         }
       } catch (err) {
+        const msg =
+          err instanceof Error
+            ? err.message
+            : err && typeof err === 'object' && 'message' in err
+              ? String((err as { message: unknown }).message)
+              : 'Gagal menjalankan kontrol data Supabase.';
         setFeedback({
           type: 'error',
-          message: err instanceof Error ? err.message : 'Gagal menjalankan kontrol data Supabase.',
+          message: msg,
         });
       }
       return;
@@ -3298,33 +3238,46 @@ export default function App() {
         </div>
       )}
 
-      {/* Global Feedback Banner for views without inline feedback slot */}
-      {feedback &&
-        subView !== 'kpm-detail' &&
-        subView !== 'kpm-form' &&
-        subView !== 'edit-proposal' &&
-        !(subView === 'none' && activeTab === 'dashboard') && (
-          <div className="fixed top-3 left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2">
-            <div
-              role="status"
-              className={`flex items-center justify-between gap-2.5 rounded-2xl border px-3.5 py-2.5 text-xs shadow-lg ${
-                feedback.type === 'success'
-                  ? 'border-teal-200 bg-teal-50 text-teal-900'
-                  : 'border-rose-200 bg-rose-50 text-rose-900'
-              }`}
-            >
+      {/* Global Bottom Toast Notification for Success / Error Feedback */}
+      {feedback && (
+        <div
+          className={`fixed left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2 animate-[toastSlideUp_0.22s_ease-out] ${
+            showBottomNav ||
+            subView === 'kpm-detail' ||
+            subView === 'proposal-detail' ||
+            subView === 'kpm-form' ||
+            subView === 'edit-proposal'
+              ? 'bottom-24'
+              : 'bottom-5'
+          }`}
+        >
+          <div
+            role="status"
+            className={`flex items-center justify-between gap-2.5 rounded-2xl border px-3.5 py-3 text-xs shadow-xl ${
+              feedback.type === 'success'
+                ? 'border-teal-300 bg-teal-50 text-teal-950'
+                : 'border-rose-300 bg-rose-50 text-rose-950'
+            }`}
+          >
+            <div className="flex min-w-0 items-start gap-2">
+              {feedback.type === 'success' ? (
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+              ) : (
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+              )}
               <p className="font-medium leading-snug">{feedback.message}</p>
-              <button
-                type="button"
-                onClick={() => setFeedback(null)}
-                aria-label="Tutup notifikasi"
-                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg hover:bg-black/5"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
             </div>
+            <button
+              type="button"
+              onClick={() => setFeedback(null)}
+              aria-label="Tutup notifikasi"
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg hover:bg-black/5"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
           </div>
-        )}
+        </div>
+      )}
 
       {/* Interactive In-App Push Toast for Incoming 1-on-1 Direct Message */}
       {incomingToast && (

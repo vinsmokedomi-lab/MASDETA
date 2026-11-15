@@ -10,6 +10,7 @@ import {
   Shield,
   Trash2,
   User,
+  X,
 } from 'lucide-react';
 import { DriveImage } from './DriveImage';
 import {
@@ -77,6 +78,12 @@ export function UserProfileView({
     setNama(user.nama);
     setKontak(user.kontak || '');
   }, [user.id, user.nama, user.kontak]);
+
+  useEffect(() => {
+    if (!feedback) return;
+    const timer = window.setTimeout(() => setFeedback(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [feedback]);
 
   const handlePhotoChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -209,19 +216,6 @@ export function UserProfileView({
       </header>
 
       <div className="space-y-4 px-4 pt-4">
-        {feedback && (
-          <div
-            className={`flex items-center gap-2 rounded-2xl border px-4 py-3 text-xs font-semibold ${
-              feedback.type === 'success'
-                ? 'border-teal-200 bg-teal-50 text-teal-800'
-                : 'border-rose-200 bg-rose-50 text-rose-700'
-            }`}
-          >
-            <CheckCircle2 className="h-4 w-4 shrink-0" />
-            <span>{feedback.message}</span>
-          </div>
-        )}
-
         {/* Centered Profile Hero Summary */}
         <section className="flex flex-col items-center rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center">
           <label className="relative flex h-24 w-24 cursor-pointer items-center justify-center overflow-visible">
@@ -482,6 +476,36 @@ export function UserProfileView({
           <span>Keluar dari Akun</span>
         </button>
       </div>
+
+      {feedback && (
+        <div className="fixed bottom-5 left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2 animate-[toastSlideUp_0.22s_ease-out]">
+          <div
+            role="status"
+            className={`flex items-center justify-between gap-2.5 rounded-2xl border px-3.5 py-3 text-xs shadow-xl ${
+              feedback.type === 'success'
+                ? 'border-teal-300 bg-teal-50 text-teal-950'
+                : 'border-rose-300 bg-rose-50 text-rose-950'
+            }`}
+          >
+            <div className="flex min-w-0 items-start gap-2">
+              <CheckCircle2
+                className={`mt-0.5 h-4 w-4 shrink-0 ${
+                  feedback.type === 'success' ? 'text-teal-700' : 'text-rose-600'
+                }`}
+              />
+              <span className="font-medium leading-snug">{feedback.message}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setFeedback(null)}
+              aria-label="Tutup notifikasi"
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg hover:bg-black/5"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

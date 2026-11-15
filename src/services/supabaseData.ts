@@ -1378,52 +1378,58 @@ export async function syncAllOperationalDataToSupabase(
 export async function runAdminDataActionInSupabase(
   action: AdminDataActionType
 ): Promise<void> {
+  const deleteAll = async (table: string) => {
+    const { error } = await supabase.from(table).delete().neq('id', '');
+    if (error) throw error;
+  };
+
   if (action === 'delete_all_kpm') {
-    await supabase.from('kpm_audit_logs').delete().neq('id', '');
-    await supabase.from('kpm_sub_item_deliveries').delete().neq('id', '');
-    await supabase.from('kpm_documents').delete().neq('id', '');
-    await supabase.from('proposal_kpm_history').delete().neq('id', '');
-    await supabase.from('kpm_records').delete().neq('id', '');
+    await deleteAll('kpm_audit_logs');
+    await deleteAll('kpm_sub_item_deliveries');
+    await deleteAll('kpm_documents');
+    await deleteAll('proposal_kpm_history');
+    await deleteAll('kpm_records');
     return;
   }
 
   if (action === 'delete_all_proposal') {
-    await supabase.from('proposal_kpm_history').delete().neq('id', '');
-    await supabase.from('proposal_documents').delete().neq('id', '');
-    await supabase.from('proposals').delete().neq('id', '');
+    await deleteAll('proposal_kpm_history');
+    await deleteAll('proposal_documents');
+    await deleteAll('proposals');
     return;
   }
 
   if (action === 'delete_all_items') {
-    await supabase.from('item_sub_items').delete().neq('id', '');
-    await supabase.from('item_bantuan').delete().neq('id', '');
+    await deleteAll('item_sub_items');
+    await deleteAll('item_bantuan');
     return;
   }
 
   if (action === 'delete_all_data') {
-    await supabase.from('kpm_audit_logs').delete().neq('id', '');
-    await supabase.from('kpm_sub_item_deliveries').delete().neq('id', '');
-    await supabase.from('kpm_documents').delete().neq('id', '');
-    await supabase.from('proposal_kpm_history').delete().neq('id', '');
-    await supabase.from('kpm_records').delete().neq('id', '');
-    await supabase.from('proposal_documents').delete().neq('id', '');
-    await supabase.from('proposals').delete().neq('id', '');
-    await supabase.from('pengelola').delete().neq('id', '');
+    await deleteAll('kpm_audit_logs');
+    await deleteAll('kpm_sub_item_deliveries');
+    await deleteAll('kpm_documents');
+    await deleteAll('proposal_kpm_history');
+    await deleteAll('kpm_records');
+    await deleteAll('proposal_documents');
+    await deleteAll('proposals');
+    await deleteAll('pengelola');
     return;
   }
 
   if (action === 'reset_total') {
-    await supabase.from('direct_chat_messages').delete().neq('id', '');
-    await supabase.from('kpm_audit_logs').delete().neq('id', '');
-    await supabase.from('kpm_sub_item_deliveries').delete().neq('id', '');
-    await supabase.from('kpm_documents').delete().neq('id', '');
-    await supabase.from('proposal_kpm_history').delete().neq('id', '');
-    await supabase.from('kpm_records').delete().neq('id', '');
-    await supabase.from('proposal_documents').delete().neq('id', '');
-    await supabase.from('proposals').delete().neq('id', '');
-    await supabase.from('pengelola').delete().neq('id', '');
-    await supabase.from('item_sub_items').delete().neq('id', '');
-    await supabase.from('item_bantuan').delete().neq('id', '');
+    await deleteAll('direct_chat_messages');
+    await deleteAll('kpm_audit_logs');
+    await deleteAll('kpm_sub_item_deliveries');
+    await deleteAll('kpm_documents');
+    await deleteAll('proposal_kpm_history');
+    await deleteAll('kpm_records');
+    await deleteAll('proposal_documents');
+    await deleteAll('proposals');
+    await deleteAll('pengelola');
+    await deleteAll('item_sub_items');
+    await deleteAll('item_bantuan');
+    await deleteAll('pekerjaan_master');
   }
 }
 

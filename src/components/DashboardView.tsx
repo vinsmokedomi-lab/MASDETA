@@ -608,36 +608,6 @@ export function DashboardView({
       </header>
 
       <main className="space-y-5 px-4 pt-4">
-        {feedback && (
-          <div
-            role="status"
-            className={`flex items-center justify-between gap-2.5 rounded-2xl border px-3.5 py-2.5 text-xs ${
-              feedback.type === 'success'
-                ? 'border-teal-200 bg-teal-50 text-teal-900'
-                : 'border-rose-200 bg-rose-50 text-rose-900'
-            }`}
-          >
-            <div className="flex min-w-0 items-start gap-2">
-              <CheckCircle2
-                className={`mt-0.5 h-4 w-4 shrink-0 ${
-                  feedback.type === 'success' ? 'text-teal-700' : 'text-rose-600'
-                }`}
-              />
-              <p className="font-medium leading-snug">{feedback.message}</p>
-            </div>
-            {onDismissFeedback && (
-              <button
-                type="button"
-                onClick={onDismissFeedback}
-                aria-label="Tutup notifikasi"
-                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg hover:bg-black/5"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
-        )}
-
         {/* 1. EXECUTIVE COMMAND HERO */}
         <section className="rounded-3xl bg-slate-900 p-5 text-white">
           <div className="flex items-center justify-between gap-3">
@@ -650,7 +620,7 @@ export function DashboardView({
               </p>
             </div>
 
-            <div className="relative inline-flex min-h-[44px] min-w-[104px] shrink-0 items-center rounded-xl border border-slate-700 bg-slate-800/90 transition-colors hover:bg-slate-800">
+            <div className="relative inline-flex min-h-[44px] min-w-[104px] shrink-0 items-center rounded-xl border-2 border-white/90 bg-slate-800/90 transition-colors hover:border-white hover:bg-slate-800">
               <select
                 aria-label="Pilih tahun anggaran"
                 value={selectedYear}
@@ -666,7 +636,7 @@ export function DashboardView({
                   Semua Tahun
                 </option>
               </select>
-              <ChevronDown className="pointer-events-none absolute right-3 h-4 w-4 text-slate-300" />
+              <ChevronDown className="pointer-events-none absolute right-3 h-4 w-4 text-white" />
             </div>
           </div>
 

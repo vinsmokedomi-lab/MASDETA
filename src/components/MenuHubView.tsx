@@ -233,6 +233,7 @@ export function MenuHubView({
 
   // Active sub-tab in Setting
   const [settingPanel, setSettingPanel] = useState<'main' | 'items' | 'wilayah'>('main');
+  const [usersOpenedFromSuperAdmin, setUsersOpenedFromSuperAdmin] = useState(false);
 
   // Wilayah delete confirmation state
   const [pendingDeleteWilayah, setPendingDeleteWilayah] = useState<
@@ -743,13 +744,13 @@ export function MenuHubView({
             </div>
           </section>
 
-          {/* Group 4: Administrasi Sistem & Pengaturan */}
-          <section>
-            <h2 className="mb-2 px-1 text-xs font-bold tracking-wide text-slate-500">
-              Sistem &amp; Pengaturan
-            </h2>
-            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
-              {currentUser.role === 'SuperAdmin' && (
+          {/* Group 4: Administrasi Sistem & Pengaturan (Khusus SuperAdmin) */}
+          {currentUser.role === 'SuperAdmin' && (
+            <section>
+              <h2 className="mb-2 px-1 text-xs font-bold tracking-wide text-slate-500">
+                Sistem &amp; Pengaturan
+              </h2>
+              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
                 <button
                   type="button"
                   onClick={() => onChangeSection('superadmin')}
@@ -761,53 +762,14 @@ export function MenuHubView({
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-semibold text-slate-900">Kontrol Super Admin</p>
                     <p className="mt-0.5 truncate text-xs text-slate-500">
-                      Reset data sistem &amp; kendali penuh admin
+                      Reset data, master data &amp; kendali penuh admin
                     </p>
                   </div>
                   <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
                 </button>
-              )}
-
-              <button
-                type="button"
-                onClick={() => onChangeSection('users')}
-                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-white">
-                  <UserCheck className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">
-                    Manajemen User &amp; Akses
-                  </p>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">
-                    Kontrol Admin, izin ADD/UPDATE/DELETE
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setSettingPanel('main');
-                  onChangeSection('setting');
-                }}
-                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
-                  <Settings className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">Pengaturan Master Data</p>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">
-                    Item, wilayah, pekerjaan, dan proposal
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-              </button>
-            </div>
-          </section>
+              </div>
+            </section>
+          )}
 
           <div className="flex justify-center">
             <PWAInstallButton />
@@ -865,9 +827,9 @@ export function MenuHubView({
       },
       reset_total: {
         title: 'Reset Total',
-        subtitle: 'Hapus semua data, item/sub-item, dan riwayat chat server',
+        subtitle: 'Kosongkan proposal, KPM, item, pengelola, pekerjaan & chat',
         confirmMessage:
-          'TINDAKAN EKSTREM: Seluruh KPM, proposal, pengelola, item & sub-item, log riwayat, serta seluruh pesan chat langsung akan dihapus bersih. Sesi SuperAdmin Anda tetap aktif.',
+          'TINDAKAN EKSTREM: Seluruh data proposal, KPM, item & sub-item, pengelola, daftar pekerjaan, log riwayat, serta seluruh pesan chat langsung akan dihapus bersih. Akun Admin/SuperAdmin tetap aktif.',
         buttonLabel: 'Jalankan Reset Total',
         dangerLevel: 'high',
       },
@@ -984,27 +946,52 @@ export function MenuHubView({
               <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
                 <div className="border-b border-slate-100 px-4 py-3">
                   <h2 className="text-xs font-bold tracking-wide text-slate-900">
-                    Manajemen Admin &amp; Hak Akses
+                    Manajemen Admin &amp; Master Data
                   </h2>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => onChangeSection('users')}
-                  className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-slate-50"
-                >
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-800">
-                    <Users className="h-5 w-5" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-slate-900">
-                      Kelola Akun Admin (Add / Update / Delete / View)
-                    </p>
-                    <p className="mt-0.5 text-xs text-slate-500">
-                      {internalUsers.length} akun terdaftar · {pendingUsersCount} menunggu persetujuan
-                    </p>
-                  </div>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-                </button>
+                <div className="divide-y divide-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUsersOpenedFromSuperAdmin(true);
+                      onChangeSection('users');
+                    }}
+                    className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-800">
+                      <Users className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-slate-900">
+                        Kelola Akun Admin
+                      </p>
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        {internalUsers.length} akun terdaftar · {pendingUsersCount} menunggu persetujuan
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSettingPanel('main');
+                      onChangeSection('setting');
+                    }}
+                    className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+                      <Settings className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-slate-900">Pengaturan Master Data</p>
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        Item, wilayah, pekerjaan, pengelola, dan proposal
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+                </div>
               </section>
 
               {/* Pengendalian & Reset Data */}
@@ -1131,7 +1118,14 @@ export function MenuHubView({
 
     return (
       <div className="min-h-screen pb-24">
-        {renderSubHeader('Manajemen User & Akses', () => onChangeSection('root'))}
+        {renderSubHeader('Manajemen User & Akses', () => {
+          if (usersOpenedFromSuperAdmin) {
+            setUsersOpenedFromSuperAdmin(false);
+            onChangeSection('superadmin');
+          } else {
+            onChangeSection('root');
+          }
+        })}
 
         <div className="space-y-4 px-4 pt-4">
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -2083,7 +2077,7 @@ export function MenuHubView({
 
     return (
       <div className="min-h-screen pb-24">
-        {renderSubHeader('Pengaturan Aplikasi', () => onChangeSection('root'))}
+        {renderSubHeader('Pengaturan Master Data', () => onChangeSection('superadmin'))}
         <div className="px-4 pt-4">
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
             {canAdd && (
@@ -2166,25 +2160,6 @@ export function MenuHubView({
                 <p className="text-sm font-semibold text-slate-900">Kelola Pengelola Lapangan</p>
                 <p className="text-xs text-slate-500">
                   Daftar pengelola lapangan
-                </p>
-              </div>
-              <ChevronRight className="h-4 w-4 text-slate-400" />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => onChangeSection('users')}
-              className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50"
-            >
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-700 text-white">
-                <UserCheck className="h-5 w-5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-slate-900">
-                  Manajemen User Internal
-                </p>
-                <p className="text-xs text-slate-500">
-                  Kelola izin akses petugas internal
                 </p>
               </div>
               <ChevronRight className="h-4 w-4 text-slate-400" />
