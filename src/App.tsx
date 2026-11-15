@@ -102,9 +102,12 @@ import { AdminDataActionType, MenuHubView, MenuSection } from './components/Menu
 import { HistoryDetailView } from './components/HistoryDetailView';
 import { ScrollToTopButton } from './components/ScrollToTopButton';
 import { AuthView } from './components/AuthView';
+import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
+import { App as CapacitorApp } from '@capacitor/app';
 import { ChatView } from './components/ChatView';
 import { UserProfileView } from './components/UserProfileView';
 import { AppUpdateModal } from './components/AppUpdateModal';
+import { PullToRefresh } from './components/PullToRefresh';
 import { AppUpdateInfo, checkForAppUpdate } from './services/appUpdater';
 import { APP_VERSION } from './config/appVersion';
 
@@ -242,6 +245,7 @@ export default function App() {
   const [kpmDetailReturnToChatPeerId, setKpmDetailReturnToChatPeerId] = useState<string | null>(null);
   const [addProposalFromKpmForm, setAddProposalFromKpmForm] = useState(false);
   const [menuSection, setMenuSection] = useState<MenuSection>('root');
+  const [usersOpenedFromSuperAdmin, setUsersOpenedFromSuperAdmin] = useState(false);
   const [selectedPengelolaDrill, setSelectedPengelolaDrill] = useState<string | null>(null);
   const [selectedPekerjaanDrill, setSelectedPekerjaanDrill] = useState<string | null>(null);
   const [menuOpenedFromDashboard, setMenuOpenedFromDashboard] = useState(false);
@@ -347,6 +351,7 @@ export default function App() {
   const currentUserIdRef = useRef<string | null>(sessionUserId);
   const supabaseReadyRef = useRef<boolean>(supabaseReady);
   const lastLocalSyncAtRef = useRef<number>(0);
+  const isManualRefreshingRef = useRef<boolean>(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -936,6 +941,95 @@ export default function App() {
     [currentUser, directMessages, authFetch]
   );
 
+  const handleManualRefresh = useCallback(async () => {
+    if (isManualRefreshingRef.current) return;
+    isManualRefreshingRef.current = true;
+    try {
+      const uid = currentUserIdRef.current;
+      if (supabaseReadyRef.current) {
+        const [snapshot, users, msgs] = await Promise.all([
+          fetchOperationalDataFromSupabase(),
+          supabaseFetchInternalUsers(),
+          supabaseFetchDirectMessages(),
+        ]);
+
+        applyRemoteOperationalState({
+          records: snapshot.records,
+          proposals: snapshot.proposals,
+          items: snapshot.items,
+          pekerjaanList: snapshot.pekerjaanList,
+          wilayahList:
+            snapshot.wilayahList.length > 0
+              ? snapshot.wilayahList
+              : latestDataRef.current.wilayahList,
+          pengelolaList: snapshot.pengelolaList,
+          proposalHistory: snapshot.proposalHistory,
+          kpmAuditLogs: snapshot.kpmAuditLogs,
+        });
+
+        if (users.length > 0) {
+          setInternalUsers(users);
+          if (uid) {
+            const refreshedUser = users.find((u) => u.id === uid);
+            if (!refreshedUser || refreshedUser.status !== 'active') {
+              clearSessionState();
+              return;
+            }
+          }
+        }
+
+        if (uid) {
+          const userMsgs = msgs.filter((m) => m.senderId === uid || m.recipientId === uid);
+          prevMessageIdsRef.current = new Set(userMsgs.map((m) => m.id));
+          setDirectMessages(userMsgs);
+        }
+
+        setFeedback({
+          type: 'success',
+          message: 'Data terbaru berhasil dimuat ulang.',
+        });
+        return;
+      }
+
+      if (sessionTokenRef.current) {
+        const [stateRes, collabRes] = await Promise.all([
+          authFetch('/api/data/state'),
+          authFetch('/api/collab/state'),
+        ]);
+        if (stateRes.ok) {
+          const remote = (await stateRes.json()) as OperationalDataPayload;
+          if (remote.initialized) {
+            applyRemoteOperationalState(remote);
+          }
+        }
+        if (collabRes.ok) {
+          const collab = (await collabRes.json()) as {
+            user?: InternalUser | null;
+            users?: InternalUser[];
+            messages?: DirectChatMessage[];
+          };
+          if (Array.isArray(collab.users) && collab.users.length > 0) {
+            setInternalUsers(collab.users);
+          }
+          if (Array.isArray(collab.messages)) {
+            setDirectMessages(collab.messages);
+          }
+        }
+        setFeedback({
+          type: 'success',
+          message: 'Data berhasil disegarkan.',
+        });
+      }
+    } catch {
+      setFeedback({
+        type: 'error',
+        message: 'Gagal memuat ulang data. Periksa koneksi internet Anda.',
+      });
+    } finally {
+      isManualRefreshingRef.current = false;
+    }
+  }, [applyRemoteOperationalState, authFetch, clearSessionState]);
+
   // Supabase Realtime Multi-Admin Sync (saat supabaseReady = true)
   useEffect(() => {
     const uid = currentUser?.id;
@@ -1260,7 +1354,161 @@ export default function App() {
     };
   }, [currentUser?.id, currentUser?.presenceManual]);
 
-  // Matikan tombol back bawaan Android / browser agar semua navigasi berasal dari UI dalam aplikasi
+  // Tombol Back Android: TERKUNCI saat BottomNav (botnavig) tampil di layar,
+  // dan HANYA berfungsi melakukan navigasi kembali jika tidak ada BottomNav di layar.
+  const handleAndroidBackRef = useRef<() => void>(() => {});
+  handleAndroidBackRef.current = () => {
+    const bottomNavVisible =
+      subView === 'none' && !(activeTab === 'menu' && menuSection !== 'root');
+
+    // JIKA ADA BOTNAVIG DI LAYAR (atau belum login), tombol back Android dikunci total
+    if (!currentUser || bottomNavVisible) {
+      return;
+    }
+
+    if (lightboxDoc) {
+      setLightboxDoc(null);
+      return;
+    }
+
+    if (isUpdateModalOpen) {
+      setIsUpdateModalOpen(false);
+      return;
+    }
+
+    if (subView === 'kpm-history') {
+      setSubView('kpm-detail');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    if (subView === 'proposal-history') {
+      setSubView('proposal-detail');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    if (subView === 'edit-proposal') {
+      setFeedback(null);
+      setSubView('proposal-detail');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    if (subView === 'add-proposal') {
+      setFeedback(null);
+      if (addProposalFromKpmForm) {
+        setAddProposalFromKpmForm(false);
+        setSubView('kpm-form');
+      } else {
+        setSubView('none');
+        setActiveTab(returnToTab);
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    if (subView === 'kpm-form') {
+      setFeedback(null);
+      setEditingKpmRecord(null);
+      setLockedKpmProposalScope(null);
+      if (kpmFormReturnToDetail && activeKpmId) {
+        setKpmFormReturnToDetail(false);
+        setSubView('kpm-detail');
+      } else if (kpmFormReturnToProposalDetail && activeProposal) {
+        setKpmFormReturnToProposalDetail(false);
+        setSubView('proposal-detail');
+      } else {
+        setSubView('none');
+        setActiveTab(returnToTab);
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    if (subView === 'kpm-detail') {
+      setFeedback(null);
+      setActiveKpmId(null);
+      if (kpmDetailReturnToChatPeerId) {
+        const peer =
+          kpmDetailReturnToChatPeerId === '__list__' ? null : kpmDetailReturnToChatPeerId;
+        setKpmDetailReturnToChatPeerId(null);
+        setActiveChatPeerId(peer);
+        setSubView('chat');
+        if (peer) void handleMarkChatRead(peer);
+      } else if (kpmDetailReturnToProposalDetail && activeProposal) {
+        setKpmDetailReturnToProposalDetail(false);
+        setSubView('proposal-detail');
+      } else if (kpmDetailReturnToRecap) {
+        setKpmDetailReturnToRecap(false);
+        setSubView('subitem-recap');
+      } else {
+        setSubView('none');
+        setActiveTab(returnToTab);
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    if (subView === 'proposal-detail' || subView === 'subitem-recap') {
+      setFeedback(null);
+      setSubView('none');
+      setActiveTab(returnToTab);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    if (subView === 'chat') {
+      if (activeChatPeerId) {
+        setActiveChatPeerId(null);
+      } else {
+        setActiveChatPeerId(null);
+        setSubView('none');
+        setActiveTab(returnToTab);
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    if (subView === 'profile') {
+      setSubView('none');
+      setActiveTab(returnToTab);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    if (subView === 'none' && activeTab === 'menu' && menuSection !== 'root') {
+      if (menuSection === 'pengelola' && selectedPengelolaDrill) {
+        setSelectedPengelolaDrill(null);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      }
+      if (menuSection === 'pekerjaan' && selectedPekerjaanDrill) {
+        setSelectedPekerjaanDrill(null);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      }
+      if (menuSection === 'users' && usersOpenedFromSuperAdmin) {
+        setUsersOpenedFromSuperAdmin(false);
+        setMenuSection('superadmin');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      }
+      if (menuOpenedFromDashboard) {
+        setMenuOpenedFromDashboard(false);
+        setMenuSection('root');
+        setActiveTab('dashboard');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      }
+      setSelectedPengelolaDrill(null);
+      setSelectedPekerjaanDrill(null);
+      setUsersOpenedFromSuperAdmin(false);
+      setMenuSection('root');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
   useEffect(() => {
     try {
       window.history.pushState({ masdetaLocked: true }, '', window.location.href);
@@ -1274,11 +1522,13 @@ export default function App() {
       } catch {
         // Abaikan
       }
+      handleAndroidBackRef.current();
     };
 
     const handleCordovaBack = (ev: Event) => {
       ev.preventDefault();
       ev.stopPropagation();
+      handleAndroidBackRef.current();
     };
 
     const handleIonBack = (ev: Event) => {
@@ -1286,9 +1536,12 @@ export default function App() {
         register?: (priority: number, handler: () => void) => void;
       }>;
       if (customEv.detail?.register) {
-        customEv.detail.register(999, () => {});
+        customEv.detail.register(999, () => {
+          handleAndroidBackRef.current();
+        });
       } else {
         ev.preventDefault();
+        handleAndroidBackRef.current();
       }
     };
 
@@ -1296,43 +1549,33 @@ export default function App() {
     document.addEventListener('backbutton', handleCordovaBack, false);
     document.addEventListener('ionBackButton', handleIonBack);
 
-    let capListenerHandle: { remove?: () => void } | undefined;
-    const capApp = (
-      window as unknown as {
-        Capacitor?: {
-          Plugins?: {
-            App?: {
-              addListener?: (
-                eventName: string,
-                cb: () => void
-              ) => Promise<{ remove: () => void }> | { remove: () => void };
-            };
-          };
-        };
-      }
-    ).Capacitor?.Plugins?.App;
+    let disposed = false;
+    let capListenerHandle: PluginListenerHandle | undefined;
 
-    if (capApp?.addListener) {
-      const maybePromise = capApp.addListener('backButton', () => {
-        // Sengaja dikosongkan agar tombol back Android tidak keluar/kembali
-      });
-      if (
-        maybePromise &&
-        typeof (maybePromise as Promise<{ remove: () => void }>).then === 'function'
-      ) {
-        (maybePromise as Promise<{ remove: () => void }>).then((handle) => {
-          capListenerHandle = handle;
+    if (Capacitor.isNativePlatform()) {
+      CapacitorApp.addListener('backButton', () => {
+        handleAndroidBackRef.current();
+      })
+        .then((handle) => {
+          if (disposed) {
+            void handle.remove();
+          } else {
+            capListenerHandle = handle;
+          }
+        })
+        .catch(() => {
+          // Abaikan jika plugin native tidak tersedia
         });
-      } else {
-        capListenerHandle = maybePromise as { remove?: () => void };
-      }
     }
 
     return () => {
+      disposed = true;
       window.removeEventListener('popstate', handlePopState);
       document.removeEventListener('backbutton', handleCordovaBack, false);
       document.removeEventListener('ionBackButton', handleIonBack);
-      capListenerHandle?.remove?.();
+      if (capListenerHandle) {
+        void capListenerHandle.remove();
+      }
     };
   }, []);
 
@@ -3374,8 +3617,20 @@ export default function App() {
         </div>
       )}
 
-      {/* Dedicated Mobile Viewport Shell */}
-      <div className="mx-auto min-h-screen w-full max-w-md overflow-x-hidden bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm">
+      {/* Dedicated Mobile Viewport Shell with Pull-to-Refresh */}
+      <PullToRefresh
+        onRefresh={handleManualRefresh}
+        disabled={
+          subView === 'kpm-form' ||
+          subView === 'add-proposal' ||
+          subView === 'edit-proposal' ||
+          subView === 'chat' ||
+          Boolean(lightboxDoc) ||
+          isQuickAddOpen ||
+          isUpdateModalOpen
+        }
+      >
+        <div className="mx-auto min-h-screen w-full max-w-md overflow-x-hidden bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm">
         {/* Sub-Views */}
         {subView === 'chat' && (
           <ChatView
@@ -3775,6 +4030,9 @@ export default function App() {
             onChangeSection={(section) => {
               setSelectedPengelolaDrill(null);
               setSelectedPekerjaanDrill(null);
+              if (section !== 'users' && section !== 'superadmin') {
+                setUsersOpenedFromSuperAdmin(false);
+              }
               if (section === 'root' && menuOpenedFromDashboard) {
                 setMenuOpenedFromDashboard(false);
                 setMenuSection('root');
@@ -3788,6 +4046,8 @@ export default function App() {
             onSelectPengelolaDrill={setSelectedPengelolaDrill}
             selectedPekerjaanDrill={selectedPekerjaanDrill}
             onSelectPekerjaanDrill={setSelectedPekerjaanDrill}
+            usersOpenedFromSuperAdmin={usersOpenedFromSuperAdmin}
+            onChangeUsersOpenedFromSuperAdmin={setUsersOpenedFromSuperAdmin}
             currentUser={currentUser}
             unreadChatCount={unreadChatCount}
             records={records}
@@ -3817,7 +4077,6 @@ export default function App() {
               setWilayahList(nextList);
               void syncOperationalData({ wilayahList: nextList }, 'update');
             }}
-            onOpenAddProposal={() => openAddProposalForm('menu')}
             onOpenSubItemRecap={() => openSubItemRecap('menu')}
             onAddPengelola={handleCreatePengelola}
             onAdminControlUser={handleAdminControlUser}
@@ -3832,7 +4091,8 @@ export default function App() {
             onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
           />
         )}
-      </div>
+        </div>
+      </PullToRefresh>
 
       {/* Floating Scroll-To-Top Hover Button */}
       <ScrollToTopButton
@@ -3851,6 +4111,7 @@ export default function App() {
             setMenuOpenedFromDashboard(false);
             if (tab === 'menu') {
               setMenuSection('root');
+              setUsersOpenedFromSuperAdmin(false);
               setSelectedPengelolaDrill(null);
               setSelectedPekerjaanDrill(null);
             }

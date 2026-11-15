@@ -15,7 +15,6 @@ import {
   Eye,
   EyeOff,
   FileSpreadsheet,
-  FolderPlus,
   Layers,
   Lock,
   MapPin,
@@ -27,7 +26,6 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
-  Settings,
   ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
@@ -74,7 +72,8 @@ import {
 export type MenuSection =
   | 'root'
   | 'superadmin'
-  | 'setting'
+  | 'items'
+  | 'wilayah'
   | 'users'
   | 'duplikasi'
   | 'arsip'
@@ -98,6 +97,8 @@ interface MenuHubViewProps {
   onSelectPengelolaDrill?: (name: string | null) => void;
   selectedPekerjaanDrill?: string | null;
   onSelectPekerjaanDrill?: (name: string | null) => void;
+  usersOpenedFromSuperAdmin?: boolean;
+  onChangeUsersOpenedFromSuperAdmin?: (value: boolean) => void;
   currentUser: InternalUser;
   unreadChatCount: number;
   records: KpmRecord[];
@@ -118,7 +119,6 @@ interface MenuHubViewProps {
   onCopyItemsFromYear: (fromYear: string, toYear: string) => void;
   onAddPekerjaan: (name: string) => void;
   onUpdateWilayahList: (nextList: WilayahKabKota[]) => void;
-  onOpenAddProposal: () => void;
   onOpenSubItemRecap: () => void;
   onAddPengelola: (profile: PengelolaProfile) => void;
   onAdminControlUser: (
@@ -167,6 +167,8 @@ export function MenuHubView({
   onSelectPengelolaDrill,
   selectedPekerjaanDrill,
   onSelectPekerjaanDrill,
+  usersOpenedFromSuperAdmin: controlledUsersFromSuperAdmin,
+  onChangeUsersOpenedFromSuperAdmin,
   currentUser,
   unreadChatCount,
   records,
@@ -187,7 +189,6 @@ export function MenuHubView({
   onCopyItemsFromYear,
   onAddPekerjaan,
   onUpdateWilayahList,
-  onOpenAddProposal,
   onOpenSubItemRecap,
   onAddPengelola,
   onAdminControlUser,
@@ -267,9 +268,19 @@ export function MenuHubView({
   const [regError, setRegError] = useState<string | null>(null);
   const [regSubmitting, setRegSubmitting] = useState(false);
 
-  // Active sub-tab in Setting
-  const [settingPanel, setSettingPanel] = useState<'main' | 'items' | 'wilayah'>('main');
-  const [usersOpenedFromSuperAdmin, setUsersOpenedFromSuperAdmin] = useState(false);
+  // SuperAdmin drill flag (lifted when provided)
+  const [localUsersOpenedFromSuperAdmin, setLocalUsersOpenedFromSuperAdmin] = useState(false);
+  const usersOpenedFromSuperAdmin =
+    controlledUsersFromSuperAdmin !== undefined
+      ? controlledUsersFromSuperAdmin
+      : localUsersOpenedFromSuperAdmin;
+  const setUsersOpenedFromSuperAdmin = (value: boolean) => {
+    if (onChangeUsersOpenedFromSuperAdmin) {
+      onChangeUsersOpenedFromSuperAdmin(value);
+    } else {
+      setLocalUsersOpenedFromSuperAdmin(value);
+    }
+  };
 
   // Wilayah delete confirmation state
   const [pendingDeleteWilayah, setPendingDeleteWilayah] = useState<
@@ -314,6 +325,23 @@ export function MenuHubView({
   const [arsipProposalFilter, setArsipProposalFilter] = useState<string>('all');
   const [arsipReturnFilter, setArsipReturnFilter] = useState<'all' | 'pending_return' | 'returned'>('all');
   const [showArsipExtraFilters, setShowArsipExtraFilters] = useState(false);
+
+  // Pengelola Lapangan search, filter & sorting
+  const [pengelolaQuery, setPengelolaQuery] = useState('');
+  const [pengelolaWilayahFilter, setPengelolaWilayahFilter] = useState<string>('all');
+  const [pengelolaKpmFilter, setPengelolaKpmFilter] = useState<'all' | 'with_kpm' | 'empty'>('all');
+  const [pengelolaSortBy, setPengelolaSortBy] = useState<
+    'name_asc' | 'name_desc' | 'count_desc' | 'count_asc' | 'wilayah_asc'
+  >('name_asc');
+  const [showPengelolaFilters, setShowPengelolaFilters] = useState(false);
+
+  // Profesi & Pekerjaan search, filter & sorting
+  const [pekerjaanQuery, setPekerjaanQuery] = useState('');
+  const [pekerjaanKpmFilter, setPekerjaanKpmFilter] = useState<'all' | 'with_kpm' | 'empty'>('all');
+  const [pekerjaanSortBy, setPekerjaanSortBy] = useState<
+    'name_asc' | 'name_desc' | 'count_desc' | 'count_asc'
+  >('name_asc');
+  const [showPekerjaanFilters, setShowPekerjaanFilters] = useState(false);
 
   const archivedRecords = useMemo(
     () => records.filter((r) => isArchivedKpm(r)),
@@ -777,6 +805,40 @@ export function MenuHubView({
                 </div>
                 <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
               </button>
+
+              <button
+                type="button"
+                onClick={() => onChangeSection('wilayah')}
+                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+              >
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                  <MapPin className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-slate-900">Wilayah</p>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    Kabupaten / Kota, Kecamatan, dan Desa / Kelurahan
+                  </p>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onChangeSection('items')}
+                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+              >
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+                  <PackagePlus className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-slate-900">Kelola Item &amp; Sub-Item</p>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    Katalog paket dan sub-item per tahun
+                  </p>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+              </button>
             </div>
           </section>
 
@@ -798,7 +860,7 @@ export function MenuHubView({
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-semibold text-slate-900">Kontrol Super Admin</p>
                     <p className="mt-0.5 truncate text-xs text-slate-500">
-                      Reset data, master data &amp; kendali penuh admin
+                      Reset data &amp; kendali penuh admin
                     </p>
                   </div>
                   <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -1002,7 +1064,7 @@ export function MenuHubView({
               <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
                 <div className="border-b border-slate-100 px-4 py-3">
                   <h2 className="text-xs font-bold tracking-wide text-slate-900">
-                    Manajemen Admin &amp; Master Data
+                    Manajemen Admin
                   </h2>
                 </div>
                 <div className="divide-y divide-slate-100">
@@ -1023,26 +1085,6 @@ export function MenuHubView({
                       </p>
                       <p className="mt-0.5 text-xs text-slate-500">
                         {internalUsers.length} akun terdaftar · {pendingUsersCount} menunggu persetujuan
-                      </p>
-                    </div>
-                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSettingPanel('main');
-                      onChangeSection('setting');
-                    }}
-                    className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-slate-50"
-                  >
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
-                      <Settings className="h-5 w-5" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-slate-900">Pengaturan Master Data</p>
-                      <p className="mt-0.5 text-xs text-slate-500">
-                        Item, wilayah, pekerjaan, pengelola, dan proposal
                       </p>
                     </div>
                     <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -1800,30 +1842,30 @@ export function MenuHubView({
     );
   }
 
-  // 3. MENU SETTING (Master Data: Proposal, Item, Pekerjaan, Manajemen User)
-  if (activeSection === 'setting') {
-    if (settingPanel === 'items') {
-      return (
-        <ItemManagerView
-          items={items}
-          records={records}
-          canAdd={canAdd}
-          canUpdate={canUpdate}
-          canDelete={canDelete}
-          onBack={() => setSettingPanel('main')}
-          onSaveItem={onSaveItem}
-          onDeleteItem={onDeleteItem}
-          onMoveItemOrder={onMoveItemOrder}
-          onUpdateItemSubItems={onUpdateItemSubItems}
-          onCopyItemsFromYear={onCopyItemsFromYear}
-        />
-      );
-    }
+  // 3A. KELOLA ITEM & SUB-ITEM
+  if (activeSection === 'items') {
+    return (
+      <ItemManagerView
+        items={items}
+        records={records}
+        canAdd={canAdd}
+        canUpdate={canUpdate}
+        canDelete={canDelete}
+        onBack={() => onChangeSection('root')}
+        onSaveItem={onSaveItem}
+        onDeleteItem={onDeleteItem}
+        onMoveItemOrder={onMoveItemOrder}
+        onUpdateItemSubItems={onUpdateItemSubItems}
+        onCopyItemsFromYear={onCopyItemsFromYear}
+      />
+    );
+  }
 
-    if (settingPanel === 'wilayah') {
-      return (
-        <div className="min-h-screen pb-24">
-          {renderSubHeader('Wilayah', () => setSettingPanel('main'))}
+  // 3B. WILAYAH
+  if (activeSection === 'wilayah') {
+    return (
+      <div className="min-h-screen pb-24">
+        {renderSubHeader('Wilayah', () => onChangeSection('root'))}
           <div className="space-y-4 px-4 pt-4">
             {canAdd && (
               <form
@@ -2128,101 +2170,6 @@ export function MenuHubView({
             </div>
           )}
         </div>
-      );
-    }
-
-    return (
-      <div className="min-h-screen pb-24">
-        {renderSubHeader('Pengaturan Master Data', () => onChangeSection('superadmin'))}
-        <div className="px-4 pt-4">
-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
-            {canAdd && (
-              <button
-                type="button"
-                onClick={onOpenAddProposal}
-                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
-                  <FolderPlus className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">Tambah Proposal Baru</p>
-                  <p className="text-xs text-slate-500">Buat master proposal wilayah baru</p>
-                </div>
-                <ChevronRight className="h-4 w-4 text-slate-400" />
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setSettingPanel('wilayah')}
-              className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50"
-            >
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
-                <MapPin className="h-5 w-5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-slate-900">Wilayah</p>
-                <p className="text-xs text-slate-500">
-                  Kabupaten / Kota, Kecamatan, dan Desa / Kelurahan
-                </p>
-              </div>
-              <ChevronRight className="h-4 w-4 text-slate-400" />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSettingPanel('items')}
-              className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50"
-            >
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
-                <PackagePlus className="h-5 w-5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-slate-900">Kelola Item & Sub-Item</p>
-                <p className="text-xs text-slate-500">
-                  Katalog paket dan sub-item per tahun
-                </p>
-              </div>
-              <ChevronRight className="h-4 w-4 text-slate-400" />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => onChangeSection('pekerjaan')}
-              className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50"
-            >
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
-                <Briefcase className="h-5 w-5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-slate-900">Kelola Daftar Pekerjaan</p>
-                <p className="text-xs text-slate-500">
-                  Pilihan pekerjaan pada form calon KPM
-                </p>
-              </div>
-              <ChevronRight className="h-4 w-4 text-slate-400" />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => onChangeSection('pengelola')}
-              className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50"
-            >
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
-                <Users className="h-5 w-5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-slate-900">Kelola Pengelola Lapangan</p>
-                <p className="text-xs text-slate-500">
-                  Daftar pengelola lapangan
-                </p>
-              </div>
-              <ChevronRight className="h-4 w-4 text-slate-400" />
-            </button>
-          </div>
-        </div>
-      </div>
     );
   }
 
@@ -2713,10 +2660,86 @@ export function MenuHubView({
       );
     }
 
+    const pengelolaKpmCounts = new Map<string, number>();
+    for (const r of records) {
+      const key = (r.pengelola || '').trim().toLowerCase();
+      if (key) {
+        pengelolaKpmCounts.set(key, (pengelolaKpmCounts.get(key) ?? 0) + 1);
+      }
+    }
+
+    const getPengelolaWilayahLabel = (p: PengelolaProfile) =>
+      [
+        p.kelurahan ? p.kelurahan.replace(/^kel\.?\s+/i, 'Kelurahan ') : '',
+        p.kecamatan
+          ? p.kecamatan.toLowerCase().startsWith('kecamatan ')
+            ? p.kecamatan
+            : `Kecamatan ${p.kecamatan.replace(/^kec\.?\s+/i, '')}`
+          : '',
+        p.kabKota || '',
+      ]
+        .filter(Boolean)
+        .join(' · ');
+
+    const pengelolaWilayahOptions = Array.from(
+      new Set(
+        pengelolaList
+          .map((p) => (p.kecamatan || p.kabKota || '').trim())
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b, 'id'));
+
+    const activePengelolaFilterCount =
+      (pengelolaWilayahFilter !== 'all' ? 1 : 0) +
+      (pengelolaKpmFilter !== 'all' ? 1 : 0) +
+      (pengelolaSortBy !== 'name_asc' ? 1 : 0);
+
+    const qPengelola = pengelolaQuery.trim().toLowerCase();
+    const filteredPengelolaList = pengelolaList
+      .filter((p) => {
+        const count = pengelolaKpmCounts.get(p.displayName.trim().toLowerCase()) ?? 0;
+        const wilayahKey = (p.kecamatan || p.kabKota || '').trim();
+        if (pengelolaWilayahFilter !== 'all' && wilayahKey !== pengelolaWilayahFilter) {
+          return false;
+        }
+        if (pengelolaKpmFilter === 'with_kpm' && count === 0) return false;
+        if (pengelolaKpmFilter === 'empty' && count > 0) return false;
+        if (!qPengelola) return true;
+        return (
+          p.displayName.toLowerCase().includes(qPengelola) ||
+          p.nama.toLowerCase().includes(qPengelola) ||
+          (p.kabKota || '').toLowerCase().includes(qPengelola) ||
+          (p.kecamatan || '').toLowerCase().includes(qPengelola) ||
+          (p.kelurahan || '').toLowerCase().includes(qPengelola) ||
+          (p.alamat || '').toLowerCase().includes(qPengelola) ||
+          (p.kontak || '').toLowerCase().includes(qPengelola)
+        );
+      })
+      .sort((a, b) => {
+        const countA = pengelolaKpmCounts.get(a.displayName.trim().toLowerCase()) ?? 0;
+        const countB = pengelolaKpmCounts.get(b.displayName.trim().toLowerCase()) ?? 0;
+        switch (pengelolaSortBy) {
+          case 'name_desc':
+            return b.displayName.localeCompare(a.displayName, 'id');
+          case 'count_desc':
+            return countB - countA || a.displayName.localeCompare(b.displayName, 'id');
+          case 'count_asc':
+            return countA - countB || a.displayName.localeCompare(b.displayName, 'id');
+          case 'wilayah_asc':
+            return (
+              getPengelolaWilayahLabel(a).localeCompare(getPengelolaWilayahLabel(b), 'id') ||
+              a.displayName.localeCompare(b.displayName, 'id')
+            );
+          case 'name_asc':
+          default:
+            return a.displayName.localeCompare(b.displayName, 'id');
+        }
+      });
+
     return (
       <div className="min-h-screen pb-24">
         {renderSubHeader('Pengelola Lapangan', () => onChangeSection('root'))}
-        <div className="space-y-4 px-4 pt-4">
+        <div className="space-y-3 px-4 pt-4">
           {canAdd && (
             <button
               type="button"
@@ -2728,6 +2751,108 @@ export function MenuHubView({
             </button>
           )}
 
+          {pengelolaList.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <div className="relative min-w-0 flex-1">
+                  <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="search"
+                    value={pengelolaQuery}
+                    onChange={(e) => setPengelolaQuery(e.target.value)}
+                    placeholder="Cari nama pengelola, wilayah, kontak..."
+                    className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pr-3 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowPengelolaFilters((prev) => !prev)}
+                  aria-label="Filter dan urutkan pengelola"
+                  aria-expanded={showPengelolaFilters}
+                  className={`relative inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl border transition-colors ${
+                    showPengelolaFilters || activePengelolaFilterCount > 0
+                      ? 'border-teal-700 bg-teal-50 text-teal-800'
+                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <SlidersHorizontal className="h-4 w-4" />
+                  {activePengelolaFilterCount > 0 && (
+                    <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-teal-700 px-1 text-[10px] font-bold text-white tabular-nums">
+                      {activePengelolaFilterCount}
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              {showPengelolaFilters && (
+                <div className="rounded-2xl border border-slate-200 bg-white p-3 space-y-2.5">
+                  <div className="grid grid-cols-2 gap-2">
+                    <FilterSelect
+                      ariaLabel="Filter jumlah KPM pengelola"
+                      value={pengelolaKpmFilter}
+                      onChange={(v) => setPengelolaKpmFilter(v as 'all' | 'with_kpm' | 'empty')}
+                    >
+                      <option value="all">Semua Pengelola</option>
+                      <option value="with_kpm">Memiliki KPM (&gt;0)</option>
+                      <option value="empty">Belum Ada KPM (0)</option>
+                    </FilterSelect>
+
+                    <FilterSelect
+                      ariaLabel="Urutkan pengelola lapangan"
+                      value={pengelolaSortBy}
+                      onChange={(v) =>
+                        setPengelolaSortBy(
+                          v as 'name_asc' | 'name_desc' | 'count_desc' | 'count_asc' | 'wilayah_asc'
+                        )
+                      }
+                    >
+                      <option value="name_asc">Urut: Nama (A–Z)</option>
+                      <option value="name_desc">Urut: Nama (Z–A)</option>
+                      <option value="count_desc">Urut: KPM Terbanyak</option>
+                      <option value="count_asc">Urut: KPM Tersedikit</option>
+                      <option value="wilayah_asc">Urut: Wilayah (A–Z)</option>
+                    </FilterSelect>
+                  </div>
+
+                  {pengelolaWilayahOptions.length > 0 && (
+                    <div className="border-t border-slate-100 pt-2.5">
+                      <FilterSelect
+                        ariaLabel="Filter wilayah pengelola"
+                        value={pengelolaWilayahFilter}
+                        onChange={setPengelolaWilayahFilter}
+                      >
+                        <option value="all">Semua Wilayah</option>
+                        {pengelolaWilayahOptions.map((wil) => (
+                          <option key={wil} value={wil}>
+                            {wil}
+                          </option>
+                        ))}
+                      </FilterSelect>
+                    </div>
+                  )}
+
+                  {activePengelolaFilterCount > 0 && (
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPengelolaWilayahFilter('all');
+                          setPengelolaKpmFilter('all');
+                          setPengelolaSortBy('name_asc');
+                        }}
+                        className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-800"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                        <span>Reset Filter</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {pengelolaList.length === 0 ? (
             <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
               <p className="text-sm font-semibold text-slate-900">
@@ -2737,14 +2862,31 @@ export function MenuHubView({
                 Ketuk tombol di atas untuk mendaftarkan pengelola lapangan baru.
               </p>
             </div>
+          ) : filteredPengelolaList.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center space-y-2.5">
+              <p className="text-sm font-semibold text-slate-900">
+                Tidak ada pengelola yang cocok
+              </p>
+              <p className="text-xs text-slate-500">
+                Ubah kata kunci pencarian atau reset filter untuk melihat semua pengelola.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setPengelolaQuery('');
+                  setPengelolaWilayahFilter('all');
+                  setPengelolaKpmFilter('all');
+                  setPengelolaSortBy('name_asc');
+                }}
+                className="inline-flex min-h-[36px] items-center justify-center rounded-xl border border-slate-200 px-3.5 text-xs font-semibold text-teal-700 hover:bg-slate-50"
+              >
+                Reset Pencarian &amp; Filter
+              </button>
+            </div>
           ) : (
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
-              {pengelolaList.map((p) => {
-                const count = records.filter(
-                  (r) =>
-                    (r.pengelola || '').trim().toLowerCase() ===
-                    p.displayName.trim().toLowerCase()
-                ).length;
+              {filteredPengelolaList.map((p) => {
+                const count = pengelolaKpmCounts.get(p.displayName.trim().toLowerCase()) ?? 0;
 
                 return (
                   <div
@@ -2788,17 +2930,7 @@ export function MenuHubView({
                         </p>
                         {(p.kelurahan || p.kecamatan || p.kabKota) && (
                           <p className="truncate text-xs text-slate-500">
-                            {[
-                              p.kelurahan ? p.kelurahan.replace(/^kel\.?\s+/i, 'Kelurahan ') : '',
-                              p.kecamatan
-                                ? p.kecamatan.toLowerCase().startsWith('kecamatan ')
-                                  ? p.kecamatan
-                                  : `Kecamatan ${p.kecamatan.replace(/^kec\.?\s+/i, '')}`
-                                : '',
-                              p.kabKota || '',
-                            ]
-                              .filter(Boolean)
-                              .join(' · ')}
+                            {getPengelolaWilayahLabel(p)}
                           </p>
                         )}
                         {(() => {
@@ -2896,10 +3028,38 @@ export function MenuHubView({
       }
     }
 
+    const activePekerjaanFilterCount =
+      (pekerjaanKpmFilter !== 'all' ? 1 : 0) + (pekerjaanSortBy !== 'name_asc' ? 1 : 0);
+
+    const qPekerjaan = pekerjaanQuery.trim().toLowerCase();
+    const filteredPekerjaanList = pekerjaanList
+      .filter((job) => {
+        const count = jobCounts.get(job.trim().toLowerCase()) ?? 0;
+        if (pekerjaanKpmFilter === 'with_kpm' && count === 0) return false;
+        if (pekerjaanKpmFilter === 'empty' && count > 0) return false;
+        if (!qPekerjaan) return true;
+        return job.toLowerCase().includes(qPekerjaan);
+      })
+      .sort((a, b) => {
+        const countA = jobCounts.get(a.trim().toLowerCase()) ?? 0;
+        const countB = jobCounts.get(b.trim().toLowerCase()) ?? 0;
+        switch (pekerjaanSortBy) {
+          case 'name_desc':
+            return b.localeCompare(a, 'id');
+          case 'count_desc':
+            return countB - countA || a.localeCompare(b, 'id');
+          case 'count_asc':
+            return countA - countB || a.localeCompare(b, 'id');
+          case 'name_asc':
+          default:
+            return a.localeCompare(b, 'id');
+        }
+      });
+
     return (
       <div className="min-h-screen pb-24">
         {renderSubHeader('Profesi & Pekerjaan', () => onChangeSection('root'))}
-        <div className="space-y-4 px-4 pt-4">
+        <div className="space-y-3 px-4 pt-4">
           {canAdd && (
             <button
               type="button"
@@ -2915,6 +3075,89 @@ export function MenuHubView({
             </button>
           )}
 
+          {pekerjaanList.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <div className="relative min-w-0 flex-1">
+                  <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="search"
+                    value={pekerjaanQuery}
+                    onChange={(e) => setPekerjaanQuery(e.target.value)}
+                    placeholder="Cari profesi atau pekerjaan..."
+                    className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pr-3 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowPekerjaanFilters((prev) => !prev)}
+                  aria-label="Filter dan urutkan pekerjaan"
+                  aria-expanded={showPekerjaanFilters}
+                  className={`relative inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl border transition-colors ${
+                    showPekerjaanFilters || activePekerjaanFilterCount > 0
+                      ? 'border-teal-700 bg-teal-50 text-teal-800'
+                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <SlidersHorizontal className="h-4 w-4" />
+                  {activePekerjaanFilterCount > 0 && (
+                    <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-teal-700 px-1 text-[10px] font-bold text-white tabular-nums">
+                      {activePekerjaanFilterCount}
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              {showPekerjaanFilters && (
+                <div className="rounded-2xl border border-slate-200 bg-white p-3 space-y-2.5">
+                  <div className="grid grid-cols-2 gap-2">
+                    <FilterSelect
+                      ariaLabel="Filter jumlah KPM pekerjaan"
+                      value={pekerjaanKpmFilter}
+                      onChange={(v) => setPekerjaanKpmFilter(v as 'all' | 'with_kpm' | 'empty')}
+                    >
+                      <option value="all">Semua Pekerjaan</option>
+                      <option value="with_kpm">Memiliki KPM (&gt;0)</option>
+                      <option value="empty">Belum Ada KPM (0)</option>
+                    </FilterSelect>
+
+                    <FilterSelect
+                      ariaLabel="Urutkan daftar pekerjaan"
+                      value={pekerjaanSortBy}
+                      onChange={(v) =>
+                        setPekerjaanSortBy(
+                          v as 'name_asc' | 'name_desc' | 'count_desc' | 'count_asc'
+                        )
+                      }
+                    >
+                      <option value="name_asc">Urut: Nama (A–Z)</option>
+                      <option value="name_desc">Urut: Nama (Z–A)</option>
+                      <option value="count_desc">Urut: KPM Terbanyak</option>
+                      <option value="count_asc">Urut: KPM Tersedikit</option>
+                    </FilterSelect>
+                  </div>
+
+                  {activePekerjaanFilterCount > 0 && (
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPekerjaanKpmFilter('all');
+                          setPekerjaanSortBy('name_asc');
+                        }}
+                        className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-800"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                        <span>Reset Filter</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {pekerjaanList.length === 0 ? (
             <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
               <p className="text-sm font-semibold text-slate-900">Belum ada daftar pekerjaan</p>
@@ -2922,9 +3165,29 @@ export function MenuHubView({
                 Ketuk tombol di atas untuk menambahkan jenis pekerjaan baru.
               </p>
             </div>
+          ) : filteredPekerjaanList.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center space-y-2.5">
+              <p className="text-sm font-semibold text-slate-900">
+                Tidak ada pekerjaan yang cocok
+              </p>
+              <p className="text-xs text-slate-500">
+                Ubah kata kunci pencarian atau reset filter untuk melihat semua profesi.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setPekerjaanQuery('');
+                  setPekerjaanKpmFilter('all');
+                  setPekerjaanSortBy('name_asc');
+                }}
+                className="inline-flex min-h-[36px] items-center justify-center rounded-xl border border-slate-200 px-3.5 text-xs font-semibold text-teal-700 hover:bg-slate-50"
+              >
+                Reset Pencarian &amp; Filter
+              </button>
+            </div>
           ) : (
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
-              {pekerjaanList.map((job) => {
+              {filteredPekerjaanList.map((job) => {
                 const count = jobCounts.get(job.trim().toLowerCase()) ?? 0;
                 return (
                   <button

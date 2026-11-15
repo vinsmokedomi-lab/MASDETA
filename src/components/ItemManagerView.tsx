@@ -796,7 +796,12 @@ export function ItemManagerView({
         )}
 
         {deleteLayerState && (
-          <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/55 p-4 backdrop-blur-[1px] sm:items-center">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Konfirmasi Hapus Sub-Item"
+            className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/55 p-4 backdrop-blur-[1px] sm:items-center"
+          >
             <div className="w-full max-w-sm rounded-3xl border border-slate-200 bg-white p-5 shadow-xl space-y-4">
               {deleteLayerState.layer === 1 ? (
                 <>
@@ -1020,48 +1025,28 @@ export function ItemManagerView({
                       />
                     </button>
 
-                    <div className="flex shrink-0 items-center gap-0.5">
-                      {canUpdate && (
-                        <>
-                          <button
-                            type="button"
-                            disabled={idx === 0}
-                            onClick={() => onMoveItemOrder(item.tahun, item.code, 'up')}
-                            aria-label={`Naikkan urutan ${item.code}`}
-                            className="inline-flex h-8 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30"
-                          >
-                            <ArrowUp className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            disabled={idx === yearCatalogItems.length - 1}
-                            onClick={() => onMoveItemOrder(item.tahun, item.code, 'down')}
-                            aria-label={`Turunkan urutan ${item.code}`}
-                            className="inline-flex h-8 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30"
-                          >
-                            <ArrowDown className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => openEditForm(item, idx)}
-                            aria-label={`Edit item ${item.code}`}
-                            className="inline-flex h-8 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-teal-50 hover:text-teal-700"
-                          >
-                            <Edit3 className="h-3.5 w-3.5" />
-                          </button>
-                        </>
-                      )}
-                      {canDelete && (
+                    {canUpdate && (
+                      <div className="flex shrink-0 items-center gap-0.5">
                         <button
                           type="button"
-                          onClick={() => requestDeleteItem(item)}
-                          aria-label={`Hapus item ${item.code} tahun ${item.tahun}`}
-                          className="inline-flex h-8 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                          disabled={idx === 0}
+                          onClick={() => onMoveItemOrder(item.tahun, item.code, 'up')}
+                          aria-label={`Naikkan urutan ${item.code}`}
+                          className="inline-flex h-8 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30"
                         >
-                          <Trash2 className="h-3.5 w-3.5" />
+                          <ArrowUp className="h-3.5 w-3.5" />
                         </button>
-                      )}
-                    </div>
+                        <button
+                          type="button"
+                          disabled={idx === yearCatalogItems.length - 1}
+                          onClick={() => onMoveItemOrder(item.tahun, item.code, 'down')}
+                          aria-label={`Turunkan urutan ${item.code}`}
+                          className="inline-flex h-8 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30"
+                        >
+                          <ArrowDown className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   {isExpanded && (
@@ -1070,14 +1055,31 @@ export function ItemManagerView({
                         <p className="text-xs font-bold text-slate-700">
                           Daftar Sub-Item ({item.code} · {item.tahun})
                         </p>
-                        {canUpdate && (
-                          <button
-                            type="button"
-                            onClick={() => openEditForm(item, idx)}
-                            className="text-xs font-semibold text-teal-700 hover:underline"
-                          >
-                            Ubah Paket
-                          </button>
+                        {(canUpdate || canDelete) && (
+                          <div className="flex shrink-0 items-center gap-1">
+                            {canUpdate && (
+                              <button
+                                type="button"
+                                onClick={() => openEditForm(item, idx)}
+                                aria-label={`Edit paket ${item.code}`}
+                                title="Ubah Paket"
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-slate-600 transition-colors hover:bg-teal-50 hover:text-teal-700"
+                              >
+                                <Edit3 className="h-[18px] w-[18px]" />
+                              </button>
+                            )}
+                            {canDelete && (
+                              <button
+                                type="button"
+                                onClick={() => requestDeleteItem(item)}
+                                aria-label={`Hapus paket ${item.code} tahun ${item.tahun}`}
+                                title="Hapus Paket"
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-rose-600 transition-colors hover:bg-rose-50 hover:text-rose-700"
+                              >
+                                <Trash2 className="h-[18px] w-[18px]" />
+                              </button>
+                            )}
+                          </div>
                         )}
                       </div>
 
@@ -1138,7 +1140,12 @@ export function ItemManagerView({
 
       {/* Layered Delete Confirmation Modal ("Notif Berlapis") */}
       {deleteLayerState && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/55 p-4 backdrop-blur-[1px] sm:items-center">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Konfirmasi Hapus Item Bantuan"
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/55 p-4 backdrop-blur-[1px] sm:items-center"
+        >
           <div className="w-full max-w-sm rounded-3xl border border-slate-200 bg-white p-5 shadow-xl space-y-4">
             {deleteLayerState.layer === 1 ? (
               <>
@@ -1152,8 +1159,8 @@ export function ItemManagerView({
                     </p>
                     <h3 className="text-sm font-bold text-slate-900">
                       {deleteLayerState.kind === 'item'
-                        ? 'Hapus Master Item Bantuan?'
-                        : 'Hapus Sub-Item Paket?'}
+                        ? 'Apakah Anda yakin ingin menghapus paket item ini?'
+                        : 'Apakah Anda yakin ingin menghapus sub-item ini?'}
                     </h3>
                   </div>
                 </div>
