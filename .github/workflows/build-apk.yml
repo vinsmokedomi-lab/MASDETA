@@ -1,0 +1,84 @@
+name: Build MASDETA Android APK
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-android-apk:
+    name: Build Debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Java 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Write .env from GitHub Secrets (if provided)
+        run: |
+          touch .env
+          if [ -n "${{ secrets.VITE_SUPABASE_URL }}" ]; then
+            echo "VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}" >> .env
+          fi
+          if [ -n "${{ secrets.VITE_SUPABASE_ANON_KEY }}" ]; then
+            echo "VITE_SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY }}" >> .env
+          fi
+          if [ -n "${{ secrets.VITE_GAS_UPLOAD_URL }}" ]; then
+            echo "VITE_GAS_UPLOAD_URL=${{ secrets.VITE_GAS_UPLOAD_URL }}" >> .env
+          fi
+          if [ -n "${{ secrets.VITE_GAS_API_KEY }}" ]; then
+            echo "VITE_GAS_API_KEY=${{ secrets.VITE_GAS_API_KEY }}" >> .env
+          fi
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build web bundle
+        run: npm run build
+
+      - name: Add Android platform if missing
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+
+      - name: Inject CAMERA permission into AndroidManifest.xml
+        run: |
+          node -e '
+            const fs = require("fs");
+            const manifestPath = "android/app/src/main/AndroidManifest.xml";
+            let xml = fs.readFileSync(manifestPath, "utf8");
+            const cameraPermission = "<uses-permission android:name=\"android.permission.CAMERA\" />";
+            if (!xml.includes("android.permission.CAMERA")) {
+              xml = xml.replace("<application", "    " + cameraPermission + "\n\n    <application");
+              fs.writeFileSync(manifestPath, xml, "utf8");
+            }
+          '
+
+      - name: Sync Capacitor Android
+        run: npx cap sync android
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x android/gradlew
+
+      - name: Build Debug APK
+        run: cd android && ./gradlew assembleDebug
+
+      - name: Upload MASDETA Android APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MASDETA-Android-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
