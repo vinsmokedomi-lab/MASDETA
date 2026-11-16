@@ -1,7 +1,7 @@
 Pembaruan Resmi MASDETA:
 
 - Scan KTP & KK Otomatis: Unggah foto KTP dan KK saat pendaftaran KPM untuk mengisi data formulir secara otomatis.
-- Deteksi Duplikasi NIK / KK Lintas Tahun: Pengecekan NIK KTP & Nomor KK ganda lintas tahun anggaran dengan hitungan akurat di Dashboard dan menu Duplikasi.
+- Deteksi Duplikasi NIK / KK Lintas Tahun: Pengecekan NIK KTP & Nomor KK ganda lintas tahun anggaran dengan hitungan akurat, serta dot merah & angka duplikasi otomatis hilang setelah menu Duplikasi dibuka (muncul lagi jika ada duplikasi baru).
 - Status Aktif & Centang Chat Real-Time: Penanda kontak "Sedang aktif", centang 1 (terkirim), centang 2 (masuk), dan centang 2 biru (dibaca), serta perbaikan error chat.
 - Notifikasi Chat Android: Perbaikan notifikasi latar belakang, layar terkunci, suara masuk, serta ikon notifikasi resmi MASDETA.
 - Ubah Nama Pribadi User: Pengguna bisa mengganti nama tampilan kontak atau akun lain khusus untuk pemakaian pribadi tanpa mengubah nama asli akun.

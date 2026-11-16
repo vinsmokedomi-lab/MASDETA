@@ -539,6 +539,40 @@ export function MenuHubView({
 
   const [dtsenDrill, setDtsenDrill] = useState<string | null>(null);
   const [duplikasiYearFilter, setDuplikasiYearFilter] = useState<string>(selectedYear || 'all');
+  const seenDuplicatesStorageKey = useMemo(
+    () => `masdeta_seen_duplicates_v1_${currentUser.id}`,
+    [currentUser.id]
+  );
+  const [seenDuplicateSignatures, setSeenDuplicateSignatures] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(`masdeta_seen_duplicates_v1_${currentUser.id}`);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed)
+        ? parsed.filter((item): item is string => typeof item === 'string')
+        : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(seenDuplicatesStorageKey);
+      if (!raw) {
+        setSeenDuplicateSignatures([]);
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      setSeenDuplicateSignatures(
+        Array.isArray(parsed)
+          ? parsed.filter((item): item is string => typeof item === 'string')
+          : []
+      );
+    } catch {
+      setSeenDuplicateSignatures([]);
+    }
+  }, [seenDuplicatesStorageKey]);
 
   // Administrasi search & filter state
   const [adminQuery, setAdminQuery] = useState('');
@@ -636,19 +670,23 @@ export function MenuHubView({
       value: string;
       years: string[];
       records: KpmRecord[];
+      signature: string;
     }[] = [];
     byKtp.forEach((recs, key) => {
       if (recs.length > 1) {
         const years = Array.from(
           new Set(recs.map((r) => (r.tahun || '').trim()).filter(Boolean))
         ).sort((a, b) => a.localeCompare(b));
+        const sortedRecs = [...recs].sort(
+          (a, b) => b.tahun.localeCompare(a.tahun) || a.nama.localeCompare(b.nama, 'id')
+        );
+        const signature = `NIK KTP|${key}|${recs.map((r) => r.id).sort().join(',')}`;
         groups.push({
           type: 'NIK KTP',
           value: key,
           years,
-          records: [...recs].sort(
-            (a, b) => b.tahun.localeCompare(a.tahun) || a.nama.localeCompare(b.nama, 'id')
-          ),
+          records: sortedRecs,
+          signature,
         });
       }
     });
@@ -657,13 +695,16 @@ export function MenuHubView({
         const years = Array.from(
           new Set(recs.map((r) => (r.tahun || '').trim()).filter(Boolean))
         ).sort((a, b) => a.localeCompare(b));
+        const sortedRecs = [...recs].sort(
+          (a, b) => b.tahun.localeCompare(a.tahun) || a.nama.localeCompare(b.nama, 'id')
+        );
+        const signature = `Nomor KK|${key}|${recs.map((r) => r.id).sort().join(',')}`;
         groups.push({
           type: 'Nomor KK',
           value: key,
           years,
-          records: [...recs].sort(
-            (a, b) => b.tahun.localeCompare(a.tahun) || a.nama.localeCompare(b.nama, 'id')
-          ),
+          records: sortedRecs,
+          signature,
         });
       }
     });
@@ -679,12 +720,43 @@ export function MenuHubView({
     );
   }, [allDuplicateGroups, duplikasiYearFilter]);
 
+  useEffect(() => {
+    if (activeSection !== 'duplikasi' || duplicateGroups.length === 0) return;
+    const visibleSignatures = duplicateGroups.map((g) => g.signature);
+    setSeenDuplicateSignatures((prev) => {
+      const nextSet = new Set(prev);
+      let changed = false;
+      for (const sig of visibleSignatures) {
+        if (!nextSet.has(sig)) {
+          nextSet.add(sig);
+          changed = true;
+        }
+      }
+      if (!changed) return prev;
+      const nextList = Array.from(nextSet).slice(-500);
+      try {
+        localStorage.setItem(seenDuplicatesStorageKey, JSON.stringify(nextList));
+      } catch {
+        // Ignore storage quota errors
+      }
+      return nextList;
+    });
+  }, [activeSection, duplicateGroups, seenDuplicatesStorageKey]);
+
+  const seenDuplicateSignatureSet = useMemo(
+    () => new Set(seenDuplicateSignatures),
+    [seenDuplicateSignatures]
+  );
+
   const activeDuplicateBadgeCount = useMemo(() => {
-    if (selectedYear === 'all') return allDuplicateGroups.length;
-    return allDuplicateGroups.filter((g) =>
-      g.records.some((r) => (r.tahun || '').trim() === selectedYear)
-    ).length;
-  }, [allDuplicateGroups, selectedYear]);
+    const yearGroups =
+      selectedYear === 'all'
+        ? allDuplicateGroups
+        : allDuplicateGroups.filter((g) =>
+            g.records.some((r) => (r.tahun || '').trim() === selectedYear)
+          );
+    return yearGroups.filter((g) => !seenDuplicateSignatureSet.has(g.signature)).length;
+  }, [allDuplicateGroups, selectedYear, seenDuplicateSignatureSet]);
 
   const urgentSchedulesCount = useMemo(() => {
     const limitDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
