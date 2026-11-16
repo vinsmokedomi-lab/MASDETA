@@ -19,6 +19,7 @@ import {
   getDocumentThumbnailUrl,
   getItemHierarchyRank,
   getKpmSubItemStatusList,
+  getPrimaryKpmPhotoWithMeta,
   resolvePackageForKpm,
   resolveProposalDomicile,
   resolveProposalKecamatanCategory,
@@ -734,7 +735,8 @@ export async function exportSingleKpmToPdf({
         ? [190, 18, 60]
         : [180, 83, 9];
 
-  const heroPhotoDoc = record.documents.penerima || record.documents.ktp;
+  const heroPhotoMeta = getPrimaryKpmPhotoWithMeta(record.documents);
+  const heroPhotoDoc = heroPhotoMeta?.doc;
   const loadedPortrait = await resolveKpmPortraitForPdf(heroPhotoDoc);
 
   const subStatuses = getKpmSubItemStatusList(record, items);
@@ -836,7 +838,7 @@ export async function exportSingleKpmToPdf({
   doc.setFontSize(8);
   doc.setTextColor(100, 116, 139);
   doc.text(
-    record.documents.penerima ? 'Foto Calon Penerima' : record.documents.ktp ? 'Foto KTP' : 'Foto KPM',
+    heroPhotoMeta?.label || 'Foto KPM',
     photoX + photoW / 2,
     topBlockY + photoH + 4.2,
     { align: 'center' }

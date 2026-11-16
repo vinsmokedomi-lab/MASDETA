@@ -12,6 +12,7 @@ import {
   getAbsenSeq,
   getItemHierarchyRank,
   getItemsForYear,
+  getPrimaryKpmPhoto,
   isKecamatanProposal,
   resolveProposalDomicile,
 } from '../utils/imageProcessor';
@@ -506,7 +507,7 @@ export function KpmListView({
         ) : (
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
             {filteredRecords.slice(0, visibleLimit).map((rec) => {
-              const thumb = rec.documents.penerima || rec.documents.ktp;
+              const thumb = getPrimaryKpmPhoto(rec.documents);
               const locked = isRecordProposalLocked(rec);
               const absenSeq = getAbsenSeq(rec.registerCode);
               const absenLabel =
@@ -555,7 +556,7 @@ export function KpmListView({
                   <button
                     type="button"
                     onClick={() => onSelectRecord(rec)}
-                    className="flex w-full items-stretch gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
+                    className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
                   >
                     {/* Nomor Absen sebelum Foto */}
                     <div className="flex w-5 shrink-0 items-center justify-center">
@@ -564,13 +565,13 @@ export function KpmListView({
                       </span>
                     </div>
 
-                    {/* Foto Thumbnail Persegi Panjang (sejajar ujung atas judul s.d. ujung bawah subjudul) */}
-                    <div className="flex w-11 shrink-0 items-center justify-center self-stretch overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
+                    {/* Foto Thumbnail Fixed Frame (48x48) */}
+                    <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
                       {thumb ? (
                         <DriveImage
                           doc={thumb}
                           alt={rec.nama}
-                          className="h-full w-full object-cover"
+                          className="absolute inset-0 h-full w-full object-cover"
                         />
                       ) : (
                         <User className="h-5 w-5" />

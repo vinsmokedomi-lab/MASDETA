@@ -49,6 +49,7 @@ import {
   getDocumentDirectUrl,
   getDocumentThumbnailUrl,
   getKpmSubItemStatusList,
+  getPrimaryKpmPhoto,
   removeDocumentFromDrive,
   resolvePackageForKpm,
   resolveProposalDomicile,
@@ -330,7 +331,7 @@ export function KpmDetailView({
       ? [record.documents.rumah]
       : [];
   const lainnyaDocs = record.documents.lainnya || [];
-  const heroPhotoDoc = record.documents.penerima || record.documents.ktp;
+  const heroPhotoDoc = getPrimaryKpmPhoto(record.documents);
   const heroWaUrl = formatWhatsAppUrl(record.kontak);
 
   const chatRecipients = useMemo(() => {
@@ -543,22 +544,22 @@ export function KpmDetailView({
           {/* Core Identity Body */}
           <div className="p-4">
             <div className="flex items-start gap-3.5">
-              {/* Foto KPM */}
+              {/* Foto KPM Fixed Frame */}
               {heroPhotoDoc ? (
                 <button
                   type="button"
                   onClick={() => onPreviewDocument(heroPhotoDoc, record.nama)}
-                  className="h-22 w-18 shrink-0 overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 shadow-xs"
+                  className="relative h-[88px] w-[72px] shrink-0 overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 shadow-xs"
                   aria-label={`Lihat foto ${record.nama}`}
                 >
                   <DriveImage
                     doc={heroPhotoDoc}
                     alt={record.nama}
-                    className="h-full w-full object-cover"
+                    className="absolute inset-0 h-full w-full object-cover"
                   />
                 </button>
               ) : (
-                <div className="flex h-22 w-18 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-slate-100 text-slate-400">
+                <div className="flex h-[88px] w-[72px] shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-slate-100 text-slate-400">
                   <User className="h-8 w-8" />
                 </div>
               )}

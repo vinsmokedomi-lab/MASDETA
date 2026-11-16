@@ -19,6 +19,7 @@ import {
   ItemBantuan,
   KpmAuditLogEntry,
   KpmDocumentFile,
+  KpmDocuments,
   KpmFieldChange,
   KpmFormValues,
   KpmRecord,
@@ -1483,4 +1484,46 @@ export function saveCustomYears(years: string[]): boolean {
   } catch {
     return false;
   }
+}
+
+const hasRenderableMedia = (doc?: KpmDocumentFile): doc is KpmDocumentFile =>
+  Boolean(doc && (doc.dataUrl || doc.directUrl || doc.thumbnailUrl || doc.fileId));
+
+export function getPrimaryKpmPhotoWithMeta(
+  documents?: Partial<KpmDocuments> | null
+): { doc: KpmDocumentFile; label: string } | null {
+  if (!documents) return null;
+  if (hasRenderableMedia(documents.penerima)) {
+    return { doc: documents.penerima, label: 'Foto Calon Penerima' };
+  }
+  if (hasRenderableMedia(documents.survey)) {
+    return { doc: documents.survey, label: 'Foto Survey' };
+  }
+  if (hasRenderableMedia(documents.ktp)) {
+    return { doc: documents.ktp, label: 'Foto KTP' };
+  }
+  if (hasRenderableMedia(documents.kk)) {
+    return { doc: documents.kk, label: 'Foto KK' };
+  }
+  const lainnyaArr = Array.isArray(documents.lainnya) ? documents.lainnya : [];
+  const firstLainnya = lainnyaArr.find(hasRenderableMedia);
+  if (firstLainnya) {
+    return { doc: firstLainnya, label: 'Foto Lainnya' };
+  }
+  const rumahArr = Array.isArray(documents.rumah)
+    ? documents.rumah
+    : documents.rumah
+      ? [documents.rumah as unknown as KpmDocumentFile]
+      : [];
+  const firstRumah = rumahArr.find(hasRenderableMedia);
+  if (firstRumah) {
+    return { doc: firstRumah, label: 'Foto Rumah' };
+  }
+  return null;
+}
+
+export function getPrimaryKpmPhoto(
+  documents?: Partial<KpmDocuments> | null
+): KpmDocumentFile | undefined {
+  return getPrimaryKpmPhotoWithMeta(documents)?.doc;
 }

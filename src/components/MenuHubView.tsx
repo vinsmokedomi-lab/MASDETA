@@ -69,6 +69,7 @@ import {
   formatUploadDateTime,
   formatWhatsAppUrl,
   getAbsenSeq,
+  getPrimaryKpmPhoto,
   isArchivedKpm,
   isKecamatanProposal,
   resolveProposalDomicile,
@@ -2599,7 +2600,7 @@ export function MenuHubView({
           ) : (
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
               {visibleArsip.map((rec) => {
-                const thumb = rec.documents.penerima || rec.documents.ktp;
+                const thumb = getPrimaryKpmPhoto(rec.documents);
                 const absenSeq = getAbsenSeq(rec.registerCode);
                 const absenLabel =
                   absenSeq < 999999 ? String(absenSeq).padStart(2, '0') : '--';
@@ -2629,7 +2630,7 @@ export function MenuHubView({
                     <button
                       type="button"
                       onClick={() => onSelectKpm?.(rec)}
-                      className="flex w-full items-stretch gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
+                      className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
                     >
                       <div className="flex w-5 shrink-0 items-center justify-center">
                         <span className="font-mono text-[11px] font-bold text-slate-500 tabular-nums">
@@ -2637,12 +2638,12 @@ export function MenuHubView({
                         </span>
                       </div>
 
-                      <div className="flex w-11 shrink-0 items-center justify-center self-stretch overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
+                      <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
                         {thumb ? (
                           <DriveImage
                             doc={thumb}
                             alt={rec.nama}
-                            className="h-full w-full object-cover"
+                            className="absolute inset-0 h-full w-full object-cover"
                           />
                         ) : (
                           <User className="h-5 w-5" />

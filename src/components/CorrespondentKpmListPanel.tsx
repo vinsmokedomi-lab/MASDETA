@@ -11,6 +11,7 @@ import {
 import {
   getAbsenSeq,
   getItemHierarchyRank,
+  getPrimaryKpmPhoto,
   resolveProposalDomicile,
 } from '../utils/imageProcessor';
 import { DriveImage } from './DriveImage';
@@ -377,7 +378,7 @@ export function CorrespondentKpmListPanel({
       ) : (
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
           {filteredRecords.map((rec) => {
-            const thumb = rec.documents.rumah?.[0] || rec.documents.ktp;
+            const thumb = getPrimaryKpmPhoto(rec.documents);
             const locked = isRecordProposalLocked(rec);
             const kel = getCompactKelurahan(getRecordKelurahan(rec));
             const desilMatch = rec.dtsen?.match(/\d+/);
@@ -411,12 +412,12 @@ export function CorrespondentKpmListPanel({
                 onClick={() => onSelectRecord?.(rec)}
                 className="flex w-full items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
               >
-                <div className="h-12 w-12 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
+                <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
                   {thumb ? (
                     <DriveImage
                       doc={thumb}
                       alt={rec.nama}
-                      className="h-full w-full object-cover"
+                      className="absolute inset-0 h-full w-full object-cover"
                     />
                   ) : (
                     <div className="flex h-full w-full items-center justify-center text-slate-400">
