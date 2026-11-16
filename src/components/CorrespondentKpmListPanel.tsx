@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ChevronRight, Lock, Search, SlidersHorizontal, User, X } from 'lucide-react';
+import { Lock, Search, SlidersHorizontal, User, X } from 'lucide-react';
 import { INITIAL_WILAYAH_LIST } from '../data/kpmOptions';
 import {
   ItemBantuan,
@@ -12,6 +12,7 @@ import {
   getAbsenSeq,
   getItemHierarchyRank,
   getPrimaryKpmPhoto,
+  isKecamatanProposal,
   resolveProposalDomicile,
 } from '../utils/imageProcessor';
 import { DriveImage } from './DriveImage';
@@ -380,28 +381,17 @@ export function CorrespondentKpmListPanel({
           {filteredRecords.map((rec) => {
             const thumb = getPrimaryKpmPhoto(rec.documents);
             const locked = isRecordProposalLocked(rec);
-            const kel = getCompactKelurahan(getRecordKelurahan(rec));
-            const desilMatch = rec.dtsen?.match(/\d+/);
-            const desilNumeric = desilMatch ? `D${desilMatch[0]}` : '';
-            const statusDotClass =
-              rec.validasi === 'accepted'
-                ? 'bg-teal-600'
-                : rec.validasi === 'rejected'
-                  ? 'bg-rose-600'
-                  : 'bg-amber-500';
-            const statusText =
-              rec.validasi === 'accepted'
-                ? 'Diterima'
-                : rec.validasi === 'rejected'
-                  ? 'Ditolak'
-                  : 'Menunggu';
-
-            const metaLine = [
-              kel,
-              rec.rt && rec.rw ? `RT ${rec.rt}/RW ${rec.rw}` : '',
-              rec.pekerjaan,
-              rec.pengelola,
-            ]
+            const absenSeq = getAbsenSeq(rec.registerCode);
+            const absenLabel =
+              absenSeq < 999999 ? String(absenSeq).padStart(2, '0') : '--';
+            const desilNumeric =
+              rec.dtsen && /^\d/.test(rec.dtsen.trim())
+                ? rec.dtsen.trim().replace(/\s*-\s*/g, '-')
+                : '';
+            const kelurahanName = isKecamatanProposal(rec.proposal)
+              ? getCompactKelurahan(getRecordKelurahan(rec))
+              : '';
+            const metaLine = [kelurahanName, rec.pengelola?.trim()]
               .filter(Boolean)
               .join(' · ');
 
@@ -410,9 +400,16 @@ export function CorrespondentKpmListPanel({
                 key={rec.id}
                 type="button"
                 onClick={() => onSelectRecord?.(rec)}
-                className="flex w-full items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
+                className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
               >
-                <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
+                <div className="flex w-5 shrink-0 items-center justify-center">
+                  <span className="font-mono text-[11px] font-bold text-slate-500 tabular-nums">
+                    {absenLabel}
+                  </span>
+                </div>
+
+                {/* Foto Thumbnail Fixed Frame (48x48) */}
+                <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
                   {thumb ? (
                     <DriveImage
                       doc={thumb}
@@ -420,31 +417,34 @@ export function CorrespondentKpmListPanel({
                       className="absolute inset-0 h-full w-full object-cover"
                     />
                   ) : (
-                    <div className="flex h-full w-full items-center justify-center text-slate-400">
-                      <User className="h-4 w-4" />
-                    </div>
+                    <User className="h-5 w-5" />
                   )}
                 </div>
 
-                <div className="min-w-0 flex-1">
+                {/* Konten Utama */}
+                <div className="min-w-0 flex-1 flex flex-col justify-center">
+                  {/* Baris 1: Nama + Item & Angka Desil */}
                   <div className="flex items-center justify-between gap-2">
-                    <div className="flex min-w-0 items-center gap-1.5">
-                      <span
-                        className={`h-2 w-2 shrink-0 rounded-full ${statusDotClass}`}
-                        title={statusText}
-                      />
-                      <span className="truncate text-sm font-semibold text-slate-900">
+                    <div className="flex min-w-0 items-center gap-1">
+                      <span className="truncate text-[13px] font-medium leading-tight text-slate-900">
                         {rec.nama}
                       </span>
-                      {locked && <Lock className="h-3 w-3 shrink-0 text-amber-600" />}
+                      {locked && <Lock className="h-3 w-3 shrink-0 text-rose-600" />}
                     </div>
 
-                    <span className="shrink-0 rounded-md bg-teal-50 px-1.5 py-0.5 text-[11px] font-bold leading-none text-teal-800 tabular-nums">
-                      {rec.item || '-'}
-                      {desilNumeric ? ` · ${desilNumeric}` : ''}
+                    <span
+                      className={`shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-bold leading-none tabular-nums ${
+                        rec.item?.trim()
+                          ? 'bg-slate-100 text-slate-700'
+                          : 'bg-amber-50 text-amber-800'
+                      }`}
+                    >
+                      {rec.item?.trim() || 'Tanpa Item'}
+                      {desilNumeric ? ` · D${desilNumeric}` : ''}
                     </span>
                   </div>
 
+                  {/* Baris 2: Proposal & Tahun */}
                   <div className="mt-1 flex items-center justify-between gap-2 text-[11px] leading-tight">
                     <span className="truncate font-medium text-slate-600">
                       {rec.proposal}
@@ -454,14 +454,11 @@ export function CorrespondentKpmListPanel({
                     </span>
                   </div>
 
-                  {metaLine && (
-                    <p className="mt-0.5 truncate text-[11px] leading-tight text-slate-500">
-                      {metaLine}
-                    </p>
-                  )}
+                  {/* Baris 3: Kelurahan / Pengelola */}
+                  <p className="mt-0.5 truncate text-[11px] leading-tight text-slate-500">
+                    {metaLine || (rec.nikKtp ? `NIK ···${rec.nikKtp.slice(-4)}` : '-')}
+                  </p>
                 </div>
-
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
               </button>
             );
           })}

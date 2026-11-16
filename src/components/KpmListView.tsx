@@ -1,6 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Lock, Search, SlidersHorizontal, Trash2, User, X } from 'lucide-react';
-import { INITIAL_WILAYAH_LIST, TAHUN_OPTIONS } from '../data/kpmOptions';
+import {
+  AlertTriangle,
+  Check,
+  CheckSquare,
+  Lock,
+  Package,
+  QrCode,
+  Search,
+  SlidersHorizontal,
+  Square,
+  Trash2,
+  User,
+  X,
+} from 'lucide-react';
+import { DTSEN_OPTION_ITEMS, INITIAL_WILAYAH_LIST, TAHUN_OPTIONS } from '../data/kpmOptions';
 import {
   ItemBantuan,
   KpmRecord,
@@ -18,6 +31,7 @@ import {
 } from '../utils/imageProcessor';
 import { DriveImage } from './DriveImage';
 import { FilterSelect, SegmentedTabs } from './FormControls';
+import { QrScannerLookupModal } from './QrScannerLookupModal';
 import { SwipeAction, SwipeableRow } from './SwipeableRow';
 
 type KpmSortKey = 'absen' | 'item' | 'rtrw' | 'pengelola' | 'pekerjaan' | 'kelurahan';
@@ -35,11 +49,22 @@ interface KpmListViewProps {
   onChangeItemFilter: (item: string) => void;
   proposalFilter?: string;
   onChangeProposalFilter?: (proposal: string) => void;
+  canUpdate?: boolean;
   canDelete?: boolean;
+  isLoading?: boolean;
   onBack?: () => void;
   onCreateNew: () => void;
   onSelectRecord: (record: KpmRecord) => void;
   onDeleteRecord: (id: string) => void;
+  onBulkUpdateKpms?: (
+    ids: string[],
+    patch: {
+      validasi?: ValidationStatus;
+      dtsen?: string;
+      item?: string;
+      markAllSubItems?: boolean;
+    }
+  ) => Promise<void> | void;
 }
 
 export function KpmListView({
@@ -55,9 +80,12 @@ export function KpmListView({
   onChangeItemFilter,
   proposalFilter = 'all',
   onChangeProposalFilter,
+  canUpdate = true,
   canDelete = true,
+  isLoading = false,
   onSelectRecord,
   onDeleteRecord,
+  onBulkUpdateKpms,
 }: KpmListViewProps) {
   const [query, setQuery] = useState('');
   const [sortBy, setSortBy] = useState<KpmSortKey>('absen');
@@ -70,6 +98,11 @@ export function KpmListView({
   const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
   const [pendingDeleteRecord, setPendingDeleteRecord] = useState<KpmRecord | null>(null);
   const [lockedNoticeRecord, setLockedNoticeRecord] = useState<KpmRecord | null>(null);
+  const [isQrModalOpen, setIsQrModalOpen] = useState(false);
+  const [bulkMode, setBulkMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkSheet, setBulkSheet] = useState<'none' | 'dtsen' | 'item'>('none');
+  const [bulkProcessing, setBulkProcessing] = useState(false);
 
   useEffect(() => {
     setVisibleLimit(40);
@@ -303,6 +336,44 @@ export function KpmListView({
     });
   }, [scopedRecords, query, statusFilter, sortBy, items, proposals, wilayahList]);
 
+  const unlockedFilteredIds = useMemo(
+    () => filteredRecords.filter((r) => !isRecordProposalLocked(r)).map((r) => r.id),
+    [filteredRecords, proposals]
+  );
+
+  const toggleSelectRecord = (id: string) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const handleSelectAllUnlocked = () => {
+    if (
+      unlockedFilteredIds.length > 0 &&
+      unlockedFilteredIds.every((id) => selectedIds.includes(id))
+    ) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(unlockedFilteredIds);
+    }
+  };
+
+  const runBulkPatch = async (patch: {
+    validasi?: ValidationStatus;
+    dtsen?: string;
+    item?: string;
+    markAllSubItems?: boolean;
+  }) => {
+    if (!onBulkUpdateKpms || selectedIds.length === 0 || bulkProcessing) return;
+    setBulkProcessing(true);
+    try {
+      await onBulkUpdateKpms(selectedIds, patch);
+      setBulkSheet('none');
+      setSelectedIds([]);
+      setBulkMode(false);
+    } finally {
+      setBulkProcessing(false);
+    }
+  };
+
   const handleResetExtraFilters = () => {
     onChangeItemFilter('all');
     setSortBy('absen');
@@ -313,12 +384,34 @@ export function KpmListView({
   };
 
   return (
-    <div className="min-h-screen pb-24">
-      {/* Sticky Header: hanya judul tanpa tombol kembali / aksi */}
-      <header className="sticky top-0 z-20 flex h-14 items-center border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md">
+    <div className="min-h-screen pb-28">
+      {/* Sticky Header */}
+      <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md">
         <h1 className="truncate text-base font-bold text-slate-900">
           Keluarga Penerima Manfaat (KPM)
         </h1>
+        {canUpdate && onBulkUpdateKpms && (
+          <button
+            type="button"
+            onClick={() => {
+              setBulkMode((prev) => {
+                if (prev) {
+                  setSelectedIds([]);
+                  setBulkSheet('none');
+                }
+                return !prev;
+              });
+            }}
+            className={`inline-flex min-h-[34px] shrink-0 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-semibold transition-colors ${
+              bulkMode
+                ? 'border-teal-700 bg-teal-700 text-white'
+                : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            <CheckSquare className="h-3.5 w-3.5" />
+            <span>{bulkMode ? 'Selesai' : 'Pilih Banyak'}</span>
+          </button>
+        )}
       </header>
 
       <div className="space-y-4 px-4 pt-4">
@@ -363,6 +456,16 @@ export function KpmListView({
               ))}
               <option value="all">Semua</option>
             </FilterSelect>
+
+            <button
+              type="button"
+              onClick={() => setIsQrModalOpen(true)}
+              aria-label="Scan QR atau cari 4 digit NIK"
+              title="Scan QR / 4 Digit NIK"
+              className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 transition-colors hover:bg-slate-50"
+            >
+              <QrCode className="h-4 w-4" />
+            </button>
 
             <button
               type="button"
@@ -494,10 +597,40 @@ export function KpmListView({
               { key: 'rejected', label: 'Ditolak', count: counts.rejected },
             ]}
           />
+
+          {bulkMode && unlockedFilteredIds.length > 0 && (
+            <div className="flex items-center justify-between gap-2 rounded-xl border border-teal-200 bg-teal-50/70 px-3 py-2 text-xs">
+              <span className="font-semibold text-teal-900 tabular-nums">
+                {selectedIds.length} dipilih dari {unlockedFilteredIds.length} KPM terbuka
+              </span>
+              <button
+                type="button"
+                onClick={handleSelectAllUnlocked}
+                className="font-bold text-teal-700 hover:underline"
+              >
+                {unlockedFilteredIds.every((id) => selectedIds.includes(id))
+                  ? 'Batal Semua'
+                  : 'Pilih Semua'}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Records List */}
-        {filteredRecords.length === 0 ? (
+        {isLoading && records.length === 0 ? (
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100 animate-pulse">
+            {[0, 1, 2, 3, 4].map((idx) => (
+              <div key={idx} className="flex items-center gap-3 px-3.5 py-3">
+                <div className="h-4 w-5 rounded bg-slate-200" />
+                <div className="h-12 w-12 shrink-0 rounded-xl bg-slate-200" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-3.5 w-2/3 rounded bg-slate-200" />
+                  <div className="h-3 w-1/2 rounded bg-slate-100" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : filteredRecords.length === 0 ? (
           <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
             <p className="text-sm font-semibold text-slate-900">Tidak ada data calon KPM ditemukan</p>
             <p className="mt-1 text-xs text-slate-500">
@@ -544,6 +677,8 @@ export function KpmListView({
                     ]
                   : [];
 
+              const isSelected = selectedIds.includes(rec.id);
+
               return (
                 <SwipeableRow
                   key={rec.id}
@@ -551,19 +686,44 @@ export function KpmListView({
                   isOpen={openSwipeId === rec.id}
                   onOpen={setOpenSwipeId}
                   onClose={() => setOpenSwipeId(null)}
-                  actions={swipeActions}
+                  actions={bulkMode ? [] : swipeActions}
                 >
                   <button
                     type="button"
-                    onClick={() => onSelectRecord(rec)}
-                    className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
+                    onClick={() => {
+                      if (bulkMode) {
+                        if (locked) {
+                          setLockedNoticeRecord(rec);
+                        } else {
+                          toggleSelectRecord(rec.id);
+                        }
+                        return;
+                      }
+                      onSelectRecord(rec);
+                    }}
+                    className={`flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors ${
+                      isSelected
+                        ? 'bg-teal-50/70'
+                        : 'hover:bg-slate-50 active:bg-slate-100/70'
+                    }`}
                   >
-                    {/* Nomor Absen sebelum Foto */}
-                    <div className="flex w-5 shrink-0 items-center justify-center">
-                      <span className="font-mono text-[11px] font-bold text-slate-500 tabular-nums">
-                        {absenLabel}
-                      </span>
-                    </div>
+                    {bulkMode ? (
+                      <div className="flex w-5 shrink-0 items-center justify-center">
+                        {locked ? (
+                          <Lock className="h-3.5 w-3.5 text-slate-400" />
+                        ) : isSelected ? (
+                          <CheckSquare className="h-4.5 w-4.5 text-teal-700" />
+                        ) : (
+                          <Square className="h-4.5 w-4.5 text-slate-300" />
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex w-5 shrink-0 items-center justify-center">
+                        <span className="font-mono text-[11px] font-bold text-slate-500 tabular-nums">
+                          {absenLabel}
+                        </span>
+                      </div>
+                    )}
 
                     {/* Foto Thumbnail Fixed Frame (48x48) */}
                     <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
@@ -597,7 +757,7 @@ export function KpmListView({
                           }`}
                         >
                           {rec.item?.trim() || 'Tanpa Item'}
-                          {desilNumeric ? ` · ${desilNumeric}` : ''}
+                          {desilNumeric ? ` · D${desilNumeric}` : ''}
                         </span>
                       </div>
 
@@ -611,12 +771,10 @@ export function KpmListView({
                         </span>
                       </div>
 
-                      {/* Baris 3: Kelurahan (jika Proposal Kecamatan) · Pengelola */}
-                      {metaLine && (
-                        <p className="mt-0.5 truncate text-[11px] leading-tight text-slate-500">
-                          {metaLine}
-                        </p>
-                      )}
+                      {/* Baris 3: Kelurahan / Pengelola */}
+                      <p className="mt-0.5 truncate text-[11px] leading-tight text-slate-500">
+                        {metaLine || (rec.nikKtp ? `NIK ···${rec.nikKtp.slice(-4)}` : '-')}
+                      </p>
                     </div>
                   </button>
                 </SwipeableRow>
@@ -733,6 +891,168 @@ export function KpmListView({
           </div>
         </div>
       )}
+
+      {/* Sticky Bulk Action Bar */}
+      {bulkMode && selectedIds.length > 0 && (
+        <div className="fixed bottom-20 left-1/2 z-40 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2 rounded-2xl border border-slate-700 bg-slate-900 p-3 text-white shadow-2xl">
+          <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-800">
+            <span className="text-xs font-bold tabular-nums">
+              {selectedIds.length} KPM Dipilih
+            </span>
+            <button
+              type="button"
+              onClick={() => setSelectedIds([])}
+              className="text-[11px] font-semibold text-slate-300 hover:text-white"
+            >
+              Bersihkan
+            </button>
+          </div>
+
+          <div className="mt-2 grid grid-cols-3 gap-1.5">
+            <button
+              type="button"
+              disabled={bulkProcessing}
+              onClick={() => void runBulkPatch({ validasi: 'accepted' })}
+              className="inline-flex min-h-[36px] items-center justify-center gap-1 rounded-xl bg-teal-600 px-2 text-[11px] font-semibold text-white hover:bg-teal-500 disabled:opacity-60"
+            >
+              <Check className="h-3.5 w-3.5" />
+              <span>Terima</span>
+            </button>
+            <button
+              type="button"
+              disabled={bulkProcessing}
+              onClick={() => void runBulkPatch({ validasi: 'pending' })}
+              className="inline-flex min-h-[36px] items-center justify-center rounded-xl bg-amber-600 px-2 text-[11px] font-semibold text-white hover:bg-amber-500 disabled:opacity-60"
+            >
+              Menunggu
+            </button>
+            <button
+              type="button"
+              disabled={bulkProcessing}
+              onClick={() => void runBulkPatch({ validasi: 'rejected' })}
+              className="inline-flex min-h-[36px] items-center justify-center rounded-xl bg-rose-600 px-2 text-[11px] font-semibold text-white hover:bg-rose-500 disabled:opacity-60"
+            >
+              Tolak
+            </button>
+            <button
+              type="button"
+              disabled={bulkProcessing}
+              onClick={() => setBulkSheet('dtsen')}
+              className="inline-flex min-h-[36px] items-center justify-center rounded-xl bg-slate-800 px-2 text-[11px] font-semibold text-slate-100 hover:bg-slate-700 disabled:opacity-60"
+            >
+              Atur Desil
+            </button>
+            <button
+              type="button"
+              disabled={bulkProcessing}
+              onClick={() => setBulkSheet('item')}
+              className="inline-flex min-h-[36px] items-center justify-center gap-1 rounded-xl bg-slate-800 px-2 text-[11px] font-semibold text-slate-100 hover:bg-slate-700 disabled:opacity-60"
+            >
+              <Package className="h-3 w-3" />
+              <span>Ganti Item</span>
+            </button>
+            <button
+              type="button"
+              disabled={bulkProcessing}
+              onClick={() => void runBulkPatch({ markAllSubItems: true })}
+              className="inline-flex min-h-[36px] items-center justify-center rounded-xl bg-slate-800 px-2 text-[11px] font-semibold text-teal-300 hover:bg-slate-700 disabled:opacity-60"
+            >
+              Sub-Item ✓
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Desil Picker Modal */}
+      {bulkSheet === 'dtsen' && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/55 backdrop-blur-xs sm:items-center sm:p-4"
+          onClick={() => setBulkSheet('none')}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl space-y-3"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-900">
+                Atur Desil DTSEN ({selectedIds.length} KPM)
+              </h3>
+              <button
+                type="button"
+                onClick={() => setBulkSheet('none')}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="max-h-72 space-y-1.5 overflow-y-auto">
+              {DTSEN_OPTION_ITEMS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  disabled={bulkProcessing}
+                  onClick={() => void runBulkPatch({ dtsen: opt.value })}
+                  className="flex min-h-[42px] w-full items-center justify-between rounded-xl border border-slate-200 px-3 text-left text-xs font-semibold text-slate-800 hover:bg-teal-50 hover:border-teal-300"
+                >
+                  <span>{opt.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Item Picker Modal */}
+      {bulkSheet === 'item' && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/55 backdrop-blur-xs sm:items-center sm:p-4"
+          onClick={() => setBulkSheet('none')}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl space-y-3"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-900">
+                Ganti Paket Item ({selectedIds.length} KPM)
+              </h3>
+              <button
+                type="button"
+                onClick={() => setBulkSheet('none')}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="max-h-72 space-y-1.5 overflow-y-auto">
+              {yearItemOptions.map((it) => (
+                <button
+                  key={it.code}
+                  type="button"
+                  disabled={bulkProcessing}
+                  onClick={() => void runBulkPatch({ item: it.code })}
+                  className="flex min-h-[44px] w-full items-center justify-between gap-2 rounded-xl border border-slate-200 px-3 py-2 text-left hover:bg-teal-50 hover:border-teal-300"
+                >
+                  <span className="text-xs font-bold text-teal-800">{it.code}</span>
+                  <span className="truncate text-xs text-slate-700">{it.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* QR Code & 4-Digit NIK Fast Lookup Modal */}
+      <QrScannerLookupModal
+        isOpen={isQrModalOpen}
+        records={records}
+        onClose={() => setIsQrModalOpen(false)}
+        onSelectRecord={onSelectRecord}
+      />
     </div>
   );
 }

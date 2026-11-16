@@ -1,19 +1,22 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
   Check,
   ChevronDown,
   FileSpreadsheet,
+  FileText,
   Loader2,
   Printer,
 } from 'lucide-react';
 import { TAHUN_OPTIONS } from '../data/kpmOptions';
 import {
+  DEFAULT_REPORT_TEMPLATE,
   ItemBantuan,
   KpmRecord,
   PengelolaProfile,
   ProposalRecord,
+  ReportTemplateConfig,
   WilayahKabKota,
 } from '../types/kpm';
 import {
@@ -39,6 +42,8 @@ interface MenuDownloadViewProps {
   items: ItemBantuan[];
   wilayahList: WilayahKabKota[];
   pengelolaList: PengelolaProfile[];
+  reportTemplate?: ReportTemplateConfig;
+  onSaveReportTemplate?: (next: ReportTemplateConfig) => void;
   onBack: () => void;
 }
 
@@ -48,6 +53,8 @@ export function MenuDownloadView({
   items,
   wilayahList,
   pengelolaList,
+  reportTemplate,
+  onSaveReportTemplate,
   onBack,
 }: MenuDownloadViewProps) {
   const yearOptions = useMemo(() => {
@@ -84,6 +91,17 @@ export function MenuDownloadView({
     type: 'success' | 'error';
     message: string;
   } | null>(null);
+  const [showTemplateEditor, setShowTemplateEditor] = useState(false);
+  const [templateDraft, setTemplateDraft] = useState<ReportTemplateConfig>(
+    () => reportTemplate ?? DEFAULT_REPORT_TEMPLATE
+  );
+  const [templateSavedNotice, setTemplateSavedNotice] = useState(false);
+
+  useEffect(() => {
+    if (reportTemplate) {
+      setTemplateDraft(reportTemplate);
+    }
+  }, [reportTemplate]);
 
   const yearScopedProposals = useMemo(() => {
     if (selectedTahun === 'all') return proposals;
@@ -233,6 +251,7 @@ export function MenuDownloadView({
         subtitle,
         fileName,
         includeSummary,
+        reportTemplate: templateDraft,
       });
       setPdfFeedback({
         type: 'success',
@@ -262,6 +281,7 @@ export function MenuDownloadView({
         items,
         wilayahList,
         fileName,
+        reportTemplate: templateDraft,
       });
       setExcelFeedback({
         type: 'success',
@@ -527,6 +547,188 @@ export function MenuDownloadView({
               </>
             )}
           </button>
+        </section>
+
+        {/* Card 4: Template Kop Surat & Penandatangan Resmi */}
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+          <button
+            type="button"
+            onClick={() => setShowTemplateEditor((prev) => !prev)}
+            className="flex min-h-[52px] w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+          >
+            <div className="flex min-w-0 items-center gap-2.5">
+              <FileText className="h-4 w-4 shrink-0 text-teal-700" />
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-slate-900">
+                  Template Kop &amp; Penandatangan Resmi
+                </p>
+                <p className="truncate text-[11px] text-slate-500">
+                  {templateDraft.enabled
+                    ? `${templateDraft.orgHeaderLine2} · Aktif pada PDF, Excel & BAST`
+                    : 'Nonaktif · Ketuk untuk mengaktifkan kop instansi'}
+                </p>
+              </div>
+            </div>
+            <ChevronDown
+              className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${
+                showTemplateEditor ? 'rotate-180' : ''
+              }`}
+            />
+          </button>
+
+          {showTemplateEditor && (
+            <div className="space-y-3 border-t border-slate-100 px-4 py-3.5">
+              <label className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold text-slate-800">
+                <span>Sertakan Kop Surat &amp; Blok Tanda Tangan</span>
+                <input
+                  type="checkbox"
+                  checked={templateDraft.enabled}
+                  onChange={(e) => {
+                    setTemplateSavedNotice(false);
+                    setTemplateDraft((prev) => ({ ...prev, enabled: e.target.checked }));
+                  }}
+                  className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-600"
+                />
+              </label>
+
+              <div className="space-y-2.5">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600">
+                    Baris Atas Kop Instansi
+                  </label>
+                  <input
+                    type="text"
+                    value={templateDraft.orgHeaderLine1}
+                    onChange={(e) => {
+                      setTemplateSavedNotice(false);
+                      setTemplateDraft((prev) => ({ ...prev, orgHeaderLine1: e.target.value }));
+                    }}
+                    placeholder="Contoh: PEMERINTAH KOTA PONTIANAK"
+                    className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600">
+                    Nama Dinas / Unit Pengelola
+                  </label>
+                  <input
+                    type="text"
+                    value={templateDraft.orgHeaderLine2}
+                    onChange={(e) => {
+                      setTemplateSavedNotice(false);
+                      setTemplateDraft((prev) => ({ ...prev, orgHeaderLine2: e.target.value }));
+                    }}
+                    placeholder="Contoh: DINAS SOSIAL / TIM KOORDINASI MASDETA"
+                    className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600">
+                    Alamat / Kontak Sekretariat
+                  </label>
+                  <input
+                    type="text"
+                    value={templateDraft.orgAddress}
+                    onChange={(e) => {
+                      setTemplateSavedNotice(false);
+                      setTemplateDraft((prev) => ({ ...prev, orgAddress: e.target.value }));
+                    }}
+                    placeholder="Alamat sekretariat"
+                    className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600">
+                      Kota Penandatanganan
+                    </label>
+                    <input
+                      type="text"
+                      value={templateDraft.city}
+                      onChange={(e) => {
+                        setTemplateSavedNotice(false);
+                        setTemplateDraft((prev) => ({ ...prev, city: e.target.value }));
+                      }}
+                      placeholder="Pontianak"
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600">
+                      Jabatan Penandatangan
+                    </label>
+                    <input
+                      type="text"
+                      value={templateDraft.signatoryTitle}
+                      onChange={(e) => {
+                        setTemplateSavedNotice(false);
+                        setTemplateDraft((prev) => ({ ...prev, signatoryTitle: e.target.value }));
+                      }}
+                      placeholder="Koordinator Pelaksana"
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600">
+                      Nama Penandatangan
+                    </label>
+                    <input
+                      type="text"
+                      value={templateDraft.signatoryName}
+                      onChange={(e) => {
+                        setTemplateSavedNotice(false);
+                        setTemplateDraft((prev) => ({ ...prev, signatoryName: e.target.value }));
+                      }}
+                      placeholder="( ................................ )"
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600">
+                      NIP / NRP (Opsional)
+                    </label>
+                    <input
+                      type="text"
+                      value={templateDraft.signatoryNip || ''}
+                      onChange={(e) => {
+                        setTemplateSavedNotice(false);
+                        setTemplateDraft((prev) => ({ ...prev, signatoryNip: e.target.value }));
+                      }}
+                      placeholder="NIP. ..."
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {templateSavedNotice && (
+                <p className="flex items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-medium text-teal-900">
+                  <Check className="h-3.5 w-3.5 shrink-0 text-teal-700" />
+                  <span>Template Kop &amp; Penandatangan berhasil disimpan.</span>
+                </p>
+              )}
+
+              {onSaveReportTemplate && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSaveReportTemplate(templateDraft);
+                    setTemplateSavedNotice(true);
+                  }}
+                  className="inline-flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-4 text-xs font-semibold text-white transition-colors hover:bg-slate-800"
+                >
+                  <Check className="h-3.5 w-3.5" />
+                  <span>Simpan Template</span>
+                </button>
+              )}
+            </div>
+          )}
         </section>
       </div>
 

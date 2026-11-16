@@ -1862,3 +1862,67 @@ export async function supabaseMarkDirectMessagesRead(
     .is('read_at', null);
   if (error) throw error;
 }
+
+// ============================================================================
+// APP STATE SLICES (Jadwal, Tempat Sampah 30 Hari, Kop Laporan, Metadata BAST)
+// ============================================================================
+export async function fetchAppStateSlice<T>(stateKey: string, fallback: T): Promise<T> {
+  const localKey = `masdeta_slice_${stateKey}`;
+  let localValue: T = fallback;
+  try {
+    const raw = localStorage.getItem(localKey);
+    if (raw) localValue = JSON.parse(raw) as T;
+  } catch {
+    // ignore storage errors
+  }
+
+  if (!isSupabaseConfigured) return localValue;
+  try {
+    const { data, error } = await supabase
+      .from('masdeta_app_state')
+      .select('payload')
+      .eq('state_key', stateKey)
+      .maybeSingle();
+    if (error) {
+      return localValue;
+    }
+    if (data && data.payload !== undefined && data.payload !== null) {
+      const remoteVal = data.payload as T;
+      try {
+        localStorage.setItem(localKey, JSON.stringify(remoteVal));
+      } catch {
+        // ignore quota errors
+      }
+      return remoteVal;
+    }
+  } catch {
+    // fallback to local cache
+  }
+  return localValue;
+}
+
+export async function saveAppStateSlice<T>(stateKey: string, payload: T): Promise<void> {
+  const localKey = `masdeta_slice_${stateKey}`;
+  try {
+    localStorage.setItem(localKey, JSON.stringify(payload));
+  } catch {
+    // ignore storage quota errors
+  }
+  if (!isSupabaseConfigured) return;
+  try {
+    const { error } = await supabase.from('masdeta_app_state').upsert(
+      {
+        state_key: stateKey,
+        payload: payload as Record<string, unknown>,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'state_key' }
+    );
+    if (error && !isSchemaMissingError(error)) {
+      console.warn(`App state sync (${stateKey}) warning:`, error.message);
+    }
+  } catch {
+    // keep local cache intact
+  }
+}
+

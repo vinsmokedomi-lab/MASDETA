@@ -3,7 +3,7 @@ import { Directory, Filesystem } from '@capacitor/filesystem';
 import { FileOpener } from '@capawesome-team/capacitor-file-opener';
 import * as XLSX from 'xlsx';
 import { INITIAL_WILAYAH_LIST } from '../data/kpmOptions';
-import { ItemBantuan, KpmRecord, ProposalRecord, WilayahKabKota } from '../types/kpm';
+import { ItemBantuan, KpmRecord, ProposalRecord, ReportTemplateConfig, WilayahKabKota } from '../types/kpm';
 import {
   getAbsenSeq,
   getItemHierarchyRank,
@@ -29,12 +29,14 @@ export async function exportKpmRecordsToExcel({
   items,
   wilayahList = INITIAL_WILAYAH_LIST,
   fileName,
+  reportTemplate,
 }: {
   records: KpmRecord[];
   proposals: ProposalRecord[];
   items: ItemBantuan[];
   wilayahList?: WilayahKabKota[];
   fileName: string;
+  reportTemplate?: ReportTemplateConfig;
 }): Promise<{ savedFileName: string; openedNative: boolean; count: number }> {
   const sortedRecords = [...records].sort((a, b) => {
     const yearCmp = (a.tahun || '').localeCompare(b.tahun || '');
@@ -93,7 +95,26 @@ export async function exportKpmRecordsToExcel({
     };
   });
 
-  const worksheet = XLSX.utils.json_to_sheet(rows);
+  let worksheet: XLSX.WorkSheet;
+  if (reportTemplate?.enabled) {
+    const kopRows: string[][] = [];
+    if (reportTemplate.orgHeaderLine1?.trim()) {
+      kopRows.push([reportTemplate.orgHeaderLine1.trim().toUpperCase()]);
+    }
+    if (reportTemplate.orgHeaderLine2?.trim()) {
+      kopRows.push([reportTemplate.orgHeaderLine2.trim()]);
+    }
+    if (reportTemplate.orgAddress?.trim()) {
+      kopRows.push([reportTemplate.orgAddress.trim()]);
+    }
+    kopRows.push([]);
+    worksheet = XLSX.utils.aoa_to_sheet(kopRows);
+    XLSX.utils.sheet_add_json(worksheet, rows, {
+      origin: `A${kopRows.length + 1}`,
+    });
+  } else {
+    worksheet = XLSX.utils.json_to_sheet(rows);
+  }
   worksheet['!cols'] = [
     { wch: 6 },  // No
     { wch: 18 }, // Kode Register

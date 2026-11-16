@@ -278,22 +278,18 @@ export function KpmRegistrationForm({
     });
   }, [proposals, values.tahun, values.proposal, editingRecord, isProposalScopeLocked, wilayahList]);
 
-  const duplicateKkMatch = useMemo(() => {
-    if (!isValidNik16(values.nikKk)) return null;
-    const matches = existingRecords.filter(
-      (r) => r.id !== editingRecord?.id && r.nikKk === values.nikKk
-    );
-    if (matches.length === 0) return null;
-    return matches.find((r) => r.tahun === values.tahun) ?? matches[0];
+  const duplicateKkMatches = useMemo(() => {
+    if (!isValidNik16(values.nikKk)) return [];
+    return existingRecords
+      .filter((r) => r.id !== editingRecord?.id && r.nikKk === values.nikKk)
+      .sort((a, b) => (a.tahun === values.tahun ? -1 : b.tahun === values.tahun ? 1 : 0));
   }, [existingRecords, editingRecord?.id, values.nikKk, values.tahun]);
 
-  const duplicateKtpMatch = useMemo(() => {
-    if (!isValidNik16(values.nikKtp)) return null;
-    const matches = existingRecords.filter(
-      (r) => r.id !== editingRecord?.id && r.nikKtp === values.nikKtp
-    );
-    if (matches.length === 0) return null;
-    return matches.find((r) => r.tahun === values.tahun) ?? matches[0];
+  const duplicateKtpMatches = useMemo(() => {
+    if (!isValidNik16(values.nikKtp)) return [];
+    return existingRecords
+      .filter((r) => r.id !== editingRecord?.id && r.nikKtp === values.nikKtp)
+      .sort((a, b) => (a.tahun === values.tahun ? -1 : b.tahun === values.tahun ? 1 : 0));
   }, [existingRecords, editingRecord?.id, values.nikKtp, values.tahun]);
 
   const selectedProposalRecord = useMemo(
@@ -798,14 +794,35 @@ export function KpmRegistrationForm({
                     }`}
                   />
                   {errors.nikKk && <p className="mt-1 text-xs text-rose-600">{errors.nikKk}</p>}
-                  {duplicateKkMatch && (
-                    <p className="mt-1.5 flex items-start gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] font-medium text-amber-900">
-                      <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
-                      <span>
-                        No. KK ini sudah terdaftar atas nama{' '}
-                        <span className="font-bold">{duplicateKkMatch.nama}</span> ({duplicateKkMatch.proposal} · {duplicateKkMatch.tahun}).
-                      </span>
-                    </p>
+                  {duplicateKkMatches.length > 0 && (
+                    <div className="mt-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900 space-y-1">
+                      <p className="flex items-center gap-1.5 font-bold">
+                        <AlertCircle className="h-3.5 w-3.5 shrink-0 text-amber-600" />
+                        <span>No. KK ini sudah terdaftar ({duplicateKkMatches.length} data):</span>
+                      </p>
+                      <ul className="space-y-1 pl-5 list-disc">
+                        {duplicateKkMatches.map((dup) => (
+                          <li key={dup.id} className="leading-snug">
+                            <span className="font-bold">{dup.nama}</span> ({dup.proposal} · {dup.tahun}){' '}
+                            <span
+                              className={`ml-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                                dup.validasi === 'accepted'
+                                  ? 'bg-teal-100 text-teal-800'
+                                  : dup.validasi === 'rejected'
+                                    ? 'bg-rose-100 text-rose-700'
+                                    : 'bg-amber-100 text-amber-800'
+                              }`}
+                            >
+                              {dup.validasi === 'accepted'
+                                ? 'Diterima'
+                                : dup.validasi === 'rejected'
+                                  ? 'Ditolak'
+                                  : 'Menunggu'}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   )}
                 </div>
 
@@ -838,14 +855,35 @@ export function KpmRegistrationForm({
                     }`}
                   />
                   {errors.nikKtp && <p className="mt-1 text-xs text-rose-600">{errors.nikKtp}</p>}
-                  {duplicateKtpMatch && (
-                    <p className="mt-1.5 flex items-start gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] font-medium text-amber-900">
-                      <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
-                      <span>
-                        NIK KTP ini sudah terdaftar atas nama{' '}
-                        <span className="font-bold">{duplicateKtpMatch.nama}</span> ({duplicateKtpMatch.proposal} · {duplicateKtpMatch.tahun}).
-                      </span>
-                    </p>
+                  {duplicateKtpMatches.length > 0 && (
+                    <div className="mt-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900 space-y-1">
+                      <p className="flex items-center gap-1.5 font-bold">
+                        <AlertCircle className="h-3.5 w-3.5 shrink-0 text-amber-600" />
+                        <span>NIK KTP ini sudah terdaftar ({duplicateKtpMatches.length} data):</span>
+                      </p>
+                      <ul className="space-y-1 pl-5 list-disc">
+                        {duplicateKtpMatches.map((dup) => (
+                          <li key={dup.id} className="leading-snug">
+                            <span className="font-bold">{dup.nama}</span> ({dup.proposal} · {dup.tahun}){' '}
+                            <span
+                              className={`ml-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                                dup.validasi === 'accepted'
+                                  ? 'bg-teal-100 text-teal-800'
+                                  : dup.validasi === 'rejected'
+                                    ? 'bg-rose-100 text-rose-700'
+                                    : 'bg-amber-100 text-amber-800'
+                              }`}
+                            >
+                              {dup.validasi === 'accepted'
+                                ? 'Diterima'
+                                : dup.validasi === 'rejected'
+                                  ? 'Ditolak'
+                                  : 'Menunggu'}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   )}
                 </div>
 

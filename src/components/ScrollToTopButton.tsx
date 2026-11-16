@@ -37,16 +37,16 @@ export function ScrollToTopButton({
   return (
     <div
       className={`pointer-events-none fixed left-1/2 z-30 flex w-full max-w-md -translate-x-1/2 justify-end px-4 transition-all ${
-        hasBottomNav || hasFloatingAction ? 'bottom-21' : 'bottom-6'
+        hasBottomNav || hasFloatingAction ? 'bottom-22' : 'bottom-6'
       }`}
     >
       <button
         type="button"
         onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
         aria-label="Kembali ke paling atas"
-        className="pointer-events-auto inline-flex h-11 w-11 items-center justify-center rounded-full border border-slate-700/20 bg-slate-900/90 text-white shadow-lg backdrop-blur-sm transition-all hover:bg-teal-700 active:scale-95"
+        className="pointer-events-auto inline-flex h-[52px] w-[52px] items-center justify-center rounded-full border border-slate-700/20 bg-slate-900/90 text-white shadow-lg backdrop-blur-sm transition-all hover:bg-teal-700 active:scale-95"
       >
-        <ArrowUp className="h-5 w-5" />
+        <ArrowUp className="h-6 w-6" />
       </button>
     </div>
   );

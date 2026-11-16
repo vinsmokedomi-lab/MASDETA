@@ -9,7 +9,8 @@ import {
   Send,
   User,
 } from 'lucide-react';
-import { DirectChatMessage, InternalUser, SharedKpmCard } from '../types/kpm';
+import { DirectChatMessage, InternalUser, KpmRecord, SharedKpmCard } from '../types/kpm';
+import { getPrimaryKpmPhoto } from '../utils/imageProcessor';
 import { DriveImage } from './DriveImage';
 import { PresenceDot, getPresenceMeta } from './PresenceDot';
 
@@ -17,6 +18,7 @@ interface ChatViewProps {
   currentUser: InternalUser;
   users: InternalUser[];
   messages: DirectChatMessage[];
+  records?: KpmRecord[];
   activePeerId: string | null;
   onSelectPeer: (peerId: string | null) => void;
   onSendMessage: (recipientId: string, text: string, sharedKpm?: SharedKpmCard) => Promise<void>;
@@ -59,6 +61,7 @@ export function ChatView({
   currentUser,
   users,
   messages,
+  records = [],
   activePeerId,
   onSelectPeer,
   onSendMessage,
@@ -203,7 +206,23 @@ export function ChatView({
           ) : (
             threadMessages.map((msg) => {
               const isMine = msg.senderId === currentUser.id;
-              const kpmCard = msg.sharedKpm;
+              const liveRecord = msg.sharedKpm
+                ? records.find((r) => r.id === msg.sharedKpm!.kpmId)
+                : undefined;
+              const livePhoto = liveRecord ? getPrimaryKpmPhoto(liveRecord.documents) : undefined;
+              const kpmCard = msg.sharedKpm
+                ? {
+                    ...msg.sharedKpm,
+                    nama: liveRecord?.nama ?? msg.sharedKpm.nama,
+                    validasi: liveRecord?.validasi ?? msg.sharedKpm.validasi,
+                    item: liveRecord?.item ?? msg.sharedKpm.item,
+                    proposal: liveRecord?.proposal ?? msg.sharedKpm.proposal,
+                    registerCode: liveRecord?.registerCode ?? msg.sharedKpm.registerCode,
+                    fotoDataUrl: livePhoto?.dataUrl ?? msg.sharedKpm.fotoDataUrl,
+                    fotoThumbnailUrl:
+                      livePhoto?.thumbnailUrl ?? msg.sharedKpm.fotoThumbnailUrl,
+                  }
+                : undefined;
               const shortStatus =
                 kpmCard?.validasi === 'accepted'
                   ? 'Diterima'
@@ -236,7 +255,13 @@ export function ChatView({
                         className="mb-2 flex w-full max-w-[270px] items-center gap-2.5 overflow-hidden rounded-xl border border-slate-200 bg-white p-2 text-left text-slate-900 transition-colors hover:bg-slate-50"
                       >
                         <div className="flex h-11 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-100 text-slate-400">
-                          {kpmCard.fotoDataUrl ? (
+                          {livePhoto ? (
+                            <DriveImage
+                              doc={livePhoto}
+                              alt={kpmCard.nama}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : kpmCard.fotoDataUrl ? (
                             <DriveImage
                               src={kpmCard.fotoDataUrl}
                               thumbnailUrl={kpmCard.fotoThumbnailUrl}

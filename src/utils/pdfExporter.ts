@@ -3,12 +3,14 @@ import { Directory, Filesystem } from '@capacitor/filesystem';
 import { FileOpener } from '@capawesome-team/capacitor-file-opener';
 import { jsPDF } from 'jspdf';
 import autoTable, { Styles } from 'jspdf-autotable';
+import QRCode from 'qrcode';
 import { DTSEN_OPTION_ITEMS, INITIAL_WILAYAH_LIST } from '../data/kpmOptions';
 import {
   ItemBantuan,
   KpmDocumentFile,
   KpmRecord,
   ProposalRecord,
+  ReportTemplateConfig,
   WilayahKabKota,
 } from '../types/kpm';
 import {
@@ -363,6 +365,7 @@ export interface ExportKpmTablePdfOptions {
   subtitle?: string;
   fileName: string;
   includeSummary?: boolean;
+  reportTemplate?: ReportTemplateConfig;
 }
 
 export async function exportKpmTableToPdf({
@@ -375,6 +378,7 @@ export async function exportKpmTableToPdf({
   subtitle,
   fileName,
   includeSummary = true,
+  reportTemplate,
 }: ExportKpmTablePdfOptions): Promise<{ savedFileName: string; openedNative: boolean; count: number }> {
   // Selalu sertakan 4 kolom wajib + add-on terpilih hingga maksimal 10 kolom total
   const mergedKeys = Array.from(new Set([...MANDATORY_PDF_COLUMN_KEYS, ...selectedColumns]));
@@ -405,19 +409,57 @@ export async function exportKpmTableToPdf({
     compress: true,
   }) as AutoTableDoc;
 
+  let headerTopY = F4_PDF_MARGINS.top;
+  if (reportTemplate?.enabled) {
+    const centerX = F4_PDF_MARGINS.left + PRINTABLE_WIDTH_MM / 2;
+    if (reportTemplate.orgHeaderLine1?.trim()) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor(15, 23, 42);
+      doc.text(reportTemplate.orgHeaderLine1.trim().toUpperCase(), centerX, headerTopY + 4.5, {
+        align: 'center',
+      });
+      headerTopY += 5.5;
+    }
+    if (reportTemplate.orgHeaderLine2?.trim()) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(15, 118, 110);
+      doc.text(reportTemplate.orgHeaderLine2.trim(), centerX, headerTopY + 4, {
+        align: 'center',
+      });
+      headerTopY += 5;
+    }
+    if (reportTemplate.orgAddress?.trim()) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(71, 85, 105);
+      doc.text(reportTemplate.orgAddress.trim(), centerX, headerTopY + 3.5, {
+        align: 'center',
+      });
+      headerTopY += 5;
+    }
+    doc.setDrawColor(15, 23, 42);
+    doc.setLineWidth(0.5);
+    doc.line(F4_PDF_MARGINS.left, headerTopY + 1, F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right, headerTopY + 1);
+    doc.setLineWidth(0.2);
+    doc.line(F4_PDF_MARGINS.left, headerTopY + 2.1, F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right, headerTopY + 2.1);
+    headerTopY += 5;
+  }
+
   // Header Dokumen
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
   doc.setTextColor(15, 23, 42);
-  doc.text(title.trim() || 'Daftar Calon KPM', F4_PDF_MARGINS.left, F4_PDF_MARGINS.top + 6);
+  doc.text(title.trim() || 'Daftar Calon KPM', F4_PDF_MARGINS.left, headerTopY + 6);
 
-  let tableStartY = F4_PDF_MARGINS.top + 11;
+  let tableStartY = headerTopY + 11;
   if (subtitle && subtitle.trim()) {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8.5);
     doc.setTextColor(71, 85, 105);
-    doc.text(subtitle.trim(), F4_PDF_MARGINS.left, F4_PDF_MARGINS.top + 11);
-    tableStartY = F4_PDF_MARGINS.top + 15;
+    doc.text(subtitle.trim(), F4_PDF_MARGINS.left, headerTopY + 11);
+    tableStartY = headerTopY + 15;
   }
 
   const colWidths = computeScaledColumnWidths(activeCols);
@@ -588,6 +630,74 @@ export async function exportKpmTableToPdf({
     pengelolaEntries.forEach(([name, cnt], idx) => {
       doc.text(`- ${name} : ${cnt}`, rightColX, cursorY + 6 + idx * lineStep);
     });
+
+    if (
+      reportTemplate?.enabled &&
+      (reportTemplate.signatoryName?.trim() || reportTemplate.signatoryTitle?.trim())
+    ) {
+      let sigY = cursorY + 10 + maxLines * lineStep;
+      if (sigY + 34 > F4_PAPER_HEIGHT_MM - F4_PDF_MARGINS.bottom) {
+        doc.addPage([F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM], 'portrait');
+        sigY = F4_PDF_MARGINS.top + 8;
+      }
+      const sigX = F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right - 34;
+      const dateStr = new Intl.DateTimeFormat('id-ID', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+      }).format(new Date());
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.8);
+      doc.setTextColor(15, 23, 42);
+      doc.text(`${reportTemplate.city?.trim() || 'Pontianak'}, ${dateStr}`, sigX, sigY, {
+        align: 'center',
+      });
+      if (reportTemplate.signatoryTitle?.trim()) {
+        doc.text(reportTemplate.signatoryTitle.trim(), sigX, sigY + 4.8, { align: 'center' });
+      }
+      if (reportTemplate.signatoryName?.trim()) {
+        doc.setFont('helvetica', 'bold');
+        doc.text(reportTemplate.signatoryName.trim(), sigX, sigY + 23, { align: 'center' });
+      }
+      if (reportTemplate.signatoryNip?.trim()) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8);
+        doc.text(`NIP. ${reportTemplate.signatoryNip.trim()}`, sigX, sigY + 27.5, { align: 'center' });
+      }
+    }
+  } else if (
+    reportTemplate?.enabled &&
+    (reportTemplate.signatoryName?.trim() || reportTemplate.signatoryTitle?.trim())
+  ) {
+    let sigY = (doc.lastAutoTable?.finalY ?? tableStartY) + 12;
+    if (sigY + 34 > F4_PAPER_HEIGHT_MM - F4_PDF_MARGINS.bottom) {
+      doc.addPage([F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM], 'portrait');
+      sigY = F4_PDF_MARGINS.top + 8;
+    }
+    const sigX = F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right - 34;
+    const dateStr = new Intl.DateTimeFormat('id-ID', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    }).format(new Date());
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.8);
+    doc.setTextColor(15, 23, 42);
+    doc.text(`${reportTemplate.city?.trim() || 'Pontianak'}, ${dateStr}`, sigX, sigY, {
+      align: 'center',
+    });
+    if (reportTemplate.signatoryTitle?.trim()) {
+      doc.text(reportTemplate.signatoryTitle.trim(), sigX, sigY + 4.8, { align: 'center' });
+    }
+    if (reportTemplate.signatoryName?.trim()) {
+      doc.setFont('helvetica', 'bold');
+      doc.text(reportTemplate.signatoryName.trim(), sigX, sigY + 23, { align: 'center' });
+    }
+    if (reportTemplate.signatoryNip?.trim()) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.text(`NIP. ${reportTemplate.signatoryNip.trim()}`, sigX, sigY + 27.5, { align: 'center' });
+    }
   }
 
   const result = await saveOrOpenPdfDocument(doc, fileName);
@@ -745,6 +855,17 @@ export async function exportSingleKpmToPdf({
   const lainnyaCount = Array.isArray(docs.lainnya) ? docs.lainnya.length : 0;
   const rtRwText = `${record.rt ? record.rt.padStart(3, '0') : '-'} / ${record.rw ? record.rw.padStart(3, '0') : '-'}`;
 
+  let qrDataUrl = '';
+  try {
+    qrDataUrl = await QRCode.toDataURL(`MASDETA:KPM:${record.registerCode || record.id}`, {
+      width: 160,
+      margin: 1,
+      color: { dark: '#0f172a', light: '#ffffff' },
+    });
+  } catch {
+    qrDataUrl = '';
+  }
+
   // =========================================================================
   // 1. HEADER DOKUMEN A4 (TANPA BINGKAI KARTU ROUNDED)
   // =========================================================================
@@ -762,22 +883,24 @@ export async function exportSingleKpmToPdf({
     A4_MARGIN.top + 11.5
   );
 
+  const rightTextEdge = qrDataUrl ? A4_WIDTH_MM - A4_MARGIN.right - 19 : A4_WIDTH_MM - A4_MARGIN.right;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10.5);
   doc.setTextColor(...statusColor);
-  doc.text(
-    `STATUS: ${statusText.toUpperCase()}`,
-    A4_WIDTH_MM - A4_MARGIN.right,
-    A4_MARGIN.top + 5.5,
-    { align: 'right' }
-  );
+  doc.text(`STATUS: ${statusText.toUpperCase()}`, rightTextEdge, A4_MARGIN.top + 5.5, {
+    align: 'right',
+  });
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
   doc.setTextColor(100, 116, 139);
-  doc.text('MASDETA', A4_WIDTH_MM - A4_MARGIN.right, A4_MARGIN.top + 11.5, { align: 'right' });
+  doc.text('MASDETA', rightTextEdge, A4_MARGIN.top + 11.5, { align: 'right' });
 
-  const dividerY = A4_MARGIN.top + 15;
+  if (qrDataUrl) {
+    doc.addImage(qrDataUrl, 'PNG', A4_WIDTH_MM - A4_MARGIN.right - 16, A4_MARGIN.top - 1, 16, 16);
+  }
+
+  const dividerY = A4_MARGIN.top + 16;
   doc.setDrawColor(15, 118, 110);
   doc.setLineWidth(0.5);
   doc.line(A4_MARGIN.left, dividerY, A4_WIDTH_MM - A4_MARGIN.right, dividerY);
@@ -1061,3 +1184,278 @@ export async function exportSingleKpmToPdf({
   const safeName = `${record.tahun}_${record.nama}_${record.registerCode || 'kpm'}`;
   return saveOrOpenPdfDocument(doc, safeName);
 }
+
+export interface ExportKpmBastPdfOptions {
+  record: KpmRecord;
+  proposals: ProposalRecord[];
+  items: ItemBantuan[];
+  wilayahList?: WilayahKabKota[];
+  reportTemplate?: ReportTemplateConfig;
+}
+
+export async function exportKpmBastToPdf({
+  record,
+  proposals,
+  items,
+  wilayahList = INITIAL_WILAYAH_LIST,
+  reportTemplate,
+}: ExportKpmBastPdfOptions): Promise<{ savedFileName: string; openedNative: boolean }> {
+  const A4_WIDTH_MM = 210;
+  const A4_HEIGHT_MM = 297;
+  const A4_MARGIN = { top: 14, right: 15, bottom: 14, left: 15 };
+  const PRINT_W = A4_WIDTH_MM - A4_MARGIN.left - A4_MARGIN.right;
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: [A4_WIDTH_MM, A4_HEIGHT_MM],
+    compress: true,
+  }) as AutoTableDoc;
+
+  let cursorY = A4_MARGIN.top;
+  const centerX = A4_MARGIN.left + PRINT_W / 2;
+
+  if (reportTemplate?.enabled) {
+    if (reportTemplate.orgHeaderLine1?.trim()) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(12);
+      doc.setTextColor(15, 23, 42);
+      doc.text(reportTemplate.orgHeaderLine1.trim().toUpperCase(), centerX, cursorY + 4, {
+        align: 'center',
+      });
+      cursorY += 5.5;
+    }
+    if (reportTemplate.orgHeaderLine2?.trim()) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10.5);
+      doc.setTextColor(15, 118, 110);
+      doc.text(reportTemplate.orgHeaderLine2.trim(), centerX, cursorY + 4, { align: 'center' });
+      cursorY += 5;
+    }
+    if (reportTemplate.orgAddress?.trim()) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.5);
+      doc.setTextColor(71, 85, 105);
+      doc.text(reportTemplate.orgAddress.trim(), centerX, cursorY + 3.5, { align: 'center' });
+      cursorY += 4.8;
+    }
+    doc.setDrawColor(15, 23, 42);
+    doc.setLineWidth(0.55);
+    doc.line(A4_MARGIN.left, cursorY + 1, A4_WIDTH_MM - A4_MARGIN.right, cursorY + 1);
+    doc.setLineWidth(0.2);
+    doc.line(A4_MARGIN.left, cursorY + 2.2, A4_WIDTH_MM - A4_MARGIN.right, cursorY + 2.2);
+    cursorY += 7;
+  }
+
+  let qrDataUrl = '';
+  try {
+    qrDataUrl = await QRCode.toDataURL(`MASDETA:BAST:${record.registerCode || record.id}`, {
+      width: 160,
+      margin: 1,
+    });
+  } catch {
+    qrDataUrl = '';
+  }
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text('BERITA ACARA SERAH TERIMA BANTUAN (BAST)', A4_MARGIN.left, cursorY + 4.5);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(71, 85, 105);
+  doc.text(
+    `No. Register: ${record.registerCode || '-'}   ·   Tahun Anggaran ${record.tahun}`,
+    A4_MARGIN.left,
+    cursorY + 10
+  );
+
+  if (qrDataUrl) {
+    doc.addImage(qrDataUrl, 'PNG', A4_WIDTH_MM - A4_MARGIN.right - 16, cursorY - 1, 16, 16);
+  }
+
+  cursorY += 16;
+
+  const domicile = resolveProposalDomicile(record.proposal, proposals, record.tahun, wilayahList);
+  const kelurahan = record.kelurahan?.trim() || domicile.kelurahan || '-';
+  const kecamatan = record.kecamatan?.trim() || domicile.kecamatan || '-';
+  const pkg = resolvePackageForKpm(items, record.tahun, record.item);
+  const itemLabel =
+    pkg.name && pkg.name !== pkg.code ? `${pkg.code} — ${pkg.name}` : record.item || '-';
+  const signedDateText = record.bast?.signedAt
+    ? formatUploadDateTime(record.bast.signedAt)
+    : formatUploadDateTime(new Date().toISOString());
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+  doc.setTextColor(30, 41, 59);
+  const introText = `Pada hari ini, tanggal ${signedDateText}, telah dilakukan serah terima barang bantuan program MASDETA kepada Keluarga Penerima Manfaat (KPM) dengan rincian sebagai berikut:`;
+  const wrappedIntro = doc.splitTextToSize(introText, PRINT_W);
+  doc.text(wrappedIntro, A4_MARGIN.left, cursorY);
+  cursorY += wrappedIntro.length * 4.5 + 3;
+
+  autoTable(doc, {
+    startY: cursorY,
+    margin: A4_MARGIN,
+    tableWidth: PRINT_W,
+    head: [['DATA PENERIMA MANFAAT', 'KETERANGAN']],
+    body: [
+      ['Nama Lengkap Penerima', (record.bast?.recipientName || record.nama || '-').toUpperCase()],
+      ['NIK KTP / No. KK', `${record.nikKtp || '-'} / ${record.nikKk || '-'}`],
+      [
+        'Alamat Domisili',
+        `${record.alamat || '-'}, RT ${record.rt || '-'} / RW ${record.rw || '-'}, ${kelurahan}, ${kecamatan}`,
+      ],
+      ['Proposal & Tahun', `${record.proposal || '-'} (${record.tahun})`],
+      ['Paket Bantuan', itemLabel],
+      ['Pengelola Lapangan', record.pengelola || '-'],
+      ...(record.bast?.lat !== undefined && record.bast?.lng !== undefined
+        ? [
+            [
+              'Koordinat Serah Terima (GPS)',
+              `${record.bast.lat.toFixed(6)}, ${record.bast.lng.toFixed(6)}${record.bast.accuracy ? ` (±${Math.round(record.bast.accuracy)}m)` : ''}`,
+            ],
+          ]
+        : []),
+    ],
+    theme: 'grid',
+    styles: {
+      font: 'helvetica',
+      fontSize: 9.2,
+      textColor: [15, 23, 42],
+      lineColor: [203, 213, 225],
+      lineWidth: 0.22,
+      cellPadding: { top: 2.3, right: 3, bottom: 2.3, left: 3 },
+    },
+    headStyles: {
+      fillColor: [15, 118, 110],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+    },
+    columnStyles: {
+      0: { cellWidth: 54, fontStyle: 'bold', fillColor: [248, 250, 252] },
+      1: { cellWidth: PRINT_W - 54 },
+    },
+  });
+
+  const subStatuses = getKpmSubItemStatusList(record, items);
+  const subStartY = (doc.lastAutoTable?.finalY ?? cursorY + 45) + 5;
+
+  autoTable(doc, {
+    startY: subStartY,
+    margin: A4_MARGIN,
+    tableWidth: PRINT_W,
+    head: [['NO', 'RINCIAN BARANG / SUB-ITEM', 'STATUS SERAH TERIMA']],
+    body:
+      subStatuses.length > 0
+        ? subStatuses.map((sub, i) => [
+            String(i + 1).padStart(2, '0'),
+            sub.name,
+            sub.delivered ? 'Diterima Baik & Lengkap' : 'Belum Diterima',
+          ])
+        : [['01', itemLabel, 'Paket Utama']],
+    theme: 'grid',
+    styles: {
+      font: 'helvetica',
+      fontSize: 9,
+      textColor: [15, 23, 42],
+      lineColor: [203, 213, 225],
+      lineWidth: 0.22,
+      cellPadding: { top: 2.2, right: 2.8, bottom: 2.2, left: 2.8 },
+    },
+    headStyles: {
+      fillColor: [241, 245, 249],
+      textColor: [15, 23, 42],
+      fontStyle: 'bold',
+      halign: 'center',
+    },
+    columnStyles: {
+      0: { cellWidth: 14, halign: 'center' },
+      1: { cellWidth: PRINT_W - 64 },
+      2: { cellWidth: 50, halign: 'center' },
+    },
+  });
+
+  let sigY = (doc.lastAutoTable?.finalY ?? subStartY + 30) + 10;
+  if (sigY + 48 > A4_HEIGHT_MM - A4_MARGIN.bottom) {
+    doc.addPage([A4_WIDTH_MM, A4_HEIGHT_MM], 'portrait');
+    sigY = A4_MARGIN.top + 8;
+  }
+
+  const leftSigX = A4_MARGIN.left + PRINT_W * 0.23;
+  const rightSigX = A4_MARGIN.left + PRINT_W * 0.77;
+  const cityLabel = reportTemplate?.city?.trim() || 'Pontianak';
+  const dateOnlyStr = new Intl.DateTimeFormat('id-ID', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  }).format(record.bast?.signedAt ? new Date(record.bast.signedAt) : new Date());
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(15, 23, 42);
+  doc.text('Mengetahui / Petugas Penyerah,', leftSigX, sigY + 4.8, { align: 'center' });
+  doc.text(`${cityLabel}, ${dateOnlyStr}`, rightSigX, sigY, { align: 'center' });
+  doc.text('Penerima Manfaat (KPM),', rightSigX, sigY + 4.8, { align: 'center' });
+
+  // Load KPM Signature PNG if available
+  const sigDoc =
+    record.bast?.signatureDoc ||
+    (record.documents.lainnya || []).find((d) =>
+      (d.fileName || '').toUpperCase().startsWith('BAST-TTD-')
+    );
+  const loadedSig = await resolveKpmPortraitForPdf(sigDoc);
+  if (loadedSig) {
+    const boxW = 46;
+    const boxH = 20;
+    const imgRatio = loadedSig.width / loadedSig.height;
+    let drawW = boxW;
+    let drawH = boxH;
+    if (imgRatio > boxW / boxH) {
+      drawH = boxW / imgRatio;
+    } else {
+      drawW = boxH * imgRatio;
+    }
+    doc.addImage(
+      loadedSig.dataUrl,
+      loadedSig.format,
+      rightSigX - drawW / 2,
+      sigY + 7 + (boxH - drawH) / 2,
+      drawW,
+      drawH
+    );
+  }
+
+  const officerName =
+    reportTemplate?.enabled && reportTemplate.signatoryName?.trim()
+      ? reportTemplate.signatoryName.trim()
+      : record.bast?.signedBy || record.pengelola || 'Petugas Lapangan';
+  const officerTitle =
+    reportTemplate?.enabled && reportTemplate.signatoryTitle?.trim()
+      ? reportTemplate.signatoryTitle.trim()
+      : 'Admin / Pendamping';
+
+  doc.setFont('helvetica', 'bold');
+  doc.text(officerName, leftSigX, sigY + 31, { align: 'center' });
+  doc.text((record.bast?.recipientName || record.nama || '-').toUpperCase(), rightSigX, sigY + 31, {
+    align: 'center',
+  });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    reportTemplate?.enabled && reportTemplate.signatoryNip?.trim()
+      ? `NIP. ${reportTemplate.signatoryNip.trim()}`
+      : officerTitle,
+    leftSigX,
+    sigY + 35.5,
+    { align: 'center' }
+  );
+  doc.text(`NIK: ${record.nikKtp || '-'}`, rightSigX, sigY + 35.5, { align: 'center' });
+
+  const safeName = `BAST_${record.tahun}_${record.nama}_${record.registerCode || 'kpm'}`;
+  return saveOrOpenPdfDocument(doc, safeName);
+}
+

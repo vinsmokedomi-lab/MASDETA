@@ -12,9 +12,11 @@ import { isSupabaseConfigured, supabase } from './lib/supabaseClient';
 import {
   checkSupabaseSchemaReady,
   deleteKpmRecordInSupabase,
+  fetchAppStateSlice,
   fetchOperationalDataFromSupabase,
   isSchemaMissingError,
   runAdminDataActionInSupabase,
+  saveAppStateSlice,
   supabaseAdminControlInternalUser,
   supabaseCreateInternalUserBySuperAdmin,
   supabaseDeleteInternalUser,
@@ -45,12 +47,14 @@ import {
 } from './data/kpmOptions';
 import {
   AppNotificationItem,
+  DEFAULT_REPORT_TEMPLATE,
   DirectChatMessage,
   InternalUser,
   InternalUserRole,
   InternalUserStatus,
   ItemBantuan,
   KpmAuditLogEntry,
+  KpmBastInfo,
   KpmDocumentFile,
   KpmDocuments,
   KpmFormValues,
@@ -61,7 +65,11 @@ import {
   ProposalFormValues,
   ProposalKpmHistoryEntry,
   ProposalRecord,
+  ReportTemplateConfig,
+  ScheduleCategory,
+  ScheduleEventItem,
   SharedKpmCard,
+  TrashRecordItem,
   UserPermissions,
   UserPresenceStatus,
   ValidationStatus,
@@ -97,8 +105,14 @@ import {
   saveProposalHistory,
   saveProposals,
   saveWilayahList,
+  uploadImageDocumentToDrive,
 } from './utils/imageProcessor';
 import { loadIdbSnapshot, saveIdbValue } from './utils/indexedDbStorage';
+import {
+  enqueueOfflineAction,
+  getOfflineQueue,
+  removeOfflineAction,
+} from './utils/offlineQueue';
 import { TAHUN_OPTIONS } from './data/kpmOptions';
 import { importProposalKpmFromCsv } from './utils/csvImporter';
 import { KpmRegistrationForm } from './components/KpmRegistrationForm';
@@ -430,6 +444,12 @@ export default function App() {
     Boolean(getCachedMandatoryUpdate())
   );
   const [checkingAppUpdate, setCheckingAppUpdate] = useState(false);
+  const [isOperationalLoading, setIsOperationalLoading] = useState<boolean>(true);
+  const [offlineQueueCount, setOfflineQueueCount] = useState<number>(0);
+  const [schedules, setSchedules] = useState<ScheduleEventItem[]>([]);
+  const [trashBin, setTrashBin] = useState<TrashRecordItem[]>([]);
+  const [reportTemplate, setReportTemplate] = useState<ReportTemplateConfig>(DEFAULT_REPORT_TEMPLATE);
+  const [kpmBastMap, setKpmBastMap] = useState<Record<string, KpmBastInfo>>({});
 
   const {
     isOnline,
@@ -460,6 +480,10 @@ export default function App() {
   const notifiedDeletedProposalIdsRef = useRef<Set<string>>(new Set());
   const appAlertToastTimerRef = useRef<number | undefined>(undefined);
   const nativePushRequestedRef = useRef<boolean>(false);
+  const kpmBastMapRef = useRef<Record<string, KpmBastInfo>>(kpmBastMap);
+  const isFlushingQueueRef = useRef<boolean>(false);
+
+  kpmBastMapRef.current = kpmBastMap;
 
   useEffect(() => {
     isOnlineRef.current = isOnline;
@@ -746,7 +770,6 @@ export default function App() {
     const ktpCounts = new Map<string, number>();
     const kkCounts = new Map<string, number>();
     for (const r of records) {
-      if (selectedYear !== 'all' && r.tahun !== selectedYear) continue;
       if (r.nikKtp) ktpCounts.set(r.nikKtp, (ktpCounts.get(r.nikKtp) ?? 0) + 1);
       if (r.nikKk) kkCounts.set(r.nikKk, (kkCounts.get(r.nikKk) ?? 0) + 1);
     }
@@ -758,7 +781,7 @@ export default function App() {
       if (c > 1) dupes += 1;
     });
     return dupes;
-  }, [records, selectedYear]);
+  }, [records]);
 
   // Hydrate last known operational state from IndexedDB for reliable offline startup
   useEffect(() => {
@@ -791,7 +814,11 @@ export default function App() {
           setKpmAuditLogs(snapshot.kpmAuditLogs);
         }
         if (snapshot.records && (snapshot.records.length > 0 || latestDataRef.current.records.length === 0)) {
-          setRecords(snapshot.records);
+          setRecords(
+            snapshot.records.map((r) =>
+              kpmBastMapRef.current[r.id] ? { ...r, bast: kpmBastMapRef.current[r.id] } : r
+            )
+          );
         }
         if (snapshot.internalUsers && snapshot.internalUsers.length > 0) {
           setInternalUsers(snapshot.internalUsers);
@@ -803,6 +830,9 @@ export default function App() {
       .finally(() => {
         if (!cancelled) setIdbHydrated(true);
       });
+    void getOfflineQueue().then((q) => {
+      if (!cancelled) setOfflineQueueCount(q.length);
+    });
     return () => {
       cancelled = true;
     };
@@ -976,22 +1006,104 @@ export default function App() {
     [clearSessionState]
   );
 
-  const applyRemoteOperationalState = useCallback((state: Partial<OperationalDataPayload>) => {
-    hasAppliedRemoteRef.current = true;
-    const nextProposals = Array.isArray(state.proposals) ? state.proposals : latestDataRef.current.proposals;
-    const nextItems = Array.isArray(state.items) ? state.items : latestDataRef.current.items;
-    const nextWilayah = Array.isArray(state.wilayahList) ? state.wilayahList : latestDataRef.current.wilayahList;
-    const rawRecords = Array.isArray(state.records) ? state.records : latestDataRef.current.records;
+  const mergeBastIntoRecords = useCallback(
+    (list: KpmRecord[], bastMap: Record<string, KpmBastInfo>): KpmRecord[] =>
+      list.map((r) => (bastMap[r.id] ? { ...r, bast: bastMap[r.id] } : r)),
+    []
+  );
 
-    setProposals(nextProposals);
-    setItems(nextItems);
-    setWilayahList(nextWilayah);
-    setRecords(recalculateProposalRegisterCodes(rawRecords, nextProposals, nextItems, nextWilayah));
-    if (Array.isArray(state.pengelolaList)) setPengelolaList(state.pengelolaList);
-    if (Array.isArray(state.pekerjaanList)) setPekerjaanList(state.pekerjaanList);
-    if (Array.isArray(state.proposalHistory)) setProposalHistory(state.proposalHistory);
-    if (Array.isArray(state.kpmAuditLogs)) setKpmAuditLogs(state.kpmAuditLogs);
-  }, []);
+  const loadAppStateSlices = useCallback(async () => {
+    try {
+      const [fetchedSchedules, fetchedTrash, fetchedTemplate, fetchedBastMap] = await Promise.all([
+        fetchAppStateSlice<ScheduleEventItem[]>('masdeta_schedules_v1', []),
+        fetchAppStateSlice<TrashRecordItem[]>('masdeta_trash_bin_v1', []),
+        fetchAppStateSlice<ReportTemplateConfig>(
+          'masdeta_report_template_v1',
+          DEFAULT_REPORT_TEMPLATE
+        ),
+        fetchAppStateSlice<Record<string, KpmBastInfo>>('masdeta_kpm_bast_v1', {}),
+      ]);
+
+      const nowMs = Date.now();
+      const rawTrash = Array.isArray(fetchedTrash) ? fetchedTrash : [];
+      const expiredTrash = rawTrash.filter((t) => new Date(t.expiresAt).getTime() <= nowMs);
+      const activeTrash = rawTrash.filter((t) => new Date(t.expiresAt).getTime() > nowMs);
+
+      if (expiredTrash.length > 0) {
+        const docsToRemove: KpmDocumentFile[] = [];
+        for (const item of expiredTrash) {
+          if (item.kpmRecord) {
+            const d = item.kpmRecord.documents;
+            if (d.ktp) docsToRemove.push(d.ktp);
+            if (d.kk) docsToRemove.push(d.kk);
+            if (d.penerima) docsToRemove.push(d.penerima);
+            if (d.survey) docsToRemove.push(d.survey);
+            (d.rumah || []).forEach((x) => docsToRemove.push(x));
+            (d.lainnya || []).forEach((x) => docsToRemove.push(x));
+            if (item.kpmRecord.bast?.signatureDoc) {
+              docsToRemove.push(item.kpmRecord.bast.signatureDoc);
+            }
+          }
+          if (item.proposalRecord) {
+            Object.values(item.proposalRecord.documents || {}).forEach((doc) => {
+              if (doc) docsToRemove.push(doc);
+            });
+          }
+        }
+        if (docsToRemove.length > 0) {
+          void Promise.allSettled(docsToRemove.map((doc) => removeDocumentFromDrive(doc)));
+        }
+        void saveAppStateSlice('masdeta_trash_bin_v1', activeTrash);
+      }
+
+      const safeBastMap =
+        fetchedBastMap && typeof fetchedBastMap === 'object' ? fetchedBastMap : {};
+      kpmBastMapRef.current = safeBastMap;
+      setSchedules(Array.isArray(fetchedSchedules) ? fetchedSchedules : []);
+      setTrashBin(activeTrash);
+      setReportTemplate(
+        fetchedTemplate && typeof fetchedTemplate === 'object'
+          ? { ...DEFAULT_REPORT_TEMPLATE, ...fetchedTemplate }
+          : DEFAULT_REPORT_TEMPLATE
+      );
+      setKpmBastMap(safeBastMap);
+      setRecords((prev) => mergeBastIntoRecords(prev, safeBastMap));
+    } catch {
+      // Abaikan gangguan sementara saat memuat slice tambahan
+    }
+  }, [mergeBastIntoRecords]);
+
+  const applyRemoteOperationalState = useCallback(
+    (state: Partial<OperationalDataPayload>) => {
+      hasAppliedRemoteRef.current = true;
+      const nextProposals = Array.isArray(state.proposals)
+        ? state.proposals
+        : latestDataRef.current.proposals;
+      const nextItems = Array.isArray(state.items) ? state.items : latestDataRef.current.items;
+      const nextWilayah = Array.isArray(state.wilayahList)
+        ? state.wilayahList
+        : latestDataRef.current.wilayahList;
+      const rawRecords = Array.isArray(state.records)
+        ? state.records
+        : latestDataRef.current.records;
+
+      setProposals(nextProposals);
+      setItems(nextItems);
+      setWilayahList(nextWilayah);
+      const recalculated = recalculateProposalRegisterCodes(
+        rawRecords,
+        nextProposals,
+        nextItems,
+        nextWilayah
+      );
+      setRecords(mergeBastIntoRecords(recalculated, kpmBastMapRef.current));
+      if (Array.isArray(state.pengelolaList)) setPengelolaList(state.pengelolaList);
+      if (Array.isArray(state.pekerjaanList)) setPekerjaanList(state.pekerjaanList);
+      if (Array.isArray(state.proposalHistory)) setProposalHistory(state.proposalHistory);
+      if (Array.isArray(state.kpmAuditLogs)) setKpmAuditLogs(state.kpmAuditLogs);
+    },
+    [mergeBastIntoRecords]
+  );
 
   const loadOrBootstrapOperationalData = useCallback(
     async (
@@ -1000,112 +1112,118 @@ export default function App() {
       useSupabaseOverride?: boolean
     ) => {
       const useSupabase = useSupabaseOverride ?? supabaseReadyRef.current;
-
-      if (useSupabase) {
-        try {
-          const snapshot = await fetchOperationalDataFromSupabase();
-          applyRemoteOperationalState({
-            records: snapshot.records,
-            proposals: snapshot.proposals,
-            items: snapshot.items,
-            pekerjaanList: snapshot.pekerjaanList,
-            wilayahList:
-              snapshot.wilayahList.length > 0
-                ? snapshot.wilayahList
-                : latestDataRef.current.wilayahList,
-            pengelolaList: snapshot.pengelolaList,
-            proposalHistory: snapshot.proposalHistory,
-            kpmAuditLogs: snapshot.kpmAuditLogs,
-          });
-          return;
-        } catch (err) {
-          if (isSchemaMissingError(err)) {
-            setSupabaseSchemaMissing(true);
-            setSupabaseReady(false);
-          } else {
-            console.error('Supabase operational load error:', err);
-          }
-        }
-      }
+      setIsOperationalLoading(true);
+      void loadAppStateSlices();
 
       try {
-        const res = await authFetch('/api/data/state', {}, token);
-        if (!res.ok) return;
-        const remote = (await res.json()) as OperationalDataPayload;
-        if (remote.initialized) {
-          applyRemoteOperationalState(remote);
-          return;
-        }
-
-        let seedPayload: OperationalDataPayload = { ...latestDataRef.current };
-        const SEED_FLAG_KEY = 'masdeta_csv_seed_ptk_kota_2026_v1';
-        let seedDone = false;
-        try {
-          seedDone = localStorage.getItem(SEED_FLAG_KEY) === 'done';
-        } catch {
-          seedDone = false;
-        }
-
-        if (seedPayload.records.length === 0 && !seedDone) {
+        if (useSupabase) {
           try {
-            const csvRes = await fetch('/assets/aistudio/Kecamatan_Pontianak_Kota_2026_ab18452d.csv');
-            if (csvRes.ok) {
-              const csvText = await csvRes.text();
-              if (csvText) {
-                const imported = importProposalKpmFromCsv({
-                  csvText,
-                  existingRecords: seedPayload.records,
-                  existingProposals: seedPayload.proposals,
-                  existingPengelolaList: seedPayload.pengelolaList,
-                  existingPekerjaanList: seedPayload.pekerjaanList,
-                  items: seedPayload.items,
-                  wilayahList: seedPayload.wilayahList,
-                  actorName: actor?.nama ?? 'SuperAdmin',
-                  actorEmail: actor?.email,
-                });
-                if (imported.importedRecordsCount > 0) {
-                  seedPayload = {
-                    ...seedPayload,
-                    records: imported.nextRecords,
-                    proposals: imported.nextProposals,
-                    pengelolaList: imported.nextPengelolaList,
-                    pekerjaanList: imported.nextPekerjaanList,
-                    kpmAuditLogs: [...imported.newAuditLogs, ...seedPayload.kpmAuditLogs],
-                    proposalHistory: [...imported.newProposalHistory, ...seedPayload.proposalHistory],
-                  };
-                  try {
-                    localStorage.setItem(SEED_FLAG_KEY, 'done');
-                  } catch {
-                    // Ignore storage write error
+            const snapshot = await fetchOperationalDataFromSupabase();
+            applyRemoteOperationalState({
+              records: snapshot.records,
+              proposals: snapshot.proposals,
+              items: snapshot.items,
+              pekerjaanList: snapshot.pekerjaanList,
+              wilayahList:
+                snapshot.wilayahList.length > 0
+                  ? snapshot.wilayahList
+                  : latestDataRef.current.wilayahList,
+              pengelolaList: snapshot.pengelolaList,
+              proposalHistory: snapshot.proposalHistory,
+              kpmAuditLogs: snapshot.kpmAuditLogs,
+            });
+            return;
+          } catch (err) {
+            if (isSchemaMissingError(err)) {
+              setSupabaseSchemaMissing(true);
+              setSupabaseReady(false);
+            } else {
+              console.error('Supabase operational load error:', err);
+            }
+          }
+        }
+
+        try {
+          const res = await authFetch('/api/data/state', {}, token);
+          if (!res.ok) return;
+          const remote = (await res.json()) as OperationalDataPayload;
+          if (remote.initialized) {
+            applyRemoteOperationalState(remote);
+            return;
+          }
+
+          let seedPayload: OperationalDataPayload = { ...latestDataRef.current };
+          const SEED_FLAG_KEY = 'masdeta_csv_seed_ptk_kota_2026_v1';
+          let seedDone = false;
+          try {
+            seedDone = localStorage.getItem(SEED_FLAG_KEY) === 'done';
+          } catch {
+            seedDone = false;
+          }
+
+          if (seedPayload.records.length === 0 && !seedDone) {
+            try {
+              const csvRes = await fetch('/assets/aistudio/Kecamatan_Pontianak_Kota_2026_ab18452d.csv');
+              if (csvRes.ok) {
+                const csvText = await csvRes.text();
+                if (csvText) {
+                  const imported = importProposalKpmFromCsv({
+                    csvText,
+                    existingRecords: seedPayload.records,
+                    existingProposals: seedPayload.proposals,
+                    existingPengelolaList: seedPayload.pengelolaList,
+                    existingPekerjaanList: seedPayload.pekerjaanList,
+                    items: seedPayload.items,
+                    wilayahList: seedPayload.wilayahList,
+                    actorName: actor?.nama ?? 'SuperAdmin',
+                    actorEmail: actor?.email,
+                  });
+                  if (imported.importedRecordsCount > 0) {
+                    seedPayload = {
+                      ...seedPayload,
+                      records: imported.nextRecords,
+                      proposals: imported.nextProposals,
+                      pengelolaList: imported.nextPengelolaList,
+                      pekerjaanList: imported.nextPekerjaanList,
+                      kpmAuditLogs: [...imported.newAuditLogs, ...seedPayload.kpmAuditLogs],
+                      proposalHistory: [...imported.newProposalHistory, ...seedPayload.proposalHistory],
+                    };
+                    try {
+                      localStorage.setItem(SEED_FLAG_KEY, 'done');
+                    } catch {
+                      // Ignore storage write error
+                    }
                   }
                 }
               }
+            } catch {
+              // Ignore CSV seed error
             }
-          } catch {
-            // Ignore CSV seed error
           }
-        }
 
-        const bootRes = await authFetch(
-          '/api/data/bootstrap',
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(seedPayload),
-          },
-          token
-        );
-        if (bootRes.ok) {
-          const bootData = (await bootRes.json()) as { state?: OperationalDataPayload };
-          if (bootData.state) {
-            applyRemoteOperationalState(bootData.state);
+          const bootRes = await authFetch(
+            '/api/data/bootstrap',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(seedPayload),
+            },
+            token
+          );
+          if (bootRes.ok) {
+            const bootData = (await bootRes.json()) as { state?: OperationalDataPayload };
+            if (bootData.state) {
+              applyRemoteOperationalState(bootData.state);
+            }
           }
+        } catch {
+          // Fallback ke state lokal jika server data sementara tidak terjangkau
         }
-      } catch {
-        // Fallback ke state lokal jika server data sementara tidak terjangkau
+      } finally {
+        setIsOperationalLoading(false);
       }
     },
-    [authFetch, applyRemoteOperationalState]
+    [authFetch, applyRemoteOperationalState, loadAppStateSlices]
   );
 
   const syncOperationalData = useCallback(
@@ -1214,6 +1332,7 @@ export default function App() {
           }
 
           if (!sessionUserId) {
+            setIsOperationalLoading(false);
             setAuthReady(true);
             return;
           }
@@ -1221,6 +1340,7 @@ export default function App() {
           const activeUser = users.find((u) => u.id === sessionUserId && u.status === 'active');
           if (!activeUser) {
             clearSessionState();
+            setIsOperationalLoading(false);
             setAuthReady(true);
             return;
           }
@@ -1254,6 +1374,7 @@ export default function App() {
           );
         } catch (err) {
           console.error('Supabase initial sync error:', err);
+          setIsOperationalLoading(false);
         } finally {
           if (!cancelled) setAuthReady(true);
         }
@@ -1264,6 +1385,7 @@ export default function App() {
         if (sessionUserId) {
           clearSessionState();
         }
+        setIsOperationalLoading(false);
         setAuthReady(true);
         return;
       }
@@ -1361,6 +1483,7 @@ export default function App() {
           fetchOperationalDataFromSupabase(),
           supabaseFetchInternalUsers(),
           supabaseFetchDirectMessages(),
+          loadAppStateSlices(),
         ]);
 
         applyRemoteOperationalState({
@@ -2054,6 +2177,46 @@ export default function App() {
     };
   }, [currentUser?.id, currentUser?.presenceManual, supabaseReady]);
 
+  // Kunci pinch-in / pinch-out zoom aplikasi secara global (kecuali di pratinjau foto lightbox)
+  useEffect(() => {
+    const isInsideAllowedZoomStage = (target: EventTarget | null) =>
+      target instanceof Element && Boolean(target.closest('[data-allow-pinch-zoom="true"]'));
+
+    const handleTouchGuard = (e: TouchEvent) => {
+      if (e.touches.length > 1 && !isInsideAllowedZoomStage(e.target)) {
+        e.preventDefault();
+      }
+    };
+
+    const handleGestureGuard = (e: Event) => {
+      if (!isInsideAllowedZoomStage(e.target)) {
+        e.preventDefault();
+      }
+    };
+
+    const handleWheelGuard = (e: WheelEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !isInsideAllowedZoomStage(e.target)) {
+        e.preventDefault();
+      }
+    };
+
+    document.addEventListener('touchstart', handleTouchGuard, { passive: false });
+    document.addEventListener('touchmove', handleTouchGuard, { passive: false });
+    document.addEventListener('gesturestart', handleGestureGuard, { passive: false });
+    document.addEventListener('gesturechange', handleGestureGuard, { passive: false });
+    document.addEventListener('gestureend', handleGestureGuard, { passive: false });
+    document.addEventListener('wheel', handleWheelGuard, { passive: false });
+
+    return () => {
+      document.removeEventListener('touchstart', handleTouchGuard);
+      document.removeEventListener('touchmove', handleTouchGuard);
+      document.removeEventListener('gesturestart', handleGestureGuard);
+      document.removeEventListener('gesturechange', handleGestureGuard);
+      document.removeEventListener('gestureend', handleGestureGuard);
+      document.removeEventListener('wheel', handleWheelGuard);
+    };
+  }, []);
+
   // Tombol Back Android: TERKUNCI saat BottomNav (botnavig) tampil di layar,
   // dan HANYA berfungsi melakukan navigasi kembali jika tidak ada BottomNav di layar.
   const handleAndroidBackRef = useRef<() => void>(() => {});
@@ -2194,7 +2357,7 @@ export default function App() {
         window.scrollTo({ top: 0, behavior: 'smooth' });
         return;
       }
-      if (menuSection === 'administrasi') {
+      if (menuSection === 'administrasi' || menuSection === 'sampah') {
         setMenuSection('superadmin');
         window.scrollTo({ top: 0, behavior: 'smooth' });
         return;
@@ -2328,7 +2491,8 @@ export default function App() {
 
   const handleImportCsv = (
     csvText: string,
-    sourceLabel?: string
+    sourceLabel?: string,
+    skipDuplicates = true
   ): {
     importedRecords: number;
     importedProposals: number;
@@ -2359,6 +2523,7 @@ export default function App() {
       wilayahList: state.wilayahList,
       actorName: state.currentActor.nama,
       actorEmail: state.currentActor.email,
+      skipDuplicates,
     });
 
     if (result.importedRecordsCount > 0) {
@@ -2744,6 +2909,36 @@ export default function App() {
       );
       const nextRecords = recalculateProposalRegisterCodes(mapped, proposals, items, wilayahList);
 
+      if (!isOnlineRef.current || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+        await enqueueOfflineAction({
+          id: `off-save-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          createdAt: now,
+          kind: 'save_kpm',
+          label: `Edit KPM: ${values.nama}`,
+          editingRecordId: editingId,
+          values,
+        });
+        const queue = await getOfflineQueue();
+        setOfflineQueueCount(queue.length);
+        setKpmAuditLogs(nextAuditLogs);
+        setProposalHistory(nextProposalHistory);
+        setRecords(nextRecords);
+        setEditingKpmRecord(null);
+        if (kpmFormReturnToDetail && activeKpmId) {
+          setKpmFormReturnToDetail(false);
+          setSubView('kpm-detail');
+        } else {
+          setSubView('none');
+          setActiveTab(returnToTab);
+        }
+        setFeedback({
+          type: 'success',
+          message: `Mode Offline: Perubahan "${values.nama}" disimpan ke antrean & akan disinkronkan saat internet kembali.`,
+        });
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return true;
+      }
+
       const ok = await syncOperationalData(
         {
           records: nextRecords,
@@ -2841,6 +3036,41 @@ export default function App() {
     const nextAuditLogs = [createdAuditEntry, ...kpmAuditLogs];
     const nextProposalHistory = [enteredHistory, ...proposalHistory];
 
+    if (!isOnlineRef.current || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+      await enqueueOfflineAction({
+        id: `off-add-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        createdAt: now,
+        kind: 'save_kpm',
+        label: `Tambah KPM: ${values.nama}`,
+        values,
+      });
+      const queue = await getOfflineQueue();
+      setOfflineQueueCount(queue.length);
+      setRecords(nextRecordsList);
+      setKpmAuditLogs(nextAuditLogs);
+      setProposalHistory(nextProposalHistory);
+      setPendingSelectedProposal(null);
+      setLockedKpmProposalScope(null);
+      setSelectedYear(savedNewRecord.tahun);
+      setActiveKpmId(savedNewRecord.id);
+      setKpmDetailReturnToRecap(false);
+      setKpmDetailReturnToChatPeerId(null);
+      if (kpmFormReturnToProposalDetail && activeProposal) {
+        setKpmFormReturnToProposalDetail(false);
+        setKpmDetailReturnToProposalDetail(true);
+      } else {
+        setKpmDetailReturnToProposalDetail(false);
+        setReturnToTab('kpm');
+      }
+      setSubView('kpm-detail');
+      setFeedback({
+        type: 'success',
+        message: `Mode Offline: "${savedNewRecord.nama}" disimpan ke antrean & akan dikirim saat internet kembali.`,
+      });
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return true;
+    }
+
     const ok = await syncOperationalData(
       {
         records: nextRecordsList,
@@ -2891,20 +3121,24 @@ export default function App() {
       return;
     }
 
-    // Hapus seluruh foto KPM dari Google Drive agar tidak meninggalkan berkas yatim
-    const docsToTrash: (KpmDocumentFile | undefined)[] = [
-      target.documents.ktp,
-      target.documents.kk,
-      target.documents.penerima,
-      target.documents.survey,
-      ...(target.documents.rumah || []),
-      ...(target.documents.lainnya || []),
-    ];
-    void Promise.allSettled(
-      docsToTrash.filter((d): d is KpmDocumentFile => Boolean(d)).map((d) => removeDocumentFromDrive(d))
-    );
-
+    // Pindahkan ke Tempat Sampah 30 hari (berkas Drive tetap dipertahankan sampai kedaluwarsa atau dihapus permanen)
     const now = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    const trashEntry: TrashRecordItem = {
+      id: `trash-kpm-${target.id}-${Date.now()}`,
+      kind: 'kpm',
+      title: target.nama,
+      subtitle: `${target.proposal} · ${target.tahun} · ${target.registerCode}`,
+      tahun: target.tahun,
+      deletedAt: now,
+      expiresAt,
+      deletedBy: currentActor.nama,
+      kpmRecord: target,
+    };
+    const nextTrash = [trashEntry, ...trashBin];
+    setTrashBin(nextTrash);
+    void saveAppStateSlice('masdeta_trash_bin_v1', nextTrash);
+
     const removedHistory: ProposalKpmHistoryEntry = {
       id: `hist-del-${Date.now()}`,
       tahun: target.tahun,
@@ -2949,7 +3183,7 @@ export default function App() {
     }
     setFeedback({
       type: 'success',
-      message: `Data calon KPM "${target.nama}" dan foto terkait telah dihapus.`,
+      message: `Data calon KPM "${target.nama}" dipindahkan ke Tempat Sampah (tersimpan 30 hari).`,
     });
   };
 
@@ -3097,6 +3331,23 @@ export default function App() {
     );
     setKpmAuditLogs(nextLogs);
     setRecords(nextRecords);
+
+    if (!isOnlineRef.current || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+      void enqueueOfflineAction({
+        id: `off-st-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        createdAt: now,
+        kind: 'update_status',
+        label: `Status ${target.nama} → ${formatValidationLabel(status)}`,
+        kpmId: id,
+        status,
+      }).then(() => getOfflineQueue().then((q) => setOfflineQueueCount(q.length)));
+      setFeedback({
+        type: 'success',
+        message: `Mode Offline: Perubahan status "${target.nama}" masuk antrean sinkronisasi.`,
+      });
+      return;
+    }
+
     void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
   };
 
@@ -3156,6 +3407,25 @@ export default function App() {
     );
     setKpmAuditLogs(nextLogs);
     setRecords(nextRecords);
+
+    if (!isOnlineRef.current || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+      void enqueueOfflineAction({
+        id: `off-sub-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        createdAt: now,
+        kind: 'toggle_subitem',
+        label: `Checklist ${subItemName} (${target.nama})`,
+        kpmId,
+        subItemKey,
+        subItemName,
+        delivered: nextDelivered,
+      }).then(() => getOfflineQueue().then((q) => setOfflineQueueCount(q.length)));
+      setFeedback({
+        type: 'success',
+        message: `Mode Offline: Checklist "${subItemName}" masuk antrean sinkronisasi.`,
+      });
+      return;
+    }
+
     void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
   };
 
@@ -3215,6 +3485,565 @@ export default function App() {
     setKpmAuditLogs(nextLogs);
     setRecords(nextRecords);
     void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
+  };
+
+  const handleFlushOfflineQueue = useCallback(async () => {
+    if (!isOnlineRef.current || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+    if (isFlushingQueueRef.current) return;
+
+    const queue = await getOfflineQueue();
+    if (queue.length === 0) {
+      setOfflineQueueCount(0);
+      return;
+    }
+
+    isFlushingQueueRef.current = true;
+    try {
+      let workRecords = [...latestDataRef.current.records];
+      let workAuditLogs = [...latestDataRef.current.kpmAuditLogs];
+      let workHistory = [...latestDataRef.current.proposalHistory];
+      const workProposals = latestDataRef.current.proposals;
+      const workItems = latestDataRef.current.items;
+      const workWilayah = latestDataRef.current.wilayahList;
+      const actor = {
+        nama: currentUser?.nama ?? 'Petugas Internal',
+        email: currentUser?.email,
+      };
+
+      let processedCount = 0;
+      const processedIds: string[] = [];
+
+      for (const act of queue) {
+        try {
+          if (act.kind === 'save_kpm') {
+            if (act.editingRecordId) {
+              const prev = workRecords.find((r) => r.id === act.editingRecordId);
+              if (prev) {
+                workRecords = workRecords.map((r) =>
+                  r.id === act.editingRecordId
+                    ? {
+                        ...r,
+                        ...act.values,
+                        validasi: act.values.validasi || r.validasi,
+                        updatedAt: act.createdAt,
+                      }
+                    : r
+                );
+              }
+            } else {
+              const dupByNik =
+                act.values.nikKtp &&
+                workRecords.some((r) => r.nikKtp === act.values.nikKtp && r.nama === act.values.nama);
+              if (!dupByNik) {
+                const newRec: KpmRecord = {
+                  id: `kpm-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+                  registerCode: generateRegisterCode(
+                    act.values.tahun,
+                    act.values.item,
+                    workRecords.filter(
+                      (r) => r.proposal === act.values.proposal && r.tahun === act.values.tahun
+                    ).length
+                  ),
+                  ...act.values,
+                  validasi: act.values.validasi || 'pending',
+                  createdAt: act.createdAt,
+                  updatedAt: act.createdAt,
+                };
+                workRecords = [newRec, ...workRecords];
+              }
+            }
+            processedIds.push(act.id);
+            processedCount++;
+          } else if (act.kind === 'update_status') {
+            const target = workRecords.find((r) => r.id === act.kpmId);
+            if (target && target.validasi !== act.status) {
+              workAuditLogs = [
+                {
+                  id: `audit-off-st-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+                  kpmId: target.id,
+                  action: 'status_changed',
+                  actorName: actor.nama,
+                  actorEmail: actor.email,
+                  timestamp: act.createdAt,
+                  proposal: target.proposal,
+                  tahun: target.tahun,
+                  changes: [
+                    {
+                      field: 'Status Validasi',
+                      before: formatValidationLabel(target.validasi),
+                      after: formatValidationLabel(act.status),
+                    },
+                  ],
+                },
+                ...workAuditLogs,
+              ];
+              workRecords = workRecords.map((r) =>
+                r.id === act.kpmId ? { ...r, validasi: act.status, updatedAt: act.createdAt } : r
+              );
+            }
+            processedIds.push(act.id);
+            processedCount++;
+          } else if (act.kind === 'toggle_subitem') {
+            const target = workRecords.find((r) => r.id === act.kpmId);
+            if (target) {
+              workRecords = workRecords.map((r) =>
+                r.id === act.kpmId
+                  ? {
+                      ...r,
+                      subItemDeliveries: {
+                        ...(r.subItemDeliveries || {}),
+                        [act.subItemKey]: {
+                          delivered: act.delivered,
+                          updatedAt: act.createdAt,
+                          updatedBy: actor.nama,
+                        },
+                      },
+                      updatedAt: act.createdAt,
+                    }
+                  : r
+              );
+            }
+            processedIds.push(act.id);
+            processedCount++;
+          } else if (act.kind === 'upload_doc') {
+            const target = workRecords.find((r) => r.id === act.kpmId);
+            if (target) {
+              const fileObj = new File([act.fileBlob], act.fileName, { type: act.mimeType });
+              const uploaded = await uploadImageDocumentToDrive(fileObj);
+              const docs = { ...target.documents };
+              if (act.category === 'rumah') {
+                docs.rumah = [...(docs.rumah || []), uploaded];
+              } else if (act.category === 'lainnya') {
+                docs.lainnya = [...(docs.lainnya || []), uploaded];
+              } else {
+                docs[act.category] = uploaded;
+              }
+              workRecords = workRecords.map((r) =>
+                r.id === act.kpmId ? { ...r, documents: docs, updatedAt: act.createdAt } : r
+              );
+            }
+            processedIds.push(act.id);
+            processedCount++;
+          }
+        } catch {
+          // Biarkan aksi tetap di antrean jika satu langkah gagal
+        }
+      }
+
+      workRecords = recalculateProposalRegisterCodes(
+        workRecords,
+        workProposals,
+        workItems,
+        workWilayah
+      );
+
+      if (processedIds.length > 0) {
+        const ok = await syncOperationalData(
+          {
+            records: workRecords,
+            kpmAuditLogs: workAuditLogs,
+            proposalHistory: workHistory,
+          },
+          'update'
+        );
+        if (ok) {
+          for (const id of processedIds) {
+            await removeOfflineAction(id);
+          }
+          setRecords(mergeBastIntoRecords(workRecords, kpmBastMapRef.current));
+          setKpmAuditLogs(workAuditLogs);
+          setProposalHistory(workHistory);
+          const remaining = await getOfflineQueue();
+          setOfflineQueueCount(remaining.length);
+          setFeedback({
+            type: 'success',
+            message: `Sinkronisasi offline selesai: ${processedCount} perubahan berhasil diunggah ke server.`,
+          });
+        }
+      }
+    } finally {
+      isFlushingQueueRef.current = false;
+    }
+  }, [currentUser, mergeBastIntoRecords, syncOperationalData]);
+
+  useEffect(() => {
+    const onOnline = () => {
+      void handleFlushOfflineQueue();
+    };
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, [handleFlushOfflineQueue]);
+
+  useEffect(() => {
+    if (isOnline && offlineQueueCount > 0 && authReady && currentUser) {
+      void handleFlushOfflineQueue();
+    }
+  }, [isOnline, offlineQueueCount, authReady, currentUser, handleFlushOfflineQueue]);
+
+  const handleBulkUpdateKpms = async (
+    ids: string[],
+    patch: {
+      validasi?: ValidationStatus;
+      dtsen?: string;
+      item?: string;
+      markAllSubItems?: boolean;
+    }
+  ) => {
+    if (!requirePermission('update', 'mengubah data KPM secara massal')) return;
+    if (ids.length === 0) return;
+
+    const idSet = new Set(ids);
+    const now = new Date().toISOString();
+    const newLogs: KpmAuditLogEntry[] = [];
+    let updatedCount = 0;
+
+    const mapped = records.map((rec) => {
+      if (!idSet.has(rec.id)) return rec;
+      const prop =
+        proposals.find((p) => p.namaProposal === rec.proposal && p.tahun === rec.tahun) ??
+        proposals.find((p) => p.namaProposal === rec.proposal);
+      if (prop?.status === 'locked') return rec;
+
+      const changes: KpmAuditLogEntry['changes'] = [];
+      let nextRec = { ...rec };
+
+      if (patch.validasi && patch.validasi !== rec.validasi) {
+        changes.push({
+          field: 'Status Validasi (Massal)',
+          before: formatValidationLabel(rec.validasi),
+          after: formatValidationLabel(patch.validasi),
+        });
+        nextRec.validasi = patch.validasi;
+      }
+      if (patch.dtsen !== undefined && patch.dtsen !== rec.dtsen) {
+        changes.push({
+          field: 'Klasifikasi DTSEN (Massal)',
+          before: rec.dtsen || '-',
+          after: patch.dtsen || '-',
+        });
+        nextRec.dtsen = patch.dtsen;
+      }
+      if (patch.item && patch.item !== rec.item) {
+        changes.push({
+          field: 'Item Bantuan (Massal)',
+          before: rec.item || '-',
+          after: patch.item,
+        });
+        nextRec.item = patch.item;
+      }
+      if (patch.markAllSubItems) {
+        const pkg = resolvePackageForKpm(items, rec.tahun, patch.item || rec.item);
+        const subNames = pkg?.subItems || [];
+        if (subNames.length > 0) {
+          const nextDeliveries = { ...(rec.subItemDeliveries || {}) };
+          let subChanged = 0;
+          for (const subName of subNames) {
+            const key = normalizeSubItemKey(subName);
+            if (!nextDeliveries[key]?.delivered) {
+              nextDeliveries[key] = {
+                delivered: true,
+                updatedAt: now,
+                updatedBy: currentActor.nama,
+              };
+              subChanged++;
+            }
+          }
+          if (subChanged > 0) {
+            changes.push({
+              field: 'Sub-Item Diterima (Massal)',
+              before: `${subNames.length - subChanged}/${subNames.length}`,
+              after: `${subNames.length}/${subNames.length}`,
+            });
+            nextRec.subItemDeliveries = nextDeliveries;
+          }
+        }
+      }
+
+      if (changes.length === 0) return rec;
+      updatedCount++;
+      nextRec.updatedAt = now;
+      newLogs.push({
+        id: `audit-bulk-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        kpmId: rec.id,
+        action: patch.validasi ? 'status_changed' : 'updated',
+        actorName: currentActor.nama,
+        actorEmail: currentActor.email,
+        timestamp: now,
+        proposal: rec.proposal,
+        tahun: rec.tahun,
+        changes,
+      });
+      return nextRec;
+    });
+
+    if (updatedCount === 0) {
+      setFeedback({
+        type: 'error',
+        message: 'Tidak ada KPM yang berubah (proposal terkunci atau nilai sudah sama).',
+      });
+      return;
+    }
+
+    const nextRecords = patch.item
+      ? mergeBastIntoRecords(
+          recalculateProposalRegisterCodes(mapped, proposals, items, wilayahList),
+          kpmBastMapRef.current
+        )
+      : mapped;
+    const nextLogs = [...newLogs, ...kpmAuditLogs];
+
+    setRecords(nextRecords);
+    setKpmAuditLogs(nextLogs);
+    const ok = await syncOperationalData(
+      { records: nextRecords, kpmAuditLogs: nextLogs },
+      'update'
+    );
+    if (ok) {
+      setFeedback({
+        type: 'success',
+        message: `${updatedCount} calon KPM berhasil diperbarui secara massal.`,
+      });
+    }
+  };
+
+  const handleSaveKpmBast = async (
+    kpmId: string,
+    file: File,
+    meta: { recipientName: string; lat?: number; lng?: number; accuracy?: number }
+  ) => {
+    if (!requirePermission('update', 'menyimpan tanda terima BAST digital')) return;
+    const target = records.find((r) => r.id === kpmId);
+    if (!target) return;
+
+    const uploadedDoc = await uploadImageDocumentToDrive(file, target.bast?.signatureDoc);
+    const now = new Date().toISOString();
+    const bastInfo: KpmBastInfo = {
+      signedAt: now,
+      signedBy: currentActor.nama,
+      recipientName: meta.recipientName,
+      lat: meta.lat,
+      lng: meta.lng,
+      accuracy: meta.accuracy,
+      signatureDoc: uploadedDoc,
+    };
+
+    const nextBastMap = { ...kpmBastMapRef.current, [kpmId]: bastInfo };
+    kpmBastMapRef.current = nextBastMap;
+    setKpmBastMap(nextBastMap);
+    void saveAppStateSlice('masdeta_kpm_bast_v1', nextBastMap);
+
+    const auditEntry: KpmAuditLogEntry = {
+      id: `audit-bast-${Date.now()}`,
+      kpmId: target.id,
+      action: 'updated',
+      actorName: currentActor.nama,
+      actorEmail: currentActor.email,
+      timestamp: now,
+      proposal: target.proposal,
+      tahun: target.tahun,
+      changes: [
+        {
+          field: 'Tanda Terima Digital (BAST)',
+          before: target.bast?.recipientName || 'Belum ditandatangani',
+          after: `Ditandatangani oleh ${meta.recipientName}`,
+        },
+      ],
+    };
+
+    const nextLogs = [auditEntry, ...kpmAuditLogs];
+    const nextRecords = records.map((r) =>
+      r.id === kpmId ? { ...r, bast: bastInfo, updatedAt: now } : r
+    );
+    setKpmAuditLogs(nextLogs);
+    setRecords(nextRecords);
+    await syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
+    setFeedback({
+      type: 'success',
+      message: `Tanda terima digital (BAST) "${target.nama}" berhasil disimpan ke Google Drive & Supabase.`,
+    });
+  };
+
+  const handleRestoreTrashItem = (trashId: string) => {
+    if (!currentUser || currentUser.role !== 'SuperAdmin') {
+      setFeedback({
+        type: 'error',
+        message: 'Hanya SuperAdmin yang dapat memulihkan data dari Tempat Sampah.',
+      });
+      return;
+    }
+    const target = trashBin.find((t) => t.id === trashId);
+    if (!target) return;
+
+    const now = new Date().toISOString();
+    const nextTrash = trashBin.filter((t) => t.id !== trashId);
+
+    if (target.kind === 'kpm' && target.kpmRecord) {
+      const kpm = target.kpmRecord;
+      const alreadyExists = records.some((r) => r.id === kpm.id);
+      const baseRecords = alreadyExists ? records : [{ ...kpm, updatedAt: now }, ...records];
+      const nextRecords = mergeBastIntoRecords(
+        recalculateProposalRegisterCodes(baseRecords, proposals, items, wilayahList),
+        kpmBastMapRef.current
+      );
+      const restoreHist: ProposalKpmHistoryEntry = {
+        id: `hist-restore-kpm-${Date.now()}`,
+        tahun: kpm.tahun,
+        proposalName: kpm.proposal,
+        kpmId: kpm.id,
+        kpmName: kpm.nama,
+        registerCode: kpm.registerCode,
+        action: 'entered',
+        toProposal: kpm.proposal,
+        actorName: `${currentActor.nama} (Pulihkan Sampah)`,
+        timestamp: now,
+      };
+      const nextHistory = [restoreHist, ...proposalHistory];
+
+      setTrashBin(nextTrash);
+      setRecords(nextRecords);
+      setProposalHistory(nextHistory);
+      void saveAppStateSlice('masdeta_trash_bin_v1', nextTrash);
+      void syncOperationalData(
+        { records: nextRecords, proposalHistory: nextHistory },
+        'add'
+      );
+      setFeedback({
+        type: 'success',
+        message: `Calon KPM "${kpm.nama}" berhasil dipulihkan beserta foto terkait.`,
+      });
+      return;
+    }
+
+    if (target.kind === 'proposal' && target.proposalRecord) {
+      const prop = target.proposalRecord;
+      const exists = proposals.some(
+        (p) =>
+          p.id === prop.id ||
+          (p.namaProposal.toLowerCase() === prop.namaProposal.toLowerCase() &&
+            p.tahun === prop.tahun)
+      );
+      const nextProposals = exists ? proposals : [{ ...prop, updatedAt: now }, ...proposals];
+      const restoreHist = createActivityHistoryEntry('proposal_restored', {
+        proposalName: prop.namaProposal,
+        detail: `Memulihkan proposal "${prop.namaProposal}" (${prop.tahun}) dari Tempat Sampah.`,
+        tahun: prop.tahun,
+        action: 'entered',
+      });
+      const nextHistory = [restoreHist, ...proposalHistory];
+
+      setTrashBin(nextTrash);
+      setProposals(nextProposals);
+      setProposalHistory(nextHistory);
+      void saveAppStateSlice('masdeta_trash_bin_v1', nextTrash);
+      void syncOperationalData(
+        { proposals: nextProposals, proposalHistory: nextHistory },
+        'add'
+      );
+      setFeedback({
+        type: 'success',
+        message: `Proposal "${prop.namaProposal}" berhasil dipulihkan dari Tempat Sampah.`,
+      });
+    }
+  };
+
+  const handlePermanentDeleteTrashItem = (trashId: string) => {
+    if (!currentUser || currentUser.role !== 'SuperAdmin') {
+      setFeedback({
+        type: 'error',
+        message: 'Hanya SuperAdmin yang dapat menghapus data secara permanen.',
+      });
+      return;
+    }
+    const target = trashBin.find((t) => t.id === trashId);
+    if (!target) return;
+
+    const docsToDelete: KpmDocumentFile[] = [];
+    if (target.kpmRecord) {
+      const d = target.kpmRecord.documents;
+      if (d.ktp) docsToDelete.push(d.ktp);
+      if (d.kk) docsToDelete.push(d.kk);
+      if (d.penerima) docsToDelete.push(d.penerima);
+      if (d.survey) docsToDelete.push(d.survey);
+      (d.rumah || []).forEach((x) => docsToDelete.push(x));
+      (d.lainnya || []).forEach((x) => docsToDelete.push(x));
+      if (target.kpmRecord.bast?.signatureDoc) {
+        docsToDelete.push(target.kpmRecord.bast.signatureDoc);
+      }
+    }
+    if (target.proposalRecord) {
+      Object.values(target.proposalRecord.documents || {}).forEach((doc) => {
+        if (doc) docsToDelete.push(doc);
+      });
+    }
+    if (docsToDelete.length > 0) {
+      void Promise.allSettled(docsToDelete.map((doc) => removeDocumentFromDrive(doc)));
+    }
+
+    const nextTrash = trashBin.filter((t) => t.id !== trashId);
+    setTrashBin(nextTrash);
+    void saveAppStateSlice('masdeta_trash_bin_v1', nextTrash);
+    setFeedback({
+      type: 'success',
+      message: `"${target.title}" beserta berkas Drive terkait dihapus permanen.`,
+    });
+  };
+
+  const handleAddSchedule = (payload: {
+    title: string;
+    category: ScheduleCategory;
+    targetDate: string;
+    proposalName?: string;
+    notes?: string;
+  }) => {
+    const newItem: ScheduleEventItem = {
+      id: `sch-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      title: payload.title,
+      category: payload.category,
+      targetDate: payload.targetDate,
+      tahun: selectedYear,
+      proposalName: payload.proposalName,
+      notes: payload.notes,
+      completed: false,
+      createdBy: currentActor.nama,
+      createdAt: new Date().toISOString(),
+    };
+    const next = [newItem, ...schedules].sort((a, b) => a.targetDate.localeCompare(b.targetDate));
+    setSchedules(next);
+    void saveAppStateSlice('masdeta_schedules_v1', next);
+    setFeedback({
+      type: 'success',
+      message: `Agenda "${payload.title}" berhasil ditambahkan ke jadwal.`,
+    });
+  };
+
+  const handleToggleSchedule = (id: string) => {
+    const now = new Date().toISOString();
+    const next = schedules.map((s) =>
+      s.id === id
+        ? {
+            ...s,
+            completed: !s.completed,
+            completedAt: !s.completed ? now : undefined,
+          }
+        : s
+    );
+    setSchedules(next);
+    void saveAppStateSlice('masdeta_schedules_v1', next);
+  };
+
+  const handleDeleteSchedule = (id: string) => {
+    const next = schedules.filter((s) => s.id !== id);
+    setSchedules(next);
+    void saveAppStateSlice('masdeta_schedules_v1', next);
+  };
+
+  const handleSaveReportTemplate = (next: ReportTemplateConfig) => {
+    setReportTemplate(next);
+    void saveAppStateSlice('masdeta_report_template_v1', next);
+    setFeedback({
+      type: 'success',
+      message: 'Template Kop Surat & penandatangan resmi berhasil disimpan.',
+    });
   };
 
   const remapSubItemDeliveries = (
@@ -3608,29 +4437,40 @@ export default function App() {
       return;
     }
 
-    const docsToTrash = Object.values(target.documents || {}).filter(
-      (d): d is KpmDocumentFile => Boolean(d)
-    );
-    if (docsToTrash.length > 0) {
-      void Promise.allSettled(docsToTrash.map((d) => removeDocumentFromDrive(d)));
-    }
+    // Pindahkan proposal ke Tempat Sampah 30 hari (berkas Drive tetap aman hingga dihapus permanen/kedaluwarsa)
+    const nowIso = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    const actorName = currentUser?.nama || 'Petugas Internal';
+    const trashEntry: TrashRecordItem = {
+      id: `trash-prop-${target.id}-${Date.now()}`,
+      kind: 'proposal',
+      title: target.namaProposal,
+      subtitle: `${target.tipe} · ${target.tahun} · Target ${target.jumlahKpm} KPM`,
+      tahun: target.tahun,
+      deletedAt: nowIso,
+      expiresAt,
+      deletedBy: actorName,
+      proposalRecord: target,
+    };
+    const nextTrash = [trashEntry, ...trashBin];
+    setTrashBin(nextTrash);
+    void saveAppStateSlice('masdeta_trash_bin_v1', nextTrash);
 
     const nextProposals = proposals.filter((p) => p.id !== proposalId);
-    const actorName = currentUser?.nama || 'Petugas Internal';
     const deletedNotif: AppNotificationItem = {
       id: `notif-prop-del-${proposalId}-${Date.now()}`,
       type: 'proposal_deleted',
       title: 'Proposal Dihapus',
-      message: `Proposal "${target.namaProposal}" (${target.tahun}) telah dihapus oleh ${actorName}.`,
+      message: `Proposal "${target.namaProposal}" (${target.tahun}) dipindahkan ke Tempat Sampah oleh ${actorName}.`,
       actorName,
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
       read: true,
       targetAction: 'proposals',
     };
 
     const actEntry = createActivityHistoryEntry('proposal_deleted', {
       proposalName: target.namaProposal,
-      detail: `Menghapus proposal "${target.namaProposal}" (${target.tipe}, ${target.tahun}).`,
+      detail: `Memindahkan proposal "${target.namaProposal}" (${target.tipe}, ${target.tahun}) ke Tempat Sampah.`,
       tahun: target.tahun,
       action: 'removed',
       actorName,
@@ -3667,7 +4507,7 @@ export default function App() {
     });
     setFeedback({
       type: 'success',
-      message: `Proposal "${target.namaProposal}" (${target.tahun}) berhasil dihapus.`,
+      message: `Proposal "${target.namaProposal}" (${target.tahun}) dipindahkan ke Tempat Sampah (tersimpan 30 hari).`,
     });
   };
 
@@ -5052,6 +5892,7 @@ export default function App() {
             currentUser={currentUser}
             users={internalUsers}
             messages={directMessages}
+            records={records}
             activePeerId={activeChatPeerId}
             onSelectPeer={(peerId) => {
               setActiveChatPeerId(peerId);
@@ -5157,6 +5998,8 @@ export default function App() {
             }}
             onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
             onUpdateKpmDocuments={handleUpdateKpmDocuments}
+            reportTemplate={reportTemplate}
+            onSaveBast={handleSaveKpmBast}
           />
         )}
 
@@ -5304,6 +6147,8 @@ export default function App() {
               setSubView('proposal-history');
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
+            onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
+            onUpdateProposalDocuments={handleQuickSyncProposalDocuments}
           />
         )}
 
@@ -5376,6 +6221,17 @@ export default function App() {
             }}
             feedback={feedback}
             onDismissFeedback={() => setFeedback(null)}
+            isLoading={isOperationalLoading}
+            isOnline={isOnline}
+            offlineQueueCount={offlineQueueCount}
+            onSyncOfflineQueue={() => void handleFlushOfflineQueue()}
+            schedules={schedules}
+            onOpenSchedules={() => {
+              setMenuOpenedFromDashboard(true);
+              setMenuSection('jadwal');
+              setActiveTab('menu');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
             onOpenChat={() => openChatView()}
             onOpenProfile={openProfileView}
             onLogout={handleLogout}
@@ -5436,7 +6292,9 @@ export default function App() {
             onChangeItemFilter={setKpmItemFilter}
             proposalFilter={kpmProposalFilter}
             onChangeProposalFilter={setKpmProposalFilter}
+            canUpdate={hasPermission('update')}
             canDelete={hasPermission('delete')}
+            isLoading={isOperationalLoading}
             onBack={() => {
               if (kpmOpenedFromProposalDetail && activeProposal) {
                 setKpmOpenedFromProposalDetail(false);
@@ -5449,6 +6307,7 @@ export default function App() {
             onCreateNew={() => openKpmForm(null, 'kpm')}
             onSelectRecord={(rec) => openKpmDetail(rec, 'kpm')}
             onDeleteRecord={handleDeleteKpm}
+            onBulkUpdateKpms={handleBulkUpdateKpms}
           />
         )}
 
@@ -5549,6 +6408,15 @@ export default function App() {
             onToggleBerkasDikembalikan={handleToggleBerkasDikembalikan}
             onSelectKpmFromDuplicate={(rec) => openKpmDetail(rec, 'menu')}
             onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
+            schedules={schedules}
+            onAddSchedule={handleAddSchedule}
+            onToggleSchedule={handleToggleSchedule}
+            onDeleteSchedule={handleDeleteSchedule}
+            trashBin={trashBin}
+            onRestoreTrashItem={handleRestoreTrashItem}
+            onPermanentDeleteTrashItem={handlePermanentDeleteTrashItem}
+            reportTemplate={reportTemplate}
+            onSaveReportTemplate={handleSaveReportTemplate}
           />
         )}
         </div>

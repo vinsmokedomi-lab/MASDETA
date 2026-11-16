@@ -1,34 +1,48 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowDownLeft,
   ArrowLeft,
   ArrowRightLeft,
   ArrowUpRight,
+  Camera,
   Check,
   CheckCircle2,
   ChevronRight,
+  Download,
+  FileSpreadsheet,
+  FileText,
   History,
+  Loader2,
   Lock,
   Pencil,
   Search,
+  Trash2,
   Unlock,
+  Upload,
   UserPlus,
   Users,
   X,
 } from 'lucide-react';
 import {
   ItemBantuan,
+  KpmDocumentFile,
   KpmRecord,
+  ProposalChecklist,
+  ProposalDocuments,
   ProposalKpmHistoryEntry,
   ProposalRecord,
 } from '../types/kpm';
 import {
   computeSubItemRecap,
   formatUploadDateTime,
+  getDocumentDownloadHref,
   getItemHierarchyRank,
+  removeDocumentFromDrive,
   resolvePackageForKpm,
+  uploadProposalDocumentToDrive,
 } from '../utils/imageProcessor';
+import { DriveImage } from './DriveImage';
 
 interface ProposalDetailViewProps {
   proposal: ProposalRecord;
@@ -45,6 +59,12 @@ interface ProposalDetailViewProps {
   onAcceptAllKpm: (proposalName: string, tahun: string) => void;
   onTransferKpm?: (kpmIds: string[], targetProposalId: string) => Promise<boolean> | boolean;
   onOpenFullHistory: () => void;
+  onPreviewDocument?: (file: KpmDocumentFile, title: string) => void;
+  onUpdateProposalDocuments?: (
+    proposalId: string,
+    documents: ProposalDocuments,
+    checklist: ProposalChecklist
+  ) => Promise<void> | void;
 }
 
 export function ProposalDetailView({
@@ -62,6 +82,8 @@ export function ProposalDetailView({
   onAcceptAllKpm,
   onTransferKpm,
   onOpenFullHistory,
+  onPreviewDocument,
+  onUpdateProposalDocuments,
 }: ProposalDetailViewProps) {
   const [confirmAcceptAll, setConfirmAcceptAll] = useState(false);
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
@@ -72,6 +94,19 @@ export function ProposalDetailView({
   const [selectedTransferIds, setSelectedTransferIds] = useState<string[]>([]);
   const [confirmTransferOpen, setConfirmTransferOpen] = useState(false);
   const [isTransferring, setIsTransferring] = useState(false);
+  const [docBusySlot, setDocBusySlot] = useState<string | null>(null);
+  const [docError, setDocError] = useState<string | null>(null);
+  const [pendingUploadTarget, setPendingUploadTarget] = useState<{
+    key: keyof ProposalDocuments;
+    label: string;
+    existingDoc?: KpmDocumentFile;
+  } | null>(null);
+  const [pendingDeleteDoc, setPendingDeleteDoc] = useState<{
+    key: keyof ProposalDocuments;
+    label: string;
+    doc: KpmDocumentFile;
+  } | null>(null);
+  const docFileInputRef = useRef<HTMLInputElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const [titleFontPx, setTitleFontPx] = useState<number>(16);
   const [allowTitleWrap, setAllowTitleWrap] = useState(false);
@@ -404,6 +439,128 @@ export function ProposalDetailView({
       setIsTransferring(false);
     }
   };
+
+  const buildChecklistForDocs = (nextDocs: ProposalDocuments): ProposalChecklist => ({
+    ...proposal.checklist,
+    docx: Boolean(nextDocs.proposalOpd || nextDocs.proposalLurahCamat),
+    rab: Boolean(nextDocs.rab),
+    rt: Boolean(nextDocs.capRt),
+    rw: Boolean(nextDocs.capRw),
+    lurah: Boolean(nextDocs.capLurah),
+    camat: Boolean(nextDocs.capCamat),
+  });
+
+  const handleTriggerDocUpload = (
+    key: keyof ProposalDocuments,
+    label: string,
+    accept: string,
+    existingDoc?: KpmDocumentFile
+  ) => {
+    if (proposal.status === 'locked' || !canUpdate || !onUpdateProposalDocuments || docBusySlot) {
+      return;
+    }
+    setDocError(null);
+    setPendingUploadTarget({ key, label, existingDoc });
+    if (docFileInputRef.current) {
+      docFileInputRef.current.accept = accept;
+      docFileInputRef.current.click();
+    }
+  };
+
+  const handleDocFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    const target = pendingUploadTarget;
+    setPendingUploadTarget(null);
+    if (!file || !target || !onUpdateProposalDocuments) return;
+
+    setDocError(null);
+    setDocBusySlot(target.key);
+    try {
+      const uploaded = await uploadProposalDocumentToDrive(file, target.existingDoc);
+      const nextDocs: ProposalDocuments = {
+        ...(proposal.documents || {}),
+        [target.key]: uploaded,
+      };
+      await onUpdateProposalDocuments(proposal.id, nextDocs, buildChecklistForDocs(nextDocs));
+    } catch (err) {
+      setDocError(
+        err instanceof Error ? err.message : 'Gagal mengunggah berkas dokumen ke Google Drive.'
+      );
+    } finally {
+      setDocBusySlot(null);
+    }
+  };
+
+  const handleConfirmDeleteDocument = async () => {
+    if (!pendingDeleteDoc || !onUpdateProposalDocuments || docBusySlot) return;
+    const { key, doc } = pendingDeleteDoc;
+    setDocError(null);
+    setDocBusySlot(key);
+    try {
+      await removeDocumentFromDrive(doc);
+      const nextDocs: ProposalDocuments = { ...(proposal.documents || {}) };
+      delete nextDocs[key];
+      await onUpdateProposalDocuments(proposal.id, nextDocs, buildChecklistForDocs(nextDocs));
+      setPendingDeleteDoc(null);
+    } catch (err) {
+      setDocError(
+        err instanceof Error ? err.message : 'Gagal menghapus berkas dari Google Drive.'
+      );
+    } finally {
+      setDocBusySlot(null);
+    }
+  };
+
+  const proposalDocSlots: {
+    key: keyof ProposalDocuments;
+    label: string;
+    icon: typeof FileText;
+    accept: string;
+  }[] = [
+    {
+      key: 'proposalOpd',
+      label: 'Proposal OPD',
+      icon: FileText,
+      accept: '.pdf,.doc,.docx,image/*',
+    },
+    {
+      key: 'proposalLurahCamat',
+      label: 'Proposal Lurah / Camat',
+      icon: FileText,
+      accept: '.pdf,.doc,.docx,image/*',
+    },
+    {
+      key: 'rab',
+      label: 'Berkas RAB',
+      icon: FileSpreadsheet,
+      accept: '.pdf,.xls,.xlsx,.doc,.docx,image/*',
+    },
+    {
+      key: 'capRt',
+      label: 'Cap RT',
+      icon: Camera,
+      accept: 'image/*,.pdf',
+    },
+    {
+      key: 'capRw',
+      label: 'Cap RW',
+      icon: Camera,
+      accept: 'image/*,.pdf',
+    },
+    {
+      key: 'capLurah',
+      label: 'Cap Lurah',
+      icon: Camera,
+      accept: 'image/*,.pdf',
+    },
+    {
+      key: 'capCamat',
+      label: 'Cap Camat',
+      icon: Camera,
+      accept: 'image/*,.pdf',
+    },
+  ];
 
   // SVG Donut ring geometry
   const ringRadius = 42;
@@ -862,6 +1019,172 @@ export function ProposalDetailView({
           )}
         </section>
 
+        {/* Dokumentasi Proposal (hanya tampilkan berkas/foto yang sudah diunggah) */}
+        {(() => {
+          const uploadedDocSlots = proposalDocSlots.filter((slot) =>
+            Boolean(proposal.documents?.[slot.key])
+          );
+          if (uploadedDocSlots.length === 0) return null;
+
+          return (
+            <section className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Dokumentasi</h3>
+                  <p className="text-[11px] text-slate-500">
+                    Disimpan langsung di Google Drive · Klik berkas atau foto untuk pratinjau
+                  </p>
+                </div>
+                {docBusySlot && (
+                  <span className="inline-flex items-center gap-1.5 rounded-lg bg-teal-50 px-2.5 py-1 text-[11px] font-semibold text-teal-800">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>Memproses Drive...</span>
+                  </span>
+                )}
+              </div>
+
+              <input
+                ref={docFileInputRef}
+                type="file"
+                accept=".pdf,.doc,.docx,.xls,.xlsx,image/*"
+                onChange={handleDocFileChange}
+                className="sr-only"
+              />
+
+              {docError && (
+                <div
+                  role="alert"
+                  className="mt-3 flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-800"
+                >
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-rose-600" />
+                  <span>{docError}</span>
+                </div>
+              )}
+
+              <div className="mt-3 grid grid-cols-2 gap-2.5">
+                {uploadedDocSlots.map((slot) => {
+                  const doc = proposal.documents?.[slot.key];
+                  if (!doc) return null;
+                  const Icon = slot.icon;
+                  const isSlotBusy = docBusySlot === slot.key;
+                  const editableDocs = Boolean(
+                    proposal.status !== 'locked' && canUpdate && onUpdateProposalDocuments
+                  );
+                  const isImage = Boolean(doc.mimeType?.startsWith('image/'));
+                  const isPdf =
+                    doc.mimeType === 'application/pdf' ||
+                    doc.fileName.toLowerCase().endsWith('.pdf');
+                  const fileExt = doc.fileName.split('.').pop()?.toUpperCase() || 'FILE';
+                  const downloadHref = getDocumentDownloadHref(doc);
+
+                  return (
+                    <div
+                      key={slot.key}
+                      className="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-slate-50"
+                    >
+                      <button
+                        type="button"
+                        disabled={Boolean(docBusySlot)}
+                        onClick={() => onPreviewDocument?.(doc, slot.label)}
+                        className="relative block aspect-[1.45/1] w-full overflow-hidden bg-slate-200 text-left"
+                      >
+                        {isImage ? (
+                          <DriveImage
+                            doc={doc}
+                            alt={slot.label}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-full w-full flex-col items-center justify-center bg-gradient-to-br from-slate-50 to-slate-100 px-2.5 pb-6 text-center">
+                            <div
+                              className={`flex h-9 w-9 items-center justify-center rounded-xl border bg-white shadow-xs ${
+                                isPdf
+                                  ? 'border-rose-200 text-rose-600'
+                                  : slot.key === 'rab'
+                                    ? 'border-emerald-200 text-emerald-700'
+                                    : 'border-teal-200 text-teal-700'
+                              }`}
+                            >
+                              <Icon className="h-4.5 w-4.5" />
+                            </div>
+                            <span className="mt-1.5 font-mono text-[11px] font-bold text-slate-800">
+                              {fileExt.slice(0, 5)}
+                            </span>
+                            <span className="mt-0.5 w-full truncate text-[10px] text-slate-500">
+                              {doc.fileName}
+                            </span>
+                          </div>
+                        )}
+                        {isSlotBusy && (
+                          <div className="absolute inset-0 flex items-center justify-center bg-slate-950/60 text-white">
+                            <Loader2 className="h-5 w-5 animate-spin" />
+                          </div>
+                        )}
+                        <span className="absolute bottom-1.5 left-1.5 rounded-md bg-slate-900/75 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                          {slot.label}
+                        </span>
+                      </button>
+
+                      {(editableDocs || !isImage) && (
+                        <div className="mt-auto flex items-center gap-1 border-t border-slate-200 bg-white p-1.5">
+                          {!isImage && downloadHref && (
+                            <a
+                              href={downloadHref}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              download={doc.fileName}
+                              aria-label={`Unduh ${slot.label}`}
+                              title="Unduh"
+                              className={`inline-flex min-h-[30px] items-center justify-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 ${
+                                editableDocs ? '' : 'flex-1'
+                              }`}
+                            >
+                              <Download className="h-3 w-3" />
+                              {!editableDocs && <span>Unduh</span>}
+                            </a>
+                          )}
+                          {editableDocs && (
+                            <>
+                              <button
+                                type="button"
+                                disabled={Boolean(docBusySlot)}
+                                onClick={() =>
+                                  handleTriggerDocUpload(slot.key, slot.label, slot.accept, doc)
+                                }
+                                className="inline-flex min-h-[30px] flex-1 items-center justify-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                              >
+                                <Upload className="h-3 w-3" />
+                                <span>Ganti</span>
+                              </button>
+                              <button
+                                type="button"
+                                disabled={Boolean(docBusySlot)}
+                                onClick={() =>
+                                  setPendingDeleteDoc({
+                                    key: slot.key,
+                                    label: slot.label,
+                                    doc,
+                                  })
+                                }
+                                aria-label={`Hapus ${slot.label}`}
+                                title="Hapus Berkas"
+                                className="inline-flex min-h-[30px] items-center justify-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                                <span>Hapus</span>
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          );
+        })()}
+
         {/* Paling Bawah: Rekam Jejak (Ringkas + Lihat selengkapnya) */}
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
           <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
@@ -959,9 +1282,9 @@ export function ProposalDetailView({
             onClick={() => onEditProposal(proposal.id)}
             aria-label="Edit Proposal"
             title="Edit Proposal"
-            className="pointer-events-auto inline-flex h-12 w-12 items-center justify-center rounded-full bg-teal-700 text-white shadow-lg shadow-teal-900/25 transition-all hover:bg-teal-800 active:scale-95"
+            className="pointer-events-auto inline-flex h-[52px] w-[52px] items-center justify-center rounded-full bg-teal-700 text-white shadow-lg shadow-teal-900/25 transition-all hover:bg-teal-800 active:scale-95"
           >
-            <Pencil className="h-5 w-5" />
+            <Pencil className="h-[22px] w-[22px]" />
           </button>
         </div>
       )}
@@ -1244,6 +1567,58 @@ export function ProposalDetailView({
           </div>
         );
       })()}
+
+      {/* Confirmation Modal for Deleting Proposal Document */}
+      {pendingDeleteDoc && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-4 backdrop-blur-xs sm:items-center"
+          onClick={() => !docBusySlot && setPendingDeleteDoc(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Konfirmasi Hapus Berkas"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm space-y-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-xl"
+          >
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-100 text-rose-700">
+                <Trash2 className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Hapus Berkas?</h3>
+                <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                  Berkas <strong>{pendingDeleteDoc.label}</strong> akan dipindahkan ke Trash Google
+                  Drive dan kolom dokumen pada database Supabase akan dikosongkan.
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={Boolean(docBusySlot)}
+                onClick={() => setPendingDeleteDoc(null)}
+                className="min-h-[42px] flex-1 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={Boolean(docBusySlot)}
+                onClick={() => void handleConfirmDeleteDocument()}
+                className="inline-flex min-h-[42px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-rose-600 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+              >
+                {docBusySlot ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="h-3.5 w-3.5" />
+                )}
+                <span>{docBusySlot ? 'Menghapus...' : 'Ya, Hapus Berkas'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

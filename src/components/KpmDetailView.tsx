@@ -13,20 +13,26 @@ import {
   History,
   Loader2,
   Lock,
+  MapPin,
   MessageCircle,
   Package,
   Pencil,
+  PenTool,
   Plus,
+  QrCode,
   Send,
   Share2,
   ShieldCheck,
   Trash2,
   Upload,
   User,
+  UserCheck,
   X,
   XCircle,
 } from 'lucide-react';
 import { DriveImage } from './DriveImage';
+import { KpmQrCardModal } from './QrScannerLookupModal';
+import { SignaturePadModal } from './SignaturePadModal';
 import { DTSEN_OPTION_ITEMS, INITIAL_WILAYAH_LIST } from '../data/kpmOptions';
 import {
   InternalUser,
@@ -36,6 +42,7 @@ import {
   KpmDocuments,
   KpmRecord,
   ProposalRecord,
+  ReportTemplateConfig,
   SharedKpmCard,
   SingleDocumentKey,
   ValidationStatus,
@@ -55,7 +62,7 @@ import {
   resolveProposalDomicile,
   uploadImageDocumentToDrive,
 } from '../utils/imageProcessor';
-import { exportSingleKpmToPdf } from '../utils/pdfExporter';
+import { exportKpmBastToPdf, exportSingleKpmToPdf } from '../utils/pdfExporter';
 import { openCekBansosWithNik } from '../services/cekBansos';
 
 interface KpmDetailViewProps {
@@ -93,6 +100,12 @@ interface KpmDetailViewProps {
     nextDocuments: KpmDocuments,
     auditChange: { field: string; before: string; after: string }
   ) => Promise<void> | void;
+  reportTemplate?: ReportTemplateConfig;
+  onSaveBast?: (
+    kpmId: string,
+    file: File,
+    meta: { recipientName: string; lat?: number; lng?: number; accuracy?: number }
+  ) => Promise<void>;
   feedback?: { type: 'success' | 'error'; message: string } | null;
   onDismissFeedback?: () => void;
 }
@@ -120,6 +133,8 @@ export function KpmDetailView({
   onOpenFullHistory,
   onPreviewDocument,
   onUpdateKpmDocuments,
+  reportTemplate,
+  onSaveBast,
   feedback,
   onDismissFeedback,
 }: KpmDetailViewProps) {
@@ -129,6 +144,9 @@ export function KpmDetailView({
   const [shareMessage, setShareMessage] = useState<string>('');
   const [sharingChat, setSharingChat] = useState(false);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+  const [isDownloadingBastPdf, setIsDownloadingBastPdf] = useState(false);
+  const [isQrCardOpen, setIsQrCardOpen] = useState(false);
+  const [isSignatureOpen, setIsSignatureOpen] = useState(false);
   const [pdfNotice, setPdfNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(
     null
   );
@@ -505,19 +523,62 @@ export function KpmDetailView({
     }
   };
 
+  const handleDownloadBastPdf = async () => {
+    if (isDownloadingBastPdf) return;
+    setPdfNotice(null);
+    setIsDownloadingBastPdf(true);
+    try {
+      const res = await exportKpmBastToPdf({
+        record,
+        proposals,
+        items,
+        wilayahList,
+        reportTemplate,
+      });
+      setPdfNotice({
+        type: 'success',
+        message: res.openedNative
+          ? `BAST "${res.savedFileName}" berhasil dibuat dan dibuka.`
+          : `BAST "${res.savedFileName}" berhasil diunduh.`,
+      });
+    } catch (err) {
+      setPdfNotice({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Gagal mencetak PDF BAST.',
+      });
+    } finally {
+      setIsDownloadingBastPdf(false);
+    }
+  };
+
   return (
     <div className="min-h-screen pb-24">
-      {/* Sub-Screen Header: hanya panah kembali + judul */}
-      <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
-        <button
-          type="button"
-          onClick={onBack}
-          className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
-          aria-label="Kembali ke daftar KPM"
-        >
-          <ArrowLeft className="h-5 w-5" />
-        </button>
-        <h1 className="truncate text-base font-bold text-slate-900">Detail Calon KPM</h1>
+      {/* Sub-Screen Header: tombol kembali + judul + aksi hapus aman di kanan atas */}
+      <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onBack}
+            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
+            aria-label="Kembali ke daftar KPM"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </button>
+          <h1 className="truncate text-base font-bold text-slate-900">Detail Calon KPM</h1>
+        </div>
+
+        {canDelete && (
+          <button
+            type="button"
+            disabled={isProposalLocked}
+            onClick={() => setConfirmDelete(true)}
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-200 bg-rose-50 text-rose-600 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+            aria-label="Hapus Data KPM"
+            title={isProposalLocked ? 'Proposal Terkunci' : 'Hapus Data KPM'}
+          >
+            <Trash2 className="h-4.5 w-4.5" />
+          </button>
+        )}
       </header>
 
       <main className="space-y-4 px-4 pt-4">
@@ -564,7 +625,7 @@ export function KpmDetailView({
                 </div>
               )}
 
-              {/* Nama, Item, Proposal, Nomor HP */}
+              {/* Nama, Item, Proposal, Pengelola, Nomor HP */}
               <div className="min-w-0 flex-1 space-y-1.5">
                 <h2 className="break-words text-base font-bold leading-snug tracking-tight text-slate-900">
                   {record.nama}
@@ -588,6 +649,13 @@ export function KpmDetailView({
                       : record.proposal}
                   </span>
                 </button>
+
+                <div className="flex items-center gap-1.5 text-xs text-slate-700">
+                  <UserCheck className="h-3.5 w-3.5 shrink-0 text-teal-700" />
+                  <span className="truncate font-medium">
+                    Pengelola: {record.pengelola?.trim() || '-'}
+                  </span>
+                </div>
 
                 <div className="pt-0.5">
                   {heroWaUrl && record.kontak ? (
@@ -640,12 +708,12 @@ export function KpmDetailView({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-3 gap-2">
                 <button
                   type="button"
                   disabled={isDownloadingPdf}
                   onClick={() => void handleDownloadKpmPdf()}
-                  className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:opacity-60"
+                  className="inline-flex min-h-[42px] items-center justify-center gap-1 rounded-xl bg-teal-700 px-2 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:opacity-60"
                 >
                   {isDownloadingPdf ? (
                     <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
@@ -653,17 +721,26 @@ export function KpmDetailView({
                     <Download className="h-3.5 w-3.5 shrink-0" />
                   )}
                   <span className="truncate">
-                    {isDownloadingPdf ? 'Membuat PDF...' : 'Unduh PDF'}
+                    {isDownloadingPdf ? 'Membuat...' : 'PDF'}
                   </span>
                 </button>
 
                 <button
                   type="button"
+                  onClick={() => setIsQrCardOpen(true)}
+                  className="inline-flex min-h-[42px] items-center justify-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-2 text-xs font-semibold text-slate-800 transition-colors hover:bg-slate-100"
+                >
+                  <QrCode className="h-3.5 w-3.5 shrink-0 text-teal-700" />
+                  <span className="truncate">Kartu QR</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={handleOpenShareModal}
-                  className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50/70 px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100"
+                  className="inline-flex min-h-[42px] items-center justify-center gap-1 rounded-xl border border-teal-200 bg-teal-50/70 px-2 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100"
                 >
                   <Share2 className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate">Bagikan Chat</span>
+                  <span className="truncate">Chat</span>
                 </button>
               </div>
 
@@ -690,6 +767,14 @@ export function KpmDetailView({
             </div>
           </div>
         </section>
+
+        {/* Catatan Petugas (tampil tepat di bawah heading jika tidak ada duplikasi) */}
+        {!duplicateInfo.hasDuplicates && record.catatan?.trim() && (
+          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white px-4 py-3">
+            <p className="text-xs text-slate-500">Catatan Petugas</p>
+            <p className="mt-1 text-xs leading-relaxed text-slate-700">{record.catatan}</p>
+          </section>
+        )}
 
         {/* Status Duplikasi NIK / KK */}
         {duplicateInfo.hasDuplicates ? (
@@ -747,6 +832,13 @@ export function KpmDetailView({
                 );
               })}
             </div>
+
+            {record.catatan?.trim() && (
+              <div className="border-t border-amber-200 bg-amber-50/35 px-4 py-3">
+                <p className="text-xs text-slate-500">Catatan Petugas</p>
+                <p className="mt-1 text-xs leading-relaxed text-slate-700">{record.catatan}</p>
+              </div>
+            )}
           </section>
         ) : (
           <section className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
@@ -889,6 +981,109 @@ export function KpmDetailView({
           )}
         </section>
 
+        {/* Tanda Terima Digital (BAST) */}
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+          <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
+            <div className="flex items-start gap-2.5 min-w-0">
+              <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                <PenTool className="h-4 w-4" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-sm font-bold text-slate-900">Tanda Terima Digital (BAST)</h3>
+                <p className="text-xs text-slate-500">
+                  Berita Acara Serah Terima bantuan beserta tanda tangan &amp; koordinat GPS
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="p-4 space-y-3">
+            {record.bast ? (
+              <div className="rounded-2xl border border-teal-200 bg-teal-50/40 p-3 space-y-2.5">
+                <div className="flex items-center gap-3">
+                  {record.bast.signatureDoc ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onPreviewDocument(record.bast!.signatureDoc!, 'Tanda Tangan BAST')
+                      }
+                      className="h-16 w-28 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-white p-1"
+                    >
+                      <DriveImage
+                        doc={record.bast.signatureDoc}
+                        alt="Tanda Tangan BAST"
+                        className="h-full w-full object-contain"
+                      />
+                    </button>
+                  ) : null}
+                  <div className="min-w-0 flex-1 space-y-0.5">
+                    <p className="truncate text-xs font-bold text-slate-900">
+                      Penerima: {record.bast.recipientName}
+                    </p>
+                    <p className="text-[11px] text-slate-600 tabular-nums">
+                      Ditandatangani: {formatUploadDateTime(record.bast.signedAt)}
+                    </p>
+                    <p className="text-[11px] text-slate-500">
+                      Petugas: {record.bast.signedBy}
+                    </p>
+                    {typeof record.bast.lat === 'number' && typeof record.bast.lng === 'number' && (
+                      <a
+                        href={`https://maps.google.com/?q=${record.bast.lat},${record.bast.lng}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 pt-0.5 text-[11px] font-semibold text-teal-700 hover:underline tabular-nums"
+                      >
+                        <MapPin className="h-3 w-3" />
+                        <span>
+                          {record.bast.lat.toFixed(5)}, {record.bast.lng.toFixed(5)}
+                        </span>
+                      </a>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50/70 px-3 py-3 text-center text-xs text-slate-500">
+                Belum ada tanda tangan Berita Acara Serah Terima (BAST) yang direkam.
+              </p>
+            )}
+
+            <div className="grid grid-cols-2 gap-2">
+              {onSaveBast && (
+                <button
+                  type="button"
+                  disabled={isProposalLocked || !canUpdate}
+                  onClick={() => setIsSignatureOpen(true)}
+                  className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <PenTool className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">
+                    {record.bast ? 'Ulangi Tanda Tangan' : 'Tanda Tangan BAST'}
+                  </span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                disabled={isDownloadingBastPdf}
+                onClick={() => void handleDownloadBastPdf()}
+                className={`inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50/70 px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100 disabled:opacity-60 ${
+                  onSaveBast ? '' : 'col-span-2'
+                }`}
+              >
+                {isDownloadingBastPdf ? (
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                ) : (
+                  <Download className="h-3.5 w-3.5 shrink-0" />
+                )}
+                <span className="truncate">
+                  {isDownloadingBastPdf ? 'Mencetak...' : 'Cetak BAST PDF'}
+                </span>
+              </button>
+            </div>
+          </div>
+        </section>
+
         {/* Pengajuan & Bantuan */}
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
           <div className="border-b border-slate-100 px-4 py-3">
@@ -1028,20 +1223,14 @@ export function KpmDetailView({
                 })()}
               </dd>
             </div>
-            {record.catatan && (
-              <div className="px-4 py-3">
-                <dt className="text-xs text-slate-500">Catatan Petugas</dt>
-                <dd className="mt-1 text-xs leading-relaxed text-slate-700">{record.catatan}</dd>
-              </div>
-            )}
           </dl>
         </section>
 
-        {/* Dokumen & Foto Lapangan */}
+        {/* Dokumentasi */}
         <section className="rounded-2xl border border-slate-200 bg-white p-4">
           <div className="flex items-center justify-between gap-2">
             <div>
-              <h3 className="text-sm font-bold text-slate-900">Dokumen &amp; Foto Lapangan</h3>
+              <h3 className="text-sm font-bold text-slate-900">Dokumentasi</h3>
               <p className="text-[11px] text-slate-500">
                 Disimpan langsung di Google Drive · Klik foto untuk pratinjau
               </p>
@@ -1075,10 +1264,10 @@ export function KpmDetailView({
           <div className="mt-3 grid grid-cols-2 gap-2.5">
             {(
               [
-                { key: 'ktp', label: 'Foto KTP', icon: CreditCard },
-                { key: 'kk', label: 'Foto KK', icon: FileText },
                 { key: 'penerima', label: 'Foto Penerima', icon: User },
                 { key: 'survey', label: 'Foto Survey', icon: FileText },
+                { key: 'ktp', label: 'Foto KTP', icon: CreditCard },
+                { key: 'kk', label: 'Foto KK', icon: FileText },
               ] as const
             ).map((item) => {
               const doc = record.documents[item.key];
@@ -1090,7 +1279,7 @@ export function KpmDetailView({
               return (
                 <div
                   key={item.key}
-                  className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50"
+                  className="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-slate-50"
                 >
                   {doc ? (
                     <>
@@ -1115,7 +1304,7 @@ export function KpmDetailView({
                         </span>
                       </button>
                       {editableDocs && (
-                        <div className="flex items-center gap-1 border-t border-slate-200 bg-white p-1.5">
+                        <div className="mt-auto flex items-center gap-1 border-t border-slate-200 bg-white p-1.5">
                           <button
                             type="button"
                             disabled={Boolean(docBusySlot)}
@@ -1148,14 +1337,14 @@ export function KpmDetailView({
                       )}
                     </>
                   ) : (
-                    <div className="flex aspect-[1.45/1] flex-col items-center justify-center p-2 text-center text-slate-400">
+                    <div className="flex min-h-[124px] w-full flex-1 flex-col items-center justify-center p-2.5 text-center text-slate-400">
                       {isSlotBusy ? (
                         <Loader2 className="h-5 w-5 animate-spin text-teal-700" />
                       ) : (
                         <Icon className="h-5 w-5" />
                       )}
-                      <p className="mt-1 text-[10px] font-medium text-slate-500">
-                        {isSlotBusy ? 'Mengunggah...' : `${item.label} kosong`}
+                      <p className="mt-1.5 text-[11px] font-medium text-slate-500">
+                        {isSlotBusy ? 'Mengunggah...' : item.label}
                       </p>
                       {editableDocs && !isSlotBusy && (
                         <button
@@ -1174,63 +1363,13 @@ export function KpmDetailView({
               );
             })}
 
-            {rumahDocs.map((doc, idx) => {
-              const isBusy = docBusySlot === `rumah:${doc.id}`;
-              const editableDocs = Boolean(!isProposalLocked && canUpdate && onUpdateKpmDocuments);
-              return (
-                <div
-                  key={doc.id}
-                  className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50"
-                >
-                  <button
-                    type="button"
-                    onClick={() => onPreviewDocument(doc, `Foto Rumah #${idx + 1}`)}
-                    className="relative block aspect-[1.45/1] w-full overflow-hidden bg-slate-200 text-left"
-                  >
-                    <DriveImage
-                      doc={doc}
-                      alt={`Foto Rumah ${idx + 1}`}
-                      className="h-full w-full object-cover"
-                    />
-                    {isBusy && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-slate-950/60 text-white">
-                        <Loader2 className="h-5 w-5 animate-spin" />
-                      </div>
-                    )}
-                    <span className="absolute bottom-1.5 left-1.5 rounded-md bg-slate-900/75 px-1.5 py-0.5 text-[10px] font-medium text-white">
-                      Rumah #{idx + 1}
-                    </span>
-                  </button>
-                  {editableDocs && (
-                    <div className="flex items-center justify-end border-t border-slate-200 bg-white p-1.5">
-                      <button
-                        type="button"
-                        disabled={Boolean(docBusySlot)}
-                        onClick={() =>
-                          setPendingDeleteDoc({
-                            category: 'rumah',
-                            label: `Foto Rumah #${idx + 1}`,
-                            doc,
-                          })
-                        }
-                        className="inline-flex min-h-[28px] w-full items-center justify-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100"
-                      >
-                        <Trash2 className="h-3 w-3" />
-                        <span>Hapus Foto</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-
             {lainnyaDocs.map((doc, idx) => {
               const isBusy = docBusySlot === `lainnya:${doc.id}`;
               const editableDocs = Boolean(!isProposalLocked && canUpdate && onUpdateKpmDocuments);
               return (
                 <div
                   key={doc.id}
-                  className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50"
+                  className="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-slate-50"
                 >
                   <button
                     type="button"
@@ -1252,7 +1391,7 @@ export function KpmDetailView({
                     </span>
                   </button>
                   {editableDocs && (
-                    <div className="flex items-center justify-end border-t border-slate-200 bg-white p-1.5">
+                    <div className="mt-auto flex items-center justify-end border-t border-slate-200 bg-white p-1.5">
                       <button
                         type="button"
                         disabled={Boolean(docBusySlot)}
@@ -1273,21 +1412,60 @@ export function KpmDetailView({
                 </div>
               );
             })}
+
+            {rumahDocs.map((doc, idx) => {
+              const isBusy = docBusySlot === `rumah:${doc.id}`;
+              const editableDocs = Boolean(!isProposalLocked && canUpdate && onUpdateKpmDocuments);
+              return (
+                <div
+                  key={doc.id}
+                  className="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-slate-50"
+                >
+                  <button
+                    type="button"
+                    onClick={() => onPreviewDocument(doc, `Foto Rumah #${idx + 1}`)}
+                    className="relative block aspect-[1.45/1] w-full overflow-hidden bg-slate-200 text-left"
+                  >
+                    <DriveImage
+                      doc={doc}
+                      alt={`Foto Rumah ${idx + 1}`}
+                      className="h-full w-full object-cover"
+                    />
+                    {isBusy && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-slate-950/60 text-white">
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                      </div>
+                    )}
+                    <span className="absolute bottom-1.5 left-1.5 rounded-md bg-slate-900/75 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                      Rumah #{idx + 1}
+                    </span>
+                  </button>
+                  {editableDocs && (
+                    <div className="mt-auto flex items-center justify-end border-t border-slate-200 bg-white p-1.5">
+                      <button
+                        type="button"
+                        disabled={Boolean(docBusySlot)}
+                        onClick={() =>
+                          setPendingDeleteDoc({
+                            category: 'rumah',
+                            label: `Foto Rumah #${idx + 1}`,
+                            doc,
+                          })
+                        }
+                        className="inline-flex min-h-[28px] w-full items-center justify-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                        <span>Hapus Foto</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           {!isProposalLocked && canUpdate && onUpdateKpmDocuments && (
             <div className="mt-3 flex flex-wrap gap-2">
-              {rumahDocs.length < 3 && (
-                <button
-                  type="button"
-                  disabled={Boolean(docBusySlot)}
-                  onClick={() => handleTriggerSingleOrMultiUpload('rumah', 'Foto Rumah')}
-                  className="inline-flex min-h-[36px] flex-1 items-center justify-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-                >
-                  <Plus className="h-3.5 w-3.5 text-teal-700" />
-                  <span>Tambah Foto Rumah ({rumahDocs.length}/3)</span>
-                </button>
-              )}
               {lainnyaDocs.length < 5 && (
                 <button
                   type="button"
@@ -1297,6 +1475,17 @@ export function KpmDetailView({
                 >
                   <Plus className="h-3.5 w-3.5 text-teal-700" />
                   <span>Tambah Foto Lainnya ({lainnyaDocs.length}/5)</span>
+                </button>
+              )}
+              {rumahDocs.length < 3 && (
+                <button
+                  type="button"
+                  disabled={Boolean(docBusySlot)}
+                  onClick={() => handleTriggerSingleOrMultiUpload('rumah', 'Foto Rumah')}
+                  className="inline-flex min-h-[36px] flex-1 items-center justify-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                >
+                  <Plus className="h-3.5 w-3.5 text-teal-700" />
+                  <span>Tambah Foto Rumah ({rumahDocs.length}/3)</span>
                 </button>
               )}
             </div>
@@ -1349,45 +1538,6 @@ export function KpmDetailView({
             </button>
           )}
         </section>
-
-        {/* Action Footer (Safe Delete) */}
-        {canDelete && (
-          <section className="pt-1">
-            {!confirmDelete ? (
-              <button
-                type="button"
-                disabled={isProposalLocked}
-                onClick={() => setConfirmDelete(true)}
-                className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-4 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <Trash2 className="h-4 w-4" />
-                <span>Hapus Data KPM</span>
-              </button>
-            ) : (
-              <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3.5">
-                <p className="text-xs font-bold text-rose-900">
-                  Hapus calon KPM "{record.nama}" dari daftar?
-                </p>
-                <div className="mt-2.5 flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setConfirmDelete(false)}
-                    className="min-h-[40px] flex-1 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                  >
-                    Batal
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onDeleteRecord(record.id)}
-                    className="min-h-[40px] flex-1 rounded-xl bg-rose-600 text-xs font-semibold text-white hover:bg-rose-700"
-                  >
-                    Ya, Hapus Data
-                  </button>
-                </div>
-              </div>
-            )}
-          </section>
-        )}
       </main>
 
       {/* Persistent Bottom-Right Floating Pencil Edit KPM Button */}
@@ -1410,13 +1560,17 @@ export function KpmDetailView({
                 ? 'Akses Edit Dinonaktifkan'
                 : 'Edit Data KPM'
           }
-          className={`pointer-events-auto inline-flex h-12 w-12 items-center justify-center rounded-full shadow-lg transition-all active:scale-95 ${
+          className={`pointer-events-auto inline-flex h-[52px] w-[52px] items-center justify-center rounded-full shadow-lg transition-all active:scale-95 ${
             isProposalLocked || !canUpdate
               ? 'cursor-not-allowed border border-slate-300 bg-slate-200 text-slate-500 shadow-slate-900/10'
               : 'bg-teal-700 text-white shadow-teal-900/25 hover:bg-teal-800'
           }`}
         >
-          {isProposalLocked || !canUpdate ? <Lock className="h-5 w-5" /> : <Pencil className="h-5 w-5" />}
+          {isProposalLocked || !canUpdate ? (
+            <Lock className="h-[22px] w-[22px]" />
+          ) : (
+            <Pencil className="h-[22px] w-[22px]" />
+          )}
         </button>
       </div>
 
@@ -1601,6 +1755,80 @@ export function KpmDetailView({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Confirmation Modal for Deleting KPM Record (Triggered safely from Top Header) */}
+      {confirmDelete && canDelete && !isProposalLocked && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-4 backdrop-blur-xs sm:items-center"
+          onClick={() => setConfirmDelete(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Konfirmasi Hapus Data KPM"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm space-y-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-xl"
+          >
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-100 text-rose-700">
+                <Trash2 className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Hapus Data KPM?</h3>
+                <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                  Data calon KPM <strong>{record.nama}</strong> ({record.registerCode}) akan
+                  dihapus permanen dari daftar.
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(false)}
+                className="min-h-[42px] flex-1 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmDelete(false);
+                  onDeleteRecord(record.id);
+                }}
+                className="inline-flex min-h-[42px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-rose-600 text-xs font-semibold text-white hover:bg-rose-700"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                <span>Ya, Hapus Data</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* QR Code Verification Card Modal */}
+      <KpmQrCardModal
+        isOpen={isQrCardOpen}
+        record={record}
+        onClose={() => setIsQrCardOpen(false)}
+      />
+
+      {/* Digital Signature & GPS Modal for BAST */}
+      {onSaveBast && (
+        <SignaturePadModal
+          isOpen={isSignatureOpen}
+          defaultRecipientName={record.nama}
+          registerCode={record.registerCode}
+          onClose={() => setIsSignatureOpen(false)}
+          onSave={async (payload) => {
+            await onSaveBast(record.id, payload.file, {
+              recipientName: payload.recipientName,
+              lat: payload.lat,
+              lng: payload.lng,
+              accuracy: payload.accuracy,
+            });
+          }}
+        />
       )}
     </div>
   );

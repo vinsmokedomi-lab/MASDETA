@@ -5,10 +5,12 @@ import {
   ArrowLeft,
   Banknote,
   Briefcase,
+  CalendarClock,
   Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  ClipboardCheck,
   Clock,
   CopyCheck,
   Download,
@@ -32,6 +34,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Trash2,
+  Upload,
   User,
   UserCheck,
   UserPlus,
@@ -39,6 +42,7 @@ import {
   X,
 } from 'lucide-react';
 import { DriveImage } from './DriveImage';
+import { ExcelImportWizardModal } from './ExcelImportWizardModal';
 import { FilterSelect, SegmentedTabs } from './FormControls';
 import { ItemManagerView } from './ItemManagerView';
 import { MenuDownloadView } from './MenuDownloadView';
@@ -59,6 +63,10 @@ import {
   PengelolaProfile,
   ProposalKpmHistoryEntry,
   ProposalRecord,
+  ReportTemplateConfig,
+  ScheduleCategory,
+  ScheduleEventItem,
+  TrashRecordItem,
   UserPermissions,
   WilayahKabKota,
 } from '../types/kpm';
@@ -89,6 +97,9 @@ export type MenuSection =
   | 'pekerjaan'
   | 'activity'
   | 'download'
+  | 'kelengkapan'
+  | 'jadwal'
+  | 'sampah'
   | 'laporan';
 
 export type AdminDataActionType =
@@ -160,7 +171,8 @@ interface MenuHubViewProps {
   }) => Promise<{ ok: boolean; error?: string }> | void;
   onImportCsv?: (
     csvText: string,
-    fileName: string
+    fileName: string,
+    skipDuplicates?: boolean
   ) => {
     importedRecords: number;
     importedProposals: number;
@@ -172,6 +184,21 @@ interface MenuHubViewProps {
   onToggleBerkasDikembalikan?: (kpmId: string, nextValue: boolean) => void;
   onSelectKpmFromDuplicate: (record: KpmRecord) => void;
   onPreviewDocument: (file: KpmDocumentFile, title: string) => void;
+  schedules?: ScheduleEventItem[];
+  onAddSchedule?: (payload: {
+    title: string;
+    category: ScheduleCategory;
+    targetDate: string;
+    proposalName?: string;
+    notes?: string;
+  }) => void;
+  onToggleSchedule?: (id: string) => void;
+  onDeleteSchedule?: (id: string) => void;
+  trashBin?: TrashRecordItem[];
+  onRestoreTrashItem?: (trashId: string) => void;
+  onPermanentDeleteTrashItem?: (trashId: string) => void;
+  reportTemplate?: ReportTemplateConfig;
+  onSaveReportTemplate?: (next: ReportTemplateConfig) => void;
 }
 
 export function MenuHubView({
@@ -221,6 +248,15 @@ export function MenuHubView({
   onToggleBerkasDikembalikan,
   onSelectKpmFromDuplicate,
   onPreviewDocument,
+  schedules = [],
+  onAddSchedule,
+  onToggleSchedule,
+  onDeleteSchedule,
+  trashBin = [],
+  onRestoreTrashItem,
+  onPermanentDeleteTrashItem,
+  reportTemplate,
+  onSaveReportTemplate,
 }: MenuHubViewProps) {
   const isSuperAdminRole = currentUser.role === 'SuperAdmin';
   const canAdd =
@@ -522,6 +558,23 @@ export function MenuHubView({
     name: string;
     kpmCount: number;
   } | null>(null);
+
+  // Excel / CSV Import Wizard modal
+  const [isImportWizardOpen, setIsImportWizardOpen] = useState(false);
+
+  // Matriks Kelengkapan Berkas KPM state
+  const [matrixQuery, setMatrixQuery] = useState('');
+  const [matrixFilter, setMatrixFilter] = useState<'all' | 'incomplete'>('incomplete');
+
+  // Jadwal & Target Proposal form state
+  const [scheduleTitle, setScheduleTitle] = useState('');
+  const [scheduleCategory, setScheduleCategory] = useState<ScheduleCategory>('distribusi');
+  const [scheduleDate, setScheduleDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [scheduleProposal, setScheduleProposal] = useState('');
+  const [scheduleNotes, setScheduleNotes] = useState('');
+
+  // Tempat Sampah confirmation state
+  const [pendingPermanentDeleteTrashId, setPendingPermanentDeleteTrashId] = useState<string | null>(null);
 
   const archivedRecords = useMemo(
     () => records.filter((r) => isArchivedKpm(r)),
@@ -891,7 +944,7 @@ export function MenuHubView({
                   <CopyCheck className="h-5 w-5" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">Cek Duplikasi NIK / KK</p>
+                  <p className="text-sm font-semibold text-slate-900">Duplikasi NIK / KK</p>
                   <p className="mt-0.5 truncate text-xs text-slate-500">
                     Deteksi NIK atau KK ganda
                   </p>
@@ -911,6 +964,47 @@ export function MenuHubView({
                   <p className="text-sm font-semibold text-slate-900">Arsip Berkas Ditolak</p>
                   <p className="mt-0.5 truncate text-xs text-slate-500">
                     Daftar berkas KPM berstatus ditolak
+                  </p>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onChangeSection('kelengkapan')}
+                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+              >
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                  <ClipboardCheck className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-slate-900">Matriks Kelengkapan Berkas</p>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    Audit NIK, KK, foto lapangan &amp; DTSEN per KPM
+                  </p>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onChangeSection('jadwal')}
+                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+              >
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                  <CalendarClock className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-slate-900">Jadwal &amp; Target Proposal</p>
+                    {schedules.filter((s) => !s.completed).length > 0 && (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800 tabular-nums">
+                        {schedules.filter((s) => !s.completed).length}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    Agenda survey, antar Dinas &amp; penyaluran
                   </p>
                 </div>
                 <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -1047,6 +1141,25 @@ export function MenuHubView({
                 </div>
                 <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
               </button>
+
+              {onImportCsv && canAdd && (
+                <button
+                  type="button"
+                  onClick={() => setIsImportWizardOpen(true)}
+                  className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                >
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700">
+                    <Upload className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-slate-900">Impor Data Excel / CSV</p>
+                    <p className="mt-0.5 truncate text-xs text-slate-500">
+                      Pratinjau &amp; cek duplikasi otomatis sebelum impor massal
+                    </p>
+                  </div>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                </button>
+              )}
             </div>
           </section>
 
@@ -1101,6 +1214,18 @@ export function MenuHubView({
             </div>
           </section>
         </div>
+
+        {onImportCsv && (
+          <ExcelImportWizardModal
+            isOpen={isImportWizardOpen}
+            existingRecords={records}
+            existingProposals={proposals}
+            onClose={() => setIsImportWizardOpen(false)}
+            onConfirmImport={async (csvText, skipDuplicates) => {
+              onImportCsv(csvText, 'Wizard Impor', skipDuplicates);
+            }}
+          />
+        )}
       </div>
     );
   }
@@ -1322,6 +1447,25 @@ export function MenuHubView({
                       </p>
                       <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
                         {formatRupiah(adminStats.totalAmount)} · {adminStats.paidRecords.length} KPM tercatat
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onChangeSection('sampah')}
+                    className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-700">
+                      <Trash2 className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-slate-900">
+                        Tempat Sampah (30 Hari)
+                      </p>
+                      <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
+                        {trashBin.length} item terhapus sementara · Pulihkan atau hapus permanen
                       </p>
                     </div>
                     <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -2423,12 +2567,41 @@ export function MenuHubView({
     );
   }
 
-  // 4. CEK DUPLIKASI NIK / KK
+  // 4. DUPLIKASI NIK / KK
   if (activeSection === 'duplikasi') {
+    const ktpDupCount = duplicateGroups.filter((g) => g.type === 'NIK KTP').length;
+    const kkDupCount = duplicateGroups.filter((g) => g.type === 'Nomor KK').length;
+
     return (
       <div className="min-h-screen pb-24">
-        {renderSubHeader('Cek Duplikasi NIK / KK', () => onChangeSection('root'))}
+        {renderSubHeader('Duplikasi NIK / KK', () => onChangeSection('root'))}
         <div className="space-y-4 px-4 pt-4">
+          <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3.5">
+            <div className="flex items-center gap-3">
+              <div
+                className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+                  duplicateGroups.length > 0
+                    ? 'bg-rose-50 text-rose-600'
+                    : 'bg-teal-50 text-teal-700'
+                }`}
+              >
+                <CopyCheck className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="text-xs font-medium text-slate-500">Total Duplikasi Terdeteksi</p>
+                <p className="text-lg font-bold text-slate-900 tabular-nums">
+                  {duplicateGroups.length} Duplikat
+                </p>
+              </div>
+            </div>
+            {duplicateGroups.length > 0 && (
+              <div className="text-right text-[11px] font-semibold text-slate-500 tabular-nums">
+                <p>{ktpDupCount} NIK KTP</p>
+                <p>{kkDupCount} Nomor KK</p>
+              </div>
+            )}
+          </div>
+
           {duplicateGroups.length === 0 ? (
             <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
               <p className="text-sm font-bold text-slate-900">Data Bersih dari Duplikasi</p>
@@ -4103,7 +4276,452 @@ export function MenuHubView({
     );
   }
 
-  // 9. DOWNLOAD DATA (PDF F4 & EXCEL)
+  // 9. MATRIKS KELENGKAPAN BERKAS KPM
+  if (activeSection === 'kelengkapan') {
+    const q = matrixQuery.trim().toLowerCase();
+    const rows = records
+      .map((rec) => {
+        const checks = [
+          { key: 'nik', label: 'NIK', ok: /^\d{16}$/.test(rec.nikKtp || '') },
+          { key: 'kk', label: 'KK', ok: /^\d{16}$/.test(rec.nikKk || '') },
+          { key: 'ktpFoto', label: 'KTP', ok: Boolean(rec.documents?.ktp) },
+          { key: 'kkFoto', label: 'KK Foto', ok: Boolean(rec.documents?.kk) },
+          { key: 'survey', label: 'Survey', ok: Boolean(rec.documents?.survey) },
+          { key: 'penerima', label: 'Penerima', ok: Boolean(rec.documents?.penerima) },
+          {
+            key: 'dtsen',
+            label: 'DTSEN',
+            ok: Boolean(rec.dtsen && rec.dtsen !== 'Belum Ada Desil'),
+          },
+          { key: 'validasi', label: 'Diterima', ok: rec.validasi === 'accepted' },
+        ];
+        const score = checks.filter((c) => c.ok).length;
+        return { rec, checks, score };
+      })
+      .filter(({ rec, score }) => {
+        if (matrixFilter === 'incomplete' && score === 8) return false;
+        if (!q) return true;
+        return (
+          rec.nama.toLowerCase().includes(q) ||
+          rec.proposal.toLowerCase().includes(q) ||
+          (rec.registerCode || '').toLowerCase().includes(q) ||
+          rec.nikKtp.includes(q)
+        );
+      })
+      .sort((a, b) => a.score - b.score || a.rec.nama.localeCompare(b.rec.nama, 'id'));
+
+    return (
+      <div className="min-h-screen pb-24">
+        {renderSubHeader('Matriks Kelengkapan Berkas', () => onChangeSection('root'))}
+        <div className="space-y-4 px-4 pt-4">
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                type="search"
+                value={matrixQuery}
+                onChange={(e) => setMatrixQuery(e.target.value)}
+                placeholder="Cari nama, proposal, atau NIK..."
+                className="min-h-[42px] w-full rounded-xl border border-slate-200 bg-white pr-3 pl-10 text-sm text-slate-900 focus:border-teal-700 focus:outline-none"
+              />
+            </div>
+          </div>
+
+          <SegmentedTabs<'incomplete' | 'all'>
+            value={matrixFilter}
+            onChange={setMatrixFilter}
+            tabs={[
+              {
+                key: 'incomplete',
+                label: 'Belum Lengkap',
+                count: records.filter((r) => {
+                  const okCount =
+                    (/^\d{16}$/.test(r.nikKtp || '') ? 1 : 0) +
+                    (/^\d{16}$/.test(r.nikKk || '') ? 1 : 0) +
+                    (r.documents?.ktp ? 1 : 0) +
+                    (r.documents?.kk ? 1 : 0) +
+                    (r.documents?.survey ? 1 : 0) +
+                    (r.documents?.penerima ? 1 : 0) +
+                    (r.dtsen && r.dtsen !== 'Belum Ada Desil' ? 1 : 0) +
+                    (r.validasi === 'accepted' ? 1 : 0);
+                  return okCount < 8;
+                }).length,
+              },
+              { key: 'all', label: 'Semua KPM', count: records.length },
+            ]}
+          />
+
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+            {rows.length === 0 ? (
+              <div className="px-4 py-10 text-center text-xs text-slate-500">
+                Tidak ada KPM pada filter ini.
+              </div>
+            ) : (
+              rows.slice(0, 80).map(({ rec, checks, score }) => (
+                <button
+                  key={rec.id}
+                  type="button"
+                  onClick={() => onSelectKpm?.(rec)}
+                  className="block w-full px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="truncate text-sm font-bold text-slate-900">{rec.nama}</p>
+                    <span
+                      className={`shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-bold tabular-nums ${
+                        score === 8
+                          ? 'bg-teal-50 text-teal-800'
+                          : score >= 5
+                            ? 'bg-amber-50 text-amber-800'
+                            : 'bg-rose-50 text-rose-700'
+                      }`}
+                    >
+                      {score}/8
+                    </span>
+                  </div>
+                  <p className="mt-0.5 truncate text-[11px] text-slate-500">
+                    {rec.proposal} · {rec.tahun}
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {checks.map((c) => (
+                      <span
+                        key={c.key}
+                        className={`inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${
+                          c.ok
+                            ? 'bg-teal-50 text-teal-800'
+                            : 'bg-slate-100 text-slate-400'
+                        }`}
+                      >
+                        {c.ok ? '✓' : '·'} {c.label}
+                      </span>
+                    ))}
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 10. JADWAL & TARGET PROPOSAL
+  if (activeSection === 'jadwal') {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const catLabelMap: Record<ScheduleCategory, string> = {
+      survey: 'Survey Lapangan',
+      dinas: 'Antar ke Dinas',
+      distribusi: 'Penyaluran / Distribusi',
+      lainnya: 'Agenda Lainnya',
+    };
+
+    const sortedSchedules = [...schedules].sort((a, b) => {
+      if (a.completed !== b.completed) return a.completed ? 1 : -1;
+      return a.targetDate.localeCompare(b.targetDate);
+    });
+
+    const handleSubmitSchedule = (e: FormEvent) => {
+      e.preventDefault();
+      if (!scheduleTitle.trim() || !scheduleDate || !onAddSchedule) return;
+      onAddSchedule({
+        title: scheduleTitle.trim(),
+        category: scheduleCategory,
+        targetDate: scheduleDate,
+        proposalName: scheduleProposal.trim() || undefined,
+        notes: scheduleNotes.trim() || undefined,
+      });
+      setScheduleTitle('');
+      setScheduleProposal('');
+      setScheduleNotes('');
+    };
+
+    return (
+      <div className="min-h-screen pb-24">
+        {renderSubHeader('Jadwal & Target Proposal', () => onChangeSection('root'))}
+        <div className="space-y-4 px-4 pt-4">
+          {onAddSchedule && canAdd && (
+            <form
+              onSubmit={handleSubmitSchedule}
+              className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3"
+            >
+              <h2 className="text-sm font-bold text-slate-900">Tambah Agenda Baru</h2>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Judul Agenda / Target
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={scheduleTitle}
+                  onChange={(e) => setScheduleTitle(e.target.value)}
+                  placeholder="Contoh: Antar Proposal Kel. Sungai Beliung ke Dinas"
+                  className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 px-3 text-sm text-slate-900 focus:border-teal-700 focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700">Kategori</label>
+                  <select
+                    value={scheduleCategory}
+                    onChange={(e) => setScheduleCategory(e.target.value as ScheduleCategory)}
+                    className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none"
+                  >
+                    <option value="survey">Survey Lapangan</option>
+                    <option value="dinas">Antar ke Dinas</option>
+                    <option value="distribusi">Penyaluran / Distribusi</option>
+                    <option value="lainnya">Agenda Lainnya</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Tanggal Target
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={scheduleDate}
+                    onChange={(e) => setScheduleDate(e.target.value)}
+                    className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none tabular-nums"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="text"
+                  value={scheduleProposal}
+                  onChange={(e) => setScheduleProposal(e.target.value)}
+                  placeholder="Nama Proposal (opsional)"
+                  className="min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                />
+                <input
+                  type="text"
+                  value={scheduleNotes}
+                  onChange={(e) => setScheduleNotes(e.target.value)}
+                  placeholder="Catatan singkat (opsional)"
+                  className="min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="inline-flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white hover:bg-teal-800"
+              >
+                <Plus className="h-4 w-4" />
+                <span>Simpan Jadwal</span>
+              </button>
+            </form>
+          )}
+
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+            {sortedSchedules.length === 0 ? (
+              <div className="px-4 py-10 text-center">
+                <CalendarClock className="mx-auto h-8 w-8 text-slate-300" />
+                <p className="mt-2 text-xs font-medium text-slate-600">
+                  Belum ada jadwal kegiatan atau tenggat proposal.
+                </p>
+              </div>
+            ) : (
+              sortedSchedules.map((ev) => {
+                const isOverdue = !ev.completed && ev.targetDate < todayStr;
+                return (
+                  <div key={ev.id} className="flex items-start gap-3 px-4 py-3">
+                    {onToggleSchedule && (
+                      <button
+                        type="button"
+                        onClick={() => onToggleSchedule(ev.id)}
+                        className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border transition-colors ${
+                          ev.completed
+                            ? 'border-teal-700 bg-teal-700 text-white'
+                            : 'border-slate-300 bg-white text-transparent hover:border-teal-600'
+                        }`}
+                        aria-label={ev.completed ? 'Tandai belum selesai' : 'Tandai selesai'}
+                      >
+                        <Check className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span
+                          className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                            ev.completed
+                              ? 'bg-slate-100 text-slate-500'
+                              : isOverdue
+                                ? 'bg-rose-50 text-rose-700'
+                                : 'bg-teal-50 text-teal-800'
+                          }`}
+                        >
+                          {catLabelMap[ev.category]}
+                        </span>
+                        <span
+                          className={`text-[11px] font-bold tabular-nums ${
+                            ev.completed
+                              ? 'text-slate-400'
+                              : isOverdue
+                                ? 'text-rose-600'
+                                : 'text-slate-700'
+                          }`}
+                        >
+                          {ev.targetDate}
+                        </span>
+                      </div>
+                      <p
+                        className={`mt-1 text-sm font-semibold ${
+                          ev.completed ? 'line-through text-slate-400' : 'text-slate-900'
+                        }`}
+                      >
+                        {ev.title}
+                      </p>
+                      {(ev.proposalName || ev.notes) && (
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          {[ev.proposalName, ev.notes].filter(Boolean).join(' · ')}
+                        </p>
+                      )}
+                    </div>
+
+                    {onDeleteSchedule && canDelete && (
+                      <button
+                        type="button"
+                        onClick={() => onDeleteSchedule(ev.id)}
+                        aria-label="Hapus jadwal"
+                        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 11. TEMPAT SAMPAH (RECYCLE BIN 30 HARI - SUPERADMIN)
+  if (activeSection === 'sampah') {
+    const nowMs = Date.now();
+    return (
+      <div className="min-h-screen pb-24">
+        {renderSubHeader('Tempat Sampah (30 Hari)', () => onChangeSection('superadmin'))}
+        <div className="space-y-4 px-4 pt-4">
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-900 leading-relaxed">
+            Data KPM dan Proposal yang dihapus disimpan sementara selama <strong>30 hari</strong>{' '}
+            sebelum foto Drive &amp; datanya dibersihkan otomatis.
+          </div>
+
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+            {trashBin.length === 0 ? (
+              <div className="px-4 py-10 text-center">
+                <Trash2 className="mx-auto h-8 w-8 text-slate-300" />
+                <p className="mt-2 text-xs font-medium text-slate-600">Tempat sampah kosong.</p>
+              </div>
+            ) : (
+              trashBin.map((item) => {
+                const daysLeft = Math.max(
+                  0,
+                  Math.ceil((new Date(item.expiresAt).getTime() - nowMs) / (24 * 60 * 60 * 1000))
+                );
+                return (
+                  <div key={item.id} className="space-y-2.5 px-4 py-3.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <span
+                          className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                            item.kind === 'kpm'
+                              ? 'bg-teal-50 text-teal-800'
+                              : 'bg-amber-50 text-amber-800'
+                          }`}
+                        >
+                          {item.kind === 'kpm' ? 'Calon KPM' : 'Proposal'}
+                        </span>
+                        <p className="mt-1 truncate text-sm font-bold text-slate-900">
+                          {item.title}
+                        </p>
+                        <p className="truncate text-xs text-slate-500">{item.subtitle}</p>
+                        <p className="mt-1 text-[11px] text-slate-400 tabular-nums">
+                          Dihapus {formatUploadDateTime(item.deletedAt)} oleh {item.deletedBy} ·
+                          Sisa {daysLeft} hari
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {onRestoreTrashItem && (
+                        <button
+                          type="button"
+                          onClick={() => onRestoreTrashItem(item.id)}
+                          className="inline-flex min-h-[38px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                          <span>Pulihkan</span>
+                        </button>
+                      )}
+                      {onPermanentDeleteTrashItem && (
+                        <button
+                          type="button"
+                          onClick={() => setPendingPermanentDeleteTrashId(item.id)}
+                          className="inline-flex min-h-[38px] flex-1 items-center justify-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          <span>Hapus Permanen</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {pendingPermanentDeleteTrashId && onPermanentDeleteTrashItem && (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-4 backdrop-blur-xs sm:items-center"
+            onClick={() => setPendingPermanentDeleteTrashId(null)}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-xl space-y-4"
+            >
+              <h3 className="text-base font-bold text-slate-900">Hapus Permanen?</h3>
+              <p className="text-xs leading-relaxed text-slate-600">
+                Data beserta seluruh dokumen foto Google Drive pada item ini akan dihapus permanen
+                dan tidak dapat dipulihkan lagi.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPendingPermanentDeleteTrashId(null)}
+                  className="min-h-[42px] flex-1 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const tid = pendingPermanentDeleteTrashId;
+                    setPendingPermanentDeleteTrashId(null);
+                    onPermanentDeleteTrashItem(tid);
+                  }}
+                  className="min-h-[42px] flex-1 rounded-xl bg-rose-600 text-xs font-semibold text-white hover:bg-rose-700"
+                >
+                  Ya, Hapus Permanen
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // 12. DOWNLOAD DATA (PDF F4 & EXCEL)
   if (activeSection === 'download') {
     return (
       <MenuDownloadView
@@ -4112,6 +4730,8 @@ export function MenuHubView({
         items={items}
         wilayahList={wilayahList}
         pengelolaList={pengelolaList}
+        reportTemplate={reportTemplate}
+        onSaveReportTemplate={onSaveReportTemplate}
         onBack={() => onChangeSection('root')}
       />
     );

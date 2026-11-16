@@ -59,6 +59,16 @@ export interface SubItemDeliveryState {
   updatedBy?: string;
 }
 
+export interface KpmBastInfo {
+  recipientName: string;
+  signedAt: string;
+  signedBy: string;
+  lat?: number;
+  lng?: number;
+  accuracy?: number;
+  signatureDoc?: KpmDocumentFile;
+}
+
 export interface KpmRecord {
   id: string;
   registerCode: string;
@@ -82,6 +92,7 @@ export interface KpmRecord {
   payment: number;
   documents: KpmDocuments;
   subItemDeliveries?: Record<string, SubItemDeliveryState>;
+  bast?: KpmBastInfo;
   berkasDikembalikan?: boolean;
   berkasDikembalikanAt?: string;
   berkasDikembalikanBy?: string;
@@ -285,3 +296,56 @@ export interface AppNotificationItem {
   read: boolean;
   targetAction?: 'proposals' | 'users';
 }
+
+export interface TrashRecordItem {
+  id: string;
+  kind: 'kpm' | 'proposal';
+  title: string;
+  subtitle: string;
+  tahun: string;
+  deletedAt: string;
+  expiresAt: string;
+  deletedBy: string;
+  kpmRecord?: KpmRecord;
+  proposalRecord?: ProposalRecord;
+  attachedKpms?: KpmRecord[];
+}
+
+export type ScheduleCategory = 'survey' | 'dinas' | 'distribusi' | 'lainnya';
+
+export interface ScheduleEventItem {
+  id: string;
+  title: string;
+  category: ScheduleCategory;
+  targetDate: string; // YYYY-MM-DD
+  tahun: string;
+  proposalName?: string;
+  notes?: string;
+  completed: boolean;
+  completedAt?: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface ReportTemplateConfig {
+  enabled: boolean;
+  orgHeaderLine1: string;
+  orgHeaderLine2: string;
+  orgAddress: string;
+  city: string;
+  signatoryTitle: string;
+  signatoryName: string;
+  signatoryNip: string;
+}
+
+export const DEFAULT_REPORT_TEMPLATE: ReportTemplateConfig = {
+  enabled: false,
+  orgHeaderLine1: 'PEMERINTAH KOTA PONTIANAK',
+  orgHeaderLine2: 'DINAS SOSIAL · PROGRAM BANTUAN KPM MASDETA',
+  orgAddress: 'Jl.Sultan Abdurrahman, Pontianak, Kalimantan Barat',
+  city: 'Pontianak',
+  signatoryTitle: 'Koordinator / Penanggung Jawab',
+  signatoryName: '',
+  signatoryNip: '',
+};
+

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Bell,
+  CalendarClock,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -14,12 +15,14 @@ import {
   LogOut,
   MessageSquare,
   Package,
+  RefreshCw,
   Trash2,
   Unlock,
   User,
   UserCheck,
   UserPlus,
   Users,
+  WifiOff,
   X,
 } from 'lucide-react';
 import {
@@ -28,6 +31,7 @@ import {
   ItemBantuan,
   KpmRecord,
   ProposalRecord,
+  ScheduleEventItem,
   ValidationStatus,
 } from '../types/kpm';
 import { TAHUN_OPTIONS } from '../data/kpmOptions';
@@ -59,6 +63,12 @@ interface DashboardViewProps {
   onClearNotifications?: () => void;
   feedback?: { type: 'success' | 'error'; message: string } | null;
   onDismissFeedback?: () => void;
+  isLoading?: boolean;
+  isOnline?: boolean;
+  offlineQueueCount?: number;
+  onSyncOfflineQueue?: () => void;
+  schedules?: ScheduleEventItem[];
+  onOpenSchedules?: () => void;
   onOpenChat: () => void;
   onOpenProfile: () => void;
   onLogout: () => void;
@@ -93,6 +103,12 @@ export function DashboardView({
   onClearNotifications,
   feedback,
   onDismissFeedback,
+  isLoading = false,
+  isOnline = true,
+  offlineQueueCount = 0,
+  onSyncOfflineQueue,
+  schedules = [],
+  onOpenSchedules,
   onOpenChat,
   onOpenProfile,
   onLogout,
@@ -250,9 +266,9 @@ export function DashboardView({
     return { pendingDinas };
   }, [filteredProposals]);
 
-  // Detailed proposal breakdown
+  // Detailed proposal breakdown (smart-sorted: needing attention first, then newest update)
   const proposalSummaryList = useMemo(() => {
-    return filteredProposals.map((prop) => {
+    const mapped = filteredProposals.map((prop) => {
       const propRecords = filteredRecords.filter(
         (r) => r.proposal === prop.namaProposal && r.tahun === prop.tahun
       );
@@ -281,6 +297,13 @@ export function DashboardView({
         fillPct,
         checklistDone,
       };
+    });
+
+    return mapped.sort((a, b) => {
+      const aNeedsAttn = (a.target > 0 && a.activeKpmCount < a.target) || !a.checklist.dinas;
+      const bNeedsAttn = (b.target > 0 && b.activeKpmCount < b.target) || !b.checklist.dinas;
+      if (aNeedsAttn !== bNeedsAttn) return aNeedsAttn ? -1 : 1;
+      return (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt);
     });
   }, [filteredProposals, filteredRecords]);
 
@@ -368,12 +391,20 @@ export function DashboardView({
     [proposalSummaryList]
   );
 
+  const urgentSchedules = useMemo(() => {
+    const limitDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    return schedules
+      .filter((s) => !s.completed && s.targetDate <= limitDate)
+      .sort((a, b) => a.targetDate.localeCompare(b.targetDate));
+  }, [schedules]);
+
   const hasAttentionItems =
     pendingUsersCount > 0 ||
     duplicateNikCount > 0 ||
     missingItemCount > 0 ||
     attentionCounts.pendingDinas > 0 ||
-    incompleteQuotaProposals.length > 0;
+    incompleteQuotaProposals.length > 0 ||
+    urgentSchedules.length > 0;
 
   const visibleNotifications = useMemo(
     () =>
@@ -657,6 +688,51 @@ export function DashboardView({
       </header>
 
       <main className="space-y-5 px-4 pt-4">
+        {(!isOnline || offlineQueueCount > 0) && (
+          <section className="flex items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs text-amber-950">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+                {!isOnline ? <WifiOff className="h-4 w-4" /> : <RefreshCw className="h-4 w-4" />}
+              </div>
+              <div className="min-w-0">
+                <p className="font-bold">
+                  {!isOnline
+                    ? 'Mode Offline Aktif'
+                    : `${offlineQueueCount} Perubahan Menunggu Sinkronisasi`}
+                </p>
+                <p className="text-[11px] text-amber-800">
+                  {!isOnline
+                    ? offlineQueueCount > 0
+                      ? `${offlineQueueCount} antrean tersimpan lokal dan siap dikirim otomatis.`
+                      : 'Perubahan data akan disimpan sementara di perangkat.'
+                    : 'Koneksi kembali aktif. Kirim antrean perubahan ke server sekarang.'}
+                </p>
+              </div>
+            </div>
+            {isOnline && offlineQueueCount > 0 && onSyncOfflineQueue && (
+              <button
+                type="button"
+                onClick={onSyncOfflineQueue}
+                className="inline-flex min-h-[36px] shrink-0 items-center gap-1 rounded-xl bg-amber-700 px-3 text-[11px] font-semibold text-white hover:bg-amber-800"
+              >
+                <RefreshCw className="h-3 w-3" />
+                <span>Sinkronkan Sekarang</span>
+              </button>
+            )}
+          </section>
+        )}
+
+        {isLoading && records.length === 0 ? (
+          <div className="space-y-4 animate-pulse">
+            <div className="h-48 rounded-3xl bg-slate-200" />
+            <div className="grid grid-cols-2 gap-3">
+              <div className="h-24 rounded-2xl bg-slate-200" />
+              <div className="h-24 rounded-2xl bg-slate-200" />
+            </div>
+            <div className="h-40 rounded-2xl bg-slate-200" />
+          </div>
+        ) : (
+          <>
         {/* 1. EXECUTIVE COMMAND HERO */}
         <section className="rounded-3xl bg-slate-900 p-5 text-white">
           <div className="min-w-0">
@@ -677,15 +753,9 @@ export function DashboardView({
               <p className="text-xs font-medium text-slate-400">
                 Total KPM
               </p>
-              <div className="mt-1 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
-                <span className="text-3xl font-bold tracking-tight tabular-nums">
-                  {kpmStats.total}
-                </span>
-                <span className="text-sm font-medium text-slate-400">/</span>
-                <span className="text-xs font-medium text-teal-300 tabular-nums">
-                  {kpmStats.accepted} Diterima
-                </span>
-              </div>
+              <p className="mt-1 text-3xl font-bold tracking-tight tabular-nums">
+                {kpmStats.total}
+              </p>
             </button>
 
             <div className="relative inline-flex min-h-[44px] min-w-[104px] shrink-0 items-center rounded-xl border border-white/50 bg-white/15 transition-colors hover:border-white/75 hover:bg-white/20">
@@ -929,6 +999,26 @@ export function DashboardView({
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-medium text-slate-900">
                       {attentionCounts.pendingDinas} proposal belum diantar ke Dinas
+                    </p>
+                  </div>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                </button>
+              )}
+
+              {urgentSchedules.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => onOpenSchedules?.()}
+                  className="flex min-h-[50px] w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-slate-50"
+                >
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                    <CalendarClock className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium text-slate-900">
+                      {urgentSchedules.length === 1
+                        ? `Jadwal: ${urgentSchedules[0].title} (${urgentSchedules[0].targetDate})`
+                        : `${urgentSchedules.length} jadwal kegiatan mendekati tenggat`}
                     </p>
                   </div>
                   <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -1186,6 +1276,8 @@ export function DashboardView({
               })}
             </div>
           </section>
+        )}
+          </>
         )}
       </main>
     </div>

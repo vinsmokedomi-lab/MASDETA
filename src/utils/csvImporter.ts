@@ -30,6 +30,7 @@ export interface CsvImportParams {
   wilayahList: WilayahKabKota[];
   actorName: string;
   actorEmail?: string;
+  skipDuplicates?: boolean;
 }
 
 export interface CsvImportResult {
@@ -43,6 +44,28 @@ export interface CsvImportResult {
   importedProposalsCount: number;
   addedPengelolaCount: number;
   skippedCount: number;
+  error?: string;
+}
+
+export interface ImportPreviewRow {
+  rowNumber: number;
+  nama: string;
+  nikKtp: string;
+  nikKk: string;
+  proposal: string;
+  tahun: string;
+  item: string;
+  status: 'valid' | 'duplicate' | 'missing_item';
+  note?: string;
+}
+
+export interface ImportPreviewSummary {
+  totalRows: number;
+  validCount: number;
+  duplicateCount: number;
+  newProposalCount: number;
+  newProposals: string[];
+  rows: ImportPreviewRow[];
   error?: string;
 }
 
@@ -178,6 +201,7 @@ export function importProposalKpmFromCsv({
   wilayahList,
   actorName,
   actorEmail,
+  skipDuplicates = true,
 }: CsvImportParams): CsvImportResult {
   const cleanText = csvText.replace(/^\uFEFF/, '');
   const rawLines = cleanText
@@ -355,7 +379,7 @@ export function importProposalKpmFromCsv({
       : '';
     const dedupNameKey = `${tahun}::${proposalName.toLowerCase()}::name::${nama}::${rt}::${rw}`;
 
-    if ((dedupKtpKey && existingKeys.has(dedupKtpKey)) || existingKeys.has(dedupNameKey)) {
+    if (skipDuplicates && ((dedupKtpKey && existingKeys.has(dedupKtpKey)) || existingKeys.has(dedupNameKey))) {
       skippedCount += 1;
       continue;
     }
@@ -607,3 +631,180 @@ export function importProposalKpmFromCsv({
     skippedCount,
   };
 }
+
+export function previewImportFile({
+  csvText,
+  existingRecords,
+  existingProposals,
+}: {
+  csvText: string;
+  existingRecords: KpmRecord[];
+  existingProposals: ProposalRecord[];
+}): ImportPreviewSummary {
+  const cleanText = csvText.replace(/^\uFEFF/, '');
+  const rawLines = cleanText
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0);
+
+  if (rawLines.length < 2) {
+    return {
+      totalRows: 0,
+      validCount: 0,
+      duplicateCount: 0,
+      newProposalCount: 0,
+      newProposals: [],
+      rows: [],
+      error: 'File kosong atau tidak memiliki baris data.',
+    };
+  }
+
+  const delimiter = detectDelimiter(rawLines);
+  let headerRowIdx = -1;
+  let headers: string[] = [];
+  let bannerTahun = '';
+  let bannerProposal = '';
+
+  for (let i = 0; i < Math.min(rawLines.length, 6); i++) {
+    const cols = parseDelimitedLine(rawLines[i], delimiter);
+    const normalized = cols.map(normalizeHeaderKey);
+    const hasNama = normalized.some((h) => h === 'NAMA' || h === 'NAMA KPM' || h === 'NAMA LENGKAP');
+    const hasKeyCol = normalized.some(
+      (h) => h === 'ITEM' || h === 'NIK KTP' || h === 'ALAMAT' || h === 'RT'
+    );
+    if (hasNama && hasKeyCol) {
+      headerRowIdx = i;
+      headers = normalized;
+      break;
+    }
+    for (const cell of cols) {
+      const val = cell.trim();
+      if (!val) continue;
+      if (/^20\d{2}$/.test(val) && !bannerTahun) bannerTahun = val;
+      else if (/^(kecamatan|kelurahan|desa|jalan|jl\.?)\s+/i.test(val) && !bannerProposal) {
+        bannerProposal = formatProposalTitle(val);
+      }
+    }
+  }
+
+  if (headerRowIdx < 0) {
+    return {
+      totalRows: 0,
+      validCount: 0,
+      duplicateCount: 0,
+      newProposalCount: 0,
+      newProposals: [],
+      rows: [],
+      error: 'Header kolom (NAMA, ITEM, NIK KTP, ALAMAT) tidak ditemukan.',
+    };
+  }
+
+  const colIndex = (candidates: string[]): number => {
+    for (const c of candidates) {
+      const idx = headers.indexOf(c);
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  };
+
+  const idxItem = colIndex(['ITEM', 'KODE ITEM']);
+  const idxNama = colIndex(['NAMA', 'NAMA KPM', 'NAMA LENGKAP']);
+  const idxRt = colIndex(['RT']);
+  const idxRw = colIndex(['RW']);
+  const idxNikKtp = colIndex(['NIK KTP', 'NIK']);
+  const idxNikKk = colIndex(['NIK KK', 'NO KK', 'NOMOR KK']);
+  const idxProposal = colIndex(['PROPOSAL', 'NAMA PROPOSAL']);
+  const idxTahun = colIndex(['TAHUN']);
+
+  const existingKeys = new Set<string>();
+  const globalNikSet = new Set<string>();
+  for (const r of existingRecords) {
+    if (r.nikKtp) {
+      existingKeys.add(`${r.tahun}::${r.proposal.toLowerCase()}::ktp::${r.nikKtp}`);
+      globalNikSet.add(r.nikKtp);
+    }
+    existingKeys.add(
+      `${r.tahun}::${r.proposal.toLowerCase()}::name::${r.nama.trim().toUpperCase()}::${r.rt}::${r.rw}`
+    );
+  }
+
+  const proposalSet = new Set(
+    existingProposals.map((p) => `${p.tahun}::${p.namaProposal.toLowerCase()}`)
+  );
+  const newPropMap = new Map<string, string>();
+  const rows: ImportPreviewRow[] = [];
+  let validCount = 0;
+  let duplicateCount = 0;
+
+  const dataLines = rawLines.slice(headerRowIdx + 1);
+  for (let i = 0; i < dataLines.length; i++) {
+    const cols = parseDelimitedLine(dataLines[i], delimiter);
+    if (cols.every((c) => c === '')) continue;
+    const get = (idx: number) => (idx >= 0 && idx < cols.length ? cols[idx].trim() : '');
+    const rawNama = get(idxNama);
+    const rawNikKtp = sanitizeDigits(get(idxNikKtp).replace(/^'/, ''), 16);
+    if (!rawNama && !rawNikKtp) continue;
+    const rawNikKk = sanitizeDigits(get(idxNikKk).replace(/^'/, ''), 16);
+    const rawItem = get(idxItem).toUpperCase();
+    const tahunRaw = get(idxTahun) || bannerTahun || '2026';
+    const tahun = /^20\d{2}$/.test(tahunRaw) ? tahunRaw : bannerTahun || '2026';
+    const proposalName = formatProposalTitle(
+      get(idxProposal) || bannerProposal || 'Kecamatan Pontianak Kota'
+    );
+    const nama = rawNama.trim().toUpperCase();
+    const rt = padRtRw(get(idxRt));
+    const rw = padRtRw(get(idxRw));
+
+    const dedupKtpKey = rawNikKtp
+      ? `${tahun}::${proposalName.toLowerCase()}::ktp::${rawNikKtp}`
+      : '';
+    const dedupNameKey = `${tahun}::${proposalName.toLowerCase()}::name::${nama}::${rt}::${rw}`;
+    const isDuplicateInProposal =
+      (dedupKtpKey && existingKeys.has(dedupKtpKey)) || existingKeys.has(dedupNameKey);
+    const isCrossProposalNik = !isDuplicateInProposal && Boolean(rawNikKtp && globalNikSet.has(rawNikKtp));
+
+    let status: ImportPreviewRow['status'] = 'valid';
+    let note = '';
+    if (isDuplicateInProposal) {
+      status = 'duplicate';
+      note = 'Sudah ada di proposal ini';
+      duplicateCount += 1;
+    } else if (!rawItem) {
+      status = 'missing_item';
+      note = 'Item kosong (default OV)';
+      validCount += 1;
+    } else {
+      if (isCrossProposalNik) note = 'NIK tercatat di proposal lain';
+      validCount += 1;
+    }
+
+    if (dedupKtpKey) existingKeys.add(dedupKtpKey);
+    existingKeys.add(dedupNameKey);
+
+    const propKey = `${tahun}::${proposalName.toLowerCase()}`;
+    if (!proposalSet.has(propKey)) {
+      newPropMap.set(propKey, `${proposalName} (${tahun})`);
+    }
+
+    rows.push({
+      rowNumber: rows.length + 1,
+      nama,
+      nikKtp: rawNikKtp,
+      nikKk: rawNikKk,
+      proposal: proposalName,
+      tahun,
+      item: rawItem || 'OV',
+      status,
+      note,
+    });
+  }
+
+  return {
+    totalRows: rows.length,
+    validCount,
+    duplicateCount,
+    newProposalCount: newPropMap.size,
+    newProposals: Array.from(newPropMap.values()),
+    rows,
+  };
+}
+

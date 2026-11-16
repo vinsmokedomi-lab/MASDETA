@@ -10,6 +10,11 @@
   body {
     overscroll-behavior-x: none;
     overscroll-behavior-y: contain;
+    touch-action: pan-x pan-y;
+  }
+
+  [data-allow-pinch-zoom='true'] {
+    touch-action: none;
   }
 
   html,

@@ -284,6 +284,12 @@ CREATE TABLE IF NOT EXISTS public.direct_chat_messages (
   read_at TIMESTAMPTZ
 );
 
+CREATE TABLE IF NOT EXISTS public.masdeta_app_state (
+  state_key TEXT PRIMARY KEY,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- ----------------------------------------------------------------------------
 -- 9. INDEKS PERFORMA TINGGI (Pencarian NIK, KK, Wilayah, Proposal, Audit, Chat)
 -- ----------------------------------------------------------------------------
@@ -344,6 +350,7 @@ ALTER TABLE public.proposal_kpm_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.kpm_audit_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.internal_users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.direct_chat_messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.masdeta_app_state ENABLE ROW LEVEL SECURITY;
 
 DO $$
 DECLARE
@@ -365,7 +372,8 @@ BEGIN
     'proposal_kpm_history',
     'kpm_audit_logs',
     'internal_users',
-    'direct_chat_messages'
+    'direct_chat_messages',
+    'masdeta_app_state'
   ]
   LOOP
     EXECUTE format('DROP POLICY IF EXISTS "masdeta_multiadmin_select_%s" ON public.%I;', tbl, tbl);
@@ -415,7 +423,8 @@ BEGIN
     'proposal_kpm_history',
     'kpm_audit_logs',
     'internal_users',
-    'direct_chat_messages'
+    'direct_chat_messages',
+    'masdeta_app_state'
   ]
   LOOP
     BEGIN
