@@ -33,6 +33,16 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-android-${{ hashFiles('package-lock.json') }}-v1
+          restore-keys: |
+            gradle-android-
+
       - name: Install SVG converter
         run: sudo apt-get update && sudo apt-get install -y librsvg2-bin
 
@@ -1395,9 +1405,27 @@ jobs:
           STORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS_NAME: ${{ secrets.KEY_ALIAS }}
         run: |
+          GRADLE_PROPS="android/gradle.properties"
+          if [ -f "$GRADLE_PROPS" ]; then
+            sed -i '/^org\.gradle\.jvmargs=/d' "$GRADLE_PROPS"
+            sed -i '/^org\.gradle\.daemon=/d' "$GRADLE_PROPS"
+          fi
+          {
+            echo "org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8"
+            echo "org.gradle.daemon=false"
+          } >> "$GRADLE_PROPS"
+
           chmod +x android/gradlew
           cd android
-          ./gradlew assembleRelease --no-daemon --stacktrace
+          for attempt in 1 2 3; do
+            echo "Gradle assembleRelease attempt $attempt/3..."
+            if ./gradlew assembleRelease --no-daemon --max-workers=2 --stacktrace; then
+              exit 0
+            fi
+            echo "Gradle assembleRelease gagal (percobaan $attempt/3), mencoba ulang dalam 8 detik..."
+            sleep 8
+          done
+          exit 1
 
       - name: Rename Release APK
         run: |
@@ -1410,9 +1438,9 @@ jobs:
           VER_NAME="${{ steps.ver.outputs.version_name }}"
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || true)
           if [ -n "$PREV_TAG" ]; then
-            COMMITS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"- %s" --no-merges | head -n 20)
+            COMMITS=$(git log "${PREV_TAG}..HEAD" -n 20 --pretty=format:"- %s" --no-merges || true)
           else
-            COMMITS=$(git log -n 10 --pretty=format:"- %s" --no-merges)
+            COMMITS=$(git log -n 10 --pretty=format:"- %s" --no-merges || true)
           fi
           if [ -f "RELEASE_NOTES.md" ] && [ -s "RELEASE_NOTES.md" ] && grep -q "v${VER_NAME}" RELEASE_NOTES.md; then
             cp RELEASE_NOTES.md /tmp/release_notes.md
