@@ -86,7 +86,8 @@ export function SubItemRecapView({
     >();
 
     for (const kpmRow of recap.kpmRows) {
-      const code = kpmRow.record.item || 'LAIN';
+      const code = (kpmRow.record.item || '').trim();
+      if (!code) continue;
       const pkg = resolvePackageForKpm(items, kpmRow.record.tahun, code);
       const existing = map.get(code) ?? {
         code,
@@ -135,7 +136,7 @@ export function SubItemRecapView({
     if (!drillTarget) return [];
     const list = recap.kpmRows.filter((row) => {
       if (drillTarget.kind === 'item') {
-        return (row.record.item || 'LAIN') === drillTarget.code;
+        return (row.record.item || '').trim() === drillTarget.code;
       }
       if (drillTarget.kind === 'subitem') {
         return (

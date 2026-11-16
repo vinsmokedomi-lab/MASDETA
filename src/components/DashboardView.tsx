@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
-  Banknote,
   Bell,
   CheckCircle2,
   ChevronDown,
@@ -33,9 +32,7 @@ import {
 } from '../types/kpm';
 import { TAHUN_OPTIONS } from '../data/kpmOptions';
 import {
-  HIGH_DESIL_VALUES,
   computeSubItemRecap,
-  formatRupiah,
   formatUploadDateTime,
   getItemHierarchyRank,
   resolvePackageForKpm,
@@ -75,7 +72,6 @@ interface DashboardViewProps {
   onOpenDuplicateCheck: () => void;
   onOpenArsip?: () => void;
   onOpenDtsen?: () => void;
-  onOpenAdministrasi?: () => void;
 }
 
 export function DashboardView({
@@ -110,7 +106,6 @@ export function DashboardView({
   onOpenDuplicateCheck,
   onOpenArsip,
   onOpenDtsen,
-  onOpenAdministrasi,
 }: DashboardViewProps) {
   const [openHeaderMenu, setOpenHeaderMenu] = useState<'none' | 'notifications' | 'profile'>('none');
   const [dismissedPendingBellCount, setDismissedPendingBellCount] = useState(0);
@@ -198,11 +193,13 @@ export function DashboardView({
     };
   }, [filteredRecords, items]);
 
-  // DTSEN classification breakdown
+  // DTSEN classification breakdown (multi-color segments)
   const dtsenStats = useMemo(() => {
-    let priorityCount = 0; // Desil 1-4
-    let reviewCount = 0; // Desil 5
-    let highCount = 0; // Desil 6-10 & others
+    let priorityCount = 0; // Desil 1-4 (Hijau)
+    let reviewCount = 0; // Desil 5 (Oranye)
+    let highCount = 0; // Desil 6-10 (Merah)
+    let notFoundCount = 0; // Data Tidak Ditemukan (Hitam)
+    let unassignedCount = 0; // Belum Ada Desil (Abu-abu)
 
     for (const r of filteredRecords) {
       const d = (r.dtsen || '').trim();
@@ -210,15 +207,41 @@ export function DashboardView({
         priorityCount += 1;
       } else if (d === '5') {
         reviewCount += 1;
-      } else if (HIGH_DESIL_VALUES.has(d) || d) {
+      } else if (d === '6' || d === '7' || d === '8' || d === '9' || d === '10' || d === '6 - 10') {
         highCount += 1;
+      } else if (d === 'Data Tidak Ditemukan') {
+        notFoundCount += 1;
+      } else {
+        unassignedCount += 1;
       }
     }
 
-    const totalClassified = priorityCount + reviewCount + highCount;
-    const priorityPct =
-      totalClassified > 0 ? Math.round((priorityCount / totalClassified) * 100) : 0;
-    return { priorityCount, reviewCount, highCount, totalClassified, priorityPct };
+    const total = filteredRecords.length;
+    const priorityPct = total > 0 ? Math.round((priorityCount / total) * 100) : 0;
+    const rawSegments = [
+      { key: 'd14', label: 'Desil 1–4', count: priorityCount, barClass: 'bg-teal-700' },
+      { key: 'd5', label: 'Desil 5', count: reviewCount, barClass: 'bg-amber-500' },
+      { key: 'd610', label: 'Desil 6–10', count: highCount, barClass: 'bg-rose-600' },
+      { key: 'notfound', label: 'Data Tidak Ditemukan', count: notFoundCount, barClass: 'bg-slate-950' },
+      { key: 'unassigned', label: 'Belum Ada Desil', count: unassignedCount, barClass: 'bg-slate-300' },
+    ];
+    const segments = rawSegments
+      .filter((s) => s.count > 0)
+      .map((s) => ({
+        ...s,
+        pct: total > 0 ? (s.count / total) * 100 : 0,
+      }));
+
+    return {
+      priorityCount,
+      reviewCount,
+      highCount,
+      notFoundCount,
+      unassignedCount,
+      total,
+      priorityPct,
+      segments,
+    };
   }, [filteredRecords]);
 
   // Dinas attention counts
@@ -281,7 +304,8 @@ export function DashboardView({
     >();
 
     for (const rec of filteredRecords) {
-      const code = rec.item || 'LAIN';
+      const code = (rec.item || '').trim();
+      if (!code) continue;
       const pkg = resolvePackageForKpm(items, rec.tahun, code);
       const existing = itemMap.get(code) ?? {
         code,
@@ -305,7 +329,12 @@ export function DashboardView({
     });
   }, [filteredRecords, items, selectedYear]);
 
-  // Top field coordinators (Pengelola) & administration fees
+  const missingItemCount = useMemo(
+    () => filteredRecords.filter((r) => !(r.item || '').trim()).length,
+    [filteredRecords]
+  );
+
+  // Top field coordinators (Pengelola)
   const pengelolaBreakdown = useMemo(() => {
     const map = new Map<string, number>();
     for (const r of filteredRecords) {
@@ -322,12 +351,6 @@ export function DashboardView({
       totalCoordinators: sorted.length,
       maxCount,
     };
-  }, [filteredRecords]);
-
-  const adminFeeSummary = useMemo(() => {
-    const paid = filteredRecords.filter((r) => (r.payment || 0) > 0);
-    const totalAmount = paid.reduce((sum, r) => sum + (r.payment || 0), 0);
-    return { paidCount: paid.length, totalAmount };
   }, [filteredRecords]);
 
   const recentActivityRecords = useMemo(() => {
@@ -348,6 +371,7 @@ export function DashboardView({
   const hasAttentionItems =
     pendingUsersCount > 0 ||
     duplicateNikCount > 0 ||
+    missingItemCount > 0 ||
     attentionCounts.pendingDinas > 0 ||
     incompleteQuotaProposals.length > 0;
 
@@ -791,11 +815,18 @@ export function DashboardView({
                 </span>
               </div>
 
-              <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-                <div
-                  className="h-full rounded-full bg-teal-700 transition-all duration-300"
-                  style={{ width: `${dtsenStats.priorityPct}%` }}
-                />
+              <div className="mt-1.5 flex h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                {dtsenStats.segments.map((seg) => (
+                  <div
+                    key={seg.key}
+                    title={`${seg.label}: ${seg.count} (${Math.round(seg.pct)}%)`}
+                    className={`h-full transition-all duration-300 ${seg.barClass}`}
+                    style={{
+                      width: `${seg.pct}%`,
+                      minWidth: seg.count > 0 ? '3px' : undefined,
+                    }}
+                  />
+                ))}
               </div>
             </div>
           </button>
@@ -817,7 +848,7 @@ export function DashboardView({
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-medium text-slate-900">
-                      {pendingUsersCount} Pendaftar User Menunggu Persetujuan
+                      {pendingUsersCount} pendaftar user menunggu persetujuan
                     </p>
                   </div>
                   <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -835,7 +866,25 @@ export function DashboardView({
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-medium text-slate-900">
-                      Terdeteksi {duplicateNikCount} Duplikasi NIK / KK
+                      Terdeteksi {duplicateNikCount} duplikasi NIK / KK
+                    </p>
+                  </div>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                </button>
+              )}
+
+              {missingItemCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => onOpenKpmList({ status: 'all', item: '__missing__' })}
+                  className="flex min-h-[50px] w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-slate-50"
+                >
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                    <Package className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium text-slate-900">
+                      {missingItemCount} KPM belum memiliki item
                     </p>
                   </div>
                   <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -860,8 +909,8 @@ export function DashboardView({
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-medium text-slate-900">
                       {incompleteQuotaProposals.length === 1
-                        ? `Proposal ${incompleteQuotaProposals[0].namaProposal} Belum Penuh (${incompleteQuotaProposals[0].totalKpm}/${incompleteQuotaProposals[0].target})`
-                        : `${incompleteQuotaProposals.length} Proposal Belum Terisi Penuh`}
+                        ? `Proposal ${incompleteQuotaProposals[0].namaProposal} belum penuh (${incompleteQuotaProposals[0].totalKpm}/${incompleteQuotaProposals[0].target})`
+                        : `${incompleteQuotaProposals.length} proposal belum terisi penuh`}
                     </p>
                   </div>
                   <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -879,7 +928,7 @@ export function DashboardView({
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-medium text-slate-900">
-                      {attentionCounts.pendingDinas} Proposal Belum Diantar ke Dinas
+                      {attentionCounts.pendingDinas} proposal belum diantar ke Dinas
                     </p>
                   </div>
                   <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -1040,65 +1089,41 @@ export function DashboardView({
           )}
         </section>
 
-        {/* 6. KOORDINATOR LAPANGAN & ADMINISTRASI */}
-        {(pengelolaBreakdown.top.length > 0 || adminFeeSummary.totalAmount > 0) && (
-          <section className="space-y-3">
-            {pengelolaBreakdown.top.length > 0 && (
-              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <Users className="h-4 w-4 text-teal-700" />
-                    <h2 className="text-sm font-bold text-slate-900">Pengelola Teraktif</h2>
-                  </div>
-                  <span className="text-xs text-slate-500 tabular-nums">
-                    {pengelolaBreakdown.totalCoordinators} pengelola
-                  </span>
+        {/* 6. KOORDINATOR LAPANGAN */}
+        {pengelolaBreakdown.top.length > 0 && (
+          <section>
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+              <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <Users className="h-4 w-4 text-teal-700" />
+                  <h2 className="text-sm font-bold text-slate-900">Pengelola Teraktif</h2>
                 </div>
-                <div className="divide-y divide-slate-100">
-                  {pengelolaBreakdown.top.map((row) => {
-                    const widthPct = Math.round((row.count / pengelolaBreakdown.maxCount) * 100);
-                    return (
-                      <div key={row.name} className="px-4 py-2.5">
-                        <div className="flex items-center justify-between gap-2 text-xs">
-                          <span className="truncate font-normal text-slate-900">{row.name}</span>
-                          <span className="shrink-0 font-medium text-slate-700 tabular-nums">
-                            {row.count}
-                          </span>
-                        </div>
-                        <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-                          <div
-                            className="h-full rounded-full bg-teal-600/80"
-                            style={{ width: `${widthPct}%` }}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                <span className="text-xs text-slate-500 tabular-nums">
+                  {pengelolaBreakdown.totalCoordinators} pengelola
+                </span>
               </div>
-            )}
-
-            {adminFeeSummary.totalAmount > 0 && (
-              <button
-                type="button"
-                onClick={() => onOpenAdministrasi?.()}
-                className="flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-left transition-colors hover:bg-slate-50"
-              >
-                <div className="flex min-w-0 items-center gap-3">
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
-                    <Banknote className="h-5 w-5" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs font-bold text-slate-900">Administrasi &amp; Pelayanan</p>
-                    <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
-                      {formatRupiah(adminFeeSummary.totalAmount)} · {adminFeeSummary.paidCount}{' '}
-                      tercatat
-                    </p>
-                  </div>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-              </button>
-            )}
+              <div className="divide-y divide-slate-100">
+                {pengelolaBreakdown.top.map((row) => {
+                  const widthPct = Math.round((row.count / pengelolaBreakdown.maxCount) * 100);
+                  return (
+                    <div key={row.name} className="px-4 py-2.5">
+                      <div className="flex items-center justify-between gap-2 text-xs">
+                        <span className="truncate font-normal text-slate-900">{row.name}</span>
+                        <span className="shrink-0 font-medium text-slate-700 tabular-nums">
+                          {row.count}
+                        </span>
+                      </div>
+                      <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                        <div
+                          className="h-full rounded-full bg-teal-600/80"
+                          style={{ width: `${widthPct}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </section>
         )}
 
@@ -1147,7 +1172,8 @@ export function DashboardView({
                         </span>
                       </div>
                       <p className="mt-0.5 truncate text-[11px] text-slate-500 tabular-nums">
-                        {rec.item} · {rec.proposal} ·{' '}
+                        {rec.item?.trim() ? `${rec.item} · ` : ''}
+                        {rec.proposal} ·{' '}
                         <span className="inline-flex items-center gap-0.5">
                           <Clock className="inline h-2.5 w-2.5" />{' '}
                           {formatUploadDateTime(rec.updatedAt || rec.createdAt)}

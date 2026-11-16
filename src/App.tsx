@@ -2194,6 +2194,11 @@ export default function App() {
         window.scrollTo({ top: 0, behavior: 'smooth' });
         return;
       }
+      if (menuSection === 'administrasi') {
+        setMenuSection('superadmin');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      }
       if (menuOpenedFromDashboard) {
         setMenuOpenedFromDashboard(false);
         setMenuSection('root');
@@ -5411,12 +5416,6 @@ export default function App() {
             onOpenDtsen={() => {
               setMenuOpenedFromDashboard(true);
               setMenuSection('dtsen');
-              setActiveTab('menu');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            onOpenAdministrasi={() => {
-              setMenuOpenedFromDashboard(true);
-              setMenuSection('administrasi');
               setActiveTab('menu');
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}

@@ -198,7 +198,11 @@ export function KpmListView({
 
   const scopedRecords = useMemo(() => {
     return yearBaseRecords.filter((rec) => {
-      if (itemFilter !== 'all' && rec.item !== itemFilter) return false;
+      if (itemFilter === '__missing__') {
+        if ((rec.item || '').trim() !== '') return false;
+      } else if (itemFilter !== 'all' && rec.item !== itemFilter) {
+        return false;
+      }
       if (kelurahanFilter !== 'all' && getRecordKelurahan(rec) !== kelurahanFilter) return false;
       if (rtRwFilter !== 'all' && getRecordRtRw(rec) !== rtRwFilter) return false;
       if (pengelolaFilter !== 'all' && rec.pengelola.trim() !== pengelolaFilter) return false;
@@ -388,6 +392,7 @@ export function KpmListView({
                   onChange={onChangeItemFilter}
                 >
                   <option value="all">Semua Item</option>
+                  <option value="__missing__">Belum Ada Item</option>
                   {yearItemOptions.map((item) => (
                     <option key={item.code} value={item.code}>
                       {item.code}
@@ -583,8 +588,14 @@ export function KpmListView({
                           {locked && <Lock className="h-3 w-3 shrink-0 text-rose-600" />}
                         </div>
 
-                        <span className="shrink-0 rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] font-bold leading-none text-slate-700 tabular-nums">
-                          {rec.item}
+                        <span
+                          className={`shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-bold leading-none tabular-nums ${
+                            rec.item?.trim()
+                              ? 'bg-slate-100 text-slate-700'
+                              : 'bg-amber-50 text-amber-800'
+                          }`}
+                        >
+                          {rec.item?.trim() || 'Tanpa Item'}
                           {desilNumeric ? ` · ${desilNumeric}` : ''}
                         </span>
                       </div>

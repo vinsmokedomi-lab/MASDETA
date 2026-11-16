@@ -459,9 +459,13 @@ export function MenuHubView({
     return itemsList.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
   }, [proposalHistory, kpmAuditLogs, records]);
 
-  // Re-lock Kontrol Super Admin whenever navigating away
+  // Re-lock Kontrol Super Admin whenever navigating away from SuperAdmin flow
   useEffect(() => {
-    if (activeSection !== 'superadmin') {
+    const insideSuperAdminFlow =
+      activeSection === 'superadmin' ||
+      activeSection === 'administrasi' ||
+      (activeSection === 'users' && usersOpenedFromSuperAdmin);
+    if (!insideSuperAdminFlow) {
       setSuperAdminUnlocked(false);
       setSuperAdminPwdInput('');
       setSuperAdminPwdError(null);
@@ -470,9 +474,16 @@ export function MenuHubView({
     if (activeSection !== 'dtsen') {
       setDtsenDrill(null);
     }
-  }, [activeSection]);
+  }, [activeSection, usersOpenedFromSuperAdmin]);
 
   const [dtsenDrill, setDtsenDrill] = useState<string | null>(null);
+
+  // Administrasi search & filter state
+  const [adminQuery, setAdminQuery] = useState('');
+  const [showAdminFilters, setShowAdminFilters] = useState(false);
+  const [adminYearFilter, setAdminYearFilter] = useState<string>('all');
+  const [adminProposalFilter, setAdminProposalFilter] = useState<string>('all');
+  const [adminSortBy, setAdminSortBy] = useState<'absen' | 'amount_desc' | 'amount_asc' | 'name_asc'>('absen');
 
   // Arsip Berkas KPM filters
   const [arsipQuery, setArsipQuery] = useState('');
@@ -906,23 +917,6 @@ export function MenuHubView({
 
               <button
                 type="button"
-                onClick={() => onChangeSection('administrasi')}
-                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
-                  <Banknote className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">Administrasi &amp; Pelayanan</p>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">
-                    Catatan biaya pelayanan calon KPM
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-              </button>
-
-              <button
-                type="button"
                 onClick={() => onChangeSection('download')}
                 className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
               >
@@ -1298,6 +1292,35 @@ export function MenuHubView({
                       </p>
                       <p className="mt-0.5 text-xs text-slate-500">
                         {internalUsers.length} akun terdaftar · {pendingUsersCount} menunggu persetujuan
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+                </div>
+              </section>
+
+              {/* Administrasi (khusus SuperAdmin) */}
+              <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                <div className="border-b border-slate-100 px-4 py-3">
+                  <h2 className="text-xs font-bold tracking-wide text-slate-900">
+                    Administrasi
+                  </h2>
+                </div>
+                <div className="divide-y divide-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => onChangeSection('administrasi')}
+                    className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                      <Banknote className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-slate-900">
+                        Administrasi
+                      </p>
+                      <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
+                        {formatRupiah(adminStats.totalAmount)} · {adminStats.paidRecords.length} KPM tercatat
                       </p>
                     </div>
                     <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -2667,43 +2690,230 @@ export function MenuHubView({
     );
   }
 
-  // 5. ADMINISTRASI / BIAYA PELAYANAN
+  // 5. ADMINISTRASI (Khusus SuperAdmin)
   if (activeSection === 'administrasi') {
+    const isSuperAdmin = currentUser.role === 'SuperAdmin';
+    const paidBase = adminStats.paidRecords;
+    const adminYearOptions = Array.from(
+      new Set(paidBase.map((r) => r.tahun).filter(Boolean))
+    ).sort((a, b) => b.localeCompare(a));
+
+    const adminProposalOptions = Array.from(
+      new Set(
+        paidBase
+          .filter((r) => adminYearFilter === 'all' || r.tahun === adminYearFilter)
+          .map((r) => r.proposal)
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b, 'id'));
+
+    const activeAdminFilterCount =
+      (adminYearFilter !== 'all' ? 1 : 0) +
+      (adminProposalFilter !== 'all' ? 1 : 0) +
+      (adminSortBy !== 'absen' ? 1 : 0);
+
+    const qAdmin = adminQuery.trim().toLowerCase();
+    const filteredAdminRecords = paidBase
+      .filter((rec) => {
+        if (adminYearFilter !== 'all' && rec.tahun !== adminYearFilter) return false;
+        if (adminProposalFilter !== 'all' && rec.proposal !== adminProposalFilter) return false;
+        if (!qAdmin) return true;
+        return (
+          rec.nama.toLowerCase().includes(qAdmin) ||
+          rec.registerCode.toLowerCase().includes(qAdmin) ||
+          rec.proposal.toLowerCase().includes(qAdmin) ||
+          (rec.kelurahan || '').toLowerCase().includes(qAdmin) ||
+          (rec.kecamatan || '').toLowerCase().includes(qAdmin) ||
+          rec.nikKtp.includes(qAdmin)
+        );
+      })
+      .sort((a, b) => {
+        switch (adminSortBy) {
+          case 'amount_desc':
+            return (b.payment || 0) - (a.payment || 0) || a.nama.localeCompare(b.nama, 'id');
+          case 'amount_asc':
+            return (a.payment || 0) - (b.payment || 0) || a.nama.localeCompare(b.nama, 'id');
+          case 'name_asc':
+            return a.nama.localeCompare(b.nama, 'id');
+          case 'absen':
+          default:
+            return (
+              b.tahun.localeCompare(a.tahun, 'id') ||
+              a.proposal.localeCompare(b.proposal, 'id') ||
+              getAbsenSeq(a.registerCode) - getAbsenSeq(b.registerCode) ||
+              a.nama.localeCompare(b.nama, 'id')
+            );
+        }
+      });
+
+    const filteredAdminTotal = filteredAdminRecords.reduce(
+      (sum, r) => sum + (r.payment || 0),
+      0
+    );
+
     return (
       <div className="min-h-screen pb-24">
-        {renderSubHeader('Rekap Administrasi', () => onChangeSection('root'))}
+        {renderSubHeader('Administrasi', () =>
+          onChangeSection(isSuperAdmin ? 'superadmin' : 'root')
+        )}
         <div className="space-y-4 px-4 pt-4">
-          <div className="rounded-2xl bg-slate-900 p-5 text-white">
-            <p className="text-xs text-slate-300">Total Biaya Administrasi Tercatat</p>
-            <p className="mt-1 text-2xl font-bold tabular-nums">
-              {formatRupiah(adminStats.totalAmount)}
-            </p>
-            <p className="mt-1 text-xs text-slate-300 tabular-nums">
-              Dari {adminStats.paidRecords.length} penerima dengan nominal biaya administrasi
-            </p>
-          </div>
-
-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
-            {adminStats.paidRecords.length === 0 ? (
-              <p className="px-4 py-8 text-center text-xs text-slate-500">
-                Belum ada catatan biaya administrasi.
+          {!isSuperAdmin ? (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-center">
+              <ShieldAlert className="mx-auto h-8 w-8 text-rose-600" />
+              <p className="mt-2 text-sm font-bold text-rose-900">Akses Ditolak</p>
+              <p className="mt-1 text-xs text-rose-700">
+                Halaman Administrasi hanya dapat diakses melalui Kontrol Super Admin.
               </p>
-            ) : (
-              adminStats.paidRecords.map((rec) => (
-                <div key={rec.id} className="flex items-center justify-between gap-3 px-4 py-3">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-slate-900">{rec.nama}</p>
-                    <p className="truncate text-xs text-slate-500">
-                      {rec.registerCode} · {rec.proposal}
-                    </p>
+            </div>
+          ) : (
+            <>
+              <div className="rounded-2xl bg-slate-900 p-5 text-white">
+                <p className="text-xs text-slate-300">Total Biaya Administrasi Tercatat</p>
+                <p className="mt-1 text-2xl font-bold tabular-nums">
+                  {formatRupiah(filteredAdminTotal)}
+                </p>
+                <p className="mt-1 text-xs text-slate-300 tabular-nums">
+                  Dari {filteredAdminRecords.length} penerima dengan nominal biaya administrasi
+                </p>
+              </div>
+
+              {/* Search Bar + Filter Button */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <div className="relative min-w-0 flex-1">
+                    <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="search"
+                      value={adminQuery}
+                      onChange={(e) => setAdminQuery(e.target.value)}
+                      placeholder="Cari nama, kode, proposal, wilayah..."
+                      className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pr-3 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
+                    />
                   </div>
-                  <span className="text-sm font-medium text-teal-700 tabular-nums shrink-0">
-                    {formatRupiah(rec.payment)}
-                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminFilters((prev) => !prev)}
+                    aria-label="Filter dan urutkan administrasi"
+                    aria-expanded={showAdminFilters}
+                    className={`relative inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl border transition-colors ${
+                      showAdminFilters || activeAdminFilterCount > 0
+                        ? 'border-teal-700 bg-teal-50 text-teal-800'
+                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <SlidersHorizontal className="h-4 w-4" />
+                    {activeAdminFilterCount > 0 && (
+                      <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-teal-700 px-1 text-[10px] font-bold text-white tabular-nums">
+                        {activeAdminFilterCount}
+                      </span>
+                    )}
+                  </button>
                 </div>
-              ))
-            )}
-          </div>
+
+                {showAdminFilters && (
+                  <div className="rounded-2xl border border-slate-200 bg-white p-3 space-y-2.5">
+                    <div className="grid grid-cols-2 gap-2">
+                      <FilterSelect
+                        ariaLabel="Filter tahun administrasi"
+                        value={adminYearFilter}
+                        onChange={(yr) => {
+                          setAdminYearFilter(yr);
+                          setAdminProposalFilter('all');
+                        }}
+                      >
+                        <option value="all">Semua Tahun</option>
+                        {adminYearOptions.map((y) => (
+                          <option key={y} value={y}>
+                            Tahun {y}
+                          </option>
+                        ))}
+                      </FilterSelect>
+
+                      <FilterSelect
+                        ariaLabel="Urutkan daftar administrasi"
+                        value={adminSortBy}
+                        onChange={(v) =>
+                          setAdminSortBy(v as 'absen' | 'amount_desc' | 'amount_asc' | 'name_asc')
+                        }
+                      >
+                        <option value="absen">Urut: Proposal &amp; Absen</option>
+                        <option value="amount_desc">Urut: Nominal Terbesar</option>
+                        <option value="amount_asc">Urut: Nominal Terkecil</option>
+                        <option value="name_asc">Urut: Nama (A–Z)</option>
+                      </FilterSelect>
+                    </div>
+
+                    {adminProposalOptions.length > 0 && (
+                      <div className="border-t border-slate-100 pt-2.5">
+                        <FilterSelect
+                          ariaLabel="Filter proposal administrasi"
+                          value={adminProposalFilter}
+                          onChange={setAdminProposalFilter}
+                        >
+                          <option value="all">Semua Proposal</option>
+                          {adminProposalOptions.map((prop) => (
+                            <option key={prop} value={prop}>
+                              {prop}
+                            </option>
+                          ))}
+                        </FilterSelect>
+                      </div>
+                    )}
+
+                    {activeAdminFilterCount > 0 && (
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAdminYearFilter('all');
+                            setAdminProposalFilter('all');
+                            setAdminSortBy('absen');
+                          }}
+                          className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-800"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                          <span>Reset Filter</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+                {filteredAdminRecords.length === 0 ? (
+                  <p className="px-4 py-8 text-center text-xs text-slate-500">
+                    {paidBase.length === 0
+                      ? 'Belum ada catatan biaya administrasi.'
+                      : 'Tidak ada data administrasi yang sesuai pencarian atau filter.'}
+                  </p>
+                ) : (
+                  filteredAdminRecords.map((rec) => (
+                    <button
+                      key={rec.id}
+                      type="button"
+                      onClick={() => onSelectKpm?.(rec)}
+                      className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-slate-900">{rec.nama}</p>
+                        <p className="truncate text-xs text-slate-500">
+                          {rec.registerCode} · {rec.proposal}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span className="text-sm font-medium text-teal-700 tabular-nums">
+                          {formatRupiah(rec.payment)}
+                        </span>
+                        <ChevronRight className="h-4 w-4 text-slate-400" />
+                      </div>
+                    </button>
+                  ))
+                )}
+              </div>
+            </>
+          )}
         </div>
       </div>
     );
@@ -2750,8 +2960,12 @@ export function MenuHubView({
               const dotClass = ['1', '2', '3', '4'].includes(row.value)
                 ? 'bg-teal-700'
                 : row.value === '5'
-                  ? 'bg-amber-600'
-                  : 'bg-slate-400';
+                  ? 'bg-amber-500'
+                  : ['6', '7', '8', '9', '10', '6 - 10'].includes(row.value)
+                    ? 'bg-rose-600'
+                    : row.value === 'Data Tidak Ditemukan'
+                      ? 'bg-slate-950'
+                      : 'bg-slate-400';
               const rowTitle = getDtsenDisplayLabel(row.value);
               return (
                 <button

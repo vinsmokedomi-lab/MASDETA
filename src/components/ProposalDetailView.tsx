@@ -1,5 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowDownLeft,
   ArrowLeft,
   ArrowRightLeft,
@@ -69,6 +70,7 @@ export function ProposalDetailView({
   const [transferKelurahanFilter, setTransferKelurahanFilter] = useState<string>('all');
   const [transferQuery, setTransferQuery] = useState<string>('');
   const [selectedTransferIds, setSelectedTransferIds] = useState<string[]>([]);
+  const [confirmTransferOpen, setConfirmTransferOpen] = useState(false);
   const [isTransferring, setIsTransferring] = useState(false);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const [titleFontPx, setTitleFontPx] = useState<number>(16);
@@ -129,19 +131,26 @@ export function ProposalDetailView({
     return { total, accepted, pending, rejected };
   }, [proposalRecords]);
 
-  // DTSEN Breakdown (Desil 1-4, Desil 5, Desil 6-10 / Lainnya)
+  // DTSEN Breakdown (Desil 1-4, Desil 5, Desil 6-10, Belum Ada Desil, Data Tidak Ditemukan)
   const dtsenBreakdown = useMemo(() => {
     let desil1to4 = 0;
     let desil5 = 0;
-    let others = 0;
+    let desil6to10 = 0;
+    let unassigned = 0;
+    let notFound = 0;
 
     for (const rec of proposalRecords) {
-      if (['1', '2', '3', '4'].includes(rec.dtsen)) {
+      const d = (rec.dtsen || '').trim();
+      if (['1', '2', '3', '4'].includes(d)) {
         desil1to4 += 1;
-      } else if (rec.dtsen === '5') {
+      } else if (d === '5') {
         desil5 += 1;
+      } else if (['6', '7', '8', '9', '10', '6 - 10'].includes(d)) {
+        desil6to10 += 1;
+      } else if (d === 'Data Tidak Ditemukan') {
+        notFound += 1;
       } else {
-        others += 1;
+        unassigned += 1;
       }
     }
 
@@ -164,17 +173,35 @@ export function ProposalDetailView({
         shortLabel: 'Desil 5',
         count: desil5,
         pct: pct(desil5),
-        color: '#D97706',
-        dotClass: 'bg-amber-600',
+        color: '#F59E0B',
+        dotClass: 'bg-amber-500',
       },
       {
-        key: 'other',
+        key: 'd610',
         label: 'Desil 6 - 10',
         shortLabel: 'Desil 6 - 10',
-        count: others,
-        pct: pct(others),
-        color: '#64748B',
-        dotClass: 'bg-slate-500',
+        count: desil6to10,
+        pct: pct(desil6to10),
+        color: '#E11D48',
+        dotClass: 'bg-rose-600',
+      },
+      {
+        key: 'unassigned',
+        label: 'Belum Ada Desil',
+        shortLabel: 'Belum Ada',
+        count: unassigned,
+        pct: pct(unassigned),
+        color: '#94A3B8',
+        dotClass: 'bg-slate-400',
+      },
+      {
+        key: 'notfound',
+        label: 'Data Tidak Ditemukan',
+        shortLabel: 'Tdk Ditemukan',
+        count: notFound,
+        pct: pct(notFound),
+        color: '#0F172A',
+        dotClass: 'bg-slate-950',
       },
     ];
 
@@ -212,7 +239,8 @@ export function ProposalDetailView({
       { code: string; name: string; total: number; accepted: number }
     >();
     for (const rec of proposalRecords) {
-      const code = rec.item || 'LAIN';
+      const code = (rec.item || '').trim();
+      if (!code) continue;
       const pkg = resolvePackageForKpm(items, proposal.tahun, code);
       const existing = map.get(code) ?? {
         code,
@@ -328,6 +356,7 @@ export function ProposalDetailView({
     setTransferKelurahanFilter('all');
     setTransferQuery('');
     setSelectedTransferIds([]);
+    setConfirmTransferOpen(false);
     setIsTransferModalOpen(true);
   };
 
@@ -367,6 +396,7 @@ export function ProposalDetailView({
     try {
       const ok = await onTransferKpm(selectedTransferIds, transferTargetId);
       if (ok) {
+        setConfirmTransferOpen(false);
         setIsTransferModalOpen(false);
         setSelectedTransferIds([]);
       }
@@ -524,25 +554,28 @@ export function ProposalDetailView({
             ) : null
           ) : (
             <div className="mt-4 space-y-2">
-              <button
-                type="button"
-                onClick={() => onViewKpmInProposal(proposal.namaProposal, proposal.tahun)}
-                className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800"
-              >
-                <Users className="h-4 w-4" />
-                <span>Lihat Daftar Calon KPM ({kpmCounts.total})</span>
-              </button>
-
-              {proposal.status !== 'locked' && canUpdate && onTransferKpm && (
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={openTransferModal}
-                  className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+                  onClick={() => onViewKpmInProposal(proposal.namaProposal, proposal.tahun)}
+                  className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800"
                 >
-                  <ArrowRightLeft className="h-4 w-4 text-teal-700" />
-                  <span>Transfer KPM ke Proposal Lain</span>
+                  <Users className="h-4 w-4 shrink-0" />
+                  <span className="truncate">Lihat Daftar Calon KPM ({kpmCounts.total})</span>
                 </button>
-              )}
+
+                {proposal.status !== 'locked' && canUpdate && onTransferKpm && (
+                  <button
+                    type="button"
+                    onClick={openTransferModal}
+                    aria-label="Transfer KPM ke Proposal Lain"
+                    title="Transfer KPM ke Proposal Lain"
+                    className="inline-flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-teal-700 transition-colors hover:bg-slate-100 active:scale-[0.98]"
+                  >
+                    <ArrowRightLeft className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
 
               {kpmCounts.pending + kpmCounts.rejected > 0 && proposal.status !== 'locked' && canUpdate && (
                 !confirmAcceptAll ? (
@@ -1023,16 +1056,16 @@ export function ProposalDetailView({
               {/* Filter & Select KPM */}
               <div className="space-y-2.5">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-xs font-bold text-slate-800">
-                    2. Pilih KPM yang Dipindahkan ({selectedTransferIds.length} dipilih)
+                  <p className="min-w-0 truncate whitespace-nowrap text-xs font-bold text-slate-800">
+                    2. Pilih KPM yang dipindahkan
                   </p>
                   {filteredTransferRecords.length > 0 && (
                     <button
                       type="button"
                       onClick={toggleSelectAllFiltered}
-                      className="text-xs font-bold text-teal-700 hover:underline"
+                      className="shrink-0 whitespace-nowrap text-xs font-bold text-teal-700 hover:underline"
                     >
-                      {allFilteredSelected ? 'Batalkan Semua' : `Pilih Semua (${filteredTransferRecords.length})`}
+                      {allFilteredSelected ? 'Batalkan Semua' : 'Pilih Semua'}
                     </button>
                   )}
                 </div>
@@ -1098,7 +1131,7 @@ export function ProposalDetailView({
                               {rec.nama}
                             </p>
                             <p className="mt-0.5 truncate text-[11px] text-slate-500">
-                              {kelName} · {rec.item}
+                              {[kelName, rec.item?.trim() || 'Tanpa Item'].join(' · ')}
                             </p>
                           </div>
                           <span
@@ -1129,7 +1162,10 @@ export function ProposalDetailView({
               <button
                 type="button"
                 disabled={isTransferring}
-                onClick={() => setIsTransferModalOpen(false)}
+                onClick={() => {
+                  setConfirmTransferOpen(false);
+                  setIsTransferModalOpen(false);
+                }}
                 className="min-h-[44px] flex-1 rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50"
               >
                 Batal
@@ -1141,7 +1177,7 @@ export function ProposalDetailView({
                   selectedTransferIds.length === 0 ||
                   !transferTargetId
                 }
-                onClick={() => void handleConfirmTransfer()}
+                onClick={() => setConfirmTransferOpen(true)}
                 className="min-h-[44px] flex-1 rounded-xl bg-teal-700 px-4 text-xs font-bold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
               >
                 {isTransferring
@@ -1152,6 +1188,62 @@ export function ProposalDetailView({
           </div>
         </div>
       )}
+
+      {/* Confirmation Modal ("Yakin?") before executing Transfer KPM */}
+      {confirmTransferOpen && isTransferModalOpen && (() => {
+        const targetProp = transferTargetOptions.find((p) => p.id === transferTargetId);
+        return (
+          <div
+            className="fixed inset-0 z-[60] flex items-end justify-center bg-slate-950/60 backdrop-blur-xs sm:items-center sm:p-4"
+            onClick={() => !isTransferring && setConfirmTransferOpen(false)}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Konfirmasi Transfer KPM"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-sm rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl space-y-4"
+            >
+              <div className="mx-auto h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                  <AlertTriangle className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-base font-bold text-slate-900">Yakin pindahkan KPM?</h3>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                    Apakah Anda yakin ingin memindahkan{' '}
+                    <strong>{selectedTransferIds.length} KPM</strong> ke proposal{' '}
+                    <strong>
+                      {targetProp ? `${targetProp.namaProposal} (${targetProp.tahun})` : 'tujuan'}
+                    </strong>
+                    ?
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  disabled={isTransferring}
+                  onClick={() => setConfirmTransferOpen(false)}
+                  className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={isTransferring}
+                  onClick={() => void handleConfirmTransfer()}
+                  className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
+                >
+                  {isTransferring ? 'Memindahkan...' : 'Ya, Pindahkan'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
