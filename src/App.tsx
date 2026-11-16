@@ -20,6 +20,7 @@ import {
   supabaseAdminControlInternalUser,
   supabaseCreateInternalUserBySuperAdmin,
   supabaseDeleteInternalUser,
+  supabaseDeleteProposalDirect,
   supabaseFetchDirectMessages,
   supabaseFetchInternalUsers,
   supabaseLogin,
@@ -29,6 +30,7 @@ import {
   supabaseSendDirectMessage,
   supabaseSetUserPresence,
   supabaseUpdateInternalUserProfile,
+  supabaseUpdateProposalLockStatus,
   supabaseVerifyUserPassword,
   syncAllOperationalDataToSupabase,
   updateKpmDocumentsInSupabase,
@@ -64,6 +66,7 @@ import {
   ProposalDocuments,
   ProposalFormValues,
   ProposalKpmHistoryEntry,
+  ProposalLockStatus,
   ProposalRecord,
   ReportTemplateConfig,
   ScheduleCategory,
@@ -469,11 +472,15 @@ export default function App() {
   const supabaseReadyRef = useRef<boolean>(supabaseReady);
   const isOnlineRef = useRef<boolean>(isOnline);
   const lastLocalSyncAtRef = useRef<number>(0);
+  const activeLocalSyncCountRef = useRef<number>(0);
+  const syncQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const desiredAutoPresenceRef = useRef<UserPresenceStatus>('online');
   const isManualRefreshingRef = useRef<boolean>(false);
   const hasAppliedRemoteRef = useRef<boolean>(false);
   const lastUpdateCheckAtRef = useRef<number>(0);
   const internalUsersRef = useRef<InternalUser[]>(internalUsers);
   const proposalsRef = useRef<ProposalRecord[]>(proposals);
+  const proposalHistoryRef = useRef<ProposalKpmHistoryEntry[]>(proposalHistory);
   const realtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const knownPendingUserIdsRef = useRef<Set<string> | null>(null);
   const seenNotificationIdsRef = useRef<Set<string>>(new Set());
@@ -487,6 +494,9 @@ export default function App() {
 
   useEffect(() => {
     isOnlineRef.current = isOnline;
+    if (isOnline) {
+      window.dispatchEvent(new CustomEvent('masdeta-network-online'));
+    }
   }, [isOnline]);
 
   useEffect(() => {
@@ -566,6 +576,7 @@ export default function App() {
   supabaseReadyRef.current = supabaseReady;
   internalUsersRef.current = internalUsers;
   proposalsRef.current = proposals;
+  proposalHistoryRef.current = proposalHistory;
 
   const currentUser = useMemo(() => {
     if (!sessionUserId) return null;
@@ -574,6 +585,39 @@ export default function App() {
   currentUserIdRef.current = currentUser?.id ?? null;
   currentUserRoleRef.current = currentUser?.role ?? null;
   currentUserPresenceRef.current = currentUser?.presenceStatus ?? 'offline';
+
+  const mergeFetchedInternalUsers = useCallback((fetchedUsers: InternalUser[]): InternalUser[] => {
+    if (fetchedUsers.length === 0) return fetchedUsers;
+    const uid = currentUserIdRef.current;
+    if (!uid) return fetchedUsers;
+    const targetPresence = desiredAutoPresenceRef.current;
+    const nowIso = new Date().toISOString();
+    let shouldHealRemoteOnline = false;
+
+    const merged = fetchedUsers.map((u) => {
+      if (u.id !== uid || u.presenceManual) return u;
+      if (targetPresence === 'online' && u.presenceStatus !== 'online') {
+        shouldHealRemoteOnline = true;
+        return {
+          ...u,
+          presenceStatus: 'online' as UserPresenceStatus,
+          lastActiveAt: nowIso,
+        };
+      }
+      if (targetPresence === 'idle' && u.presenceStatus !== 'idle') {
+        return {
+          ...u,
+          presenceStatus: 'idle' as UserPresenceStatus,
+        };
+      }
+      return u;
+    });
+
+    if (shouldHealRemoteOnline && supabaseReadyRef.current && isOnlineRef.current) {
+      void supabaseSetUserPresence(uid, 'online', false);
+    }
+    return merged;
+  }, []);
 
   const pushAppNotification = useCallback(
     (
@@ -767,21 +811,34 @@ export default function App() {
   );
 
   const duplicateNikCount = useMemo(() => {
-    const ktpCounts = new Map<string, number>();
-    const kkCounts = new Map<string, number>();
+    const ktpGroups = new Map<string, KpmRecord[]>();
+    const kkGroups = new Map<string, KpmRecord[]>();
     for (const r of records) {
-      if (r.nikKtp) ktpCounts.set(r.nikKtp, (ktpCounts.get(r.nikKtp) ?? 0) + 1);
-      if (r.nikKk) kkCounts.set(r.nikKk, (kkCounts.get(r.nikKk) ?? 0) + 1);
+      const ktp = (r.nikKtp || '').trim();
+      const kk = (r.nikKk || '').trim();
+      if (ktp) {
+        const arr = ktpGroups.get(ktp) ?? [];
+        arr.push(r);
+        ktpGroups.set(ktp, arr);
+      }
+      if (kk) {
+        const arr = kkGroups.get(kk) ?? [];
+        arr.push(r);
+        kkGroups.set(kk, arr);
+      }
     }
+    const involvesSelectedYear = (recs: KpmRecord[]) =>
+      selectedYear === 'all' || recs.some((r) => (r.tahun || '').trim() === selectedYear);
+
     let dupes = 0;
-    ktpCounts.forEach((c) => {
-      if (c > 1) dupes += 1;
+    ktpGroups.forEach((recs) => {
+      if (recs.length > 1 && involvesSelectedYear(recs)) dupes += 1;
     });
-    kkCounts.forEach((c) => {
-      if (c > 1) dupes += 1;
+    kkGroups.forEach((recs) => {
+      if (recs.length > 1 && involvesSelectedYear(recs)) dupes += 1;
     });
     return dupes;
-  }, [records]);
+  }, [records, selectedYear]);
 
   // Hydrate last known operational state from IndexedDB for reliable offline startup
   useEffect(() => {
@@ -821,7 +878,7 @@ export default function App() {
           );
         }
         if (snapshot.internalUsers && snapshot.internalUsers.length > 0) {
-          setInternalUsers(snapshot.internalUsers);
+          setInternalUsers(mergeFetchedInternalUsers(snapshot.internalUsers));
         }
         if (snapshot.directMessages && snapshot.directMessages.length > 0) {
           setDirectMessages((prev) => (prev.length === 0 ? snapshot.directMessages! : prev));
@@ -920,7 +977,8 @@ export default function App() {
 
   useEffect(() => {
     if (!feedback) return;
-    const timer = window.setTimeout(() => setFeedback(null), 5000);
+    const delay = feedback.type === 'success' ? 3000 : 5000;
+    const timer = window.setTimeout(() => setFeedback(null), delay);
     return () => window.clearTimeout(timer);
   }, [feedback]);
 
@@ -939,12 +997,13 @@ export default function App() {
       return;
     }
 
-    // Pastikan Admin/Viewer tidak menyimpan sisa notifikasi pendaftaran user baru
+    // Pastikan Admin/Viewer tidak menyimpan sisa notifikasi atau toast pendaftaran user baru
     if (currentUser.role !== 'SuperAdmin') {
       setAppNotifications((prev) => {
         const filtered = prev.filter((n) => n.type !== 'user_registered');
         return filtered.length === prev.length ? prev : filtered;
       });
+      setAppAlertToast((curr) => (curr?.type === 'user_registered' ? null : curr));
     }
 
     const pendingUsers = internalUsers.filter((u) => u.status === 'pending');
@@ -1226,6 +1285,25 @@ export default function App() {
     [authFetch, applyRemoteOperationalState, loadAppStateSlices]
   );
 
+  const enqueueOperationalSync = useCallback((task: () => Promise<boolean>): Promise<boolean> => {
+    activeLocalSyncCountRef.current += 1;
+    lastLocalSyncAtRef.current = Date.now();
+    const run = syncQueueRef.current.then(async () => {
+      lastLocalSyncAtRef.current = Date.now();
+      try {
+        return await task();
+      } finally {
+        lastLocalSyncAtRef.current = Date.now();
+        activeLocalSyncCountRef.current = Math.max(0, activeLocalSyncCountRef.current - 1);
+      }
+    });
+    syncQueueRef.current = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  }, []);
+
   const syncOperationalData = useCallback(
     async (
       patch: Partial<OperationalDataPayload>,
@@ -1239,59 +1317,61 @@ export default function App() {
         return false;
       }
       if (!sessionTokenRef.current && !supabaseReadyRef.current) return false;
-      const merged: OperationalDataPayload = {
-        ...latestDataRef.current,
-        ...patch,
-      };
 
-      if (supabaseReadyRef.current) {
+      return enqueueOperationalSync(async () => {
+        const merged: OperationalDataPayload = {
+          ...latestDataRef.current,
+          ...patch,
+        };
+
+        if (supabaseReadyRef.current) {
+          try {
+            await syncAllOperationalDataToSupabase(merged);
+            return true;
+          } catch (err) {
+            const msg =
+              err instanceof Error
+                ? err.message
+                : err && typeof err === 'object' && 'message' in err
+                  ? String((err as { message: unknown }).message)
+                  : 'Gagal menyimpan perubahan ke Supabase.';
+            setFeedback({
+              type: 'error',
+              message: `Gagal sinkronisasi ke Supabase: ${msg}`,
+            });
+            return false;
+          }
+        }
+
+        if (!sessionTokenRef.current) return false;
         try {
-          lastLocalSyncAtRef.current = Date.now();
-          await syncAllOperationalDataToSupabase(merged);
+          const res = await authFetch('/api/data/sync', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ...merged,
+              requiredPermission,
+            }),
+          });
+          if (!res.ok) {
+            const errData = (await res.json().catch(() => ({}))) as { error?: string };
+            setFeedback({
+              type: 'error',
+              message: errData.error || 'Gagal menyimpan perubahan ke server.',
+            });
+            return false;
+          }
           return true;
-        } catch (err) {
-          const msg =
-            err instanceof Error
-              ? err.message
-              : err && typeof err === 'object' && 'message' in err
-                ? String((err as { message: unknown }).message)
-                : 'Gagal menyimpan perubahan ke Supabase.';
+        } catch {
           setFeedback({
             type: 'error',
-            message: `Gagal sinkronisasi ke Supabase: ${msg}`,
+            message: 'Koneksi ke server terputus. Perubahan belum tersinkron ke pengguna lain.',
           });
           return false;
         }
-      }
-
-      if (!sessionTokenRef.current) return false;
-      try {
-        const res = await authFetch('/api/data/sync', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            ...merged,
-            requiredPermission,
-          }),
-        });
-        if (!res.ok) {
-          const errData = (await res.json().catch(() => ({}))) as { error?: string };
-          setFeedback({
-            type: 'error',
-            message: errData.error || 'Gagal menyimpan perubahan ke server.',
-          });
-          return false;
-        }
-        return true;
-      } catch {
-        setFeedback({
-          type: 'error',
-          message: 'Koneksi ke server terputus. Perubahan belum tersinkron ke pengguna lain.',
-        });
-        return false;
-      }
+      });
     },
-    [authFetch]
+    [authFetch, enqueueOperationalSync]
   );
 
   // Sinkronisasi awal Supabase / Server: status schema, user, pesan 1-on-1 & data operasional
@@ -1346,7 +1426,8 @@ export default function App() {
           }
 
           if (!activeUser.presenceManual) {
-            void supabaseSetUserPresence(activeUser.id, 'online', false);
+            desiredAutoPresenceRef.current = 'online';
+            await supabaseSetUserPresence(activeUser.id, 'online', false);
           }
 
           const msgs = await supabaseFetchDirectMessages();
@@ -1404,7 +1485,7 @@ export default function App() {
               return;
             }
             if (Array.isArray(data.users) && data.users.length > 0) {
-              setInternalUsers(data.users);
+              setInternalUsers(mergeFetchedInternalUsers(data.users));
             }
             if (Array.isArray(data.messages)) {
               setDirectMessages(data.messages);
@@ -1501,7 +1582,7 @@ export default function App() {
         });
 
         if (users.length > 0) {
-          setInternalUsers(users);
+          setInternalUsers(mergeFetchedInternalUsers(users));
           if (uid) {
             const refreshedUser = users.find((u) => u.id === uid);
             if (!refreshedUser || refreshedUser.status !== 'active') {
@@ -1542,7 +1623,7 @@ export default function App() {
             messages?: DirectChatMessage[];
           };
           if (Array.isArray(collab.users) && collab.users.length > 0) {
-            setInternalUsers(collab.users);
+            setInternalUsers(mergeFetchedInternalUsers(collab.users));
           }
           if (Array.isArray(collab.messages)) {
             setDirectMessages(collab.messages);
@@ -1572,11 +1653,19 @@ export default function App() {
     let toastTimer: number | undefined;
 
     const scheduleOperationalRefresh = () => {
-      if (Date.now() - lastLocalSyncAtRef.current < 1500) return;
+      if (activeLocalSyncCountRef.current > 0 || Date.now() - lastLocalSyncAtRef.current < 4000) {
+        return;
+      }
       if (refreshTimer) window.clearTimeout(refreshTimer);
       refreshTimer = window.setTimeout(async () => {
+        if (activeLocalSyncCountRef.current > 0 || Date.now() - lastLocalSyncAtRef.current < 4000) {
+          return;
+        }
         try {
           const snapshot = await fetchOperationalDataFromSupabase();
+          if (activeLocalSyncCountRef.current > 0 || Date.now() - lastLocalSyncAtRef.current < 4000) {
+            return;
+          }
           applyRemoteOperationalState({
             records: snapshot.records,
             proposals: snapshot.proposals,
@@ -1596,7 +1685,7 @@ export default function App() {
         } catch {
           // Abaikan gangguan jaringan sementara
         }
-      }, 500);
+      }, 600);
     };
 
     const syncMessagesFromSupabase = async () => {
@@ -1690,7 +1779,7 @@ export default function App() {
         { event: '*', schema: 'public', table: 'internal_users' },
         () => {
           void supabaseFetchInternalUsers().then((users) => {
-            if (users.length > 0) setInternalUsers(users);
+            if (users.length > 0) setInternalUsers(mergeFetchedInternalUsers(users));
           });
         }
       )
@@ -1727,21 +1816,25 @@ export default function App() {
         (payload) => {
           const oldRow = (payload.old || {}) as Record<string, unknown>;
           const deletedId = String(oldRow.id || '');
-          const isLocalAction = Date.now() - lastLocalSyncAtRef.current < 1500;
+          const isLocalAction =
+            activeLocalSyncCountRef.current > 0 || Date.now() - lastLocalSyncAtRef.current < 4000;
           if (deletedId && !isLocalAction && !notifiedDeletedProposalIdsRef.current.has(deletedId)) {
             const known = proposalsRef.current.find((p) => p.id === deletedId);
             const propName = String(oldRow.nama_proposal || known?.namaProposal || 'Proposal');
             const propYear = String(oldRow.tahun || known?.tahun || '');
-            notifiedDeletedProposalIdsRef.current.add(deletedId);
-            pushAppNotification({
-              id: `notif-prop-del-${deletedId}`,
-              type: 'proposal_deleted',
-              title: 'Proposal Dihapus',
-              message: `Proposal "${propName}"${propYear ? ` (${propYear})` : ''} telah dihapus.`,
-              createdAt: new Date().toISOString(),
-              read: false,
-              targetAction: 'proposals',
-            });
+            window.setTimeout(() => {
+              if (notifiedDeletedProposalIdsRef.current.has(deletedId)) return;
+              notifiedDeletedProposalIdsRef.current.add(deletedId);
+              pushAppNotification({
+                id: `notif-prop-del-${deletedId}`,
+                type: 'proposal_deleted',
+                title: 'Proposal Dihapus',
+                message: `Proposal "${propName}"${propYear ? ` (${propYear})` : ''} telah dihapus.`,
+                createdAt: new Date().toISOString(),
+                read: false,
+                targetAction: 'proposals',
+              });
+            }, 350);
           }
           scheduleOperationalRefresh();
         }
@@ -1816,7 +1909,7 @@ export default function App() {
         try {
           const data = JSON.parse(String(event.data)) as Record<string, unknown>;
           if (data.type === 'users:updated' && Array.isArray(data.users)) {
-            setInternalUsers(data.users as InternalUser[]);
+            setInternalUsers(mergeFetchedInternalUsers(data.users as InternalUser[]));
             return;
           }
 
@@ -1960,19 +2053,36 @@ export default function App() {
     if (!uid || isManual) return;
 
     const VISIBLE_IDLE_MS = 300_000; // 5 menit tanpa interaksi di layar aktif
-    const HIDDEN_IDLE_MS = 25_000; // Grace 25 detik saat APK ke background/kamera/file picker
-    const HEARTBEAT_MS = 45_000; // Segarkan status online & lastActiveAt berkala
+    const HIDDEN_IDLE_MS = 45_000; // Grace 45 detik saat APK ke background/kamera/file picker
+    const HEARTBEAT_MS = 25_000; // Segarkan status online & lastActiveAt berkala
+    const ONLINE_RETRY_MS = 2_500; // Coba ulang cepat jika sinkronisasi 'online' sempat gagal saat wake-up
+
+    const isDocumentVisible = () =>
+      document.visibilityState === 'visible' ||
+      (document.visibilityState !== 'hidden' && document.hidden === false);
 
     let idleTimer: number | undefined;
     let hiddenIdleTimer: number | undefined;
     let heartbeatTimer: number | undefined;
+    let retryOnlineTimer: number | undefined;
     let committedStatus: UserPresenceStatus | null = null;
+    let isForegroundActive = isDocumentVisible();
     let lastInteractionAt = Date.now();
     let lastCommittedAt = 0;
+    let presenceSeq = 0;
+    let presenceWriteChain: Promise<void> = Promise.resolve();
     let disposed = false;
     let appStateHandle: PluginListenerHandle | undefined;
 
+    const clearRetryOnlineTimer = () => {
+      if (retryOnlineTimer) {
+        window.clearTimeout(retryOnlineTimer);
+        retryOnlineTimer = undefined;
+      }
+    };
+
     const applyLocalPresence = (status: UserPresenceStatus) => {
+      desiredAutoPresenceRef.current = status;
       const nowIso = new Date().toISOString();
       setInternalUsers((prev) => {
         let changed = false;
@@ -1982,7 +2092,7 @@ export default function App() {
           if (
             u.presenceStatus === status &&
             Number.isFinite(prevActiveMs) &&
-            Date.now() - prevActiveMs < 30_000
+            Date.now() - prevActiveMs < 20_000
           ) {
             return u;
           }
@@ -1998,25 +2108,47 @@ export default function App() {
     };
 
     const sendPresence = (status: UserPresenceStatus, forceNetworkSync = false) => {
+      const statusChanged =
+        committedStatus !== status || currentUserPresenceRef.current !== status;
+      const mustSync = forceNetworkSync || statusChanged;
       applyLocalPresence(status);
 
       if (supabaseReadyRef.current) {
         const shouldSkip =
-          !forceNetworkSync &&
+          !mustSync &&
           committedStatus === status &&
           currentUserPresenceRef.current === status &&
           Date.now() - lastCommittedAt < HEARTBEAT_MS;
         if (shouldSkip) return;
-        committedStatus = status;
-        lastCommittedAt = Date.now();
-        void supabaseSetUserPresence(uid, status, false);
+
+        clearRetryOnlineTimer();
+        const seq = ++presenceSeq;
+
+        presenceWriteChain = presenceWriteChain.then(async () => {
+          if (disposed || seq !== presenceSeq) return;
+          const ok = await supabaseSetUserPresence(uid, status, false);
+          if (disposed || seq !== presenceSeq) return;
+          if (ok) {
+            committedStatus = status;
+            lastCommittedAt = Date.now();
+            clearRetryOnlineTimer();
+          } else if (status === 'online' && (isForegroundActive || isDocumentVisible())) {
+            clearRetryOnlineTimer();
+            retryOnlineTimer = window.setTimeout(() => {
+              retryOnlineTimer = undefined;
+              if (!disposed && (isForegroundActive || isDocumentVisible())) {
+                sendPresence('online', true);
+              }
+            }, ONLINE_RETRY_MS);
+          }
+        });
         return;
       }
 
       const sock = wsRef.current;
       if (sock && sock.readyState === WebSocket.OPEN) {
         const shouldSkip =
-          !forceNetworkSync &&
+          !mustSync &&
           committedStatus === status &&
           currentUserPresenceRef.current === status &&
           Date.now() - lastCommittedAt < HEARTBEAT_MS;
@@ -2028,6 +2160,8 @@ export default function App() {
     };
 
     const startHiddenIdleCountdown = () => {
+      isForegroundActive = false;
+      clearRetryOnlineTimer();
       if (idleTimer) {
         window.clearTimeout(idleTimer);
         idleTimer = undefined;
@@ -2035,16 +2169,46 @@ export default function App() {
       if (hiddenIdleTimer) return;
       hiddenIdleTimer = window.setTimeout(() => {
         hiddenIdleTimer = undefined;
-        if (document.visibilityState === 'hidden') {
+        if (!disposed && !isForegroundActive && !isDocumentVisible()) {
           sendPresence('idle', true);
         }
       }, HIDDEN_IDLE_MS);
     };
 
-    const markActive = (throttled = false) => {
+    const scheduleVisibleIdleCheck = (delayMs = VISIBLE_IDLE_MS) => {
+      if (idleTimer) {
+        window.clearTimeout(idleTimer);
+        idleTimer = undefined;
+      }
+      idleTimer = window.setTimeout(() => {
+        idleTimer = undefined;
+        if (disposed) return;
+        const elapsed = Date.now() - lastInteractionAt;
+        if (elapsed >= VISIBLE_IDLE_MS) {
+          sendPresence('idle', true);
+        } else {
+          scheduleVisibleIdleCheck(Math.max(1000, VISIBLE_IDLE_MS - elapsed));
+        }
+      }, delayMs);
+    };
+
+    const markActive = (throttled = false, forceForeground = false) => {
+      if (disposed) return;
       const now = Date.now();
+      const docVisible = isDocumentVisible();
+      if (forceForeground || docVisible) {
+        isForegroundActive = true;
+      }
+
+      // Hanya masuk hitungan background idle jika benar-benar hidden dan tidak ada sinyal foreground
+      if (!isForegroundActive && !docVisible) {
+        startHiddenIdleCountdown();
+        return;
+      }
+
       if (
         throttled &&
+        !forceForeground &&
         committedStatus === 'online' &&
         currentUserPresenceRef.current === 'online' &&
         now - lastInteractionAt < 1000
@@ -2057,38 +2221,44 @@ export default function App() {
         window.clearTimeout(hiddenIdleTimer);
         hiddenIdleTimer = undefined;
       }
-      if (idleTimer) {
-        window.clearTimeout(idleTimer);
-        idleTimer = undefined;
-      }
 
-      if (document.visibilityState === 'hidden') {
-        startHiddenIdleCountdown();
-        return;
-      }
-
-      sendPresence('online');
-      idleTimer = window.setTimeout(() => {
-        sendPresence('idle', true);
-      }, VISIBLE_IDLE_MS);
+      sendPresence('online', forceForeground || committedStatus !== 'online');
+      scheduleVisibleIdleCheck(VISIBLE_IDLE_MS);
     };
 
-    const handleVisibilityOrFocus = () => {
-      if (document.visibilityState === 'hidden') {
+    const handleVisibilityChange = () => {
+      if (disposed) return;
+      if (document.visibilityState === 'hidden' || document.hidden) {
         startHiddenIdleCountdown();
       } else {
-        markActive(false);
+        markActive(false, true);
       }
     };
 
-    const handlePointerMove = () => markActive(true);
-    const handleImmediateInteraction = () => markActive(false);
-    const handleWsOpen = () => {
-      if (document.visibilityState === 'visible') {
-        sendPresence('online', true);
+    const handleFocusResume = () => {
+      if (disposed) return;
+      if (document.visibilityState !== 'hidden' && !document.hidden) {
+        markActive(false, true);
       }
     };
+
+    const handlePointerMove = () => markActive(true, false);
+    const handleImmediateInteraction = () => markActive(false, true);
+    const handleWsOpen = () => {
+      if (!disposed && (isForegroundActive || isDocumentVisible())) {
+        markActive(false, true);
+      }
+    };
+    const handleOnlineRestore = () => {
+      if (!disposed && (isForegroundActive || isDocumentVisible())) {
+        markActive(false, true);
+      }
+    };
+    const handleOfflineEvent = () => {
+      clearRetryOnlineTimer();
+    };
     const handleUnload = () => {
+      clearRetryOnlineTimer();
       if (idleTimer) window.clearTimeout(idleTimer);
       if (hiddenIdleTimer) window.clearTimeout(hiddenIdleTimer);
       if (supabaseReadyRef.current) {
@@ -2096,10 +2266,12 @@ export default function App() {
       }
     };
 
-    markActive(false);
+    markActive(false, true);
 
     heartbeatTimer = window.setInterval(() => {
-      if (document.visibilityState !== 'visible') return;
+      if (disposed) return;
+      const isVisible = isForegroundActive || isDocumentVisible();
+      if (!isVisible) return;
       const sinceInteraction = Date.now() - lastInteractionAt;
       if (sinceInteraction >= VISIBLE_IDLE_MS) {
         if (committedStatus !== 'idle') {
@@ -2108,6 +2280,7 @@ export default function App() {
         return;
       }
       if (
+        committedStatus !== 'online' ||
         currentUserPresenceRef.current !== 'online' ||
         Date.now() - lastCommittedAt >= HEARTBEAT_MS
       ) {
@@ -2122,25 +2295,36 @@ export default function App() {
       'keydown',
       'click',
       'wheel',
+      'input',
+      'change',
     ];
     immediateEvents.forEach((ev) =>
-      window.addEventListener(ev, handleImmediateInteraction, { passive: true })
+      window.addEventListener(ev, handleImmediateInteraction, { passive: true, capture: true })
     );
     window.addEventListener('pointermove', handlePointerMove, { passive: true });
     // capture: true wajib agar scroll pada container internal (overflow-y-auto) ikut terdeteksi
     window.addEventListener('scroll', handlePointerMove, { capture: true, passive: true });
-    window.addEventListener('focus', handleVisibilityOrFocus);
-    window.addEventListener('pageshow', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleFocusResume);
+    window.addEventListener('pageshow', handleFocusResume);
+    window.addEventListener('online', handleOnlineRestore);
+    window.addEventListener('offline', handleOfflineEvent);
+    window.addEventListener('masdeta-network-online', handleOnlineRestore);
     window.addEventListener('masdeta-ws-open', handleWsOpen);
     window.addEventListener('pagehide', handleUnload);
     window.addEventListener('beforeunload', handleUnload);
-    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     if (Capacitor.isNativePlatform()) {
       CapacitorApp.addListener('appStateChange', ({ isActive }) => {
         if (disposed) return;
         if (isActive) {
-          markActive(false);
+          // Android WebView kadang menunda update document.visibilityState beberapa milidetik setelah resume
+          markActive(false, true);
+          window.setTimeout(() => {
+            if (!disposed && (isForegroundActive || isDocumentVisible())) {
+              markActive(false, true);
+            }
+          }, 250);
         } else {
           startHiddenIdleCountdown();
         }
@@ -2157,20 +2341,24 @@ export default function App() {
 
     return () => {
       disposed = true;
+      clearRetryOnlineTimer();
       if (idleTimer) window.clearTimeout(idleTimer);
       if (hiddenIdleTimer) window.clearTimeout(hiddenIdleTimer);
       if (heartbeatTimer) window.clearInterval(heartbeatTimer);
       immediateEvents.forEach((ev) =>
-        window.removeEventListener(ev, handleImmediateInteraction)
+        window.removeEventListener(ev, handleImmediateInteraction, { capture: true })
       );
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('scroll', handlePointerMove, { capture: true });
-      window.removeEventListener('focus', handleVisibilityOrFocus);
-      window.removeEventListener('pageshow', handleVisibilityOrFocus);
+      window.removeEventListener('focus', handleFocusResume);
+      window.removeEventListener('pageshow', handleFocusResume);
+      window.removeEventListener('online', handleOnlineRestore);
+      window.removeEventListener('offline', handleOfflineEvent);
+      window.removeEventListener('masdeta-network-online', handleOnlineRestore);
       window.removeEventListener('masdeta-ws-open', handleWsOpen);
       window.removeEventListener('pagehide', handleUnload);
       window.removeEventListener('beforeunload', handleUnload);
-      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (appStateHandle) {
         void appStateHandle.remove();
       }
@@ -4382,16 +4570,18 @@ export default function App() {
 
   const handleToggleProposalLock = (proposalId: string) => {
     if (!requirePermission('update', 'mengunci/membuka proposal')) return;
-    const target = proposals.find((p) => p.id === proposalId);
+    const currentProposals = proposalsRef.current;
+    const target = currentProposals.find((p) => p.id === proposalId);
     if (!target) return;
 
-    const nextStatus = target.status === 'locked' ? 'unlocked' : 'locked';
-    const nextProposals: ProposalRecord[] = proposals.map((p) =>
+    const nowIso = new Date().toISOString();
+    const nextStatus: ProposalLockStatus = target.status === 'locked' ? 'unlocked' : 'locked';
+    const nextProposals: ProposalRecord[] = currentProposals.map((p) =>
       p.id === proposalId
         ? {
             ...p,
             status: nextStatus,
-            updatedAt: new Date().toISOString(),
+            updatedAt: nowIso,
           }
         : p
     );
@@ -4407,14 +4597,83 @@ export default function App() {
         action: nextStatus === 'locked' ? 'removed' : 'entered',
       }
     );
-    const nextHistory = [actEntry, ...proposalHistory];
+    const nextHistory = [actEntry, ...proposalHistoryRef.current];
 
-    setProposals(nextProposals);
-    setProposalHistory(nextHistory);
-    void syncOperationalData(
-      { proposals: nextProposals, proposalHistory: nextHistory },
-      'update'
+    proposalsRef.current = nextProposals;
+    proposalHistoryRef.current = nextHistory;
+    latestDataRef.current = {
+      ...latestDataRef.current,
+      proposals: nextProposals,
+      proposalHistory: nextHistory,
+    };
+
+    setProposals((prev) =>
+      prev.map((p) =>
+        p.id === proposalId
+          ? {
+              ...p,
+              status: nextStatus,
+              updatedAt: nowIso,
+            }
+          : p
+      )
     );
+    setProposalHistory((prev) => [actEntry, ...prev]);
+
+    if (supabaseReadyRef.current) {
+      if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+        setFeedback({
+          type: 'error',
+          message: 'Aksi ditolak: Aplikasi MASDETA wajib terhubung ke internet aktif.',
+        });
+        return;
+      }
+      void enqueueOperationalSync(async () => {
+        try {
+          await supabaseUpdateProposalLockStatus(
+            [
+              {
+                id: target.id,
+                tahun: target.tahun,
+                namaProposal: target.namaProposal,
+                status: nextStatus,
+                updatedAt: nowIso,
+              },
+            ],
+            [actEntry]
+          );
+          return true;
+        } catch (err) {
+          const msg =
+            err instanceof Error
+              ? err.message
+              : err && typeof err === 'object' && 'message' in err
+                ? String((err as { message: unknown }).message)
+                : 'Gagal memperbarui status kunci proposal.';
+          setFeedback({
+            type: 'error',
+            message: `Gagal menyimpan status kunci proposal ke Supabase: ${msg}`,
+          });
+          // Pulihkan snapshot dari database agar status di layar tetap jujur
+          try {
+            const snapshot = await fetchOperationalDataFromSupabase();
+            applyRemoteOperationalState({
+              proposals: snapshot.proposals,
+              proposalHistory: snapshot.proposalHistory,
+            });
+          } catch {
+            // Abaikan error pemulihan
+          }
+          return false;
+        }
+      });
+    } else {
+      void syncOperationalData(
+        { proposals: nextProposals, proposalHistory: nextHistory },
+        'update'
+      );
+    }
+
     setFeedback({
       type: 'success',
       message:
@@ -4424,9 +4683,128 @@ export default function App() {
     });
   };
 
+  const handleBulkSetProposalLock = (proposalIds: string[], nextStatus: ProposalLockStatus) => {
+    if (!requirePermission('update', 'mengunci/membuka semua proposal')) return;
+    if (proposalIds.length === 0) return;
+
+    const currentProposals = proposalsRef.current;
+    const idSet = new Set(proposalIds);
+    const affected = currentProposals.filter((p) => idSet.has(p.id) && p.status !== nextStatus);
+    if (affected.length === 0) return;
+
+    const nowIso = new Date().toISOString();
+    const affectedIdSet = new Set(affected.map((p) => p.id));
+    const nextProposals: ProposalRecord[] = currentProposals.map((p) =>
+      affectedIdSet.has(p.id)
+        ? {
+            ...p,
+            status: nextStatus,
+            updatedAt: nowIso,
+          }
+        : p
+    );
+
+    const yearsInBatch = Array.from(new Set(affected.map((p) => p.tahun).filter(Boolean)));
+    const scopeLabel =
+      yearsInBatch.length === 1 ? `Tahun ${yearsInBatch[0]}` : 'Semua Tahun';
+    const actEntry = createActivityHistoryEntry(
+      nextStatus === 'locked' ? 'proposal_bulk_locked' : 'proposal_bulk_unlocked',
+      {
+        proposalName: affected.length === 1 ? affected[0].namaProposal : `Semua Proposal (${scopeLabel})`,
+        detail:
+          nextStatus === 'locked'
+            ? `Mengunci sekaligus ${affected.length} proposal (${scopeLabel}).`
+            : `Membuka kunci sekaligus ${affected.length} proposal (${scopeLabel}).`,
+        tahun: yearsInBatch.length === 1 ? yearsInBatch[0] : selectedYear || '2026',
+        action: nextStatus === 'locked' ? 'removed' : 'entered',
+      }
+    );
+    const nextHistory = [actEntry, ...proposalHistoryRef.current];
+
+    proposalsRef.current = nextProposals;
+    proposalHistoryRef.current = nextHistory;
+    latestDataRef.current = {
+      ...latestDataRef.current,
+      proposals: nextProposals,
+      proposalHistory: nextHistory,
+    };
+
+    setProposals((prev) =>
+      prev.map((p) =>
+        affectedIdSet.has(p.id)
+          ? {
+              ...p,
+              status: nextStatus,
+              updatedAt: nowIso,
+            }
+          : p
+      )
+    );
+    setProposalHistory((prev) => [actEntry, ...prev]);
+
+    if (supabaseReadyRef.current) {
+      if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+        setFeedback({
+          type: 'error',
+          message: 'Aksi ditolak: Aplikasi MASDETA wajib terhubung ke internet aktif.',
+        });
+        return;
+      }
+      void enqueueOperationalSync(async () => {
+        try {
+          await supabaseUpdateProposalLockStatus(
+            affected.map((p) => ({
+              id: p.id,
+              tahun: p.tahun,
+              namaProposal: p.namaProposal,
+              status: nextStatus,
+              updatedAt: nowIso,
+            })),
+            [actEntry]
+          );
+          return true;
+        } catch (err) {
+          const msg =
+            err instanceof Error
+              ? err.message
+              : err && typeof err === 'object' && 'message' in err
+                ? String((err as { message: unknown }).message)
+                : 'Gagal memperbarui status kunci massal.';
+          setFeedback({
+            type: 'error',
+            message: `Gagal menyimpan status kunci massal ke Supabase: ${msg}`,
+          });
+          try {
+            const snapshot = await fetchOperationalDataFromSupabase();
+            applyRemoteOperationalState({
+              proposals: snapshot.proposals,
+              proposalHistory: snapshot.proposalHistory,
+            });
+          } catch {
+            // Abaikan error pemulihan
+          }
+          return false;
+        }
+      });
+    } else {
+      void syncOperationalData(
+        { proposals: nextProposals, proposalHistory: nextHistory },
+        'update'
+      );
+    }
+
+    setFeedback({
+      type: 'success',
+      message:
+        nextStatus === 'locked'
+          ? `${affected.length} proposal berhasil dikunci. Seluruh KPM di dalamnya ikut terkunci.`
+          : `Kunci ${affected.length} proposal berhasil dibuka.`,
+    });
+  };
+
   const handleDeleteProposal = (proposalId: string) => {
     if (!requirePermission('delete', 'menghapus proposal')) return;
-    const target = proposals.find((p) => p.id === proposalId);
+    const target = proposalsRef.current.find((p) => p.id === proposalId);
     if (!target) return;
 
     if (target.status === 'locked') {
@@ -4456,7 +4834,7 @@ export default function App() {
     setTrashBin(nextTrash);
     void saveAppStateSlice('masdeta_trash_bin_v1', nextTrash);
 
-    const nextProposals = proposals.filter((p) => p.id !== proposalId);
+    const nextProposals = proposalsRef.current.filter((p) => p.id !== proposalId);
     const deletedNotif: AppNotificationItem = {
       id: `notif-prop-del-${proposalId}-${Date.now()}`,
       type: 'proposal_deleted',
@@ -4475,36 +4853,73 @@ export default function App() {
       action: 'removed',
       actorName,
     });
-    const nextHistory = [actEntry, ...proposalHistory];
+    const nextHistory = [actEntry, ...proposalHistoryRef.current];
 
     notifiedDeletedProposalIdsRef.current.add(proposalId);
     seenNotificationIdsRef.current.add(deletedNotif.id);
     setAppNotifications((prev) => [deletedNotif, ...prev].slice(0, 25));
 
-    setProposals(nextProposals);
-    setProposalHistory(nextHistory);
+    proposalsRef.current = nextProposals;
+    proposalHistoryRef.current = nextHistory;
+    latestDataRef.current = {
+      ...latestDataRef.current,
+      proposals: nextProposals,
+      proposalHistory: nextHistory,
+    };
+
+    setProposals((prev) => prev.filter((p) => p.id !== proposalId));
+    setProposalHistory((prev) => [actEntry, ...prev]);
     if (activeProposalId === proposalId) {
       setActiveProposalId(null);
       setSubView('none');
       setActiveTab('proposal');
     }
-    void syncOperationalData(
-      { proposals: nextProposals, proposalHistory: nextHistory },
-      'delete'
-    ).then((synced) => {
-      if (synced && supabaseReadyRef.current && realtimeChannelRef.current) {
-        void realtimeChannelRef.current.send({
-          type: 'broadcast',
-          event: 'app:notification',
-          payload: {
-            ...deletedNotif,
-            read: false,
-            proposalId,
-            actorId: currentUser?.id,
-          },
+
+    if (supabaseReadyRef.current) {
+      if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+        setFeedback({
+          type: 'error',
+          message: 'Aksi ditolak: Aplikasi MASDETA wajib terhubung ke internet aktif.',
         });
+        return;
       }
-    });
+      void enqueueOperationalSync(async () => {
+        try {
+          await supabaseDeleteProposalDirect(target, [actEntry]);
+          if (realtimeChannelRef.current) {
+            void realtimeChannelRef.current.send({
+              type: 'broadcast',
+              event: 'app:notification',
+              payload: {
+                ...deletedNotif,
+                read: false,
+                proposalId,
+                actorId: currentUser?.id,
+              },
+            });
+          }
+          return true;
+        } catch (err) {
+          const msg =
+            err instanceof Error
+              ? err.message
+              : err && typeof err === 'object' && 'message' in err
+                ? String((err as { message: unknown }).message)
+                : 'Gagal menghapus proposal.';
+          setFeedback({
+            type: 'error',
+            message: `Gagal menghapus proposal di Supabase: ${msg}`,
+          });
+          return false;
+        }
+      });
+    } else {
+      void syncOperationalData(
+        { proposals: nextProposals, proposalHistory: nextHistory },
+        'delete'
+      );
+    }
+
     setFeedback({
       type: 'success',
       message: `Proposal "${target.namaProposal}" (${target.tahun}) dipindahkan ke Tempat Sampah (tersimpan 30 hari).`,
@@ -4535,7 +4950,20 @@ export default function App() {
           (m) => m.senderId === res.user!.id || m.recipientId === res.user!.id
         );
         prevMessageIdsRef.current = new Set(userMsgs.map((m) => m.id));
-        if (users.length > 0) setInternalUsers(users);
+        if (users.length > 0) {
+          const loggedInId = res.user.id;
+          const nowIso = new Date().toISOString();
+          if (!res.user.presenceManual) {
+            desiredAutoPresenceRef.current = 'online';
+          }
+          setInternalUsers(
+            users.map((u) =>
+              u.id === loggedInId && !u.presenceManual
+                ? { ...u, presenceStatus: 'online', lastActiveAt: nowIso }
+                : u
+            )
+          );
+        }
         setDirectMessages(userMsgs);
 
         const supaToken = `supabase-session-${res.user.id}`;
@@ -4736,6 +5164,7 @@ export default function App() {
           });
         }
         const updated = await supabaseUpdateInternalUserProfile(currentUser.id, patch);
+        desiredAutoPresenceRef.current = patch.presenceStatus;
         if (updated) {
           setInternalUsers((prev) =>
             prev.some((u) => u.id === updated.id)
@@ -4797,7 +5226,7 @@ export default function App() {
       try {
         await supabaseAdminControlInternalUser(userId, patch);
         const freshUsers = await supabaseFetchInternalUsers();
-        setInternalUsers(freshUsers);
+        setInternalUsers(mergeFetchedInternalUsers(freshUsers));
       } catch (err) {
         setFeedback({
           type: 'error',
@@ -4819,7 +5248,7 @@ export default function App() {
         return;
       }
       if (Array.isArray(data.users)) {
-        setInternalUsers(data.users);
+        setInternalUsers(mergeFetchedInternalUsers(data.users));
       }
     } catch {
       setFeedback({ type: 'error', message: 'Gagal terhubung ke server saat mengubah akses user.' });
@@ -4839,7 +5268,7 @@ export default function App() {
       try {
         await supabaseDeleteInternalUser(userId);
         const freshUsers = await supabaseFetchInternalUsers();
-        setInternalUsers(freshUsers);
+        setInternalUsers(mergeFetchedInternalUsers(freshUsers));
         setFeedback({ type: 'success', message: 'Akun pengguna berhasil dihapus dari Supabase.' });
       } catch (err) {
         setFeedback({
@@ -4861,7 +5290,7 @@ export default function App() {
         return;
       }
       if (Array.isArray(data.users)) {
-        setInternalUsers(data.users);
+        setInternalUsers(mergeFetchedInternalUsers(data.users));
       }
       setFeedback({ type: 'success', message: 'Akun pengguna berhasil dihapus.' });
     } catch {
@@ -5029,7 +5458,11 @@ export default function App() {
           return { ok: false, error: errMsg };
         }
         const freshUsers = await supabaseFetchInternalUsers();
-        setInternalUsers(freshUsers.length > 0 ? freshUsers : [res.user, ...internalUsers]);
+        setInternalUsers(
+          freshUsers.length > 0
+            ? mergeFetchedInternalUsers(freshUsers)
+            : [res.user, ...internalUsers]
+        );
         setFeedback({
           type: 'success',
           message: `Akun "${user.nama}" (${user.email}) aktif ditambahkan di Supabase dengan kata sandi awal: ${initialPassword}`,
@@ -5069,7 +5502,7 @@ export default function App() {
       }
 
       if (Array.isArray(data.users)) {
-        setInternalUsers(data.users);
+        setInternalUsers(mergeFetchedInternalUsers(data.users));
       } else {
         setInternalUsers((prev) => [data.user as InternalUser, ...prev]);
       }
@@ -5809,7 +6242,9 @@ export default function App() {
       )}
 
       {/* Interactive In-App System Alert Toast (Proposal Deleted / SuperAdmin New Registration) */}
-      {appAlertToast && !incomingToast && (
+      {appAlertToast &&
+        !incomingToast &&
+        (appAlertToast.type !== 'user_registered' || currentUser.role === 'SuperAdmin') && (
         <div className="fixed top-3 left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2">
           <div
             className={`flex items-start gap-3 rounded-2xl border bg-white p-3 shadow-lg shadow-slate-900/10 ${
@@ -6323,6 +6758,7 @@ export default function App() {
             canDelete={hasPermission('delete')}
             onOpenProposalDetail={(id) => openProposalDetailById(id, 'proposal')}
             onToggleProposalLock={handleToggleProposalLock}
+            onBulkSetProposalLock={handleBulkSetProposalLock}
             onDeleteProposal={handleDeleteProposal}
           />
         )}
@@ -6353,6 +6789,7 @@ export default function App() {
             onChangeUsersOpenedFromSuperAdmin={setUsersOpenedFromSuperAdmin}
             currentUser={currentUser}
             unreadChatCount={unreadChatCount}
+            selectedYear={selectedYear}
             records={records}
             proposals={proposals}
             items={items}

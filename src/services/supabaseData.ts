@@ -22,6 +22,7 @@ import {
   ProposalChecklist,
   ProposalDocuments,
   ProposalKpmHistoryEntry,
+  ProposalLockStatus,
   ProposalRecord,
   SharedKpmCard,
   SubItemDeliveryState,
@@ -919,6 +920,117 @@ export async function upsertProposalInSupabase(proposal: ProposalRecord): Promis
   return resolvedId;
 }
 
+export async function supabaseUpdateProposalLockStatus(
+  targets: Array<{
+    id: string;
+    tahun: string;
+    namaProposal: string;
+    status: ProposalLockStatus;
+    updatedAt: string;
+  }>,
+  historyEntries: ProposalKpmHistoryEntry[] = []
+): Promise<void> {
+  if (targets.length === 0) return;
+
+  const byStatus = new Map<ProposalLockStatus, typeof targets>();
+  for (const t of targets) {
+    const bucket = byStatus.get(t.status) || [];
+    bucket.push(t);
+    byStatus.set(t.status, bucket);
+  }
+
+  for (const [status, list] of byStatus.entries()) {
+    const updatedAt = list[0]?.updatedAt || new Date().toISOString();
+    const matchedIds = new Set<string>();
+    const idList = Array.from(new Set(list.map((t) => t.id).filter(Boolean)));
+
+    for (let i = 0; i < idList.length; i += 100) {
+      const chunk = idList.slice(i, i + 100);
+      const { data, error } = await supabase
+        .from('proposals')
+        .update({ status, updated_at: updatedAt })
+        .in('id', chunk)
+        .select('id');
+      if (error) throw error;
+      (data || []).forEach((row) => matchedIds.add(String(row.id)));
+    }
+
+    const unmatched = list.filter((t) => !matchedIds.has(t.id));
+    for (const t of unmatched) {
+      const { error } = await supabase
+        .from('proposals')
+        .update({ status, updated_at: t.updatedAt || updatedAt })
+        .eq('tahun', t.tahun)
+        .eq('nama_proposal', t.namaProposal);
+      if (error) throw error;
+    }
+  }
+
+  if (historyEntries.length > 0) {
+    const histRows = historyEntries.map((h) => {
+      const matchedTarget = targets.find(
+        (t) =>
+          t.tahun === h.tahun &&
+          t.namaProposal.trim().toLowerCase() === h.proposalName.trim().toLowerCase()
+      );
+      return {
+        id: h.id,
+        tahun: h.tahun,
+        proposal_id: matchedTarget?.id || null,
+        proposal_name: h.proposalName,
+        kpm_id: h.kpmId || null,
+        kpm_name: h.kpmName,
+        register_code: h.registerCode || '',
+        action: h.action,
+        from_proposal: h.fromProposal || null,
+        to_proposal: h.toProposal || null,
+        actor_name: h.actorName || 'Admin',
+        timestamp: h.timestamp || new Date().toISOString(),
+      };
+    });
+    await upsertInChunks('proposal_kpm_history', histRows, 'id');
+  }
+}
+
+export async function supabaseDeleteProposalDirect(
+  proposal: ProposalRecord,
+  historyEntries: ProposalKpmHistoryEntry[] = []
+): Promise<void> {
+  const { data: deletedById, error: delErr } = await supabase
+    .from('proposals')
+    .delete()
+    .eq('id', proposal.id)
+    .select('id');
+  if (delErr) throw delErr;
+
+  if (!deletedById || deletedById.length === 0) {
+    const { error: delByKeyErr } = await supabase
+      .from('proposals')
+      .delete()
+      .eq('tahun', proposal.tahun)
+      .eq('nama_proposal', proposal.namaProposal);
+    if (delByKeyErr) throw delByKeyErr;
+  }
+
+  if (historyEntries.length > 0) {
+    const histRows = historyEntries.map((h) => ({
+      id: h.id,
+      tahun: h.tahun,
+      proposal_id: null,
+      proposal_name: h.proposalName,
+      kpm_id: h.kpmId || null,
+      kpm_name: h.kpmName,
+      register_code: h.registerCode || '',
+      action: h.action,
+      from_proposal: h.fromProposal || null,
+      to_proposal: h.toProposal || null,
+      actor_name: h.actorName || 'Admin',
+      timestamp: h.timestamp || new Date().toISOString(),
+    }));
+    await upsertInChunks('proposal_kpm_history', histRows, 'id');
+  }
+}
+
 export async function syncAllOperationalDataToSupabase(
   snapshot: SupabaseOperationalSnapshot
 ): Promise<void> {
@@ -1763,17 +1875,22 @@ export async function supabaseSetUserPresence(
   userId: string,
   presenceStatus: UserPresenceStatus,
   presenceManual = false
-): Promise<void> {
+): Promise<boolean> {
   const nowIso = new Date().toISOString();
-  await supabase
-    .from('internal_users')
-    .update({
-      presence_status: presenceStatus,
-      presence_manual: presenceManual,
-      last_active_at: nowIso,
-      updated_at: nowIso,
-    })
-    .eq('id', userId);
+  try {
+    const { error } = await supabase
+      .from('internal_users')
+      .update({
+        presence_status: presenceStatus,
+        presence_manual: presenceManual,
+        last_active_at: nowIso,
+        updated_at: nowIso,
+      })
+      .eq('id', userId);
+    return !error;
+  } catch {
+    return false;
+  }
 }
 
 export function supabaseMarkOfflineKeepalive(userId: string): void {

@@ -399,7 +399,7 @@ export function DashboardView({
   }, [schedules]);
 
   const hasAttentionItems =
-    pendingUsersCount > 0 ||
+    (currentUser.role === 'SuperAdmin' && pendingUsersCount > 0) ||
     duplicateNikCount > 0 ||
     missingItemCount > 0 ||
     attentionCounts.pendingDinas > 0 ||
@@ -907,7 +907,7 @@ export function DashboardView({
           <section>
             <h2 className="mb-2 px-0.5 text-sm font-bold text-slate-900">Perlu Tindakan</h2>
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
-              {pendingUsersCount > 0 && (
+              {currentUser.role === 'SuperAdmin' && pendingUsersCount > 0 && (
                 <button
                   type="button"
                   onClick={onOpenUserApproval}

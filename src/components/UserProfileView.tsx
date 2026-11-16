@@ -87,7 +87,8 @@ export function UserProfileView({
 
   useEffect(() => {
     if (!feedback) return;
-    const timer = window.setTimeout(() => setFeedback(null), 5000);
+    const delay = feedback.type === 'success' ? 3000 : 5000;
+    const timer = window.setTimeout(() => setFeedback(null), delay);
     return () => window.clearTimeout(timer);
   }, [feedback]);
 

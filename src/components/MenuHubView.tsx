@@ -120,6 +120,7 @@ interface MenuHubViewProps {
   onChangeUsersOpenedFromSuperAdmin?: (value: boolean) => void;
   currentUser: InternalUser;
   unreadChatCount: number;
+  selectedYear?: string;
   records: KpmRecord[];
   proposals: ProposalRecord[];
   items: ItemBantuan[];
@@ -212,6 +213,7 @@ export function MenuHubView({
   onChangeUsersOpenedFromSuperAdmin,
   currentUser,
   unreadChatCount,
+  selectedYear = 'all',
   records,
   proposals,
   items,
@@ -511,9 +513,13 @@ export function MenuHubView({
     if (activeSection !== 'dtsen') {
       setDtsenDrill(null);
     }
-  }, [activeSection, usersOpenedFromSuperAdmin]);
+    if (activeSection !== 'duplikasi') {
+      setDuplikasiYearFilter(selectedYear || 'all');
+    }
+  }, [activeSection, usersOpenedFromSuperAdmin, selectedYear]);
 
   const [dtsenDrill, setDtsenDrill] = useState<string | null>(null);
+  const [duplikasiYearFilter, setDuplikasiYearFilter] = useState<string>(selectedYear || 'all');
 
   // Administrasi search & filter state
   const [adminQuery, setAdminQuery] = useState('');
@@ -586,33 +592,73 @@ export function MenuHubView({
     [internalUsers]
   );
 
-  // Detect duplicate NIK KTP or NIK KK across KPM records
-  const duplicateGroups = useMemo(() => {
+  // Detect duplicate NIK KTP or NIK KK across ALL years (cross-year + same-year)
+  const allDuplicateGroups = useMemo(() => {
     const byKtp = new Map<string, KpmRecord[]>();
     const byKk = new Map<string, KpmRecord[]>();
 
     for (const r of records) {
-      if (r.nikKtp) {
-        const arr = byKtp.get(r.nikKtp) ?? [];
+      const ktp = (r.nikKtp || '').trim();
+      const kk = (r.nikKk || '').trim();
+      if (ktp) {
+        const arr = byKtp.get(ktp) ?? [];
         arr.push(r);
-        byKtp.set(r.nikKtp, arr);
+        byKtp.set(ktp, arr);
       }
-      if (r.nikKk) {
-        const arr = byKk.get(r.nikKk) ?? [];
+      if (kk) {
+        const arr = byKk.get(kk) ?? [];
         arr.push(r);
-        byKk.set(r.nikKk, arr);
+        byKk.set(kk, arr);
       }
     }
 
-    const groups: { type: 'NIK KTP' | 'Nomor KK'; value: string; records: KpmRecord[] }[] = [];
+    const groups: {
+      type: 'NIK KTP' | 'Nomor KK';
+      value: string;
+      years: string[];
+      records: KpmRecord[];
+    }[] = [];
     byKtp.forEach((recs, key) => {
-      if (recs.length > 1) groups.push({ type: 'NIK KTP', value: key, records: recs });
+      if (recs.length > 1) {
+        const years = Array.from(
+          new Set(recs.map((r) => (r.tahun || '').trim()).filter(Boolean))
+        ).sort((a, b) => a.localeCompare(b));
+        groups.push({
+          type: 'NIK KTP',
+          value: key,
+          years,
+          records: [...recs].sort(
+            (a, b) => b.tahun.localeCompare(a.tahun) || a.nama.localeCompare(b.nama, 'id')
+          ),
+        });
+      }
     });
     byKk.forEach((recs, key) => {
-      if (recs.length > 1) groups.push({ type: 'Nomor KK', value: key, records: recs });
+      if (recs.length > 1) {
+        const years = Array.from(
+          new Set(recs.map((r) => (r.tahun || '').trim()).filter(Boolean))
+        ).sort((a, b) => a.localeCompare(b));
+        groups.push({
+          type: 'Nomor KK',
+          value: key,
+          years,
+          records: [...recs].sort(
+            (a, b) => b.tahun.localeCompare(a.tahun) || a.nama.localeCompare(b.nama, 'id')
+          ),
+        });
+      }
     });
-    return groups;
+    return groups.sort(
+      (a, b) => a.type.localeCompare(b.type) || a.value.localeCompare(b.value)
+    );
   }, [records]);
+
+  const duplicateGroups = useMemo(() => {
+    if (duplikasiYearFilter === 'all') return allDuplicateGroups;
+    return allDuplicateGroups.filter((g) =>
+      g.records.some((r) => (r.tahun || '').trim() === duplikasiYearFilter)
+    );
+  }, [allDuplicateGroups, duplikasiYearFilter]);
 
   const adminStats = useMemo(() => {
     const paidRecords = records.filter((r) => r.payment > 0);
@@ -2571,13 +2617,19 @@ export function MenuHubView({
   if (activeSection === 'duplikasi') {
     const ktpDupCount = duplicateGroups.filter((g) => g.type === 'NIK KTP').length;
     const kkDupCount = duplicateGroups.filter((g) => g.type === 'Nomor KK').length;
+    const dupYearOptions = Array.from(
+      new Set([
+        ...records.map((r) => (r.tahun || '').trim()).filter(Boolean),
+        ...proposals.map((p) => (p.tahun || '').trim()).filter(Boolean),
+      ])
+    ).sort((a, b) => b.localeCompare(a));
 
     return (
       <div className="min-h-screen pb-24">
         {renderSubHeader('Duplikasi NIK / KK', () => onChangeSection('root'))}
         <div className="space-y-4 px-4 pt-4">
           <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3.5">
-            <div className="flex items-center gap-3">
+            <div className="flex min-w-0 items-center gap-3">
               <div
                 className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
                   duplicateGroups.length > 0
@@ -2587,26 +2639,44 @@ export function MenuHubView({
               >
                 <CopyCheck className="h-5 w-5" />
               </div>
-              <div>
-                <p className="text-xs font-medium text-slate-500">Total Duplikasi Terdeteksi</p>
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-slate-500">
+                  {duplikasiYearFilter === 'all'
+                    ? 'Total Duplikasi Terdeteksi (Semua Tahun)'
+                    : `Duplikasi Terkait Tahun ${duplikasiYearFilter}`}
+                </p>
                 <p className="text-lg font-bold text-slate-900 tabular-nums">
                   {duplicateGroups.length} Duplikat
                 </p>
+                {duplicateGroups.length > 0 && (
+                  <p className="text-[11px] font-semibold text-slate-500 tabular-nums">
+                    {ktpDupCount} NIK KTP · {kkDupCount} Nomor KK
+                  </p>
+                )}
               </div>
             </div>
-            {duplicateGroups.length > 0 && (
-              <div className="text-right text-[11px] font-semibold text-slate-500 tabular-nums">
-                <p>{ktpDupCount} NIK KTP</p>
-                <p>{kkDupCount} Nomor KK</p>
-              </div>
-            )}
+            <FilterSelect
+              ariaLabel="Filter tahun duplikasi"
+              value={duplikasiYearFilter}
+              onChange={setDuplikasiYearFilter}
+              className="w-[96px] shrink-0"
+            >
+              <option value="all">Semua</option>
+              {dupYearOptions.map((yr) => (
+                <option key={yr} value={yr}>
+                  {yr}
+                </option>
+              ))}
+            </FilterSelect>
           </div>
 
           {duplicateGroups.length === 0 ? (
             <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
               <p className="text-sm font-bold text-slate-900">Data Bersih dari Duplikasi</p>
               <p className="mt-1 text-xs text-slate-500">
-                Tidak ditemukan NIK KTP atau Nomor KK yang sama di seluruh data calon KPM.
+                {duplikasiYearFilter === 'all'
+                  ? 'Tidak ditemukan NIK KTP atau Nomor KK yang sama di seluruh data calon KPM.'
+                  : `Tidak ditemukan NIK KTP atau Nomor KK ganda yang melibatkan data tahun ${duplikasiYearFilter}.`}
               </p>
             </div>
           ) : (
@@ -2615,11 +2685,18 @@ export function MenuHubView({
                 key={`${group.type}-${group.value}`}
                 className="overflow-hidden rounded-2xl border border-rose-200 bg-white"
               >
-                <div className="flex items-center gap-2 border-b border-rose-100 bg-rose-50 px-4 py-2.5">
-                  <AlertTriangle className="h-4 w-4 text-rose-600" />
-                  <p className="text-xs font-bold text-rose-900 tabular-nums">
-                    {group.type}: {formatNikDisplay(group.value)} ({group.records.length} data)
-                  </p>
+                <div className="flex items-center justify-between gap-2 border-b border-rose-100 bg-rose-50 px-4 py-2.5">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-rose-600" />
+                    <p className="truncate text-xs font-bold text-rose-900 tabular-nums">
+                      {group.type}: {formatNikDisplay(group.value)} ({group.records.length} data)
+                    </p>
+                  </div>
+                  {group.years.length > 0 && (
+                    <span className="shrink-0 rounded-md bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-800 tabular-nums">
+                      {group.years.join(' · ')}
+                    </span>
+                  )}
                 </div>
                 <div className="divide-y divide-slate-100">
                   {group.records.map((rec) => (

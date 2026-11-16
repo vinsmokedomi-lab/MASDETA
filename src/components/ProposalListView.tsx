@@ -6,11 +6,19 @@ import {
   Lock,
   MapPin,
   Search,
+  Settings,
   Trash2,
   Unlock,
+  X,
 } from 'lucide-react';
 import { INITIAL_WILAYAH_LIST, PROPOSAL_TIPE_OPTIONS, TAHUN_OPTIONS } from '../data/kpmOptions';
-import { KpmRecord, ProposalRecord, ProposalTipe, WilayahKabKota } from '../types/kpm';
+import {
+  KpmRecord,
+  ProposalLockStatus,
+  ProposalRecord,
+  ProposalTipe,
+  WilayahKabKota,
+} from '../types/kpm';
 import {
   resolveProposalKecamatanCategory,
   sortKecamatanCategoryNames,
@@ -30,6 +38,7 @@ interface ProposalListViewProps {
   canDelete?: boolean;
   onOpenProposalDetail: (proposalId: string) => void;
   onToggleProposalLock: (proposalId: string) => void;
+  onBulkSetProposalLock?: (proposalIds: string[], nextStatus: ProposalLockStatus) => void;
   onDeleteProposal: (proposalId: string) => void;
 }
 
@@ -44,16 +53,27 @@ export function ProposalListView({
   canDelete = true,
   onOpenProposalDetail,
   onToggleProposalLock,
+  onBulkSetProposalLock,
   onDeleteProposal,
 }: ProposalListViewProps) {
   const [query, setQuery] = useState('');
   const [tipeFilter, setTipeFilter] = useState<'all' | ProposalTipe>('all');
   const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
   const [collapsedKecamatans, setCollapsedKecamatans] = useState<Record<string, boolean>>({});
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsScope, setSettingsScope] = useState<'current' | 'all'>(
+    selectedYear === 'all' ? 'all' : 'current'
+  );
   const [pendingAction, setPendingAction] = useState<{
     type: 'lock' | 'delete';
     proposal: ProposalRecord;
     kpmCount: number;
+  } | null>(null);
+  const [pendingBulkAction, setPendingBulkAction] = useState<{
+    nextStatus: ProposalLockStatus;
+    targetProposals: ProposalRecord[];
+    scopeLabel: string;
+    affectedKpmCount: number;
   } | null>(null);
 
   const yearOptions = useMemo(() => {
@@ -120,11 +140,46 @@ export function ProposalListView({
 
   const isSearching = query.trim().length > 0;
 
+  const activeSettingsProposals = useMemo(() => {
+    if (selectedYear === 'all' || settingsScope === 'all') return proposals;
+    return yearScopedProposals;
+  }, [proposals, yearScopedProposals, selectedYear, settingsScope]);
+
+  const unlockedInScope = useMemo(
+    () => activeSettingsProposals.filter((p) => p.status !== 'locked'),
+    [activeSettingsProposals]
+  );
+
+  const lockedInScope = useMemo(
+    () => activeSettingsProposals.filter((p) => p.status === 'locked'),
+    [activeSettingsProposals]
+  );
+
+  const countKpmsInProposals = (list: ProposalRecord[]) => {
+    const keySet = new Set(list.map((p) => `${p.tahun}::${p.namaProposal}`));
+    return records.filter((r) => keySet.has(`${r.tahun}::${r.proposal}`)).length;
+  };
+
   return (
     <div className="min-h-screen pb-24">
-      {/* Sticky Header: hanya judul, tanpa dropdown / tombol aksi */}
-      <header className="sticky top-0 z-20 flex h-14 items-center border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md">
+      {/* Sticky Header */}
+      <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md">
         <h1 className="truncate text-base font-bold text-slate-900">Daftar Proposal</h1>
+        {canUpdate && onBulkSetProposalLock && proposals.length > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              setOpenSwipeId(null);
+              setSettingsScope(selectedYear === 'all' ? 'all' : 'current');
+              setIsSettingsOpen(true);
+            }}
+            aria-label="Pengaturan Kunci Proposal"
+            title="Pengaturan Proposal"
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 transition-colors hover:bg-slate-50 active:scale-[0.97]"
+          >
+            <Settings className="h-4.5 w-4.5" />
+          </button>
+        )}
       </header>
 
       <div className="space-y-4 px-4 pt-4">
@@ -458,6 +513,242 @@ export function ProposalListView({
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+      {/* Proposal Settings Modal (Kunci / Buka Semua Proposal) */}
+      {isSettingsOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 backdrop-blur-xs sm:items-center sm:p-4"
+          onClick={() => setIsSettingsOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Pengaturan Proposal"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl space-y-4"
+          >
+            <div className="mx-auto h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-800">
+                  <Settings className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <h2 className="text-base font-bold text-slate-900">Pengaturan Proposal</h2>
+                  <p className="text-xs text-slate-500">
+                    Kunci atau buka semua proposal sekaligus
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSettingsOpen(false)}
+                aria-label="Tutup pengaturan"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100"
+              >
+                <X className="h-4.5 w-4.5" />
+              </button>
+            </div>
+
+            {selectedYear !== 'all' && proposals.length !== yearScopedProposals.length && (
+              <div className="grid grid-cols-2 gap-1.5 rounded-xl bg-slate-100 p-1">
+                <button
+                  type="button"
+                  onClick={() => setSettingsScope('current')}
+                  className={`min-h-[38px] rounded-lg px-2.5 text-xs font-semibold transition-colors ${
+                    settingsScope === 'current'
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Tahun {selectedYear} ({yearScopedProposals.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSettingsScope('all')}
+                  className={`min-h-[38px] rounded-lg px-2.5 text-xs font-semibold transition-colors ${
+                    settingsScope === 'all'
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Semua Tahun ({proposals.length})
+                </button>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs">
+              <span className="font-medium text-slate-600">
+                {selectedYear === 'all' || settingsScope === 'all'
+                  ? 'Semua Tahun'
+                  : `Tahun ${selectedYear}`}
+              </span>
+              <div className="flex items-center gap-3 tabular-nums">
+                <span className="inline-flex items-center gap-1 font-semibold text-rose-600">
+                  <Lock className="h-3.5 w-3.5" />
+                  {lockedInScope.length} Terkunci
+                </span>
+                <span className="inline-flex items-center gap-1 font-semibold text-teal-700">
+                  <Unlock className="h-3.5 w-3.5" />
+                  {unlockedInScope.length} Terbuka
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-2.5">
+              <button
+                type="button"
+                disabled={unlockedInScope.length === 0}
+                onClick={() => {
+                  const scopeLabel =
+                    selectedYear === 'all' || settingsScope === 'all'
+                      ? 'semua tahun'
+                      : `tahun ${selectedYear}`;
+                  setIsSettingsOpen(false);
+                  setPendingBulkAction({
+                    nextStatus: 'locked',
+                    targetProposals: unlockedInScope,
+                    scopeLabel,
+                    affectedKpmCount: countKpmsInProposals(unlockedInScope),
+                  });
+                }}
+                className="flex min-h-[52px] w-full items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-white">
+                  <Lock className="h-4.5 w-4.5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-bold text-slate-900">Kunci Semua Proposal</p>
+                  <p className="text-[11px] text-slate-500">
+                    {unlockedInScope.length > 0
+                      ? `${unlockedInScope.length} proposal terbuka akan dikunci`
+                      : 'Semua proposal pada cakupan ini sudah terkunci'}
+                  </p>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+              </button>
+
+              <button
+                type="button"
+                disabled={lockedInScope.length === 0}
+                onClick={() => {
+                  const scopeLabel =
+                    selectedYear === 'all' || settingsScope === 'all'
+                      ? 'semua tahun'
+                      : `tahun ${selectedYear}`;
+                  setIsSettingsOpen(false);
+                  setPendingBulkAction({
+                    nextStatus: 'unlocked',
+                    targetProposals: lockedInScope,
+                    scopeLabel,
+                    affectedKpmCount: countKpmsInProposals(lockedInScope),
+                  });
+                }}
+                className="flex min-h-[52px] w-full items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                  <Unlock className="h-4.5 w-4.5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-bold text-slate-900">Buka Semua Proposal</p>
+                  <p className="text-[11px] text-slate-500">
+                    {lockedInScope.length > 0
+                      ? `${lockedInScope.length} proposal terkunci akan dibuka`
+                      : 'Tidak ada proposal terkunci pada cakupan ini'}
+                  </p>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsSettingsOpen(false)}
+              className="inline-flex min-h-[44px] w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              Tutup
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal for Bulk Lock / Unlock All Proposals */}
+      {pendingBulkAction && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 backdrop-blur-xs sm:items-center sm:p-4"
+          onClick={() => setPendingBulkAction(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Konfirmasi Kunci atau Buka Semua Proposal"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl space-y-4"
+          >
+            <div className="mx-auto h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+
+            <div className="flex items-start gap-3">
+              <div
+                className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+                  pendingBulkAction.nextStatus === 'locked'
+                    ? 'bg-slate-100 text-slate-800'
+                    : 'bg-amber-50 text-amber-700'
+                }`}
+              >
+                {pendingBulkAction.nextStatus === 'locked' ? (
+                  <Lock className="h-5 w-5" />
+                ) : (
+                  <Unlock className="h-5 w-5" />
+                )}
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-base font-bold text-slate-900">
+                  {pendingBulkAction.nextStatus === 'locked'
+                    ? 'Kunci Semua Proposal?'
+                    : 'Buka Semua Proposal?'}
+                </h2>
+                <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                  Apakah Anda yakin ingin{' '}
+                  {pendingBulkAction.nextStatus === 'locked' ? 'mengunci' : 'membuka kunci'}{' '}
+                  <strong>{pendingBulkAction.targetProposals.length} proposal</strong> pada{' '}
+                  <strong>{pendingBulkAction.scopeLabel}</strong>?
+                </p>
+                <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">
+                  {pendingBulkAction.nextStatus === 'locked'
+                    ? `Seluruh data pada ${pendingBulkAction.targetProposals.length} proposal tersebut dan ${pendingBulkAction.affectedKpmCount} KPM di dalamnya akan ikut terkunci.`
+                    : `Setelah dibuka, seluruh data pada ${pendingBulkAction.targetProposals.length} proposal tersebut dan ${pendingBulkAction.affectedKpmCount} KPM di dalamnya dapat diubah kembali.`}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => setPendingBulkAction(null)}
+                className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const ids = pendingBulkAction.targetProposals.map((p) => p.id);
+                  const nextStatus = pendingBulkAction.nextStatus;
+                  setPendingBulkAction(null);
+                  onBulkSetProposalLock?.(ids, nextStatus);
+                }}
+                className={`inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl px-4 text-sm font-semibold text-white ${
+                  pendingBulkAction.nextStatus === 'locked'
+                    ? 'bg-slate-900 hover:bg-slate-800'
+                    : 'bg-amber-600 hover:bg-amber-700'
+                }`}
+              >
+                {pendingBulkAction.nextStatus === 'locked' ? 'Ya, Kunci Semua' : 'Ya, Buka Semua'}
+              </button>
+            </div>
           </div>
         </div>
       )}
