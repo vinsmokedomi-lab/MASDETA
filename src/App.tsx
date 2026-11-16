@@ -489,6 +489,9 @@ export default function App() {
   const [trashBin, setTrashBin] = useState<TrashRecordItem[]>([]);
   const [reportTemplate, setReportTemplate] = useState<ReportTemplateConfig>(DEFAULT_REPORT_TEMPLATE);
   const [kpmBastMap, setKpmBastMap] = useState<Record<string, KpmBastInfo>>({});
+  const [userAliasesByOwner, setUserAliasesByOwner] = useState<
+    Record<string, Record<string, string>>
+  >({});
 
   const {
     isOnline,
@@ -524,6 +527,7 @@ export default function App() {
   const appAlertToastTimerRef = useRef<number | undefined>(undefined);
   const nativePushRequestedRef = useRef<boolean>(false);
   const kpmBastMapRef = useRef<Record<string, KpmBastInfo>>(kpmBastMap);
+  const currentUserAliasesRef = useRef<Record<string, string>>({});
   const isFlushingQueueRef = useRef<boolean>(false);
   const notifiedChatMsgIdsRef = useRef<Set<string>>(new Set());
   const syncIncomingMessagesRef = useRef<() => Promise<void>>(async () => {});
@@ -753,6 +757,18 @@ export default function App() {
       email: currentUser?.email,
     };
   }, [currentUser]);
+
+  const currentUserAliases = useMemo(() => {
+    if (!currentUser) return {};
+    return userAliasesByOwner[currentUser.id] || {};
+  }, [userAliasesByOwner, currentUser]);
+
+  currentUserAliasesRef.current = currentUserAliases;
+
+  const urgentSchedulesCount = useMemo(() => {
+    const limitDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    return schedules.filter((s) => !s.completed && s.targetDate <= limitDate).length;
+  }, [schedules]);
 
   const unreadChatCount = useMemo(() => {
     if (!currentUser) return 0;
@@ -1166,17 +1182,24 @@ export default function App() {
 
   const loadAppStateSlices = useCallback(async () => {
     try {
-      const [fetchedSchedules, fetchedTrash, fetchedTemplate, fetchedBastMap, fetchedWatermarks] =
-        await Promise.all([
-          fetchAppStateSlice<ScheduleEventItem[]>('masdeta_schedules_v1', []),
-          fetchAppStateSlice<TrashRecordItem[]>('masdeta_trash_bin_v1', []),
-          fetchAppStateSlice<ReportTemplateConfig>(
-            'masdeta_report_template_v1',
-            DEFAULT_REPORT_TEMPLATE
-          ),
-          fetchAppStateSlice<Record<string, KpmBastInfo>>('masdeta_kpm_bast_v1', {}),
-          fetchChatDeliveryWatermarks(),
-        ]);
+      const [
+        fetchedSchedules,
+        fetchedTrash,
+        fetchedTemplate,
+        fetchedBastMap,
+        fetchedWatermarks,
+        fetchedAliases,
+      ] = await Promise.all([
+        fetchAppStateSlice<ScheduleEventItem[]>('masdeta_schedules_v1', []),
+        fetchAppStateSlice<TrashRecordItem[]>('masdeta_trash_bin_v1', []),
+        fetchAppStateSlice<ReportTemplateConfig>(
+          'masdeta_report_template_v1',
+          DEFAULT_REPORT_TEMPLATE
+        ),
+        fetchAppStateSlice<Record<string, KpmBastInfo>>('masdeta_kpm_bast_v1', {}),
+        fetchChatDeliveryWatermarks(),
+        fetchAppStateSlice<Record<string, Record<string, string>>>('masdeta_user_aliases_v1', {}),
+      ]);
 
       const nowMs = Date.now();
       const rawTrash = Array.isArray(fetchedTrash) ? fetchedTrash : [];
@@ -1223,6 +1246,9 @@ export default function App() {
       setKpmBastMap(safeBastMap);
       if (fetchedWatermarks && typeof fetchedWatermarks === 'object') {
         setChatDeliveryWatermarks(fetchedWatermarks);
+      }
+      if (fetchedAliases && typeof fetchedAliases === 'object' && !Array.isArray(fetchedAliases)) {
+        setUserAliasesByOwner(fetchedAliases);
       }
       setRecords((prev) => mergeBastIntoRecords(prev, safeBastMap));
     } catch {
@@ -1885,7 +1911,10 @@ export default function App() {
             if (unnotified.length > 0) {
               const targetMsg = unnotified[unnotified.length - 1];
               const sender = internalUsersRef.current.find((u) => u.id === targetMsg.senderId);
-              const senderName = sender?.nama || 'Pengguna Internal';
+              const senderName =
+                (currentUserAliasesRef.current[targetMsg.senderId] || '').trim() ||
+                sender?.nama ||
+                'Pengguna Internal';
               const senderRole = sender?.role || 'Admin';
               const displayMsgText =
                 targetMsg.text ||
@@ -2222,7 +2251,9 @@ export default function App() {
 
                 if (!notifiedChatMsgIdsRef.current.has(msg.id)) {
                   notifiedChatMsgIdsRef.current.add(msg.id);
-                  const senderName = String(data.senderName || 'Pengguna Internal');
+                  const senderName =
+                    (currentUserAliasesRef.current[msg.senderId] || '').trim() ||
+                    String(data.senderName || 'Pengguna Internal');
                   const senderRole = String(data.senderRole || 'Admin');
                   playMessageChime();
                   setIncomingToast({
@@ -2328,7 +2359,10 @@ export default function App() {
               }).catch(() => {});
             } else if (pushEnabledRef.current) {
               const sender = internalUsersRef.current.find((u) => u.id === latestNew.senderId);
-              const senderName = sender?.nama || 'Pengguna Internal';
+              const senderName =
+                (currentUserAliasesRef.current[latestNew.senderId] || '').trim() ||
+                sender?.nama ||
+                'Pengguna Internal';
               const displayMsgText =
                 latestNew.text ||
                 (latestNew.sharedKpm
@@ -2384,7 +2418,7 @@ export default function App() {
     const senderNames: Record<string, string> = {};
     internalUsers.forEach((u) => {
       if (u.id !== uid && u.status === 'active') {
-        senderNames[u.id] = u.nama;
+        senderNames[u.id] = (currentUserAliases[u.id] || '').trim() || u.nama;
       }
     });
 
@@ -2406,7 +2440,15 @@ export default function App() {
       enabled: pushEnabled,
       sessionToken: supabaseReady ? '' : sessionToken,
     });
-  }, [currentUser?.id, internalUsers, pushEnabled, directMessages, supabaseReady, sessionToken]);
+  }, [
+    currentUser?.id,
+    internalUsers,
+    currentUserAliases,
+    pushEnabled,
+    directMessages,
+    supabaseReady,
+    sessionToken,
+  ]);
 
   useEffect(() => {
     const uid = currentUser?.id;
@@ -4649,6 +4691,31 @@ export default function App() {
     });
   };
 
+  const handleSaveUserAlias = (targetUserId: string, alias: string) => {
+    if (!currentUser) return;
+    const ownerId = currentUser.id;
+    const trimmed = alias.trim();
+    const targetUser = internalUsers.find((u) => u.id === targetUserId);
+    const nextOwnerMap = { ...(userAliasesByOwner[ownerId] || {}) };
+    if (trimmed) {
+      nextOwnerMap[targetUserId] = trimmed;
+    } else {
+      delete nextOwnerMap[targetUserId];
+    }
+    const nextAll: Record<string, Record<string, string>> = {
+      ...userAliasesByOwner,
+      [ownerId]: nextOwnerMap,
+    };
+    setUserAliasesByOwner(nextAll);
+    void saveAppStateSlice('masdeta_user_aliases_v1', nextAll);
+    setFeedback({
+      type: 'success',
+      message: trimmed
+        ? `Nama panggilan pribadi "${trimmed}" disimpan (khusus tampilan akun Anda).`
+        : `Nama dikembalikan ke nama asli (${targetUser?.nama || 'Pengguna'}).`,
+    });
+  };
+
   const remapSubItemDeliveries = (
     prevDeliveries: KpmRecord['subItemDeliveries'],
     oldSubItems: string[],
@@ -6743,6 +6810,8 @@ export default function App() {
           <ChatView
             currentUser={currentUser}
             users={internalUsers}
+            userAliases={currentUserAliases}
+            onSaveUserAlias={handleSaveUserAlias}
             messages={messagesWithDelivery}
             records={records}
             activePeerId={activeChatPeerId}
@@ -6805,6 +6874,7 @@ export default function App() {
             auditLogs={kpmAuditLogs}
             currentUserId={currentUser.id}
             internalUsers={internalUsers}
+            userAliases={currentUserAliases}
             canUpdate={hasPermission('update')}
             canDelete={hasPermission('delete')}
             feedback={feedback}
@@ -7214,12 +7284,16 @@ export default function App() {
             pengelolaList={pengelolaList}
             wilayahList={wilayahList}
             internalUsers={internalUsers}
+            userAliases={currentUserAliases}
+            onSaveUserAlias={handleSaveUserAlias}
             proposalHistory={proposalHistory}
             kpmAuditLogs={kpmAuditLogs}
             onOpenChat={(peerId) => openChatView(peerId)}
             onOpenProfile={openProfileView}
             onCheckAppUpdate={() => void handleManualCheckAppUpdate()}
             checkingAppUpdate={checkingAppUpdate}
+            hasAppUpdate={Boolean(appUpdateInfo?.hasUpdate)}
+            availableUpdateVersion={appUpdateInfo?.latestVersion}
             onSaveItem={handleSaveCatalogItem}
             onDeleteItem={handleDeleteCatalogItem}
             onMoveItemOrder={handleMoveItemOrder}
@@ -7288,6 +7362,8 @@ export default function App() {
           activeTab={activeTab}
           pendingUsersCount={currentUser.role === 'SuperAdmin' ? pendingUsersCount : 0}
           unreadChatCount={unreadChatCount}
+          urgentSchedulesCount={urgentSchedulesCount}
+          hasAppUpdate={Boolean(appUpdateInfo?.hasUpdate)}
           onSelectTab={(tab) => {
             setFeedback(null);
             setMenuOpenedFromDashboard(false);

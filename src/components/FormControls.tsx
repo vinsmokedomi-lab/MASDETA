@@ -101,6 +101,7 @@ export interface SegmentedTab<K extends string> {
   key: K;
   label: string;
   count?: number;
+  dot?: boolean;
 }
 
 interface SegmentedTabsProps<K extends string> {
@@ -134,7 +135,7 @@ export function SegmentedTabs<K extends string>({
             role="tab"
             aria-selected={active}
             onClick={() => onChange(tab.key)}
-            className={`flex min-w-0 items-center justify-center rounded-lg font-semibold leading-none transition-colors ${
+            className={`relative flex min-w-0 items-center justify-center rounded-lg font-semibold leading-none transition-colors ${
               stacked
                 ? 'min-h-[40px] flex-col gap-1 px-1 py-1 text-[10px]'
                 : 'min-h-[34px] flex-auto gap-1 px-1.5 text-[11px]'
@@ -148,11 +149,17 @@ export function SegmentedTabs<K extends string>({
             {tab.count !== undefined && (
               <span
                 className={`shrink-0 tabular-nums ${stacked ? 'text-xs font-bold' : ''} ${
-                  active ? 'text-teal-700' : 'text-slate-500'
+                  tab.dot ? 'text-rose-600 font-bold' : active ? 'text-teal-700' : 'text-slate-500'
                 }`}
               >
                 {tab.count}
               </span>
+            )}
+            {tab.dot && (
+              <span
+                aria-hidden="true"
+                className="h-1.5 w-1.5 shrink-0 rounded-full bg-rose-600"
+              />
             )}
           </button>
         );

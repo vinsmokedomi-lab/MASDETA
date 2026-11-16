@@ -5,9 +5,11 @@ import {
   Check,
   CheckCheck,
   ChevronRight,
+  Edit3,
   Search,
   Send,
   User,
+  X,
 } from 'lucide-react';
 import { DirectChatMessage, InternalUser, KpmRecord, SharedKpmCard } from '../types/kpm';
 import { getPrimaryKpmPhoto } from '../utils/imageProcessor';
@@ -17,6 +19,8 @@ import { PresenceDot, getPresenceMeta } from './PresenceDot';
 interface ChatViewProps {
   currentUser: InternalUser;
   users: InternalUser[];
+  userAliases?: Record<string, string>;
+  onSaveUserAlias?: (userId: string, alias: string) => void;
   messages: DirectChatMessage[];
   records?: KpmRecord[];
   activePeerId: string | null;
@@ -60,6 +64,8 @@ function formatRelativeActiveTime(iso?: string, status?: InternalUser['presenceS
 export function ChatView({
   currentUser,
   users,
+  userAliases = {},
+  onSaveUserAlias,
   messages,
   records = [],
   activePeerId,
@@ -75,7 +81,14 @@ export function ChatView({
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [, setTimeTick] = useState(0);
+  const [renameTargetUser, setRenameTargetUser] = useState<InternalUser | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+
+  const getPeerDisplayName = (u: InternalUser): string => {
+    const alias = (userAliases[u.id] || '').trim();
+    return alias || u.nama;
+  };
 
   useEffect(() => {
     const id = window.setInterval(() => {
@@ -110,9 +123,11 @@ export function ChatView({
         const pOrder = { online: 0, idle: 1, offline: 2 };
         const pDiff = (pOrder[a.presenceStatus] ?? 2) - (pOrder[b.presenceStatus] ?? 2);
         if (pDiff !== 0) return pDiff;
-        return a.nama.localeCompare(b.nama, 'id');
+        const aName = (userAliases[a.id] || '').trim() || a.nama;
+        const bName = (userAliases[b.id] || '').trim() || b.nama;
+        return aName.localeCompare(bName, 'id');
       });
-  }, [users, currentUser.id, currentUser.email, messages]);
+  }, [users, currentUser.id, currentUser.email, messages, userAliases]);
 
   const activePeer = useMemo(
     () => (activePeerId ? users.find((u) => u.id === activePeerId) ?? null : null),
@@ -147,9 +162,107 @@ export function ChatView({
     setSending(false);
   };
 
+  const openRenameModal = (target: InternalUser) => {
+    setRenameTargetUser(target);
+    setRenameDraft((userAliases[target.id] || '').trim());
+  };
+
+  const handleSaveRename = (e: FormEvent) => {
+    e.preventDefault();
+    if (!renameTargetUser || !onSaveUserAlias) return;
+    onSaveUserAlias(renameTargetUser.id, renameDraft.trim());
+    setRenameTargetUser(null);
+  };
+
+  const renderRenameModal = () => {
+    if (!renameTargetUser || !onSaveUserAlias) return null;
+    const currentAlias = (userAliases[renameTargetUser.id] || '').trim();
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 backdrop-blur-xs sm:items-center sm:p-4"
+        onClick={() => setRenameTargetUser(null)}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Ubah nama tampilan pribadi"
+      >
+        <form
+          onSubmit={handleSaveRename}
+          onClick={(e) => e.stopPropagation()}
+          className="w-full max-w-md rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl"
+        >
+          <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+          <div className="flex items-center justify-between pb-3">
+            <div>
+              <h2 className="text-base font-bold text-slate-900">Ubah Nama Pribadi</h2>
+              <p className="mt-0.5 text-xs text-slate-500">
+                Hanya tampil untuk akun Anda. Nama asli akun{' '}
+                <strong className="text-slate-700">{renameTargetUser.nama}</strong> tidak berubah.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setRenameTargetUser(null)}
+              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100"
+              aria-label="Tutup"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          <div className="space-y-3">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-700">
+                Nama Panggilan / Tampilan Pribadi
+              </label>
+              <input
+                type="text"
+                autoFocus
+                value={renameDraft}
+                onChange={(e) => setRenameDraft(e.target.value)}
+                placeholder={`Contoh: ${renameTargetUser.nama} (Lapangan)`}
+                className="min-h-[44px] w-full rounded-xl border border-slate-300 px-3.5 text-sm text-slate-900 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
+              />
+            </div>
+
+            {currentAlias && (
+              <button
+                type="button"
+                onClick={() => {
+                  onSaveUserAlias(renameTargetUser.id, '');
+                  setRenameTargetUser(null);
+                }}
+                className="text-xs font-semibold text-rose-600 hover:underline"
+              >
+                Kembalikan ke nama asli ({renameTargetUser.nama})
+              </button>
+            )}
+          </div>
+
+          <div className="mt-5 flex gap-2.5">
+            <button
+              type="button"
+              onClick={() => setRenameTargetUser(null)}
+              className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              Batal
+            </button>
+            <button
+              type="submit"
+              className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-teal-700 text-sm font-semibold text-white hover:bg-teal-800"
+            >
+              Simpan Nama
+            </button>
+          </div>
+        </form>
+      </div>
+    );
+  };
+
   // 1-on-1 Chat Thread Screen
   if (activePeer) {
     const meta = getPresenceMeta(activePeer.presenceStatus);
+    const activePeerDisplayName = getPeerDisplayName(activePeer);
+    const hasCustomAlias = activePeerDisplayName !== activePeer.nama;
 
     return (
       <div className="flex min-h-screen flex-col bg-slate-100">
@@ -168,7 +281,7 @@ export function ChatView({
               <DriveImage
                 src={activePeer.fotoDataUrl}
                 thumbnailUrl={activePeer.fotoThumbnailUrl}
-                alt={activePeer.nama}
+                alt={activePeerDisplayName}
                 className="h-full w-full rounded-xl object-cover"
               />
             ) : (
@@ -183,7 +296,7 @@ export function ChatView({
 
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
-              <p className="truncate text-sm font-bold text-slate-900">{activePeer.nama}</p>
+              <p className="truncate text-sm font-bold text-slate-900">{activePeerDisplayName}</p>
               <span
                 className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold ${
                   activePeer.role === 'SuperAdmin'
@@ -196,8 +309,21 @@ export function ChatView({
             </div>
             <p className={`truncate text-[11px] font-medium ${meta.textClass}`}>
               {meta.label}
+              {hasCustomAlias ? ` · Asli: ${activePeer.nama}` : ''}
             </p>
           </div>
+
+          {onSaveUserAlias && (
+            <button
+              type="button"
+              onClick={() => openRenameModal(activePeer)}
+              aria-label={`Ubah nama pribadi ${activePeerDisplayName}`}
+              title="Ubah nama panggilan pribadi"
+              className="inline-flex min-h-[40px] min-w-[40px] shrink-0 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+            >
+              <Edit3 className="h-4 w-4" />
+            </button>
+          )}
         </header>
 
         {/* Thread Body */}
@@ -205,7 +331,7 @@ export function ChatView({
           {threadMessages.length === 0 ? (
             <div className="mx-auto mt-10 max-w-xs rounded-2xl border border-slate-200 bg-white p-4 text-center">
               <p className="text-xs font-bold text-slate-800">
-                Mulai percakapan pribadi dengan {activePeer.nama}
+                Mulai percakapan pribadi dengan {activePeerDisplayName}
               </p>
               <p className="mt-1 text-[11px] text-slate-500">
                 Pesan dikirim langsung 1-on-1 dan memicu notifikasi ke penerima.
@@ -352,7 +478,7 @@ export function ChatView({
             type="text"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder={`Tulis pesan untuk ${activePeer.nama}...`}
+            placeholder={`Tulis pesan untuk ${activePeerDisplayName}...`}
             className="min-h-[44px] flex-1 rounded-xl border border-slate-300 bg-slate-50 px-3.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:bg-white focus:outline-none"
           />
           <button
@@ -364,6 +490,8 @@ export function ChatView({
             <Send className="h-4 w-4" />
           </button>
         </form>
+
+        {renderRenameModal()}
       </div>
     );
   }
@@ -373,6 +501,7 @@ export function ChatView({
   const filteredPeers = peers.filter(
     (p) =>
       !q ||
+      getPeerDisplayName(p).toLowerCase().includes(q) ||
       p.nama.toLowerCase().includes(q) ||
       p.jabatan.toLowerCase().includes(q)
   );
@@ -428,6 +557,8 @@ export function ChatView({
             </p>
           ) : (
             filteredPeers.map((peer) => {
+              const displayName = getPeerDisplayName(peer);
+              const isAliased = displayName !== peer.nama;
               const unreadCount = messages.filter(
                 (m) => m.senderId === peer.id && m.recipientId === currentUser.id && !m.readAt
               ).length;
@@ -458,68 +589,91 @@ export function ChatView({
                     );
 
               return (
-                <button
+                <div
                   key={peer.id}
-                  type="button"
-                  onClick={() => onSelectPeer(peer.id)}
-                  className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
+                  className="flex items-center gap-1.5 pr-2 transition-colors hover:bg-slate-50"
                 >
-                  <div className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
-                    {peer.fotoDataUrl ? (
-                      <DriveImage
-                        src={peer.fotoDataUrl}
-                        thumbnailUrl={peer.fotoThumbnailUrl}
-                        alt={peer.nama}
-                        className="h-full w-full rounded-xl object-cover"
-                      />
-                    ) : (
-                      <User className="h-5 w-5" />
-                    )}
-                    {unreadCount > 0 && (
-                      <span className="absolute -top-1.5 -right-1.5 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-teal-700 px-1 text-[10px] font-bold text-white ring-2 ring-white tabular-nums">
-                        {unreadCount > 99 ? '99+' : unreadCount}
-                      </span>
-                    )}
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onSelectPeer(peer.id)}
+                    className="flex min-w-0 flex-1 items-center gap-3 py-3 pl-4 pr-1 text-left active:bg-slate-100/70"
+                  >
+                    <div className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
+                      {peer.fotoDataUrl ? (
+                        <DriveImage
+                          src={peer.fotoDataUrl}
+                          thumbnailUrl={peer.fotoThumbnailUrl}
+                          alt={displayName}
+                          className="h-full w-full rounded-xl object-cover"
+                        />
+                      ) : (
+                        <User className="h-5 w-5" />
+                      )}
+                      {unreadCount > 0 && (
+                        <span className="absolute -top-1.5 -right-1.5 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-teal-700 px-1 text-[10px] font-bold text-white ring-2 ring-white tabular-nums">
+                          {unreadCount > 99 ? '99+' : unreadCount}
+                        </span>
+                      )}
+                    </div>
 
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-bold text-slate-900">{peer.nama}</p>
-                    <div className="mt-1">
-                      <span
-                        className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${
-                          peer.role === 'SuperAdmin'
-                            ? 'bg-slate-900 text-white'
-                            : 'bg-teal-50 text-teal-800'
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-bold text-slate-900">{displayName}</p>
+                      <div className="mt-1 flex items-center gap-1.5">
+                        <span
+                          className={`inline-block shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                            peer.role === 'SuperAdmin'
+                              ? 'bg-slate-900 text-white'
+                              : 'bg-teal-50 text-teal-800'
+                          }`}
+                        >
+                          {peer.role}
+                        </span>
+                        {isAliased && (
+                          <span className="truncate text-[11px] text-slate-400">
+                            Asli: {peer.nama}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="shrink-0 text-right">
+                      <div className="inline-flex items-center justify-end gap-1.5">
+                        <span className={`h-2 w-2 shrink-0 rounded-full ${statusDotColor}`} />
+                        <span className={`text-xs font-semibold ${statusTextColor}`}>
+                          {statusShortLabel}
+                        </span>
+                      </div>
+                      <p
+                        className={`mt-0.5 text-[11px] tabular-nums ${
+                          peer.presenceStatus === 'online'
+                            ? 'font-medium text-emerald-600'
+                            : 'text-slate-400'
                         }`}
                       >
-                        {peer.role}
-                      </span>
+                        {secondaryStatusLabel}
+                      </p>
                     </div>
-                  </div>
+                  </button>
 
-                  <div className="shrink-0 text-right">
-                    <div className="inline-flex items-center justify-end gap-1.5">
-                      <span className={`h-2 w-2 shrink-0 rounded-full ${statusDotColor}`} />
-                      <span className={`text-xs font-semibold ${statusTextColor}`}>
-                        {statusShortLabel}
-                      </span>
-                    </div>
-                    <p
-                      className={`mt-0.5 text-[11px] tabular-nums ${
-                        peer.presenceStatus === 'online'
-                          ? 'font-medium text-emerald-600'
-                          : 'text-slate-400'
-                      }`}
+                  {onSaveUserAlias && (
+                    <button
+                      type="button"
+                      onClick={() => openRenameModal(peer)}
+                      aria-label={`Ubah nama pribadi ${displayName}`}
+                      title="Ubah nama pribadi"
+                      className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
                     >
-                      {secondaryStatusLabel}
-                    </p>
-                  </div>
-                </button>
+                      <Edit3 className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
               );
             })
           )}
         </div>
       </div>
+
+      {renderRenameModal()}
     </div>
   );
 }

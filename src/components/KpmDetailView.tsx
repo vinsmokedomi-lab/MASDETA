@@ -74,6 +74,7 @@ interface KpmDetailViewProps {
   auditLogs: KpmAuditLogEntry[];
   currentUserId: string;
   internalUsers: InternalUser[];
+  userAliases?: Record<string, string>;
   canUpdate?: boolean;
   canDelete?: boolean;
   onBack: () => void;
@@ -119,6 +120,7 @@ export function KpmDetailView({
   auditLogs,
   currentUserId,
   internalUsers,
+  userAliases = {},
   canUpdate = true,
   canDelete = true,
   onBack,
@@ -368,8 +370,12 @@ export function KpmDetailView({
         }
         return true;
       })
-      .sort((a, b) => a.nama.localeCompare(b.nama, 'id'));
-  }, [internalUsers, currentUserId]);
+      .sort((a, b) => {
+        const aName = (userAliases[a.id] || '').trim() || a.nama;
+        const bName = (userAliases[b.id] || '').trim() || b.nama;
+        return aName.localeCompare(bName, 'id');
+      });
+  }, [internalUsers, currentUserId, userAliases]);
 
   const handleOpenShareModal = () => {
     setShareRecipientId(chatRecipients[0]?.id || '');
@@ -1637,6 +1643,9 @@ export function KpmDetailView({
                   <div className="mt-1.5 max-h-44 space-y-1.5 overflow-y-auto pr-0.5">
                     {chatRecipients.map((recipient) => {
                       const selected = shareRecipientId === recipient.id;
+                      const recipientDisplayName =
+                        (userAliases[recipient.id] || '').trim() || recipient.nama;
+                      const hasAlias = recipientDisplayName !== recipient.nama;
                       return (
                         <button
                           key={recipient.id}
@@ -1654,7 +1663,7 @@ export function KpmDetailView({
                                 <DriveImage
                                   src={recipient.fotoDataUrl}
                                   thumbnailUrl={recipient.fotoThumbnailUrl}
-                                  alt={recipient.nama}
+                                  alt={recipientDisplayName}
                                   className="h-full w-full object-cover"
                                 />
                               ) : (
@@ -1663,10 +1672,11 @@ export function KpmDetailView({
                             </div>
                             <div className="min-w-0">
                               <p className="truncate text-xs font-semibold text-slate-900">
-                                {recipient.nama}
+                                {recipientDisplayName}
                               </p>
                               <p className="truncate text-[11px] text-slate-500">
-                                {recipient.role} · {recipient.email}
+                                {recipient.role}
+                                {hasAlias ? ` · Asli: ${recipient.nama}` : ` · ${recipient.email}`}
                               </p>
                             </div>
                           </div>

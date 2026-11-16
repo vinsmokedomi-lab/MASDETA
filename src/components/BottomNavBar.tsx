@@ -6,6 +6,8 @@ interface BottomNavBarProps {
   activeTab: MainTab;
   pendingUsersCount?: number;
   unreadChatCount?: number;
+  urgentSchedulesCount?: number;
+  hasAppUpdate?: boolean;
   onSelectTab: (tab: MainTab) => void;
   onOpenQuickAdd: () => void;
 }
@@ -14,10 +16,13 @@ export function BottomNavBar({
   activeTab,
   pendingUsersCount = 0,
   unreadChatCount = 0,
+  urgentSchedulesCount = 0,
+  hasAppUpdate = false,
   onSelectTab,
   onOpenQuickAdd,
 }: BottomNavBarProps) {
-  const menuBadgeCount = pendingUsersCount + unreadChatCount;
+  const menuBadgeCount =
+    pendingUsersCount + unreadChatCount + urgentSchedulesCount + (hasAppUpdate ? 1 : 0);
   return (
     <nav
       aria-label="Navigasi utama"
@@ -99,9 +104,9 @@ export function BottomNavBar({
             {menuBadgeCount > 0 && (
               <span
                 aria-label={`${menuBadgeCount} notifikasi`}
-                className="absolute -top-1 -right-2 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-amber-600 px-1 text-[9px] font-bold text-white tabular-nums"
+                className="absolute -top-1 -right-2 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-rose-600 px-1 text-[9px] font-bold text-white ring-2 ring-white tabular-nums"
               >
-                {menuBadgeCount}
+                {menuBadgeCount > 99 ? '99+' : menuBadgeCount}
               </span>
             )}
           </div>

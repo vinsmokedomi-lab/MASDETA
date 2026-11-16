@@ -23,6 +23,58 @@ interface AppUpdateModalProps {
   open: boolean;
 }
 
+function renderInlineBold(text: string) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, idx) => {
+    if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
+      return (
+        <strong key={idx} className="font-semibold text-slate-800">
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+    return <span key={idx}>{part}</span>;
+  });
+}
+
+function renderReleaseNotesContent(rawNotes: string) {
+  const text =
+    (rawNotes || '').trim() ||
+    'Pembaruan performa, perbaikan stabilitas, dan peningkatan fitur operasional MASDETA.';
+  const lines = text.split(/\r?\n/);
+
+  return (
+    <div className="space-y-1.5 text-xs leading-relaxed text-slate-600">
+      {lines.map((rawLine, idx) => {
+        const line = rawLine.trim();
+        if (!line) {
+          return <div key={idx} className="h-1" />;
+        }
+        if (/^#{1,3}\s+/.test(line)) {
+          return (
+            <p key={idx} className="pt-1 text-xs font-bold text-slate-800">
+              {renderInlineBold(line.replace(/^#{1,3}\s+/, ''))}
+            </p>
+          );
+        }
+        if (/^[-*•]\s+/.test(line)) {
+          const itemText = line.replace(/^[-*•]\s+/, '');
+          return (
+            <div key={idx} className="flex items-start gap-2">
+              <span
+                aria-hidden="true"
+                className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#0F766E]"
+              />
+              <span className="min-w-0 flex-1">{renderInlineBold(itemText)}</span>
+            </div>
+          );
+        }
+        return <p key={idx}>{renderInlineBold(line)}</p>;
+      })}
+    </div>
+  );
+}
+
 export function AppUpdateModal({ updateInfo, open }: AppUpdateModalProps) {
   const [phase, setPhase] = useState<'idle' | 'downloading' | 'installing' | 'error'>('idle');
   const [progress, setProgress] = useState(0);
@@ -47,6 +99,10 @@ export function AppUpdateModal({ updateInfo, open }: AppUpdateModalProps) {
   const sizeLabel = formatBytes(totalBytes || updateInfo.apkSizeBytes);
   const downloadedLabel = formatBytes(downloadedBytes);
   const manualUrl = updateInfo.apkDownloadUrl || updateInfo.releaseUrl;
+  const trimmedNotes = (updateInfo.releaseNotes || '').trim();
+  const hasLongNotes =
+    trimmedNotes.split(/\r?\n/).filter((l) => l.trim().length > 0).length > 4 ||
+    trimmedNotes.length > 200;
 
   const handleStartUpdate = async () => {
     if (!updateInfo.apkDownloadUrl) {
@@ -122,11 +178,11 @@ export function AppUpdateModal({ updateInfo, open }: AppUpdateModalProps) {
       className="fixed inset-0 z-[100] flex items-end justify-center bg-slate-950/75 p-0 backdrop-blur-sm sm:items-center sm:p-4"
     >
       <div
-        className="w-full max-w-md overflow-hidden rounded-t-3xl border border-slate-200 bg-white shadow-2xl sm:rounded-3xl"
+        className="flex max-h-[92vh] w-full max-w-md flex-col overflow-hidden rounded-t-3xl border border-slate-200 bg-white shadow-2xl sm:rounded-3xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header Bertema #0F766E — Terkunci Tanpa Tombol Tutup */}
-        <div className="bg-[#0F766E] px-5 pt-5 pb-4 text-white">
+        <div className="shrink-0 bg-[#0F766E] px-5 pt-5 pb-4 text-white">
           <div className="min-w-0">
             <h2 id="masdeta-update-title" className="text-base font-bold tracking-tight">
               Update MASDETA Tersedia
@@ -159,7 +215,7 @@ export function AppUpdateModal({ updateInfo, open }: AppUpdateModalProps) {
         </div>
 
         {/* Body & Release Notes */}
-        <div className="space-y-4 p-5">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
           {/* Peringatan Penguncian Versi Lama */}
           <div className="flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
             <Lock className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
@@ -169,7 +225,7 @@ export function AppUpdateModal({ updateInfo, open }: AppUpdateModalProps) {
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3.5">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center justify-between gap-2 border-b border-slate-200/70 pb-2">
               <p className="text-xs font-bold text-slate-800">Catatan Pembaruan</p>
               {sizeLabel && (
                 <span className="text-[11px] font-semibold tabular-nums text-slate-500">
@@ -177,10 +233,14 @@ export function AppUpdateModal({ updateInfo, open }: AppUpdateModalProps) {
                 </span>
               )}
             </div>
-            <div className="mt-2 max-h-36 overflow-y-auto whitespace-pre-line text-xs leading-relaxed text-slate-600">
-              {updateInfo.releaseNotes ||
-                'Pembaruan performa, perbaikan stabilitas, dan peningkatan fitur operasional MASDETA.'}
+            <div className="mt-2.5 max-h-44 touch-pan-y overflow-y-auto overscroll-contain pr-1.5 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-300 [&::-webkit-scrollbar-track]:bg-transparent">
+              {renderReleaseNotesContent(updateInfo.releaseNotes)}
             </div>
+            {hasLongNotes && (
+              <p className="mt-2 border-t border-slate-200/70 pt-1.5 text-center text-[10px] font-medium text-slate-400">
+                Gulir ke bawah di kotak ini untuk melihat semua pembaruan
+              </p>
+            )}
           </div>
 
           {/* Progress Bar Real-time saat mengunduh */}

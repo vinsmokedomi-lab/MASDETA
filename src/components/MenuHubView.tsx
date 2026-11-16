@@ -128,12 +128,16 @@ interface MenuHubViewProps {
   wilayahList: WilayahKabKota[];
   pengelolaList: PengelolaProfile[];
   internalUsers: InternalUser[];
+  userAliases?: Record<string, string>;
+  onSaveUserAlias?: (userId: string, alias: string) => void;
   proposalHistory?: ProposalKpmHistoryEntry[];
   kpmAuditLogs?: KpmAuditLogEntry[];
   onOpenChat: (peerId?: string) => void;
   onOpenProfile: () => void;
   onCheckAppUpdate?: () => void;
   checkingAppUpdate?: boolean;
+  hasAppUpdate?: boolean;
+  availableUpdateVersion?: string;
   onSaveItem: (item: ItemBantuan, orderIndex: number, originalCode?: string) => void;
   onDeleteItem: (tahun: string, code: string) => void;
   onMoveItemOrder: (tahun: string, code: string, direction: 'up' | 'down') => void;
@@ -221,12 +225,16 @@ export function MenuHubView({
   wilayahList,
   pengelolaList,
   internalUsers,
+  userAliases = {},
+  onSaveUserAlias,
   proposalHistory = [],
   kpmAuditLogs = [],
   onOpenChat,
   onOpenProfile,
   onCheckAppUpdate,
   checkingAppUpdate = false,
+  hasAppUpdate = false,
+  availableUpdateVersion,
   onSaveItem,
   onDeleteItem,
   onMoveItemOrder,
@@ -344,8 +352,10 @@ export function MenuHubView({
     | null
   >(null);
 
-  // User filter & SuperAdmin CRUD modals
+  // User filter, Personal Rename & SuperAdmin CRUD modals
   const [userStatusFilter, setUserStatusFilter] = useState<'all' | InternalUserStatus>('all');
+  const [personalRenameTarget, setPersonalRenameTarget] = useState<InternalUser | null>(null);
+  const [personalRenameDraft, setPersonalRenameDraft] = useState('');
   const [editingUserTarget, setEditingUserTarget] = useState<InternalUser | null>(null);
   const [editUserNama, setEditUserNama] = useState('');
   const [editUserJabatan, setEditUserJabatan] = useState('');
@@ -354,6 +364,11 @@ export function MenuHubView({
   const [showEditUserPassword, setShowEditUserPassword] = useState(false);
   const [pendingDeleteUser, setPendingDeleteUser] = useState<InternalUser | null>(null);
 
+  const getUserDisplayName = (u: InternalUser): string => {
+    const alias = (userAliases[u.id] || '').trim();
+    return alias || u.nama;
+  };
+
   // SuperAdmin Password Gate & data reset confirmation state
   const [superAdminUnlocked, setSuperAdminUnlocked] = useState(false);
   const [superAdminPwdInput, setSuperAdminPwdInput] = useState('');
@@ -361,6 +376,10 @@ export function MenuHubView({
   const [superAdminPwdError, setSuperAdminPwdError] = useState<string | null>(null);
   const [verifyingSuperAdminPwd, setVerifyingSuperAdminPwd] = useState(false);
   const [pendingResetAction, setPendingResetAction] = useState<AdminDataActionType | null>(null);
+  const [resetConfirmStep, setResetConfirmStep] = useState<'confirm' | 'password'>('confirm');
+  const [resetPwdInput, setResetPwdInput] = useState('');
+  const [showResetPwd, setShowResetPwd] = useState(false);
+  const [resetPwdError, setResetPwdError] = useState<string | null>(null);
   const [isRunningReset, setIsRunningReset] = useState(false);
 
   // General Activity Log state & unified feed
@@ -659,6 +678,23 @@ export function MenuHubView({
       g.records.some((r) => (r.tahun || '').trim() === duplikasiYearFilter)
     );
   }, [allDuplicateGroups, duplikasiYearFilter]);
+
+  const activeDuplicateBadgeCount = useMemo(() => {
+    if (selectedYear === 'all') return allDuplicateGroups.length;
+    return allDuplicateGroups.filter((g) =>
+      g.records.some((r) => (r.tahun || '').trim() === selectedYear)
+    ).length;
+  }, [allDuplicateGroups, selectedYear]);
+
+  const urgentSchedulesCount = useMemo(() => {
+    const limitDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    return schedules.filter((s) => !s.completed && s.targetDate <= limitDate).length;
+  }, [schedules]);
+
+  const expiringTrashCount = useMemo(() => {
+    const thresholdMs = Date.now() + 3 * 24 * 60 * 60 * 1000;
+    return trashBin.filter((item) => new Date(item.expiresAt).getTime() <= thresholdMs).length;
+  }, [trashBin]);
 
   const adminStats = useMemo(() => {
     const paidRecords = records.filter((r) => r.payment > 0);
@@ -986,11 +1022,24 @@ export function MenuHubView({
                 onClick={() => onChangeSection('duplikasi')}
                 className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
               >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
+                <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
                   <CopyCheck className="h-5 w-5" />
+                  {activeDuplicateBadgeCount > 0 && (
+                    <span
+                      aria-label={`${activeDuplicateBadgeCount} duplikasi terdeteksi`}
+                      className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full bg-rose-600 ring-2 ring-white"
+                    />
+                  )}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">Duplikasi NIK / KK</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-slate-900">Duplikasi NIK / KK</p>
+                    {activeDuplicateBadgeCount > 0 && (
+                      <span className="flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
+                        {activeDuplicateBadgeCount}
+                      </span>
+                    )}
+                  </div>
                   <p className="mt-0.5 truncate text-xs text-slate-500">
                     Deteksi NIK atau KK ganda
                   </p>
@@ -1037,20 +1086,34 @@ export function MenuHubView({
                 onClick={() => onChangeSection('jadwal')}
                 className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
               >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
                   <CalendarClock className="h-5 w-5" />
+                  {urgentSchedulesCount > 0 && (
+                    <span
+                      aria-label={`${urgentSchedulesCount} jadwal mendesak`}
+                      className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full bg-rose-600 ring-2 ring-white"
+                    />
+                  )}
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-sm font-semibold text-slate-900">Jadwal &amp; Target Proposal</p>
                     {schedules.filter((s) => !s.completed).length > 0 && (
-                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800 tabular-nums">
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-bold tabular-nums ${
+                          urgentSchedulesCount > 0
+                            ? 'bg-rose-600 text-white'
+                            : 'bg-amber-100 text-amber-800'
+                        }`}
+                      >
                         {schedules.filter((s) => !s.completed).length}
                       </span>
                     )}
                   </div>
                   <p className="mt-0.5 truncate text-xs text-slate-500">
-                    Agenda survey, antar Dinas &amp; penyaluran
+                    {urgentSchedulesCount > 0
+                      ? `${urgentSchedulesCount} agenda jatuh tempo / mendekati target`
+                      : 'Agenda survey, antar Dinas & penyaluran'}
                   </p>
                 </div>
                 <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -1221,13 +1284,28 @@ export function MenuHubView({
                   onClick={() => onChangeSection('superadmin')}
                   className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
                 >
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-700">
+                  <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-700">
                     <ShieldAlert className="h-5 w-5" />
+                    {(pendingUsersCount > 0 || expiringTrashCount > 0) && (
+                      <span
+                        aria-label={`${pendingUsersCount + expiringTrashCount} notifikasi Super Admin`}
+                        className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full bg-rose-600 ring-2 ring-white"
+                      />
+                    )}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-slate-900">Kontrol Super Admin</p>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-semibold text-slate-900">Kontrol Super Admin</p>
+                      {pendingUsersCount > 0 && (
+                        <span className="flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
+                          {pendingUsersCount}
+                        </span>
+                      )}
+                    </div>
                     <p className="mt-0.5 truncate text-xs text-slate-500">
-                      Reset data &amp; kendali penuh admin
+                      {pendingUsersCount > 0
+                        ? `${pendingUsersCount} pendaftar menunggu persetujuan`
+                        : 'Reset data & kendali penuh admin'}
                     </p>
                   </div>
                   <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -1241,17 +1319,32 @@ export function MenuHubView({
                   onClick={onCheckAppUpdate}
                   className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 disabled:opacity-60"
                 >
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                  <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
                     <RefreshCw
                       className={`h-5 w-5 ${checkingAppUpdate ? 'animate-spin' : ''}`}
                     />
+                    {hasAppUpdate && (
+                      <span
+                        aria-label="Pembaruan aplikasi tersedia"
+                        className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full bg-rose-600 ring-2 ring-white"
+                      />
+                    )}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-slate-900">
-                      {checkingAppUpdate ? 'Memeriksa Pembaruan...' : 'Cek Pembaruan Aplikasi'}
-                    </p>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-semibold text-slate-900">
+                        {checkingAppUpdate ? 'Memeriksa Pembaruan...' : 'Cek Pembaruan Aplikasi'}
+                      </p>
+                      {hasAppUpdate && !checkingAppUpdate && (
+                        <span className="shrink-0 rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-bold text-white">
+                          Update
+                        </span>
+                      )}
+                    </div>
                     <p className="mt-0.5 truncate text-xs text-slate-500">
-                      Versi terpasang v{APP_VERSION} · Unduh rilis terbaru
+                      {hasAppUpdate
+                        ? `Tersedia versi v${availableUpdateVersion || 'terbaru'} · Ketuk untuk perbarui`
+                        : `Versi terpasang v${APP_VERSION} · Unduh rilis terbaru`}
                     </p>
                   </div>
                   <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -1377,6 +1470,15 @@ export function MenuHubView({
               onSubmit={handleUnlockSuperAdmin}
               className="rounded-2xl border border-slate-200 bg-white p-5 space-y-4 shadow-xs"
             >
+              {pendingUsersCount > 0 && (
+                <div className="flex items-center gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-semibold text-rose-800">
+                  <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-rose-600" />
+                  <span>
+                    Ada {pendingUsersCount} pendaftar akun baru menunggu persetujuan di dalam Kelola Akun Admin.
+                  </span>
+                </div>
+              )}
+
               <div className="flex flex-col items-center text-center">
                 <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-50 text-rose-700">
                   <Lock className="h-6 w-6" />
@@ -1455,13 +1557,26 @@ export function MenuHubView({
                     }}
                     className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-slate-50"
                   >
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-800">
+                    <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-800">
                       <Users className="h-5 w-5" />
+                      {pendingUsersCount > 0 && (
+                        <span
+                          aria-label={`${pendingUsersCount} akun menunggu persetujuan`}
+                          className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full bg-rose-600 ring-2 ring-white"
+                        />
+                      )}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-slate-900">
-                        Kelola Akun Admin
-                      </p>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-medium text-slate-900">
+                          Kelola Akun Admin
+                        </p>
+                        {pendingUsersCount > 0 && (
+                          <span className="flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
+                            {pendingUsersCount}
+                          </span>
+                        )}
+                      </div>
                       <p className="mt-0.5 text-xs text-slate-500">
                         {internalUsers.length} akun terdaftar · {pendingUsersCount} menunggu persetujuan
                       </p>
@@ -1503,13 +1618,32 @@ export function MenuHubView({
                     onClick={() => onChangeSection('sampah')}
                     className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-slate-50"
                   >
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-700">
+                    <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-700">
                       <Trash2 className="h-5 w-5" />
+                      {expiringTrashCount > 0 && (
+                        <span
+                          aria-label={`${expiringTrashCount} item hampir kedaluwarsa`}
+                          className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full bg-rose-600 ring-2 ring-white"
+                        />
+                      )}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-slate-900">
-                        Tempat Sampah (30 Hari)
-                      </p>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-medium text-slate-900">
+                          Tempat Sampah (30 Hari)
+                        </p>
+                        {trashBin.length > 0 && (
+                          <span
+                            className={`flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full px-1.5 text-[10px] font-bold tabular-nums ${
+                              expiringTrashCount > 0
+                                ? 'bg-rose-600 text-white'
+                                : 'bg-slate-200 text-slate-700'
+                            }`}
+                          >
+                            {trashBin.length}
+                          </span>
+                        )}
+                      </div>
                       <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
                         {trashBin.length} item terhapus sementara · Pulihkan atau hapus permanen
                       </p>
@@ -1526,7 +1660,7 @@ export function MenuHubView({
                     Pengendalian Data &amp; Reset Sistem
                   </h2>
                   <p className="mt-0.5 text-[11px] text-rose-700">
-                    Setiap tindakan di bawah ini menghapus data secara permanen setelah konfirmasi.
+                    Setiap tindakan di bawah ini menghapus data secara permanen setelah konfirmasi &amp; verifikasi password.
                   </p>
                 </div>
 
@@ -1546,7 +1680,13 @@ export function MenuHubView({
                       <button
                         key={actionKey}
                         type="button"
-                        onClick={() => setPendingResetAction(actionKey)}
+                        onClick={() => {
+                          setPendingResetAction(actionKey);
+                          setResetConfirmStep('confirm');
+                          setResetPwdInput('');
+                          setResetPwdError(null);
+                          setShowResetPwd(false);
+                        }}
                         className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-rose-50/40"
                       >
                         <div
@@ -1576,58 +1716,172 @@ export function MenuHubView({
           )}
         </div>
 
-        {/* Confirmation Modal for Reset / Bulk Delete */}
+        {/* 2-Step Confirmation + Password Verification Modal for Reset / Bulk Delete */}
         {pendingResetAction && selectedMeta && (
           <div
             className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 backdrop-blur-xs sm:items-center sm:p-4"
-            onClick={() => !isRunningReset && setPendingResetAction(null)}
+            onClick={() => {
+              if (!isRunningReset) {
+                setPendingResetAction(null);
+                setResetConfirmStep('confirm');
+                setResetPwdInput('');
+                setResetPwdError(null);
+              }
+            }}
             role="dialog"
             aria-modal="true"
           >
-            <div
-              onClick={(e) => e.stopPropagation()}
-              className="w-full max-w-md rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl"
-            >
-              <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
-              <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-100 text-rose-700">
-                  <AlertTriangle className="h-5 w-5" />
+            {resetConfirmStep === 'confirm' ? (
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="w-full max-w-md rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl"
+              >
+                <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-100 text-rose-700">
+                    <AlertTriangle className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-base font-bold text-slate-900">
+                      Yakin {selectedMeta.title}?
+                    </h3>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                      {selectedMeta.confirmMessage}
+                    </p>
+                  </div>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-base font-bold text-slate-900">{selectedMeta.title}</h3>
-                  <p className="mt-1 text-xs leading-relaxed text-slate-600">
-                    {selectedMeta.confirmMessage}
-                  </p>
-                </div>
-              </div>
 
-              <div className="mt-5 flex items-center gap-2.5">
-                <button
-                  type="button"
-                  disabled={isRunningReset}
-                  onClick={() => setPendingResetAction(null)}
-                  className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                >
-                  Batal
-                </button>
-                <button
-                  type="button"
-                  disabled={isRunningReset}
-                  onClick={async () => {
-                    setIsRunningReset(true);
-                    try {
-                      await onAdminDataAction(pendingResetAction);
+                <div className="mt-5 flex items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
                       setPendingResetAction(null);
-                    } finally {
-                      setIsRunningReset(false);
-                    }
-                  }}
-                  className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-rose-600 px-4 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
-                >
-                  {isRunningReset ? 'Memproses...' : selectedMeta.buttonLabel}
-                </button>
+                      setResetConfirmStep('confirm');
+                    }}
+                    className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setResetPwdInput('');
+                      setResetPwdError(null);
+                      setShowResetPwd(false);
+                      setResetConfirmStep('password');
+                    }}
+                    className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-rose-600 px-4 text-sm font-semibold text-white hover:bg-rose-700"
+                  >
+                    Ya, Saya Yakin
+                  </button>
+                </div>
               </div>
-            </div>
+            ) : (
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  setResetPwdError(null);
+                  if (!resetPwdInput) {
+                    setResetPwdError('Masukkan kata sandi SuperAdmin untuk melanjutkan.');
+                    return;
+                  }
+                  if (!onVerifySuperAdminPassword) {
+                    setResetPwdError('Verifikasi password belum tersedia.');
+                    return;
+                  }
+                  setIsRunningReset(true);
+                  try {
+                    const check = await onVerifySuperAdminPassword(resetPwdInput);
+                    if (!check.ok) {
+                      setResetPwdError(check.error || 'Kata sandi salah. Silakan coba lagi.');
+                      return;
+                    }
+                    await onAdminDataAction(pendingResetAction);
+                    setPendingResetAction(null);
+                    setResetConfirmStep('confirm');
+                    setResetPwdInput('');
+                    setResetPwdError(null);
+                  } finally {
+                    setIsRunningReset(false);
+                  }
+                }}
+                onClick={(e) => e.stopPropagation()}
+                className="w-full max-w-md rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl"
+              >
+                <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-100 text-rose-700">
+                    <Lock className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-base font-bold text-slate-900">
+                      Verifikasi Password — {selectedMeta.title}
+                    </h3>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                      Masukkan kata sandi akun SuperAdmin <strong>{currentUser.email}</strong> untuk
+                      mengeksekusi penghapusan permanen ini.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-4">
+                  <label
+                    htmlFor="reset-confirm-pwd"
+                    className="block text-xs font-semibold text-slate-700"
+                  >
+                    Kata Sandi SuperAdmin
+                  </label>
+                  <div className="relative mt-1.5">
+                    <Lock className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <input
+                      id="reset-confirm-pwd"
+                      type={showResetPwd ? 'text' : 'password'}
+                      autoFocus
+                      value={resetPwdInput}
+                      onChange={(e) => {
+                        setResetPwdInput(e.target.value);
+                        if (resetPwdError) setResetPwdError(null);
+                      }}
+                      placeholder="Masukkan password Anda"
+                      className="min-h-[44px] w-full rounded-xl border border-slate-300 bg-white pr-11 pl-10 text-sm text-slate-900 focus:border-rose-600 focus:outline-none focus:ring-2 focus:ring-rose-600/15"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowResetPwd((prev) => !prev)}
+                      className="absolute top-1/2 right-2 -translate-y-1/2 rounded-lg p-1.5 text-slate-400 hover:text-slate-700"
+                      aria-label={showResetPwd ? 'Sembunyikan sandi' : 'Lihat sandi'}
+                    >
+                      {showResetPwd ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                  {resetPwdError && (
+                    <p className="mt-1.5 text-xs font-medium text-rose-600">{resetPwdError}</p>
+                  )}
+                </div>
+
+                <div className="mt-5 flex items-center gap-2.5">
+                  <button
+                    type="button"
+                    disabled={isRunningReset}
+                    onClick={() => {
+                      setResetConfirmStep('confirm');
+                      setResetPwdInput('');
+                      setResetPwdError(null);
+                    }}
+                    className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Kembali
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isRunningReset}
+                    className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-rose-600 px-4 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+                  >
+                    {isRunningReset ? 'Memproses...' : selectedMeta.buttonLabel}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         )}
       </div>
@@ -1644,10 +1898,12 @@ export function MenuHubView({
       userStatusFilter === 'all' ? true : u.status === userStatusFilter
     );
 
+    const pendingVisibleCount = visibleUsers.filter((u) => u.status === 'pending').length;
     const userTabs: Array<{
       key: 'all' | InternalUserStatus;
       label: string;
       count: number;
+      dot?: boolean;
     }> = [
       { key: 'all', label: 'Semua', count: visibleUsers.length },
       ...(isSuperAdmin
@@ -1655,7 +1911,8 @@ export function MenuHubView({
             {
               key: 'pending' as const,
               label: 'Menunggu',
-              count: visibleUsers.filter((u) => u.status === 'pending').length,
+              count: pendingVisibleCount,
+              dot: pendingVisibleCount > 0,
             },
           ]
         : []),
@@ -1728,6 +1985,8 @@ export function MenuHubView({
                 const isSelf = user.id === currentUser.id;
                 const pMeta = getPresenceMeta(user.presenceStatus);
                 const perms = user.permissions || { add: true, update: true, delete: false };
+                const userDisplayName = getUserDisplayName(user);
+                const hasCustomAlias = userDisplayName !== user.nama;
 
                 return (
                   <div
@@ -1741,7 +2000,7 @@ export function MenuHubView({
                             <DriveImage
                               src={user.fotoDataUrl}
                               thumbnailUrl={user.fotoThumbnailUrl}
-                              alt={user.nama}
+                              alt={userDisplayName}
                               className="h-full w-full rounded-xl object-cover"
                             />
                           ) : (
@@ -1756,7 +2015,9 @@ export function MenuHubView({
 
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5">
-                            <p className="truncate text-sm font-semibold text-slate-900">{user.nama}</p>
+                            <p className="truncate text-sm font-semibold text-slate-900">
+                              {userDisplayName}
+                            </p>
                             <span
                               className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold ${
                                 user.role === 'SuperAdmin'
@@ -1767,6 +2028,11 @@ export function MenuHubView({
                               {user.role}
                             </span>
                           </div>
+                          {hasCustomAlias && (
+                            <p className="mt-0.5 truncate text-[11px] font-medium text-teal-700">
+                              Nama asli: {user.nama}
+                            </p>
+                          )}
                           <p className="mt-0.5 truncate text-xs text-slate-500">{user.email}</p>
                           <p className={`mt-0.5 text-[11px] font-medium ${pMeta.textClass}`}>
                             {pMeta.label} · {user.jabatan}
@@ -1790,16 +2056,33 @@ export function MenuHubView({
                               ? 'Menunggu'
                               : 'Nonaktif'}
                         </span>
-                        {!isSelf && user.status === 'active' && (
-                          <button
-                            type="button"
-                            onClick={() => onOpenChat(user.id)}
-                            className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-semibold text-teal-800 hover:bg-teal-100"
-                          >
-                            <MessageSquare className="h-3 w-3" />
-                            <span>Chat</span>
-                          </button>
-                        )}
+                        <div className="flex items-center gap-1">
+                          {!isSelf && onSaveUserAlias && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPersonalRenameTarget(user);
+                                setPersonalRenameDraft((userAliases[user.id] || '').trim());
+                              }}
+                              title="Ubah nama panggilan pribadi"
+                              aria-label={`Ubah nama pribadi ${userDisplayName}`}
+                              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+                            >
+                              <Edit3 className="h-3 w-3" />
+                              <span>Nama</span>
+                            </button>
+                          )}
+                          {!isSelf && user.status === 'active' && (
+                            <button
+                              type="button"
+                              onClick={() => onOpenChat(user.id)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-semibold text-teal-800 hover:bg-teal-100"
+                            >
+                              <MessageSquare className="h-3 w-3" />
+                              <span>Chat</span>
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
 
@@ -2276,6 +2559,90 @@ export function MenuHubView({
                 </button>
               </div>
             </div>
+          </div>
+        )}
+        {/* Personal Rename Modal (Private Nickname Only) */}
+        {personalRenameTarget && onSaveUserAlias && (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 backdrop-blur-xs sm:items-center sm:p-4"
+            onClick={() => setPersonalRenameTarget(null)}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Ubah nama tampilan pribadi"
+          >
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                onSaveUserAlias(personalRenameTarget.id, personalRenameDraft.trim());
+                setPersonalRenameTarget(null);
+              }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-md rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl"
+            >
+              <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+              <div className="flex items-center justify-between pb-3">
+                <div>
+                  <h2 className="text-base font-bold text-slate-900">Ubah Nama Pribadi</h2>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Hanya tampil untuk akun Anda. Nama asli akun{' '}
+                    <strong className="text-slate-700">{personalRenameTarget.nama}</strong> tidak berubah.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPersonalRenameTarget(null)}
+                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100"
+                  aria-label="Tutup"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">
+                    Nama Panggilan / Tampilan Pribadi
+                  </label>
+                  <input
+                    type="text"
+                    autoFocus
+                    value={personalRenameDraft}
+                    onChange={(e) => setPersonalRenameDraft(e.target.value)}
+                    placeholder={`Contoh: ${personalRenameTarget.nama} (Tim Survey)`}
+                    className="min-h-[44px] w-full rounded-xl border border-slate-300 px-3.5 text-sm text-slate-900 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
+                  />
+                </div>
+
+                {(userAliases[personalRenameTarget.id] || '').trim() && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSaveUserAlias(personalRenameTarget.id, '');
+                      setPersonalRenameTarget(null);
+                    }}
+                    className="text-xs font-semibold text-rose-600 hover:underline"
+                  >
+                    Kembalikan ke nama asli ({personalRenameTarget.nama})
+                  </button>
+                )}
+              </div>
+
+              <div className="mt-5 flex gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setPersonalRenameTarget(null)}
+                  className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-teal-700 text-sm font-semibold text-white hover:bg-teal-800"
+                >
+                  Simpan Nama
+                </button>
+              </div>
+            </form>
           </div>
         )}
       </div>
