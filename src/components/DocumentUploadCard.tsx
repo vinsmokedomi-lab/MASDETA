@@ -18,6 +18,7 @@ import {
 import { DriveImage } from './DriveImage';
 import { KpmDocumentFile } from '../types/kpm';
 import {
+  compressImageFileForOcr,
   formatBytes,
   formatUploadDateTime,
   removeDocumentFromDrive,
@@ -35,6 +36,7 @@ interface DocumentUploadCardProps {
   value?: KpmDocumentFile;
   error?: string;
   onChange: (file?: KpmDocumentFile) => void;
+  onImageForOcrReady?: (payload: { base64: string; mimeType: string } | undefined) => void;
   onPreview: (file: KpmDocumentFile, title: string) => void;
 }
 
@@ -49,6 +51,7 @@ export function DocumentUploadCard({
   value,
   error,
   onChange,
+  onImageForOcrReady,
   onPreview,
 }: DocumentUploadCardProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -70,7 +73,13 @@ export function DocumentUploadCard({
     );
     setIsProcessing(true);
     try {
-      const processed = await uploadImageDocumentToDrive(file, value);
+      const [processed, ocrPayload] = await Promise.all([
+        uploadImageDocumentToDrive(file, value),
+        onImageForOcrReady
+          ? compressImageFileForOcr(file).catch(() => undefined)
+          : Promise.resolve(undefined),
+      ]);
+      onImageForOcrReady?.(ocrPayload);
       onChange(processed);
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : 'Gagal mengunggah foto ke Google Drive.');
@@ -87,6 +96,7 @@ export function DocumentUploadCard({
     try {
       await removeDocumentFromDrive(value);
       setConfirmDeleteOpen(false);
+      onImageForOcrReady?.(undefined);
       onChange(undefined);
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : 'Gagal menghapus foto di Google Drive.');

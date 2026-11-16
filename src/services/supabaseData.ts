@@ -224,6 +224,7 @@ export function mapSupabaseChatRow(row: Record<string, unknown>): DirectChatMess
     text: String(row.text || ''),
     sharedKpm,
     createdAt: String(row.created_at || new Date().toISOString()),
+    deliveredAt: row.delivered_at ? String(row.delivered_at) : undefined,
     readAt: row.read_at ? String(row.read_at) : undefined,
   };
 }
@@ -1971,13 +1972,64 @@ export async function supabaseMarkDirectMessagesRead(
   conversationKey: string,
   readerId: string
 ): Promise<void> {
+  const now = new Date().toISOString();
   const { error } = await supabase
     .from('direct_chat_messages')
-    .update({ read_at: new Date().toISOString() })
+    .update({ read_at: now })
     .eq('conversation_key', conversationKey)
     .eq('recipient_id', readerId)
     .is('read_at', null);
   if (error) throw error;
+}
+
+const CHAT_DELIVERY_WATERMARKS_KEY = 'chat_delivery_watermarks';
+
+export async function fetchChatDeliveryWatermarks(): Promise<Record<string, string>> {
+  const raw = await fetchAppStateSlice<Record<string, string>>(CHAT_DELIVERY_WATERMARKS_KEY, {});
+  return raw && typeof raw === 'object' ? raw : {};
+}
+
+export async function supabaseMarkDirectMessagesDelivered(
+  recipientId: string,
+  latestCreatedAtIso: string,
+  messageIds?: string[]
+): Promise<Record<string, string>> {
+  const now = new Date().toISOString();
+
+  // Attempt native column update if migration has been run; ignore missing-column errors safely
+  try {
+    let query = supabase
+      .from('direct_chat_messages')
+      .update({ delivered_at: now })
+      .eq('recipient_id', recipientId)
+      .is('delivered_at', null);
+    if (messageIds && messageIds.length > 0) {
+      query = query.in('id', messageIds);
+    }
+    await query;
+  } catch {
+    // Fallback watermark in masdeta_app_state guarantees cross-device delivery ticks even without column migration
+  }
+
+  const current = await fetchChatDeliveryWatermarks();
+  const prevWatermark = current[recipientId];
+  const prevTs = prevWatermark ? new Date(prevWatermark).getTime() : 0;
+  const candidateTs = new Date(latestCreatedAtIso).getTime();
+  const nextIso =
+    Number.isFinite(candidateTs) && candidateTs > prevTs
+      ? new Date(candidateTs).toISOString()
+      : prevWatermark || now;
+
+  if (nextIso === prevWatermark) {
+    return current;
+  }
+
+  const next = {
+    ...current,
+    [recipientId]: nextIso,
+  };
+  await saveAppStateSlice(CHAT_DELIVERY_WATERMARKS_KEY, next);
+  return next;
 }
 
 // ============================================================================

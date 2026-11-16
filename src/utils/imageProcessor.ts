@@ -635,6 +635,47 @@ export async function processProposalDocumentUpload(file: File): Promise<KpmDocu
   return uploadProposalDocumentToDrive(file);
 }
 
+export async function compressImageFileForOcr(
+  file: File,
+  maxEdge = 1600,
+  quality = 0.86
+): Promise<{ base64: string; mimeType: string }> {
+  validateImageUploadFile(file);
+  const rawDataUrl = await readFileAsDataUrl(file);
+  try {
+    const img = await loadImage(rawDataUrl);
+    const srcW = img.naturalWidth || img.width || 0;
+    const srcH = img.naturalHeight || img.height || 0;
+    if (srcW > 0 && srcH > 0) {
+      const scale = Math.min(1, maxEdge / Math.max(srcW, srcH));
+      const dstW = Math.max(1, Math.round(srcW * scale));
+      const dstH = Math.max(1, Math.round(srcH * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = dstW;
+      canvas.height = dstH;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, dstW, dstH);
+        ctx.drawImage(img, 0, 0, dstW, dstH);
+        const jpegUrl = canvas.toDataURL('image/jpeg', quality);
+        const commaIdx = jpegUrl.indexOf(',');
+        const base64 = commaIdx >= 0 ? jpegUrl.slice(commaIdx + 1) : '';
+        if (base64) {
+          return { base64, mimeType: 'image/jpeg' };
+        }
+      }
+    }
+  } catch {
+    // Fallback to raw dataUrl below
+  }
+  const commaIdx = rawDataUrl.indexOf(',');
+  return {
+    base64: commaIdx >= 0 ? rawDataUrl.slice(commaIdx + 1) : rawDataUrl,
+    mimeType: file.type || 'image/jpeg',
+  };
+}
+
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

@@ -1,15 +1,28 @@
 import { useState, useEffect, useMemo, FormEvent } from 'react';
 import {
   AlertCircle,
+  AlertTriangle,
   ArrowLeft,
+  ArrowUp,
   Check,
+  CheckCircle2,
   ChevronDown,
+  Loader2,
   Lock,
   RotateCcw,
   Save,
+  ScanLine,
+  Sparkles,
   UserCheck,
   X,
 } from 'lucide-react';
+import {
+  KtpKkScanIssue,
+  OcrImagePayload,
+  SCAN_FIELD_LABELS,
+  ScanIdentityField,
+  scanKtpAndKkDocuments,
+} from '../services/ktpKkOcr';
 import {
   ALL_KELURAHAN_OPTIONS,
   DTSEN_OPTION_ITEMS,
@@ -126,6 +139,16 @@ export function KpmRegistrationForm({
   const [extraYears, setExtraYears] = useState<string[]>([]);
   const [extraPekerjaan, setExtraPekerjaan] = useState<string[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [ktpOcrImage, setKtpOcrImage] = useState<OcrImagePayload | undefined>(undefined);
+  const [kkOcrImage, setKkOcrImage] = useState<OcrImagePayload | undefined>(undefined);
+  const [isScanningDocs, setIsScanningDocs] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [scanReport, setScanReport] = useState<{
+    filledFields: ScanIdentityField[];
+    blurryFields: ScanIdentityField[];
+    fieldIssues: KtpKkScanIssue[];
+    ktpNameMatchesKk: boolean;
+  } | null>(null);
 
   const resolvedYearOptions = useMemo(() => {
     const set = new Set<string>(TAHUN_OPTIONS);
@@ -203,6 +226,10 @@ export function KpmRegistrationForm({
         },
       });
       setErrors({});
+      setKtpOcrImage(undefined);
+      setKkOcrImage(undefined);
+      setScanError(null);
+      setScanReport(null);
     } else if (lockedProposalScope) {
       setValues({
         ...INITIAL_FORM_VALUES,
@@ -210,9 +237,17 @@ export function KpmRegistrationForm({
         proposal: lockedProposalScope.namaProposal,
       });
       setErrors({});
+      setKtpOcrImage(undefined);
+      setKkOcrImage(undefined);
+      setScanError(null);
+      setScanReport(null);
     } else {
       setValues(INITIAL_FORM_VALUES);
       setErrors({});
+      setKtpOcrImage(undefined);
+      setKkOcrImage(undefined);
+      setScanError(null);
+      setScanReport(null);
     }
   }, [editingRecord, lockedProposalScope]);
 
@@ -329,6 +364,16 @@ export function KpmRegistrationForm({
     if (errors[key]) {
       setErrors((prev) => ({ ...prev, [key]: undefined }));
     }
+    setScanReport((prev) => {
+      if (!prev) return prev;
+      const keyStr = key as string;
+      if (!prev.blurryFields.includes(key as ScanIdentityField)) return prev;
+      return {
+        ...prev,
+        blurryFields: prev.blurryFields.filter((f) => f !== keyStr),
+        fieldIssues: prev.fieldIssues.filter((issue) => issue.field !== keyStr),
+      };
+    });
   };
 
   const handleYearChange = (nextYear: string) => {
@@ -410,11 +455,21 @@ export function KpmRegistrationForm({
         documents: nextDocuments,
       };
     });
-    if (key === 'ktp' && errors.docKtp) {
-      setErrors((prev) => ({ ...prev, docKtp: undefined }));
+    if (key === 'ktp') {
+      if (!file) setKtpOcrImage(undefined);
+      setScanError(null);
+      setScanReport(null);
+      if (errors.docKtp) {
+        setErrors((prev) => ({ ...prev, docKtp: undefined }));
+      }
     }
-    if (key === 'kk' && errors.docKk) {
-      setErrors((prev) => ({ ...prev, docKk: undefined }));
+    if (key === 'kk') {
+      if (!file) setKkOcrImage(undefined);
+      setScanError(null);
+      setScanReport(null);
+      if (errors.docKk) {
+        setErrors((prev) => ({ ...prev, docKk: undefined }));
+      }
     }
   };
 
@@ -552,6 +607,10 @@ export function KpmRegistrationForm({
             : INITIAL_FORM_VALUES
         );
         setErrors({});
+        setKtpOcrImage(undefined);
+        setKkOcrImage(undefined);
+        setScanError(null);
+        setScanReport(null);
       }
     } finally {
       setIsSubmitting(false);
@@ -572,7 +631,136 @@ export function KpmRegistrationForm({
           : INITIAL_FORM_VALUES
       );
       setErrors({});
+      setKtpOcrImage(undefined);
+      setKkOcrImage(undefined);
+      setScanError(null);
+      setScanReport(null);
     }
+  };
+
+  const scrollToIdentityField = (fieldKey: ScanIdentityField) => {
+    const wrapper = document.getElementById(`field-${fieldKey}`);
+    wrapper?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const inputIdMap: Record<ScanIdentityField, string> = {
+      nikKk: 'input-nik-kk',
+      nikKtp: 'input-nik-ktp',
+      nama: 'input-nama',
+      alamat: 'input-alamat',
+      rt: 'input-rt',
+      rw: 'input-rw',
+      pekerjaan: 'input-pekerjaan',
+    };
+    const inputEl = document.getElementById(inputIdMap[fieldKey]);
+    if (inputEl instanceof HTMLElement) {
+      window.setTimeout(() => inputEl.focus({ preventScroll: true }), 250);
+    }
+  };
+
+  const handleScanKtpKk = async () => {
+    const ktpDoc = values.documents.ktp;
+    const kkDoc = values.documents.kk;
+    if (!ktpDoc || !kkDoc || isScanningDocs || editingProposalLocked) return;
+
+    setIsScanningDocs(true);
+    setScanError(null);
+    setScanReport(null);
+
+    try {
+      const result = await scanKtpAndKkDocuments({
+        ktpDoc,
+        kkDoc,
+        ktpOcrImage,
+        kkOcrImage,
+        pekerjaanOptions: resolvedPekerjaanOptions,
+        kelurahanOptions,
+      });
+
+      const filled: ScanIdentityField[] = [];
+      setValues((prev) => {
+        const next = { ...prev };
+        if (result.nikKk) {
+          next.nikKk = result.nikKk;
+        }
+        if (result.nikKtp) {
+          next.nikKtp = result.nikKtp;
+        }
+        if (result.nama) {
+          next.nama = result.nama;
+        }
+        if (result.alamat) {
+          next.alamat = result.alamat;
+        }
+        if (result.rt) {
+          next.rt = result.rt;
+        }
+        if (result.rw) {
+          next.rw = result.rw;
+        }
+        if (result.pekerjaan) {
+          next.pekerjaan = result.pekerjaan;
+        }
+        if (showKelurahanField && !prev.kelurahan && result.kelurahan) {
+          next.kelurahan = result.kelurahan;
+        }
+        return next;
+      });
+
+      if (result.nikKk) filled.push('nikKk');
+      if (result.nikKtp) filled.push('nikKtp');
+      if (result.nama) filled.push('nama');
+      if (result.alamat) filled.push('alamat');
+      if (result.rt) filled.push('rt');
+      if (result.rw) filled.push('rw');
+      if (result.pekerjaan) filled.push('pekerjaan');
+
+      setErrors((prev) => ({
+        ...prev,
+        ...(result.nikKk ? { nikKk: undefined } : {}),
+        ...(result.nikKtp ? { nikKtp: undefined } : {}),
+        ...(result.nama ? { nama: undefined } : {}),
+        ...(result.alamat ? { alamat: undefined } : {}),
+        ...(result.rt ? { rt: undefined } : {}),
+        ...(result.rw ? { rw: undefined } : {}),
+        ...(result.pekerjaan ? { pekerjaan: undefined } : {}),
+        ...(showKelurahanField && result.kelurahan ? { kelurahan: undefined } : {}),
+      }));
+
+      setScanReport({
+        filledFields: filled,
+        blurryFields: result.blurryFields,
+        fieldIssues: result.fieldIssues,
+        ktpNameMatchesKk: result.ktpNameMatchesKk,
+      });
+    } catch (err) {
+      setScanError(
+        err instanceof Error
+          ? err.message
+          : 'Gagal memindai foto KTP & KK. Pastikan gambar jelas dan coba lagi.'
+      );
+    } finally {
+      setIsScanningDocs(false);
+    }
+  };
+
+  const renderFieldScanBadge = (field: ScanIdentityField) => {
+    if (!scanReport) return null;
+    if (scanReport.blurryFields.includes(field)) {
+      return (
+        <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+          <AlertTriangle className="h-2.5 w-2.5" />
+          Buram — isi manual
+        </span>
+      );
+    }
+    if (scanReport.filledFields.includes(field)) {
+      return (
+        <span className="inline-flex items-center gap-1 rounded bg-teal-50 px-1.5 py-0.5 text-[10px] font-semibold text-teal-700">
+          <Sparkles className="h-2.5 w-2.5" />
+          Hasil scan
+        </span>
+      );
+    }
+    return null;
   };
 
   const errorCount = Object.values(errors).filter(Boolean).length;
@@ -767,9 +955,12 @@ export function KpmRegistrationForm({
             <div className="mt-4 grid grid-cols-2 gap-3.5">
                 <div id="field-nikKk" className="col-span-2">
                   <div className="flex items-center justify-between gap-2">
-                    <label htmlFor="input-nik-kk" className="text-xs font-semibold text-slate-700">
-                      NIK KK (No. Kartu Keluarga) <span className="text-rose-600">*</span>
-                    </label>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <label htmlFor="input-nik-kk" className="text-xs font-semibold text-slate-700">
+                        NIK KK (No. Kartu Keluarga) <span className="text-rose-600">*</span>
+                      </label>
+                      {renderFieldScanBadge('nikKk')}
+                    </div>
                     <span
                       className={`font-mono text-[11px] tabular-nums ${
                         isValidNik16(values.nikKk) ? 'font-semibold text-teal-700' : 'text-slate-400'
@@ -789,8 +980,12 @@ export function KpmRegistrationForm({
                     value={values.nikKk}
                     onKeyDown={blockNonNumericKeyDown}
                     onChange={(e) => updateField('nikKk', sanitizeDigits(e.target.value, 16))}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 font-mono text-sm tracking-wide text-slate-900 tabular-nums placeholder:font-sans placeholder:tracking-normal placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
-                      errors.nikKk ? 'border-rose-400' : 'border-slate-300'
+                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border px-3.5 font-mono text-sm tracking-wide text-slate-900 tabular-nums placeholder:font-sans placeholder:tracking-normal placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                      errors.nikKk
+                        ? 'border-rose-400 bg-white'
+                        : scanReport?.blurryFields.includes('nikKk')
+                          ? 'border-amber-400 bg-amber-50/40'
+                          : 'border-slate-300 bg-white'
                     }`}
                   />
                   {errors.nikKk && <p className="mt-1 text-xs text-rose-600">{errors.nikKk}</p>}
@@ -828,9 +1023,12 @@ export function KpmRegistrationForm({
 
                 <div id="field-nikKtp" className="col-span-2">
                   <div className="flex items-center justify-between gap-2">
-                    <label htmlFor="input-nik-ktp" className="text-xs font-semibold text-slate-700">
-                      NIK KTP <span className="text-rose-600">*</span>
-                    </label>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <label htmlFor="input-nik-ktp" className="text-xs font-semibold text-slate-700">
+                        NIK KTP <span className="text-rose-600">*</span>
+                      </label>
+                      {renderFieldScanBadge('nikKtp')}
+                    </div>
                     <span
                       className={`font-mono text-[11px] tabular-nums ${
                         isValidNik16(values.nikKtp) ? 'font-semibold text-teal-700' : 'text-slate-400'
@@ -850,8 +1048,12 @@ export function KpmRegistrationForm({
                     value={values.nikKtp}
                     onKeyDown={blockNonNumericKeyDown}
                     onChange={(e) => updateField('nikKtp', sanitizeDigits(e.target.value, 16))}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 font-mono text-sm tracking-wide text-slate-900 tabular-nums placeholder:font-sans placeholder:tracking-normal placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
-                      errors.nikKtp ? 'border-rose-400' : 'border-slate-300'
+                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border px-3.5 font-mono text-sm tracking-wide text-slate-900 tabular-nums placeholder:font-sans placeholder:tracking-normal placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                      errors.nikKtp
+                        ? 'border-rose-400 bg-white'
+                        : scanReport?.blurryFields.includes('nikKtp')
+                          ? 'border-amber-400 bg-amber-50/40'
+                          : 'border-slate-300 bg-white'
                     }`}
                   />
                   {errors.nikKtp && <p className="mt-1 text-xs text-rose-600">{errors.nikKtp}</p>}
@@ -888,9 +1090,12 @@ export function KpmRegistrationForm({
                 </div>
 
                 <div id="field-nama" className="col-span-2">
-                  <label htmlFor="input-nama" className="block text-xs font-semibold text-slate-700">
-                    Nama Lengkap Calon KPM <span className="text-rose-600">*</span>
-                  </label>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <label htmlFor="input-nama" className="block text-xs font-semibold text-slate-700">
+                      Nama Lengkap Calon KPM <span className="text-rose-600">*</span>
+                    </label>
+                    {renderFieldScanBadge('nama')}
+                  </div>
                   <input
                     id="input-nama"
                     type="text"
@@ -898,17 +1103,24 @@ export function KpmRegistrationForm({
                     placeholder="Sesuai KTP elektronik"
                     value={values.nama}
                     onChange={(e) => updateField('nama', e.target.value.toUpperCase())}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm uppercase text-slate-900 placeholder:normal-case placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
-                      errors.nama ? 'border-rose-400' : 'border-slate-300'
+                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border px-3.5 text-sm uppercase text-slate-900 placeholder:normal-case placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                      errors.nama
+                        ? 'border-rose-400 bg-white'
+                        : scanReport?.blurryFields.includes('nama')
+                          ? 'border-amber-400 bg-amber-50/40'
+                          : 'border-slate-300 bg-white'
                     }`}
                   />
                   {errors.nama && <p className="mt-1 text-xs text-rose-600">{errors.nama}</p>}
                 </div>
 
                 <div id="field-alamat" className="col-span-2">
-                  <label htmlFor="input-alamat" className="block text-xs font-semibold text-slate-700">
-                    Alamat Lengkap <span className="text-rose-600">*</span>
-                  </label>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <label htmlFor="input-alamat" className="block text-xs font-semibold text-slate-700">
+                      Alamat Lengkap <span className="text-rose-600">*</span>
+                    </label>
+                    {renderFieldScanBadge('alamat')}
+                  </div>
                   <input
                     id="input-alamat"
                     type="text"
@@ -921,8 +1133,12 @@ export function KpmRegistrationForm({
                         updateField('alamat', formatAlamatLengkap(values.alamat, true));
                       }
                     }}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
-                      errors.alamat ? 'border-rose-400' : 'border-slate-300'
+                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border px-3.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                      errors.alamat
+                        ? 'border-rose-400 bg-white'
+                        : scanReport?.blurryFields.includes('alamat')
+                          ? 'border-amber-400 bg-amber-50/40'
+                          : 'border-slate-300 bg-white'
                     }`}
                   />
                   {errors.alamat && <p className="mt-1 text-xs text-rose-600">{errors.alamat}</p>}
@@ -930,9 +1146,12 @@ export function KpmRegistrationForm({
 
                 <div id="field-rt">
                   <div className="flex items-center justify-between gap-1">
-                    <label htmlFor="input-rt" className="block text-xs font-semibold text-slate-700">
-                      RT <span className="text-rose-600">*</span>
-                    </label>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <label htmlFor="input-rt" className="block text-xs font-semibold text-slate-700">
+                        RT <span className="text-rose-600">*</span>
+                      </label>
+                      {renderFieldScanBadge('rt')}
+                    </div>
                     <span className="font-mono text-[11px] text-slate-400 tabular-nums">
                       {values.rt.length}/3
                     </span>
@@ -948,8 +1167,12 @@ export function KpmRegistrationForm({
                     onKeyDown={blockNonNumericKeyDown}
                     onChange={(e) => handleRtRwChange('rt', e.target.value)}
                     onBlur={() => handleRtRwBlur('rt')}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 font-mono text-sm text-slate-900 tabular-nums placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
-                      errors.rt ? 'border-rose-400' : 'border-slate-300'
+                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border px-3.5 font-mono text-sm text-slate-900 tabular-nums placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                      errors.rt
+                        ? 'border-rose-400 bg-white'
+                        : scanReport?.blurryFields.includes('rt')
+                          ? 'border-amber-400 bg-amber-50/40'
+                          : 'border-slate-300 bg-white'
                     }`}
                   />
                   <p className="mt-1 text-[11px] text-slate-500">3 digit awalan 0</p>
@@ -958,9 +1181,12 @@ export function KpmRegistrationForm({
 
                 <div id="field-rw">
                   <div className="flex items-center justify-between gap-1">
-                    <label htmlFor="input-rw" className="block text-xs font-semibold text-slate-700">
-                      RW <span className="text-rose-600">*</span>
-                    </label>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <label htmlFor="input-rw" className="block text-xs font-semibold text-slate-700">
+                        RW <span className="text-rose-600">*</span>
+                      </label>
+                      {renderFieldScanBadge('rw')}
+                    </div>
                     <span className="font-mono text-[11px] text-slate-400 tabular-nums">
                       {values.rw.length}/3
                     </span>
@@ -976,8 +1202,12 @@ export function KpmRegistrationForm({
                     onKeyDown={blockNonNumericKeyDown}
                     onChange={(e) => handleRtRwChange('rw', e.target.value)}
                     onBlur={() => handleRtRwBlur('rw')}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 font-mono text-sm text-slate-900 tabular-nums placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
-                      errors.rw ? 'border-rose-400' : 'border-slate-300'
+                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border px-3.5 font-mono text-sm text-slate-900 tabular-nums placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                      errors.rw
+                        ? 'border-rose-400 bg-white'
+                        : scanReport?.blurryFields.includes('rw')
+                          ? 'border-amber-400 bg-amber-50/40'
+                          : 'border-slate-300 bg-white'
                     }`}
                   />
                   <p className="mt-1 text-[11px] text-slate-500">3 digit awalan 0</p>
@@ -985,15 +1215,22 @@ export function KpmRegistrationForm({
                 </div>
 
                 <div id="field-pekerjaan" className="col-span-2">
-                  <span className="block text-xs font-semibold text-slate-700">
-                    Pekerjaan <span className="text-rose-600">*</span>
-                  </span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="block text-xs font-semibold text-slate-700">
+                      Pekerjaan <span className="text-rose-600">*</span>
+                    </span>
+                    {renderFieldScanBadge('pekerjaan')}
+                  </div>
                   <button
                     type="button"
                     id="input-pekerjaan"
                     onClick={() => setIsPekerjaanModalOpen(true)}
-                    className={`mt-1.5 flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border bg-white px-3.5 text-left text-sm transition-colors hover:bg-slate-50 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
-                      errors.pekerjaan ? 'border-rose-400' : 'border-slate-300'
+                    className={`mt-1.5 flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border px-3.5 text-left text-sm transition-colors hover:bg-slate-50 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                      errors.pekerjaan
+                        ? 'border-rose-400 bg-white'
+                        : scanReport?.blurryFields.includes('pekerjaan')
+                          ? 'border-amber-400 bg-amber-50/40'
+                          : 'border-slate-300 bg-white'
                     }`}
                   >
                     <span
@@ -1272,6 +1509,7 @@ export function KpmRegistrationForm({
                 value={values.documents.ktp}
                 error={errors.docKtp}
                 onChange={(file) => updateSingleDocument('ktp', file)}
+                onImageForOcrReady={(img) => setKtpOcrImage(img)}
                 onPreview={onPreviewDocument}
               />
 
@@ -1284,9 +1522,112 @@ export function KpmRegistrationForm({
                   value={values.documents.kk}
                   error={errors.docKk}
                   onChange={(file) => updateSingleDocument('kk', file)}
+                  onImageForOcrReady={(img) => setKkOcrImage(img)}
                   onPreview={onPreviewDocument}
                 />
               </div>
+
+              {Boolean(values.documents.ktp && values.documents.kk) && (
+                <div className="border-t border-slate-100 pt-4 space-y-3">
+                  <button
+                    type="button"
+                    onClick={handleScanKtpKk}
+                    disabled={isScanningDocs || editingProposalLocked}
+                    className="flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-slate-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
+                  >
+                    {isScanningDocs ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <span>Membaca Data KTP & KK...</span>
+                      </>
+                    ) : (
+                      <>
+                        <ScanLine className="h-4 w-4 text-teal-300" />
+                        <span>Scan & Isi Otomatis dari KTP & KK</span>
+                      </>
+                    )}
+                  </button>
+                  <p className="text-[11px] leading-relaxed text-slate-500">
+                    Data diri diambil sesuai orang pada KTP dan Nomor KK diambil dari Kartu Keluarga. Bagian yang buram akan dilewati untuk diisi manual.
+                  </p>
+
+                  {scanError && (
+                    <div
+                      role="alert"
+                      className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-800"
+                    >
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+                      <span>{scanError}</span>
+                    </div>
+                  )}
+
+                  {scanReport && (
+                    <div className="space-y-2.5 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs">
+                      {!scanReport.ktpNameMatchesKk && (
+                        <div className="flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-rose-800">
+                          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-600" />
+                          <span className="leading-snug">
+                            Nama pada foto KTP belum cocok / tidak terlihat jelas di daftar anggota Kartu Keluarga. Mohon pastikan foto KTP dan KK berasal dari pemohon yang tepat.
+                          </span>
+                        </div>
+                      )}
+
+                      {scanReport.filledFields.length > 0 && (
+                        <div className="flex items-start gap-2 text-teal-800">
+                          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+                          <div>
+                            <p className="font-semibold">
+                              {scanReport.filledFields.length} bagian berhasil diisi otomatis:
+                            </p>
+                            <p className="mt-0.5 text-[11px] text-teal-700">
+                              {scanReport.filledFields.map((f) => SCAN_FIELD_LABELS[f]).join(', ')}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {scanReport.blurryFields.length > 0 ? (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-amber-950 space-y-1.5">
+                          <p className="flex items-center gap-1.5 font-semibold text-amber-900">
+                            <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-600" />
+                            <span>
+                              {scanReport.blurryFields.length} bagian buram / perlu diisi manual:
+                            </span>
+                          </p>
+                          <ul className="space-y-1 pl-4 list-disc text-[11px] text-amber-900">
+                            {scanReport.blurryFields.map((fieldKey) => {
+                              const issue = scanReport.fieldIssues.find((i) => i.field === fieldKey);
+                              return (
+                                <li key={fieldKey}>
+                                  <span className="font-semibold">{SCAN_FIELD_LABELS[fieldKey]}</span>
+                                  {issue?.reason ? ` — ${issue.reason}` : ''}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                          <button
+                            type="button"
+                            onClick={() => scrollToIdentityField(scanReport.blurryFields[0])}
+                            className="mt-1 inline-flex items-center gap-1 rounded-lg bg-amber-700 px-3 py-1.5 text-[11px] font-semibold text-white transition-colors hover:bg-amber-800"
+                          >
+                            <ArrowUp className="h-3 w-3" />
+                            <span>Isi Bagian Buram di Atas</span>
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => scrollToIdentityField('nikKk')}
+                          className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-teal-800 transition-colors hover:bg-teal-50"
+                        >
+                          <ArrowUp className="h-3 w-3" />
+                          <span>Periksa Hasil di Bagian 02</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </section>
 

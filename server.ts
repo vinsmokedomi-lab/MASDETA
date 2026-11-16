@@ -1,9 +1,11 @@
+import 'dotenv/config';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import express from 'express';
 import type { Request, Response } from 'express';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import { WebSocketServer, WebSocket } from 'ws';
 
@@ -63,6 +65,7 @@ interface DirectChatMessage {
   text: string;
   sharedKpm?: SharedKpmCard;
   createdAt: string;
+  deliveredAt?: string;
   readAt?: string;
 }
 
@@ -717,6 +720,26 @@ async function startServer() {
     const authUser = requireAuth(req, res);
     if (!authUser) return;
 
+    const now = new Date().toISOString();
+    const deliveredIds: string[] = [];
+    const senderIdsToNotify = new Set<string>();
+    for (const msg of store.messages) {
+      if (msg.recipientId === authUser.id && !msg.deliveredAt) {
+        msg.deliveredAt = now;
+        deliveredIds.push(msg.id);
+        senderIdsToNotify.add(msg.senderId);
+      }
+    }
+    if (deliveredIds.length > 0) {
+      saveStore(store);
+      sendToUsers([authUser.id, ...Array.from(senderIdsToNotify)], {
+        type: 'chat:delivered',
+        recipientId: authUser.id,
+        deliveredAt: now,
+        messageIds: deliveredIds,
+      });
+    }
+
     res.json({
       user: sanitizeUser(authUser),
       users: store.users.map(sanitizeUser),
@@ -1066,6 +1089,9 @@ async function startServer() {
       }
     }
 
+    const now = new Date().toISOString();
+    const recipientSockets = socketStatesByUser.get(recipientId);
+    const hasActiveRecipientSocket = Boolean(recipientSockets && recipientSockets.size > 0);
     const msg: DirectChatMessage = {
       id: clientMsgId || `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       conversationKey: makeConversationKey(senderId, recipientId),
@@ -1073,7 +1099,8 @@ async function startServer() {
       recipientId,
       text,
       ...(sharedKpm ? { sharedKpm } : {}),
-      createdAt: new Date().toISOString(),
+      createdAt: now,
+      ...(hasActiveRecipientSocket ? { deliveredAt: now } : {}),
     };
 
     store.messages.push(msg);
@@ -1087,6 +1114,41 @@ async function startServer() {
     });
 
     res.status(201).json({ message: msg });
+  });
+
+  // REST: Acknowledge 1-on-1 direct message delivery on recipient device
+  app.post('/api/chat/delivered', (req: Request, res: Response) => {
+    const authUser = requireAuth(req, res);
+    if (!authUser) return;
+
+    const userId = authUser.id;
+    const requestedIds = Array.isArray(req.body?.messageIds)
+      ? new Set((req.body.messageIds as unknown[]).map((id) => String(id)))
+      : null;
+
+    const now = new Date().toISOString();
+    const updatedIds: string[] = [];
+    const senderIdsToNotify = new Set<string>();
+
+    for (const msg of store.messages) {
+      if (msg.recipientId !== userId || msg.deliveredAt) continue;
+      if (requestedIds && !requestedIds.has(msg.id)) continue;
+      msg.deliveredAt = now;
+      updatedIds.push(msg.id);
+      senderIdsToNotify.add(msg.senderId);
+    }
+
+    if (updatedIds.length > 0) {
+      saveStore(store);
+      sendToUsers([userId, ...Array.from(senderIdsToNotify)], {
+        type: 'chat:delivered',
+        recipientId: userId,
+        deliveredAt: now,
+        messageIds: updatedIds,
+      });
+    }
+
+    res.json({ updatedCount: updatedIds.length, deliveredAt: now });
   });
 
   // REST: Mark 1-on-1 conversation messages as read
@@ -1107,6 +1169,7 @@ async function startServer() {
 
     for (const msg of store.messages) {
       if (msg.senderId === peerId && msg.recipientId === userId && !msg.readAt) {
+        msg.deliveredAt = msg.deliveredAt || now;
         msg.readAt = now;
         changed = true;
         updatedIds.push(msg.id);
@@ -1307,6 +1370,247 @@ async function startServer() {
     });
 
     res.json({ ok: true, state: dataStore });
+  });
+
+  // REST: Server-side Gemini Vision OCR for KTP + Kartu Keluarga (KK)
+  interface OcrDescriptor {
+    base64?: string;
+    mimeType?: string;
+    fileId?: string;
+    thumbnailUrl?: string;
+    url?: string;
+  }
+
+  async function resolveImagePartForOcr(
+    rawDescriptor: unknown,
+    label: string
+  ): Promise<{ inlineData: { mimeType: string; data: string } }> {
+    const desc = (rawDescriptor && typeof rawDescriptor === 'object'
+      ? rawDescriptor
+      : {}) as OcrDescriptor;
+
+    const rawBase64 = typeof desc.base64 === 'string' ? desc.base64.trim() : '';
+    if (rawBase64) {
+      const cleanedBase64 = rawBase64.replace(/^data:[^;]+;base64,/, '').replace(/\s+/g, '');
+      const estimatedBytes = Math.floor((cleanedBase64.length * 3) / 4);
+      if (estimatedBytes > 10 * 1024 * 1024) {
+        throw new Error(`Ukuran gambar ${label} melebihi batas maksimal 10 MB.`);
+      }
+      const mime =
+        typeof desc.mimeType === 'string' && desc.mimeType.startsWith('image/')
+          ? desc.mimeType
+          : 'image/jpeg';
+      return {
+        inlineData: {
+          mimeType: mime,
+          data: cleanedBase64,
+        },
+      };
+    }
+
+    const candidates: string[] = [];
+    const fileId = typeof desc.fileId === 'string' ? desc.fileId.trim() : '';
+    if (fileId) {
+      candidates.push(`https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w1600`);
+      candidates.push(`https://drive.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`);
+    }
+    if (typeof desc.url === 'string' && /^https?:\/\//i.test(desc.url.trim())) {
+      candidates.push(desc.url.trim());
+    }
+    if (typeof desc.thumbnailUrl === 'string' && /^https?:\/\//i.test(desc.thumbnailUrl.trim())) {
+      candidates.push(desc.thumbnailUrl.trim());
+    }
+
+    for (const targetUrl of Array.from(new Set(candidates))) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15_000);
+        const resp = await fetch(targetUrl, {
+          redirect: 'follow',
+          signal: controller.signal,
+        }).finally(() => clearTimeout(timer));
+
+        if (!resp.ok) continue;
+        const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+        if (!contentType.startsWith('image/')) continue;
+
+        const arrayBuf = await resp.arrayBuffer();
+        if (arrayBuf.byteLength === 0 || arrayBuf.byteLength > 10 * 1024 * 1024) continue;
+
+        return {
+          inlineData: {
+            mimeType: contentType.split(';')[0] || 'image/jpeg',
+            data: Buffer.from(arrayBuf).toString('base64'),
+          },
+        };
+      } catch {
+        // Try next candidate URL
+      }
+    }
+
+    throw new Error(
+      `Foto ${label} tidak dapat diakses untuk dipindai. Silakan unggah ulang foto ${label} secara langsung.`
+    );
+  }
+
+  app.post('/api/ocr/ktp-kk', async (req: Request, res: Response) => {
+    const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+    if (!apiKey) {
+      res.status(503).json({
+        error:
+          'Layanan scan KTP & KK belum aktif karena GEMINI_API_KEY belum terpasang di Settings > Secrets.',
+      });
+      return;
+    }
+
+    const ktpRaw = req.body?.ktp;
+    const kkRaw = req.body?.kk;
+    if (!ktpRaw || !kkRaw || typeof ktpRaw !== 'object' || typeof kkRaw !== 'object') {
+      res.status(400).json({
+        error: 'Foto KTP dan Foto Kartu Keluarga (KK) harus sama-sama diunggah terlebih dahulu.',
+      });
+      return;
+    }
+
+    const pekerjaanOptions = Array.isArray(req.body?.pekerjaanOptions)
+      ? req.body.pekerjaanOptions.map((item: unknown) => String(item || '').trim()).filter(Boolean)
+      : [];
+    const kelurahanOptions = Array.isArray(req.body?.kelurahanOptions)
+      ? req.body.kelurahanOptions.map((item: unknown) => String(item || '').trim()).filter(Boolean)
+      : [];
+
+    try {
+      const [ktpPart, kkPart] = await Promise.all([
+        resolveImagePartForOcr(ktpRaw, 'KTP'),
+        resolveImagePartForOcr(kkRaw, 'Kartu Keluarga (KK)'),
+      ]);
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+
+      const pekerjaanHint =
+        pekerjaanOptions.length > 0
+          ? `Daftar pilihan Pekerjaan di form: ${pekerjaanOptions.join(', ')}. Jika pekerjaan pada KTP/KK cocok atau bermakna sama (misalnya "MENGURUS RUMAH TANGGA" / "IBU RUMAH TANGGA"), pilih yang paling sesuai dari daftar tersebut; jika tetap tidak terbaca atau buram, kosongkan "".`
+          : '';
+      const kelurahanHint =
+        kelurahanOptions.length > 0
+          ? `Daftar Kelurahan yang tersedia: ${kelurahanOptions.join(', ')}. Isi kelurahan jika terbaca jelas.`
+          : '';
+
+      const promptText = [
+        'Ekstrak data pendaftaran KPM dari pasangan FOTO 1 (KTP) dan FOTO 2 (Kartu Keluarga / KK) dengan aturan KETAT berikut:',
+        '1. PUSAT IDENTITAS WAJIB DARI KTP: Semua data personal (nikKtp, nama, alamat, rt, rw, pekerjaan) HARUS merujuk pada ORANG YANG TERTERA PADA KTP. JANGAN PERNAH mengambil anggota keluarga lain di KK sebagai pemohon utama.',
+        '2. PERAN KARTU KELUARGA (KK): Gunakan foto KK untuk mengambil Nomor Kartu Keluarga 16 digit (nikKk), serta membantu memverifikasi atau melengkapi field alamat / rt / rw / pekerjaan HANYA untuk baris anggota keluarga yang SAMA persis (nama dan/atau NIK cocok) dengan orang di KTP jika bagian tersebut di KTP sedikit kurang tajam — namun JIKA tetap buram atau meragukan di kedua foto, JANGAN MENGARANG.',
+        '3. ATURAN ANTI-MENGARANG (ZERO GUESSING): Jika ada bagian foto yang buram, silau, terpotong, terlalu kecil, atau bahkan hanya 1-2 digit angka pada NIK/No.KK/RT/RW yang tidak terbaca dengan keyakinan tinggi, WAJIB kembalikan string kosong "" untuk field tersebut, masukkan nama key field ("nikKk", "nikKtp", "nama", "alamat", "rt", "rw", "pekerjaan") ke dalam array blurryFields, dan tuliskan alasan singkat berbahasa Indonesia ke dalam fieldIssues.',
+        '4. FORMAT FIELD:',
+        '   - nikKk: tepat 16 digit angka tanpa spasi dari Nomor KK di bagian atas/tengah KK ("" jika kurang dari 16 digit atau ada angka buram).',
+        '   - nikKtp: tepat 16 digit angka tanpa spasi dari NIK pada KTP ("" jika ada angka buram).',
+        '   - nama: nama lengkap orang pada KTP dalam HURUF KAPITAL tanpa gelar mengarang ("" jika buram).',
+        '   - alamat: alamat jalan/gang/nomor rumah (tanpa tulisan RT/RW atau Kel/Kec) dari KTP (atau baris alamat KK yang sama), format rapi.',
+        '   - rt: 3 digit angka dengan awalan nol jika jelas terbaca (contoh "003"), "" jika buram.',
+        '   - rw: 3 digit angka dengan awalan nol jika jelas terbaca (contoh "005"), "" jika buram.',
+        '   - pekerjaan: pekerjaan orang pada KTP tersebut.',
+        '   - ktpNameMatchesKk: true jika orang pada KTP juga teridentifikasi di dalam daftar KK atau nama pada KTP tidak bertentangan dengan KK; false jika foto KK jelas-jelas milik keluarga yang berbeda atau nama pemegang KTP sama sekali tidak ditemukan di tabel anggota KK padahal tabel KK terbaca jelas.',
+        pekerjaanHint,
+        kelurahanHint,
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-4-hydrogen',
+        contents: {
+          parts: [
+            { text: 'FOTO 1 (KTP):' },
+            ktpPart,
+            { text: 'FOTO 2 (KARTU KELUARGA / KK):' },
+            kkPart,
+            { text: promptText },
+          ],
+        },
+        config: {
+          systemInstruction:
+            'Anda adalah asisten OCR dokumen kependudukan Indonesia (e-KTP dan Kartu Keluarga) yang sangat teliti dan konservatif. Jangan pernah menebak angka atau huruf yang buram/silau/terpotong. Kembalikan string kosong dan catat di blurryFields setiap kali ada keraguan sekecil apa pun.',
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              nikKk: { type: Type.STRING, description: '16 digit Nomor KK atau "" jika buram' },
+              nikKtp: { type: Type.STRING, description: '16 digit NIK KTP atau "" jika buram' },
+              nama: { type: Type.STRING, description: 'Nama lengkap sesuai KTP dalam HURUF KAPITAL atau ""' },
+              alamat: { type: Type.STRING, description: 'Alamat jalan/gang/nomor rumah tanpa RT/RW atau ""' },
+              rt: { type: Type.STRING, description: '3 digit RT misal 001 atau ""' },
+              rw: { type: Type.STRING, description: '3 digit RW misal 002 atau ""' },
+              pekerjaan: { type: Type.STRING, description: 'Pekerjaan orang pada KTP atau ""' },
+              kelurahan: { type: Type.STRING, description: 'Nama kelurahan/desa jika terbaca atau ""' },
+              ktpNameMatchesKk: {
+                type: Type.BOOLEAN,
+                description: 'Apakah identitas KTP sesuai / ditemukan dalam KK tersebut',
+              },
+              blurryFields: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: 'Daftar key field yang buram atau tidak terbaca yakin',
+              },
+              fieldIssues: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    field: { type: Type.STRING },
+                    reason: { type: Type.STRING },
+                  },
+                },
+                description: 'Penjelasan singkat berbahasa Indonesia untuk field yang buram',
+              },
+            },
+          },
+        },
+      });
+
+      const rawText = (response.text || '{}').trim();
+      let parsed: Record<string, unknown> = {};
+      try {
+        parsed = JSON.parse(rawText) as Record<string, unknown>;
+      } catch {
+        res.status(502).json({
+          error: 'Hasil pembacaan dokumen tidak valid. Silakan coba pindai ulang dengan foto yang lebih jelas.',
+        });
+        return;
+      }
+
+      res.json(parsed);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[OCR KTP/KK] Error:', msg);
+
+      if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
+        res.status(429).json({
+          error:
+            'Kuota permintaan API Gemini sedang penuh (429 RESOURCE_EXHAUSTED). Tunggu beberapa saat atau tingkatkan paket/billing API key di Settings > Secrets.',
+        });
+        return;
+      }
+
+      if (msg.includes('403') || msg.includes('PERMISSION_DENIED') || msg.includes('API_KEY_INVALID')) {
+        res.status(403).json({
+          error:
+            'Kunci API Gemini tidak valid atau belum memiliki izin. Periksa GEMINI_API_KEY pada panel Settings > Secrets.',
+        });
+        return;
+      }
+
+      res.status(500).json({
+        error: msg || 'Terjadi gangguan saat memindai foto KTP & KK. Silakan coba lagi.',
+      });
+    }
   });
 
   // WebSocket handling for multi-tab presence & real-time push

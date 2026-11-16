@@ -281,8 +281,12 @@ CREATE TABLE IF NOT EXISTS public.direct_chat_messages (
   shared_kpm_foto_url TEXT CHECK (shared_kpm_foto_url IS NULL OR left(shared_kpm_foto_url, 5) <> 'data:'),
   shared_kpm_snapshot JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  delivered_at TIMESTAMPTZ,
   read_at TIMESTAMPTZ
 );
+
+ALTER TABLE public.direct_chat_messages
+  ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS public.masdeta_app_state (
   state_key TEXT PRIMARY KEY,

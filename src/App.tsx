@@ -13,6 +13,7 @@ import {
   checkSupabaseSchemaReady,
   deleteKpmRecordInSupabase,
   fetchAppStateSlice,
+  fetchChatDeliveryWatermarks,
   fetchOperationalDataFromSupabase,
   isSchemaMissingError,
   runAdminDataActionInSupabase,
@@ -24,6 +25,7 @@ import {
   supabaseFetchDirectMessages,
   supabaseFetchInternalUsers,
   supabaseLogin,
+  supabaseMarkDirectMessagesDelivered,
   supabaseMarkDirectMessagesRead,
   supabaseMarkOfflineKeepalive,
   supabaseRegisterInternalUser,
@@ -147,6 +149,14 @@ import {
   checkForAppUpdate,
   getCachedMandatoryUpdate,
 } from './services/appUpdater';
+import {
+  clearNativeChatNotifier,
+  consumePendingNotificationSender,
+  markNativeNotifiedIds,
+  setNativeAppForeground,
+  setNativeNotifierEnabled,
+  syncNativeChatNotifierConfig,
+} from './services/nativeChatNotifier';
 import { APP_VERSION } from './config/appVersion';
 
 type SubView =
@@ -220,19 +230,32 @@ function playMessageChime() {
   }
 }
 
+const ANDROID_CHAT_CHANNEL_ID = 'masdeta_chat_v2';
 let androidNotifChannelCreated = false;
+
+function hashNotificationId(seed: string): number {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash = (hash * 31 + seed.charCodeAt(i)) | 0;
+  }
+  return Math.max(100, Math.abs(hash) % 2_000_000_000);
+}
 
 async function ensureAndroidNotificationChannel() {
   if (!Capacitor.isNativePlatform() || androidNotifChannelCreated) return;
   try {
+    // Hapus channel lama yang sempat memakai sound:'default' (tidak ada di res/raw -> bisu di Android 8+)
+    await LocalNotifications.deleteChannel({ id: 'masdeta_chat' }).catch(() => {});
+    // Jangan isi properti sound agar Android otomatis memakai nada dering notifikasi bawaan sistem
     await LocalNotifications.createChannel({
-      id: 'masdeta_chat',
-      name: 'Pesan & Notifikasi MASDETA',
-      description: 'Notifikasi pesan langsung dan pemberitahuan penting MASDETA',
+      id: ANDROID_CHAT_CHANNEL_ID,
+      name: 'Pesan Masuk MASDETA',
+      description: 'Notifikasi pesan chat langsung dengan suara dan tampilan layar kunci',
       importance: 5,
       visibility: 1,
-      sound: 'default',
       vibration: true,
+      lights: true,
+      lightColor: '#0F766E',
     });
     androidNotifChannelCreated = true;
   } catch {
@@ -240,7 +263,11 @@ async function ensureAndroidNotificationChannel() {
   }
 }
 
-async function triggerPushNotification(title: string, body: string) {
+async function triggerPushNotification(
+  title: string,
+  body: string,
+  options?: { senderId?: string; tag?: string }
+) {
   if (typeof window === 'undefined') return;
 
   if (Capacitor.isNativePlatform()) {
@@ -248,15 +275,22 @@ async function triggerPushNotification(title: string, body: string) {
       const perm = await LocalNotifications.checkPermissions();
       if (perm.display !== 'granted') return;
       await ensureAndroidNotificationChannel();
-      const notifId = Math.max(1, Math.floor((Date.now() + Math.random() * 1000) % 2147483000));
+      const notifId = options?.senderId
+        ? hashNotificationId(`chat:${options.senderId}`)
+        : Math.max(1000, Math.floor((Date.now() + Math.random() * 1000) % 2_147_483_000));
+      // Sengaja tanpa `schedule` agar Capacitor langsung memanggil NotificationManager.notify()
+      // tanpa tertahan pembatasan AlarmManager di Android 12-14.
       await LocalNotifications.schedule({
         notifications: [
           {
             id: notifId,
             title,
             body,
-            channelId: 'masdeta_chat',
-            schedule: { at: new Date(Date.now() + 120) },
+            channelId: ANDROID_CHAT_CHANNEL_ID,
+            smallIcon: 'ic_stat_masdeta',
+            iconColor: '#0F766E',
+            autoCancel: true,
+            extra: options?.senderId ? { senderId: options.senderId } : undefined,
           },
         ],
       });
@@ -270,19 +304,20 @@ async function triggerPushNotification(title: string, body: string) {
   if (Notification.permission !== 'granted') return;
 
   try {
+    const tag = options?.tag || `masdeta-chat-${Date.now()}`;
     if ('serviceWorker' in navigator) {
       const reg = await navigator.serviceWorker.getRegistration();
       if (reg && typeof reg.showNotification === 'function') {
         await reg.showNotification(title, {
           body,
-          icon: '/icons/icon-192.png',
-          badge: '/icons/icon-192.png',
-          tag: `masdeta-chat-${Date.now()}`,
+          icon: '/pwa-192x192.png',
+          badge: '/pwa-192x192.png',
+          tag,
         });
         return;
       }
     }
-    new Notification(title, { body, icon: '/icons/icon-192.png' });
+    new Notification(title, { body, icon: '/pwa-192x192.png', tag });
   } catch {
     // Fallback diam-diam jika Notification API dibatasi
   }
@@ -406,6 +441,7 @@ export default function App() {
   });
   const [authReady, setAuthReady] = useState(false);
   const [directMessages, setDirectMessages] = useState<DirectChatMessage[]>([]);
+  const [chatDeliveryWatermarks, setChatDeliveryWatermarks] = useState<Record<string, string>>({});
   const [activeChatPeerId, setActiveChatPeerId] = useState<string | null>(null);
   const [pushEnabled, setPushEnabled] = useState<boolean>(() => {
     try {
@@ -489,6 +525,9 @@ export default function App() {
   const nativePushRequestedRef = useRef<boolean>(false);
   const kpmBastMapRef = useRef<Record<string, KpmBastInfo>>(kpmBastMap);
   const isFlushingQueueRef = useRef<boolean>(false);
+  const notifiedChatMsgIdsRef = useRef<Set<string>>(new Set());
+  const syncIncomingMessagesRef = useRef<() => Promise<void>>(async () => {});
+  const openChatViewRef = useRef<(peerId?: string) => void>(() => {});
 
   kpmBastMapRef.current = kpmBastMap;
 
@@ -585,6 +624,26 @@ export default function App() {
   currentUserIdRef.current = currentUser?.id ?? null;
   currentUserRoleRef.current = currentUser?.role ?? null;
   currentUserPresenceRef.current = currentUser?.presenceStatus ?? 'offline';
+
+  const messagesWithDelivery = useMemo(() => {
+    if (!chatDeliveryWatermarks || Object.keys(chatDeliveryWatermarks).length === 0) {
+      return directMessages.map((m) =>
+        m.readAt && !m.deliveredAt ? { ...m, deliveredAt: m.readAt } : m
+      );
+    }
+    return directMessages.map((m) => {
+      if (m.deliveredAt) return m;
+      if (m.readAt) return { ...m, deliveredAt: m.readAt };
+      const wm = chatDeliveryWatermarks[m.recipientId];
+      if (!wm) return m;
+      const wmTs = new Date(wm).getTime();
+      const createdTs = new Date(m.createdAt).getTime();
+      if (Number.isFinite(wmTs) && Number.isFinite(createdTs) && createdTs <= wmTs) {
+        return { ...m, deliveredAt: wm };
+      }
+      return m;
+    });
+  }, [directMessages, chatDeliveryWatermarks]);
 
   const mergeFetchedInternalUsers = useCallback((fetchedUsers: InternalUser[]): InternalUser[] => {
     if (fetchedUsers.length === 0) return fetchedUsers;
@@ -740,10 +799,29 @@ export default function App() {
     [currentActor.nama, currentUser?.role, selectedYear]
   );
 
-  // Sinkronkan izin notifikasi native Android (Capacitor APK) saat startup & login
+  // Sinkronkan izin notifikasi native Android (Capacitor APK) & listener klik notifikasi
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
     let cancelled = false;
+    let actionHandle: PluginListenerHandle | null = null;
+
+    void LocalNotifications.addListener('localNotificationActionPerformed', (event) => {
+      const senderId = event.notification?.extra?.senderId;
+      if (senderId && currentUserIdRef.current) {
+        openChatViewRef.current(String(senderId));
+      } else if (currentUserIdRef.current) {
+        openChatViewRef.current();
+      }
+    })
+      .then((handle) => {
+        if (cancelled) {
+          void handle.remove();
+        } else {
+          actionHandle = handle;
+        }
+      })
+      .catch(() => {});
+
     void LocalNotifications.checkPermissions()
       .then(async (perm) => {
         if (cancelled) return;
@@ -778,8 +856,20 @@ export default function App() {
         }
       })
       .catch(() => {});
+
+    if (currentUser) {
+      void consumePendingNotificationSender().then((senderId) => {
+        if (!cancelled && senderId) {
+          openChatViewRef.current(senderId);
+        }
+      });
+    }
+
     return () => {
       cancelled = true;
+      if (actionHandle) {
+        void actionHandle.remove();
+      }
     };
   }, [currentUser]);
 
@@ -1034,8 +1124,11 @@ export default function App() {
     setSessionToken(null);
     setSessionUserId(null);
     setDirectMessages([]);
+    setChatDeliveryWatermarks({});
     setActiveChatPeerId(null);
     setBellAckChatCount(0);
+    notifiedChatMsgIdsRef.current.clear();
+    void clearNativeChatNotifier();
     try {
       localStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
       localStorage.removeItem(SESSION_STORAGE_KEY);
@@ -1073,15 +1166,17 @@ export default function App() {
 
   const loadAppStateSlices = useCallback(async () => {
     try {
-      const [fetchedSchedules, fetchedTrash, fetchedTemplate, fetchedBastMap] = await Promise.all([
-        fetchAppStateSlice<ScheduleEventItem[]>('masdeta_schedules_v1', []),
-        fetchAppStateSlice<TrashRecordItem[]>('masdeta_trash_bin_v1', []),
-        fetchAppStateSlice<ReportTemplateConfig>(
-          'masdeta_report_template_v1',
-          DEFAULT_REPORT_TEMPLATE
-        ),
-        fetchAppStateSlice<Record<string, KpmBastInfo>>('masdeta_kpm_bast_v1', {}),
-      ]);
+      const [fetchedSchedules, fetchedTrash, fetchedTemplate, fetchedBastMap, fetchedWatermarks] =
+        await Promise.all([
+          fetchAppStateSlice<ScheduleEventItem[]>('masdeta_schedules_v1', []),
+          fetchAppStateSlice<TrashRecordItem[]>('masdeta_trash_bin_v1', []),
+          fetchAppStateSlice<ReportTemplateConfig>(
+            'masdeta_report_template_v1',
+            DEFAULT_REPORT_TEMPLATE
+          ),
+          fetchAppStateSlice<Record<string, KpmBastInfo>>('masdeta_kpm_bast_v1', {}),
+          fetchChatDeliveryWatermarks(),
+        ]);
 
       const nowMs = Date.now();
       const rawTrash = Array.isArray(fetchedTrash) ? fetchedTrash : [];
@@ -1126,6 +1221,9 @@ export default function App() {
           : DEFAULT_REPORT_TEMPLATE
       );
       setKpmBastMap(safeBastMap);
+      if (fetchedWatermarks && typeof fetchedWatermarks === 'object') {
+        setChatDeliveryWatermarks(fetchedWatermarks);
+      }
       setRecords((prev) => mergeBastIntoRecords(prev, safeBastMap));
     } catch {
       // Abaikan gangguan sementara saat memuat slice tambahan
@@ -1430,13 +1528,40 @@ export default function App() {
             await supabaseSetUserPresence(activeUser.id, 'online', false);
           }
 
-          const msgs = await supabaseFetchDirectMessages();
+          const [msgs, watermarks] = await Promise.all([
+            supabaseFetchDirectMessages(),
+            fetchChatDeliveryWatermarks(),
+          ]);
           if (cancelled) return;
           const userMsgs = msgs.filter(
             (m) => m.senderId === activeUser.id || m.recipientId === activeUser.id
           );
           prevMessageIdsRef.current = new Set(userMsgs.map((m) => m.id));
+          setChatDeliveryWatermarks(watermarks);
           setDirectMessages(userMsgs);
+
+          const incomingForUser = userMsgs.filter((m) => m.recipientId === activeUser.id);
+          if (incomingForUser.length > 0) {
+            const latestIncoming = incomingForUser[incomingForUser.length - 1];
+            const prevWmTs = watermarks[activeUser.id]
+              ? new Date(watermarks[activeUser.id]).getTime()
+              : 0;
+            const latestTs = new Date(latestIncoming.createdAt).getTime();
+            const undeliveredIds = incomingForUser
+              .filter((m) => !m.deliveredAt)
+              .map((m) => m.id);
+            if (undeliveredIds.length > 0 || latestTs > prevWmTs) {
+              void supabaseMarkDirectMessagesDelivered(
+                activeUser.id,
+                latestIncoming.createdAt,
+                undeliveredIds
+              )
+                .then((nextWm) => {
+                  if (!cancelled) setChatDeliveryWatermarks(nextWm);
+                })
+                .catch(() => {});
+            }
+          }
 
           if (!sessionToken) {
             const supaTok = `supabase-session-${activeUser.id}`;
@@ -1488,6 +1613,7 @@ export default function App() {
               setInternalUsers(mergeFetchedInternalUsers(data.users));
             }
             if (Array.isArray(data.messages)) {
+              prevMessageIdsRef.current = new Set(data.messages.map((m) => m.id));
               setDirectMessages(data.messages);
             }
             setSessionUserId(data.user.id);
@@ -1526,7 +1652,7 @@ export default function App() {
       setDirectMessages((prev) =>
         prev.map((m) =>
           m.senderId === peerId && m.recipientId === currentUser.id && !m.readAt
-            ? { ...m, readAt: now }
+            ? { ...m, deliveredAt: m.deliveredAt || now, readAt: now }
             : m
         )
       );
@@ -1688,16 +1814,51 @@ export default function App() {
       }, 600);
     };
 
+    let disposed = false;
+
     const syncMessagesFromSupabase = async () => {
       try {
-        const all = await supabaseFetchDirectMessages();
+        const [all, watermarks] = await Promise.all([
+          supabaseFetchDirectMessages(),
+          fetchChatDeliveryWatermarks(),
+        ]);
+        if (disposed) return;
+
         const mine = all.filter((m) => m.senderId === uid || m.recipientId === uid);
-        const latestNew = mine.find(
+        const newIncoming = mine.filter(
           (m) => m.recipientId === uid && !prevMessageIdsRef.current.has(m.id)
         );
         prevMessageIdsRef.current = new Set(mine.map((m) => m.id));
+        setChatDeliveryWatermarks(watermarks);
         setDirectMessages(mine);
 
+        // Tandai pesan masuk sebagai "terkirim / masuk ke perangkat penerima" (centang 2)
+        const incomingForMe = mine.filter((m) => m.recipientId === uid);
+        if (incomingForMe.length > 0) {
+          const latestIncoming = incomingForMe[incomingForMe.length - 1];
+          const prevWmTs = watermarks[uid] ? new Date(watermarks[uid]).getTime() : 0;
+          const latestTs = new Date(latestIncoming.createdAt).getTime();
+          const undeliveredIds = incomingForMe.filter((m) => !m.deliveredAt).map((m) => m.id);
+          if (undeliveredIds.length > 0 || latestTs > prevWmTs) {
+            void supabaseMarkDirectMessagesDelivered(uid, latestIncoming.createdAt, undeliveredIds)
+              .then((nextWm) => {
+                if (!disposed) setChatDeliveryWatermarks(nextWm);
+                const nowIso = nextWm[uid] || new Date().toISOString();
+                void realtimeChannelRef.current?.send({
+                  type: 'broadcast',
+                  event: 'chat:delivered',
+                  payload: {
+                    recipientId: uid,
+                    deliveredAt: nowIso,
+                    messageIds: undeliveredIds,
+                  },
+                });
+              })
+              .catch(() => {});
+          }
+        }
+
+        const latestNew = newIncoming[newIncoming.length - 1];
         if (latestNew) {
           const isViewingThread =
             subViewRef.current === 'chat' &&
@@ -1707,34 +1868,56 @@ export default function App() {
           if (isViewingThread) {
             const sorted = [uid, latestNew.senderId].sort();
             void supabaseMarkDirectMessagesRead(`${sorted[0]}::${sorted[1]}`, uid);
+            void markNativeNotifiedIds(
+              newIncoming.map((m) => m.id),
+              latestNew.createdAt
+            );
           } else {
-            const sender = internalUsersRef.current.find((u) => u.id === latestNew.senderId);
-            const senderName = sender?.nama || 'Pengguna Internal';
-            const senderRole = sender?.role || 'Admin';
-            const displayMsgText =
-              latestNew.text ||
-              (latestNew.sharedKpm
-                ? `Kartu KPM: ${latestNew.sharedKpm.nama} (${latestNew.sharedKpm.proposal})`
-                : 'Pesan baru');
+            const unnotified = newIncoming.filter(
+              (m) => !notifiedChatMsgIdsRef.current.has(m.id)
+            );
+            newIncoming.forEach((m) => notifiedChatMsgIdsRef.current.add(m.id));
+            void markNativeNotifiedIds(
+              newIncoming.map((m) => m.id),
+              latestNew.createdAt
+            );
 
-            playMessageChime();
-            setIncomingToast({
-              id: latestNew.id,
-              senderId: latestNew.senderId,
-              senderName,
-              senderRole,
-              text: displayMsgText,
-            });
-            if (toastTimer) window.clearTimeout(toastTimer);
-            toastTimer = window.setTimeout(() => {
-              setIncomingToast((curr) => (curr?.id === latestNew.id ? null : curr));
-            }, 6500);
+            if (unnotified.length > 0) {
+              const targetMsg = unnotified[unnotified.length - 1];
+              const sender = internalUsersRef.current.find((u) => u.id === targetMsg.senderId);
+              const senderName = sender?.nama || 'Pengguna Internal';
+              const senderRole = sender?.role || 'Admin';
+              const displayMsgText =
+                targetMsg.text ||
+                (targetMsg.sharedKpm
+                  ? `Kartu KPM: ${targetMsg.sharedKpm.nama} (${targetMsg.sharedKpm.proposal})`
+                  : 'Pesan baru');
 
-            if (pushEnabledRef.current) {
-              void triggerPushNotification(
-                `Pesan dari ${senderName} (${senderRole})`,
-                displayMsgText
-              );
+              const unreadFromSender = mine.filter(
+                (m) => m.senderId === targetMsg.senderId && m.recipientId === uid && !m.readAt
+              ).length;
+              const notifCount = Math.max(1, unreadFromSender);
+              const notifTitle = `${notifCount} pesan masuk dari ${senderName}`;
+
+              playMessageChime();
+              setIncomingToast({
+                id: targetMsg.id,
+                senderId: targetMsg.senderId,
+                senderName,
+                senderRole,
+                text: displayMsgText,
+              });
+              if (toastTimer) window.clearTimeout(toastTimer);
+              toastTimer = window.setTimeout(() => {
+                setIncomingToast((curr) => (curr?.id === targetMsg.id ? null : curr));
+              }, 6500);
+
+              if (pushEnabledRef.current) {
+                void triggerPushNotification(notifTitle, displayMsgText, {
+                  senderId: targetMsg.senderId,
+                  tag: `masdeta-chat-${targetMsg.senderId}`,
+                });
+              }
             }
           }
         }
@@ -1743,11 +1926,37 @@ export default function App() {
       }
     };
 
+    syncIncomingMessagesRef.current = syncMessagesFromSupabase;
+
     const channel = supabase
       .channel('masdeta-realtime-sync', {
         config: {
           broadcast: { self: false },
         },
+      })
+      .on('broadcast', { event: 'chat:delivered' }, ({ payload }) => {
+        if (!payload || typeof payload !== 'object') return;
+        const p = payload as {
+          recipientId?: string;
+          deliveredAt?: string;
+          messageIds?: string[];
+        };
+        const recId = p.recipientId ? String(p.recipientId) : '';
+        const deliveredAt = p.deliveredAt ? String(p.deliveredAt) : new Date().toISOString();
+        if (recId) {
+          setChatDeliveryWatermarks((prev) => {
+            const prevTs = prev[recId] ? new Date(prev[recId]).getTime() : 0;
+            const nextTs = new Date(deliveredAt).getTime();
+            if (Number.isFinite(nextTs) && nextTs <= prevTs) return prev;
+            return { ...prev, [recId]: deliveredAt };
+          });
+        }
+        if (Array.isArray(p.messageIds) && p.messageIds.length > 0) {
+          const ids = new Set(p.messageIds.map(String));
+          setDirectMessages((prev) =>
+            prev.map((m) => (ids.has(m.id) && !m.deliveredAt ? { ...m, deliveredAt } : m))
+          );
+        }
       })
       .on('broadcast', { event: 'app:notification' }, ({ payload }) => {
         if (!payload || typeof payload !== 'object') return;
@@ -1864,16 +2073,29 @@ export default function App() {
         { event: '*', schema: 'public', table: 'kpm_audit_logs' },
         scheduleOperationalRefresh
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          void syncMessagesFromSupabase();
+        }
+      });
 
     realtimeChannelRef.current = channel;
 
+    const fallbackPollId = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void syncMessagesFromSupabase();
+      }
+    }, 12_000);
+
     return () => {
+      disposed = true;
+      window.clearInterval(fallbackPollId);
       if (refreshTimer) window.clearTimeout(refreshTimer);
       if (toastTimer) window.clearTimeout(toastTimer);
       if (realtimeChannelRef.current === channel) {
         realtimeChannelRef.current = null;
       }
+      syncIncomingMessagesRef.current = async () => {};
       void supabase.removeChannel(channel);
     };
   }, [currentUser?.id, supabaseReady, applyRemoteOperationalState, pushAppNotification]);
@@ -1964,9 +2186,17 @@ export default function App() {
                 ? `Kartu KPM: ${msg.sharedKpm.nama} (${msg.sharedKpm.proposal})`
                 : 'Pesan baru');
 
+            prevMessageIdsRef.current.add(msg.id);
+            let nextUnreadFromSender = 1;
             setDirectMessages((prev) => {
-              if (prev.some((m) => m.id === msg.id)) return prev;
-              return [...prev, msg];
+              const updated = prev.some((m) => m.id === msg.id) ? prev : [...prev, msg];
+              nextUnreadFromSender = Math.max(
+                1,
+                updated.filter(
+                  (m) => m.senderId === msg.senderId && m.recipientId === uid && !m.readAt
+                ).length
+              );
+              return updated;
             });
 
             if (msg.recipientId === uid) {
@@ -1975,6 +2205,8 @@ export default function App() {
                 activeChatPeerIdRef.current === msg.senderId &&
                 document.visibilityState === 'visible';
 
+              void markNativeNotifiedIds([msg.id], msg.createdAt);
+
               if (isViewingThread) {
                 authFetch('/api/chat/read', {
                   method: 'POST',
@@ -1982,29 +2214,51 @@ export default function App() {
                   body: JSON.stringify({ peerId: msg.senderId }),
                 }).catch(() => {});
               } else {
-                const senderName = String(data.senderName || 'Pengguna Internal');
-                const senderRole = String(data.senderRole || 'Admin');
-                playMessageChime();
-                setIncomingToast({
-                  id: msg.id,
-                  senderId: msg.senderId,
-                  senderName,
-                  senderRole,
-                  text: displayMsgText,
-                });
-                if (toastTimer) window.clearTimeout(toastTimer);
-                toastTimer = window.setTimeout(() => {
-                  setIncomingToast((curr) => (curr?.id === msg.id ? null : curr));
-                }, 6500);
+                authFetch('/api/chat/delivered', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ messageIds: [msg.id] }),
+                }).catch(() => {});
 
-                if (pushEnabledRef.current) {
-                  void triggerPushNotification(
-                    `Pesan dari ${senderName} (${senderRole})`,
-                    displayMsgText
-                  );
+                if (!notifiedChatMsgIdsRef.current.has(msg.id)) {
+                  notifiedChatMsgIdsRef.current.add(msg.id);
+                  const senderName = String(data.senderName || 'Pengguna Internal');
+                  const senderRole = String(data.senderRole || 'Admin');
+                  playMessageChime();
+                  setIncomingToast({
+                    id: msg.id,
+                    senderId: msg.senderId,
+                    senderName,
+                    senderRole,
+                    text: displayMsgText,
+                  });
+                  if (toastTimer) window.clearTimeout(toastTimer);
+                  toastTimer = window.setTimeout(() => {
+                    setIncomingToast((curr) => (curr?.id === msg.id ? null : curr));
+                  }, 6500);
+
+                  if (pushEnabledRef.current) {
+                    void triggerPushNotification(
+                      `${nextUnreadFromSender} pesan masuk dari ${senderName}`,
+                      displayMsgText,
+                      {
+                        senderId: msg.senderId,
+                        tag: `masdeta-chat-${msg.senderId}`,
+                      }
+                    );
+                  }
                 }
               }
             }
+            return;
+          }
+
+          if (data.type === 'chat:delivered' && Array.isArray(data.messageIds)) {
+            const ids = new Set(data.messageIds as string[]);
+            const deliveredAt = String(data.deliveredAt || new Date().toISOString());
+            setDirectMessages((prev) =>
+              prev.map((m) => (ids.has(m.id) && !m.deliveredAt ? { ...m, deliveredAt } : m))
+            );
             return;
           }
 
@@ -2012,7 +2266,9 @@ export default function App() {
             const ids = new Set(data.messageIds as string[]);
             const readAt = String(data.readAt || new Date().toISOString());
             setDirectMessages((prev) =>
-              prev.map((m) => (ids.has(m.id) ? { ...m, readAt } : m))
+              prev.map((m) =>
+                ids.has(m.id) ? { ...m, deliveredAt: m.deliveredAt || readAt, readAt } : m
+              )
             );
             return;
           }
@@ -2035,16 +2291,175 @@ export default function App() {
       };
     };
 
+    const syncCollabFromBackend = async () => {
+      try {
+        const res = await authFetch('/api/collab/state');
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          users?: InternalUser[];
+          messages?: DirectChatMessage[];
+        };
+        if (Array.isArray(data.users) && data.users.length > 0) {
+          setInternalUsers(mergeFetchedInternalUsers(data.users));
+        }
+        if (Array.isArray(data.messages)) {
+          const incomingNew = data.messages.filter(
+            (m) => m.recipientId === uid && !prevMessageIdsRef.current.has(m.id)
+          );
+          prevMessageIdsRef.current = new Set(data.messages.map((m) => m.id));
+          setDirectMessages(data.messages);
+
+          const latestNew = incomingNew[incomingNew.length - 1];
+          if (latestNew && !notifiedChatMsgIdsRef.current.has(latestNew.id)) {
+            incomingNew.forEach((m) => notifiedChatMsgIdsRef.current.add(m.id));
+            void markNativeNotifiedIds(
+              incomingNew.map((m) => m.id),
+              latestNew.createdAt
+            );
+            const isViewingThread =
+              subViewRef.current === 'chat' &&
+              activeChatPeerIdRef.current === latestNew.senderId &&
+              document.visibilityState === 'visible';
+            if (isViewingThread) {
+              void authFetch('/api/chat/read', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ peerId: latestNew.senderId }),
+              }).catch(() => {});
+            } else if (pushEnabledRef.current) {
+              const sender = internalUsersRef.current.find((u) => u.id === latestNew.senderId);
+              const senderName = sender?.nama || 'Pengguna Internal';
+              const displayMsgText =
+                latestNew.text ||
+                (latestNew.sharedKpm
+                  ? `Kartu KPM: ${latestNew.sharedKpm.nama} (${latestNew.sharedKpm.proposal})`
+                  : 'Pesan baru');
+              const unreadFromSender = Math.max(
+                1,
+                data.messages.filter(
+                  (m) => m.senderId === latestNew.senderId && m.recipientId === uid && !m.readAt
+                ).length
+              );
+              playMessageChime();
+              void triggerPushNotification(
+                `${unreadFromSender} pesan masuk dari ${senderName}`,
+                displayMsgText,
+                {
+                  senderId: latestNew.senderId,
+                  tag: `masdeta-chat-${latestNew.senderId}`,
+                }
+              );
+            }
+          }
+        }
+      } catch {
+        // Ignore transient network error
+      }
+    };
+
+    syncIncomingMessagesRef.current = syncCollabFromBackend;
     connect();
+    const fallbackPollId = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void syncCollabFromBackend();
+      }
+    }, 12_000);
 
     return () => {
       closedByCleanup = true;
+      window.clearInterval(fallbackPollId);
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       if (toastTimer) window.clearTimeout(toastTimer);
+      syncIncomingMessagesRef.current = async () => {};
       wsRef.current?.close();
       wsRef.current = null;
     };
   }, [currentUser?.id, sessionToken, supabaseReady, authFetch, applyRemoteOperationalState, pushAppNotification]);
+
+  // Sinkronisasi native Android background notifier (saat layar terkunci / app ditutup) + wake-up resync
+  useEffect(() => {
+    const uid = currentUser?.id;
+    if (!uid) return;
+
+    const senderNames: Record<string, string> = {};
+    internalUsers.forEach((u) => {
+      if (u.id !== uid && u.status === 'active') {
+        senderNames[u.id] = u.nama;
+      }
+    });
+
+    let maxMsgIso = new Date().toISOString();
+    let maxMsgTs = 0;
+    directMessages.forEach((m) => {
+      const ts = new Date(m.createdAt).getTime();
+      if (Number.isFinite(ts) && ts > maxMsgTs) {
+        maxMsgTs = ts;
+        maxMsgIso = m.createdAt;
+      }
+    });
+
+    void syncNativeChatNotifierConfig({
+      userId: uid,
+      senderNames,
+      lastSeenAt: maxMsgIso,
+      notifiedIds: Array.from(notifiedChatMsgIdsRef.current),
+      enabled: pushEnabled,
+      sessionToken: supabaseReady ? '' : sessionToken,
+    });
+  }, [currentUser?.id, internalUsers, pushEnabled, directMessages, supabaseReady, sessionToken]);
+
+  useEffect(() => {
+    const uid = currentUser?.id;
+    if (!uid) return;
+
+    const handleWakeSync = () => {
+      const visible = document.visibilityState === 'visible';
+      void setNativeAppForeground(visible);
+      if (visible) {
+        void syncIncomingMessagesRef.current();
+      }
+    };
+
+    void setNativeAppForeground(document.visibilityState === 'visible');
+    document.addEventListener('visibilitychange', handleWakeSync);
+    window.addEventListener('focus', handleWakeSync);
+    window.addEventListener('online', handleWakeSync);
+
+    let appStateHandle: PluginListenerHandle | null = null;
+    let disposed = false;
+    if (Capacitor.isNativePlatform()) {
+      CapacitorApp.addListener('appStateChange', ({ isActive }) => {
+        if (disposed) return;
+        void setNativeAppForeground(isActive);
+        if (isActive) {
+          void syncIncomingMessagesRef.current();
+          void consumePendingNotificationSender().then((senderId) => {
+            if (!disposed && senderId) {
+              openChatViewRef.current(senderId);
+            }
+          });
+        }
+      })
+        .then((handle) => {
+          if (disposed) {
+            void handle.remove();
+          } else {
+            appStateHandle = handle;
+          }
+        })
+        .catch(() => {});
+    }
+
+    return () => {
+      disposed = true;
+      document.removeEventListener('visibilitychange', handleWakeSync);
+      window.removeEventListener('focus', handleWakeSync);
+      window.removeEventListener('online', handleWakeSync);
+      if (appStateHandle) {
+        void appStateHandle.remove();
+      }
+    };
+  }, [currentUser?.id]);
 
   // Pelacak Aktivitas Otomatis Presisi Tinggi untuk Presence Dot (Hijau = Aktif, Oranye = Idle, Abu-abu = Offline)
   useEffect(() => {
@@ -5636,6 +6051,7 @@ export default function App() {
 
   const handleTogglePushEnabled = (enabled: boolean) => {
     setPushEnabled(enabled);
+    void setNativeNotifierEnabled(enabled);
     try {
       localStorage.setItem(PUSH_ENABLED_STORAGE_KEY, enabled ? 'true' : 'false');
     } catch {
@@ -5654,6 +6070,7 @@ export default function App() {
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
+  openChatViewRef.current = openChatView;
 
   const openProfileView = () => {
     setFeedback(null);
@@ -6326,7 +6743,7 @@ export default function App() {
           <ChatView
             currentUser={currentUser}
             users={internalUsers}
-            messages={directMessages}
+            messages={messagesWithDelivery}
             records={records}
             activePeerId={activeChatPeerId}
             onSelectPeer={(peerId) => {

@@ -74,7 +74,15 @@ export function ChatView({
   const [searchQuery, setSearchQuery] = useState('');
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
+  const [, setTimeTick] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setTimeTick((n) => (n + 1) % 10000);
+    }, 30_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   const peers = useMemo(() => {
     const isPrimaryDomi = currentUser.email.toLowerCase() === 'vinsmoke.domi@gmail.com';
@@ -308,9 +316,23 @@ export function ChatView({
                       <span>{formatChatTime(msg.createdAt)}</span>
                       {isMine &&
                         (msg.readAt ? (
-                          <CheckCheck className="h-3 w-3" />
+                          <CheckCheck
+                            className="h-4 w-4 text-[#53bdeb]"
+                            strokeWidth={2.4}
+                            aria-label="Dibaca"
+                          />
+                        ) : msg.deliveredAt ? (
+                          <CheckCheck
+                            className="h-4 w-4 text-teal-100"
+                            strokeWidth={2.2}
+                            aria-label="Pesan masuk"
+                          />
                         ) : (
-                          <Check className="h-3 w-3" />
+                          <Check
+                            className="h-4 w-4 text-teal-100/80"
+                            strokeWidth={2.2}
+                            aria-label="Terkirim"
+                          />
                         ))}
                     </div>
                   </div>
@@ -427,10 +449,13 @@ export function ChatView({
                   : peer.presenceStatus === 'idle'
                     ? 'text-amber-700'
                     : 'text-slate-500';
-              const relativeTimeLabel = formatRelativeActiveTime(
-                peer.lastActiveAt || peer.updatedAt,
-                peer.presenceStatus
-              );
+              const secondaryStatusLabel =
+                peer.presenceStatus === 'online'
+                  ? 'Sedang aktif'
+                  : formatRelativeActiveTime(
+                      peer.lastActiveAt || peer.updatedAt,
+                      peer.presenceStatus
+                    );
 
               return (
                 <button
@@ -479,8 +504,14 @@ export function ChatView({
                         {statusShortLabel}
                       </span>
                     </div>
-                    <p className="mt-0.5 text-[11px] text-slate-400 tabular-nums">
-                      {relativeTimeLabel}
+                    <p
+                      className={`mt-0.5 text-[11px] tabular-nums ${
+                        peer.presenceStatus === 'online'
+                          ? 'font-medium text-emerald-600'
+                          : 'text-slate-400'
+                      }`}
+                    >
+                      {secondaryStatusLabel}
                     </p>
                   </div>
                 </button>

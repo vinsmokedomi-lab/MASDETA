@@ -1027,10 +1027,6 @@ export async function exportSingleKpmToPdf({
       ['Klasifikasi DTSEN', dtsenText],
       ['Pengelola Lapangan', record.pengelola || '-'],
       ['Status Validasi Berkas', statusText],
-      [
-        'Biaya Administrasi',
-        record.payment && record.payment > 0 ? formatRupiah(record.payment) : '-',
-      ],
       ['Catatan Petugas', record.catatan?.trim() || '-'],
     ],
     theme: 'grid',

@@ -54,12 +54,28 @@ jobs:
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           VITE_GAS_UPLOAD_URL: ${{ secrets.VITE_GAS_UPLOAD_URL }}
           VITE_GAS_API_KEY: ${{ secrets.VITE_GAS_API_KEY }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
         run: npm run build
 
       - name: Ensure Capacitor JSON config
         run: |
           rm -f capacitor.config.ts
-          printf '{\n  "appId": "com.masdeta.app",\n  "appName": "MASDETA",\n  "webDir": "dist",\n  "android": {\n    "allowMixedContent": true\n  }\n}\n' > capacitor.config.json
+          cat << 'EOF' > capacitor.config.json
+          {
+            "appId": "com.masdeta.app",
+            "appName": "MASDETA",
+            "webDir": "dist",
+            "android": {
+              "allowMixedContent": true
+            },
+            "plugins": {
+              "LocalNotifications": {
+                "smallIcon": "ic_stat_masdeta",
+                "iconColor": "#0F766E"
+              }
+            }
+          }
+          EOF
 
       - name: Add Android platform
         run: |
@@ -317,25 +333,743 @@ jobs:
           }
           EOF
 
+          cat << 'EOF' > "$JAVA_DIR/ChatPollWorker.java"
+          package com.masdeta.app;
+
+          import android.Manifest;
+          import android.app.Notification;
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.PendingIntent;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.content.pm.PackageManager;
+          import android.media.AudioAttributes;
+          import android.media.RingtoneManager;
+          import android.net.Uri;
+          import android.os.Build;
+          import androidx.core.app.NotificationCompat;
+          import androidx.core.content.ContextCompat;
+          import java.io.BufferedReader;
+          import java.io.InputStreamReader;
+          import java.io.OutputStream;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
+          import java.net.URLEncoder;
+          import java.nio.charset.StandardCharsets;
+          import java.text.SimpleDateFormat;
+          import java.util.ArrayList;
+          import java.util.Date;
+          import java.util.HashMap;
+          import java.util.HashSet;
+          import java.util.List;
+          import java.util.Locale;
+          import java.util.Map;
+          import java.util.Set;
+          import java.util.TimeZone;
+          import org.json.JSONArray;
+          import org.json.JSONObject;
+
+          public final class ChatPollWorker {
+            public static final String PREFS_NAME = "masdeta_chat_bg_prefs";
+            public static final String CHANNEL_ID = "masdeta_chat_v2";
+            public static final String EXTRA_SENDER_ID = "masdeta_chat_sender_id";
+
+            private ChatPollWorker() {}
+
+            public static void ensureChannel(Context ctx) {
+              if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+              NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+              if (nm == null) return;
+              try {
+                nm.deleteNotificationChannel("masdeta_chat");
+              } catch (Exception ignored) {}
+              if (nm.getNotificationChannel(CHANNEL_ID) == null) {
+                NotificationChannel channel = new NotificationChannel(
+                  CHANNEL_ID,
+                  "Pesan Masuk MASDETA",
+                  NotificationManager.IMPORTANCE_HIGH
+                );
+                channel.setDescription("Notifikasi pesan chat langsung dengan suara dan tampilan layar kunci");
+                channel.enableLights(true);
+                channel.setLightColor(0xFF0F766E);
+                channel.enableVibration(true);
+                channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+                Uri soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+                AudioAttributes attrs = new AudioAttributes.Builder()
+                  .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                  .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                  .build();
+                channel.setSound(soundUri, attrs);
+                nm.createNotificationChannel(channel);
+              }
+            }
+
+            public static synchronized void pollOnce(Context ctx) {
+              SharedPreferences prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+              boolean enabled = prefs.getBoolean("enabled", true);
+              boolean isForeground = prefs.getBoolean("isForeground", false);
+              String userId = prefs.getString("userId", "");
+              if (!enabled || isForeground || userId == null || userId.trim().isEmpty()) {
+                return;
+              }
+              if (Build.VERSION.SDK_INT >= 33 &&
+                ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                return;
+              }
+
+              String supabaseUrl = prefs.getString("supabaseUrl", "");
+              String supabaseAnonKey = prefs.getString("supabaseAnonKey", "");
+              String apiBaseUrl = prefs.getString("apiBaseUrl", "");
+              String sessionToken = prefs.getString("sessionToken", "");
+              String lastSeenAt = prefs.getString("lastSeenAt", "");
+              String senderNamesRaw = prefs.getString("senderNamesJson", "{}");
+              String notifiedRaw = prefs.getString("notifiedIdsJson", "[]");
+
+              JSONObject senderNames;
+              try {
+                senderNames = new JSONObject(senderNamesRaw != null ? senderNamesRaw : "{}");
+              } catch (Exception e) {
+                senderNames = new JSONObject();
+              }
+
+              Set<String> notifiedSet = new HashSet<>();
+              List<String> notifiedList = new ArrayList<>();
+              try {
+                JSONArray arr = new JSONArray(notifiedRaw != null ? notifiedRaw : "[]");
+                for (int i = 0; i < arr.length(); i++) {
+                  String id = arr.optString(i, "");
+                  if (!id.isEmpty() && notifiedSet.add(id)) {
+                    notifiedList.add(id);
+                  }
+                }
+              } catch (Exception ignored) {}
+
+              long lastSeenMs = parseIsoMillis(lastSeenAt);
+              JSONArray unreadMessages = null;
+              boolean usedSupabase = false;
+
+              if (supabaseUrl != null && !supabaseUrl.isEmpty() && supabaseAnonKey != null && !supabaseAnonKey.isEmpty()) {
+                unreadMessages = fetchFromSupabase(supabaseUrl, supabaseAnonKey, userId);
+                if (unreadMessages != null) {
+                  usedSupabase = true;
+                }
+              }
+
+              if (unreadMessages == null && apiBaseUrl != null && !apiBaseUrl.isEmpty() && sessionToken != null && !sessionToken.isEmpty()) {
+                unreadMessages = fetchFromBackend(apiBaseUrl, sessionToken, userId);
+              }
+
+              if (unreadMessages == null || unreadMessages.length() == 0) {
+                return;
+              }
+
+              Map<String, Integer> totalUnreadBySender = new HashMap<>();
+              Map<String, JSONObject> latestNewBySender = new HashMap<>();
+              List<String> newlyDeliveredIds = new ArrayList<>();
+              String maxCreatedIso = lastSeenAt != null ? lastSeenAt : "";
+              long maxCreatedMs = lastSeenMs;
+
+              for (int i = 0; i < unreadMessages.length(); i++) {
+                JSONObject row = unreadMessages.optJSONObject(i);
+                if (row == null) continue;
+                String msgId = row.optString("id", "");
+                String senderId = row.optString("sender_id", row.optString("senderId", ""));
+                String recipientId = row.optString("recipient_id", row.optString("recipientId", ""));
+                String readAt = row.optString("read_at", row.optString("readAt", ""));
+                String deliveredAt = row.optString("delivered_at", row.optString("deliveredAt", ""));
+                String createdAt = row.optString("created_at", row.optString("createdAt", ""));
+
+                if (!userId.equals(recipientId) || msgId.isEmpty() || senderId.isEmpty()) continue;
+                if (readAt != null && !readAt.isEmpty() && !"null".equals(readAt)) continue;
+
+                totalUnreadBySender.put(senderId, totalUnreadBySender.getOrDefault(senderId, 0) + 1);
+                if (deliveredAt == null || deliveredAt.isEmpty() || "null".equals(deliveredAt)) {
+                  newlyDeliveredIds.add(msgId);
+                }
+
+                long msgMs = parseIsoMillis(createdAt);
+                if (notifiedSet.contains(msgId)) continue;
+                if (lastSeenMs > 0 && msgMs > 0 && msgMs <= lastSeenMs) continue;
+
+                notifiedSet.add(msgId);
+                notifiedList.add(msgId);
+                latestNewBySender.put(senderId, row);
+                if (msgMs > maxCreatedMs) {
+                  maxCreatedMs = msgMs;
+                  maxCreatedIso = createdAt;
+                }
+              }
+
+              if (latestNewBySender.isEmpty()) {
+                return;
+              }
+
+              ensureChannel(ctx);
+              NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+              if (nm != null) {
+                int smallIcon = ctx.getResources().getIdentifier("ic_stat_masdeta", "drawable", ctx.getPackageName());
+                if (smallIcon == 0) {
+                  smallIcon = ctx.getApplicationInfo().icon;
+                }
+
+                for (Map.Entry<String, JSONObject> entry : latestNewBySender.entrySet()) {
+                  String senderId = entry.getKey();
+                  JSONObject msg = entry.getValue();
+                  String senderName = senderNames.optString(senderId, "");
+                  if (senderName == null || senderName.trim().isEmpty()) {
+                    senderName = "Pengguna Internal";
+                  }
+                  int count = totalUnreadBySender.getOrDefault(senderId, 1);
+                  if (count < 1) count = 1;
+                  String title = count + " pesan masuk dari " + senderName;
+
+                  String text = msg.optString("text", "");
+                  if (text == null || text.trim().isEmpty() || "null".equals(text)) {
+                    JSONObject snap = msg.optJSONObject("shared_kpm_snapshot");
+                    if (snap == null) snap = msg.optJSONObject("sharedKpm");
+                    String kpmName = snap != null ? snap.optString("nama", "") : "";
+                    text = !kpmName.isEmpty() ? ("Kartu KPM: " + kpmName) : "Pesan baru";
+                  }
+
+                  Intent openIntent = new Intent(ctx, MainActivity.class);
+                  openIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                  openIntent.putExtra(EXTRA_SENDER_ID, senderId);
+                  int notifId = Math.max(100, Math.abs(("chat:" + senderId).hashCode()) % 2000000000);
+                  int piFlags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
+                  PendingIntent pendingIntent = PendingIntent.getActivity(ctx, notifId, openIntent, piFlags);
+
+                  NotificationCompat.Builder builder = new NotificationCompat.Builder(ctx, CHANNEL_ID)
+                    .setSmallIcon(smallIcon)
+                    .setColor(0xFF0F766E)
+                    .setContentTitle(title)
+                    .setContentText(text)
+                    .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
+                    .setPriority(NotificationCompat.PRIORITY_MAX)
+                    .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    .setDefaults(NotificationCompat.DEFAULT_ALL)
+                    .setAutoCancel(true)
+                    .setContentIntent(pendingIntent);
+
+                  nm.notify(notifId, builder.build());
+                }
+              }
+
+              // Simpan state agar pesan tidak diulang notifikasinya
+              int keepFrom = Math.max(0, notifiedList.size() - 120);
+              JSONArray savedIds = new JSONArray();
+              for (int i = keepFrom; i < notifiedList.size(); i++) {
+                savedIds.put(notifiedList.get(i));
+              }
+              SharedPreferences.Editor ed = prefs.edit();
+              ed.putString("notifiedIdsJson", savedIds.toString());
+              if (maxCreatedIso != null && !maxCreatedIso.isEmpty()) {
+                ed.putString("lastSeenAt", maxCreatedIso);
+              }
+              ed.apply();
+
+              if (usedSupabase && !newlyDeliveredIds.isEmpty()) {
+                markDeliveredInSupabaseBestEffort(supabaseUrl, supabaseAnonKey, newlyDeliveredIds);
+              } else if (!usedSupabase && apiBaseUrl != null && !apiBaseUrl.isEmpty() && sessionToken != null && !sessionToken.isEmpty() && !newlyDeliveredIds.isEmpty()) {
+                markDeliveredInBackendBestEffort(apiBaseUrl, sessionToken, newlyDeliveredIds);
+              }
+            }
+
+            private static JSONArray fetchFromSupabase(String baseUrl, String anonKey, String userId) {
+              HttpURLConnection conn = null;
+              try {
+                String cleanUrl = baseUrl.replaceAll("/+$", "");
+                String encodedUid = URLEncoder.encode(userId, "UTF-8");
+                String endpoint = cleanUrl + "/rest/v1/direct_chat_messages?recipient_id=eq." + encodedUid + "&read_at=is.null&order=created_at.asc&limit=40";
+                conn = (HttpURLConnection) new URL(endpoint).openConnection();
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(8000);
+                conn.setRequestProperty("apikey", anonKey);
+                conn.setRequestProperty("Authorization", "Bearer " + anonKey);
+                conn.setRequestProperty("Accept", "application/json");
+                int code = conn.getResponseCode();
+                if (code < 200 || code >= 300) return null;
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                  StringBuilder sb = new StringBuilder();
+                  String line;
+                  while ((line = br.readLine()) != null) sb.append(line);
+                  return new JSONArray(sb.toString());
+                }
+              } catch (Exception e) {
+                return null;
+              } finally {
+                if (conn != null) conn.disconnect();
+              }
+            }
+
+            private static JSONArray fetchFromBackend(String apiBaseUrl, String token, String userId) {
+              HttpURLConnection conn = null;
+              try {
+                String cleanUrl = apiBaseUrl.replaceAll("/+$", "");
+                conn = (HttpURLConnection) new URL(cleanUrl + "/api/collab/state").openConnection();
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(8000);
+                conn.setRequestProperty("Authorization", "Bearer " + token);
+                conn.setRequestProperty("Accept", "application/json");
+                int code = conn.getResponseCode();
+                if (code < 200 || code >= 300) return null;
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                  StringBuilder sb = new StringBuilder();
+                  String line;
+                  while ((line = br.readLine()) != null) sb.append(line);
+                  JSONObject obj = new JSONObject(sb.toString());
+                  return obj.optJSONArray("messages");
+                }
+              } catch (Exception e) {
+                return null;
+              } finally {
+                if (conn != null) conn.disconnect();
+              }
+            }
+
+            private static void markDeliveredInSupabaseBestEffort(String baseUrl, String anonKey, List<String> ids) {
+              HttpURLConnection conn = null;
+              try {
+                StringBuilder inList = new StringBuilder();
+                for (int i = 0; i < Math.min(ids.size(), 30); i++) {
+                  if (i > 0) inList.append(",");
+                  inList.append(URLEncoder.encode(ids.get(i), "UTF-8"));
+                }
+                String cleanUrl = baseUrl.replaceAll("/+$", "");
+                String endpoint = cleanUrl + "/rest/v1/direct_chat_messages?id=in.(" + inList + ")&delivered_at=is.null";
+                conn = (HttpURLConnection) new URL(endpoint).openConnection();
+                conn.setRequestMethod("PATCH");
+                conn.setDoOutput(true);
+                conn.setConnectTimeout(5000);
+                conn.setReadTimeout(5000);
+                conn.setRequestProperty("apikey", anonKey);
+                conn.setRequestProperty("Authorization", "Bearer " + anonKey);
+                conn.setRequestProperty("Content-Type", "application/json");
+                SimpleDateFormat isoFmt = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US);
+                isoFmt.setTimeZone(TimeZone.getTimeZone("UTC"));
+                String body = "{\"delivered_at\":\"" + isoFmt.format(new Date()) + "\"}";
+                try (OutputStream os = conn.getOutputStream()) {
+                  os.write(body.getBytes(StandardCharsets.UTF_8));
+                }
+                conn.getResponseCode();
+              } catch (Exception ignored) {
+              } finally {
+                if (conn != null) conn.disconnect();
+              }
+            }
+
+            private static void markDeliveredInBackendBestEffort(String apiBaseUrl, String token, List<String> ids) {
+              HttpURLConnection conn = null;
+              try {
+                String cleanUrl = apiBaseUrl.replaceAll("/+$", "");
+                conn = (HttpURLConnection) new URL(cleanUrl + "/api/chat/delivered").openConnection();
+                conn.setRequestMethod("POST");
+                conn.setDoOutput(true);
+                conn.setConnectTimeout(5000);
+                conn.setReadTimeout(5000);
+                conn.setRequestProperty("Authorization", "Bearer " + token);
+                conn.setRequestProperty("Content-Type", "application/json");
+                JSONObject payload = new JSONObject();
+                payload.put("messageIds", new JSONArray(ids));
+                try (OutputStream os = conn.getOutputStream()) {
+                  os.write(payload.toString().getBytes(StandardCharsets.UTF_8));
+                }
+                conn.getResponseCode();
+              } catch (Exception ignored) {
+              } finally {
+                if (conn != null) conn.disconnect();
+              }
+            }
+
+            public static long parseIsoMillis(String iso) {
+              if (iso == null || iso.trim().isEmpty()) return 0L;
+              try {
+                String s = iso.trim();
+                // Normalize fractional seconds and +00:00 -> Z
+                s = s.replaceAll("\\.[0-9]+", "");
+                if (s.endsWith("Z")) {
+                  SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US);
+                  sdf.setTimeZone(TimeZone.getTimeZone("UTC"));
+                  Date d = sdf.parse(s);
+                  return d != null ? d.getTime() : 0L;
+                }
+                s = s.replaceAll("([+-]\\d{2}):(\\d{2})$", "$1$2");
+                SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", Locale.US);
+                Date d = sdf.parse(s);
+                return d != null ? d.getTime() : 0L;
+              } catch (Exception e) {
+                return 0L;
+              }
+            }
+          }
+          EOF
+
+          cat << 'EOF' > "$JAVA_DIR/ChatPollReceiver.java"
+          package com.masdeta.app;
+
+          import android.app.AlarmManager;
+          import android.app.PendingIntent;
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.os.Build;
+          import android.os.PowerManager;
+          import java.util.concurrent.ExecutorService;
+          import java.util.concurrent.Executors;
+
+          public class ChatPollReceiver extends BroadcastReceiver {
+            public static final String ACTION_POLL = "com.masdeta.app.ACTION_CHAT_POLL";
+            private static final int REQUEST_CODE = 40821;
+            private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor();
+
+            public static void scheduleNext(Context ctx, long delayMs) {
+              SharedPreferences prefs = ctx.getSharedPreferences(ChatPollWorker.PREFS_NAME, Context.MODE_PRIVATE);
+              if (!prefs.getBoolean("enabled", true)) return;
+              String uid = prefs.getString("userId", "");
+              if (uid == null || uid.trim().isEmpty()) return;
+
+              AlarmManager am = (AlarmManager) ctx.getSystemService(Context.ALARM_SERVICE);
+              if (am == null) return;
+
+              Intent intent = new Intent(ctx, ChatPollReceiver.class);
+              intent.setAction(ACTION_POLL);
+              int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
+              PendingIntent pi = PendingIntent.getBroadcast(ctx, REQUEST_CODE, intent, flags);
+              long triggerAt = System.currentTimeMillis() + Math.max(15000L, delayMs);
+
+              try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                  am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi);
+                } else {
+                  am.set(AlarmManager.RTC_WAKEUP, triggerAt, pi);
+                }
+              } catch (Exception ignored) {}
+            }
+
+            public static void cancel(Context ctx) {
+              AlarmManager am = (AlarmManager) ctx.getSystemService(Context.ALARM_SERVICE);
+              if (am == null) return;
+              Intent intent = new Intent(ctx, ChatPollReceiver.class);
+              intent.setAction(ACTION_POLL);
+              int flags = PendingIntent.FLAG_NO_CREATE | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
+              PendingIntent pi = PendingIntent.getBroadcast(ctx, REQUEST_CODE, intent, flags);
+              if (pi != null) {
+                am.cancel(pi);
+                pi.cancel();
+              }
+            }
+
+            @Override
+            public void onReceive(Context context, Intent intent) {
+              final Context appCtx = context.getApplicationContext();
+              final PendingResult pendingResult = goAsync();
+              EXECUTOR.execute(() -> {
+                PowerManager.WakeLock wakeLock = null;
+                try {
+                  PowerManager pm = (PowerManager) appCtx.getSystemService(Context.POWER_SERVICE);
+                  if (pm != null) {
+                    wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "masdeta:chatpoll");
+                    wakeLock.acquire(12000L);
+                  }
+                  ChatPollWorker.pollOnce(appCtx);
+                } catch (Exception ignored) {
+                } finally {
+                  scheduleNext(appCtx, 30000L);
+                  ChatPollJobService.scheduleJob(appCtx);
+                  if (wakeLock != null && wakeLock.isHeld()) {
+                    try {
+                      wakeLock.release();
+                    } catch (Exception ignored) {}
+                  }
+                  pendingResult.finish();
+                }
+              });
+            }
+          }
+          EOF
+
+          cat << 'EOF' > "$JAVA_DIR/ChatPollJobService.java"
+          package com.masdeta.app;
+
+          import android.app.job.JobInfo;
+          import android.app.job.JobParameters;
+          import android.app.job.JobScheduler;
+          import android.app.job.JobService;
+          import android.content.ComponentName;
+          import android.content.Context;
+          import android.content.SharedPreferences;
+          import java.util.concurrent.ExecutorService;
+          import java.util.concurrent.Executors;
+
+          public class ChatPollJobService extends JobService {
+            private static final int JOB_ID = 40822;
+            private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor();
+
+            public static void scheduleJob(Context ctx) {
+              SharedPreferences prefs = ctx.getSharedPreferences(ChatPollWorker.PREFS_NAME, Context.MODE_PRIVATE);
+              if (!prefs.getBoolean("enabled", true)) return;
+              String uid = prefs.getString("userId", "");
+              if (uid == null || uid.trim().isEmpty()) return;
+
+              JobScheduler scheduler = (JobScheduler) ctx.getSystemService(Context.JOB_SCHEDULER_SERVICE);
+              if (scheduler == null) return;
+              if (scheduler.getPendingJob(JOB_ID) != null) return;
+
+              ComponentName serviceName = new ComponentName(ctx, ChatPollJobService.class);
+              JobInfo job = new JobInfo.Builder(JOB_ID, serviceName)
+                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                .setPersisted(true)
+                .setPeriodic(15 * 60 * 1000L)
+                .build();
+              scheduler.schedule(job);
+            }
+
+            public static void cancelJob(Context ctx) {
+              JobScheduler scheduler = (JobScheduler) ctx.getSystemService(Context.JOB_SCHEDULER_SERVICE);
+              if (scheduler != null) {
+                scheduler.cancel(JOB_ID);
+              }
+            }
+
+            @Override
+            public boolean onStartJob(JobParameters params) {
+              final Context appCtx = getApplicationContext();
+              EXECUTOR.execute(() -> {
+                try {
+                  ChatPollWorker.pollOnce(appCtx);
+                  ChatPollReceiver.scheduleNext(appCtx, 30000L);
+                } finally {
+                  jobFinished(params, false);
+                }
+              });
+              return true;
+            }
+
+            @Override
+            public boolean onStopJob(JobParameters params) {
+              return true;
+            }
+          }
+          EOF
+
+          cat << 'EOF' > "$JAVA_DIR/MasdetaChatNotifierPlugin.java"
+          package com.masdeta.app;
+
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import com.getcapacitor.JSObject;
+          import com.getcapacitor.Plugin;
+          import com.getcapacitor.PluginCall;
+          import com.getcapacitor.PluginMethod;
+          import com.getcapacitor.annotation.CapacitorPlugin;
+          import java.util.ArrayList;
+          import java.util.HashSet;
+          import java.util.List;
+          import java.util.Set;
+          import org.json.JSONArray;
+          import org.json.JSONObject;
+
+          @CapacitorPlugin(name = "MasdetaChatNotifier")
+          public class MasdetaChatNotifierPlugin extends Plugin {
+            @PluginMethod
+            public void configure(PluginCall call) {
+              Context ctx = getContext();
+              SharedPreferences prefs = ctx.getSharedPreferences(ChatPollWorker.PREFS_NAME, Context.MODE_PRIVATE);
+
+              String userId = call.getString("userId", "");
+              String supabaseUrl = call.getString("supabaseUrl", "");
+              String supabaseAnonKey = call.getString("supabaseAnonKey", "");
+              String apiBaseUrl = call.getString("apiBaseUrl", "");
+              String sessionToken = call.getString("sessionToken", "");
+              String incomingLastSeen = call.getString("lastSeenAt", "");
+              boolean enabled = call.getBoolean("enabled", true);
+
+              JSObject senderNamesObj = call.getObject("senderNames");
+              String senderNamesJson = senderNamesObj != null ? senderNamesObj.toString() : "{}";
+
+              // Merge notifiedIds with existing native IDs so already-pushed IDs never repeat
+              Set<String> mergedSet = new HashSet<>();
+              List<String> mergedList = new ArrayList<>();
+              try {
+                JSONArray existing = new JSONArray(prefs.getString("notifiedIdsJson", "[]"));
+                for (int i = 0; i < existing.length(); i++) {
+                  String id = existing.optString(i, "");
+                  if (!id.isEmpty() && mergedSet.add(id)) mergedList.add(id);
+                }
+              } catch (Exception ignored) {}
+              try {
+                JSONArray incomingIds = call.getArray("notifiedIds");
+                if (incomingIds != null) {
+                  for (int i = 0; i < incomingIds.length(); i++) {
+                    String id = incomingIds.optString(i, "");
+                    if (!id.isEmpty() && mergedSet.add(id)) mergedList.add(id);
+                  }
+                }
+              } catch (Exception ignored) {}
+              JSONArray cappedIds = new JSONArray();
+              int startIdx = Math.max(0, mergedList.size() - 120);
+              for (int i = startIdx; i < mergedList.size(); i++) {
+                cappedIds.put(mergedList.get(i));
+              }
+
+              String prevLastSeen = prefs.getString("lastSeenAt", "");
+              String chosenLastSeen = ChatPollWorker.parseIsoMillis(prevLastSeen) > ChatPollWorker.parseIsoMillis(incomingLastSeen)
+                ? prevLastSeen
+                : (incomingLastSeen != null ? incomingLastSeen : "");
+
+              prefs.edit()
+                .putString("userId", userId != null ? userId : "")
+                .putString("supabaseUrl", supabaseUrl != null ? supabaseUrl : "")
+                .putString("supabaseAnonKey", supabaseAnonKey != null ? supabaseAnonKey : "")
+                .putString("apiBaseUrl", apiBaseUrl != null ? apiBaseUrl : "")
+                .putString("sessionToken", sessionToken != null ? sessionToken : "")
+                .putString("senderNamesJson", senderNamesJson)
+                .putString("notifiedIdsJson", cappedIds.toString())
+                .putString("lastSeenAt", chosenLastSeen)
+                .putBoolean("enabled", enabled)
+                .apply();
+
+              ChatPollWorker.ensureChannel(ctx);
+              if (enabled && userId != null && !userId.trim().isEmpty()) {
+                ChatPollReceiver.scheduleNext(ctx, 25000L);
+                ChatPollJobService.scheduleJob(ctx);
+              } else {
+                ChatPollReceiver.cancel(ctx);
+                ChatPollJobService.cancelJob(ctx);
+              }
+              call.resolve();
+            }
+
+            @PluginMethod
+            public void setForeground(PluginCall call) {
+              Context ctx = getContext();
+              boolean isFg = call.getBoolean("isForeground", false);
+              SharedPreferences prefs = ctx.getSharedPreferences(ChatPollWorker.PREFS_NAME, Context.MODE_PRIVATE);
+              prefs.edit().putBoolean("isForeground", isFg).apply();
+              if (!isFg) {
+                ChatPollReceiver.scheduleNext(ctx, 20000L);
+                ChatPollJobService.scheduleJob(ctx);
+              }
+              call.resolve();
+            }
+
+            @PluginMethod
+            public void setEnabled(PluginCall call) {
+              Context ctx = getContext();
+              boolean enabled = call.getBoolean("enabled", true);
+              SharedPreferences prefs = ctx.getSharedPreferences(ChatPollWorker.PREFS_NAME, Context.MODE_PRIVATE);
+              prefs.edit().putBoolean("enabled", enabled).apply();
+              if (enabled) {
+                ChatPollReceiver.scheduleNext(ctx, 25000L);
+                ChatPollJobService.scheduleJob(ctx);
+              } else {
+                ChatPollReceiver.cancel(ctx);
+                ChatPollJobService.cancelJob(ctx);
+              }
+              call.resolve();
+            }
+
+            @PluginMethod
+            public void markNotified(PluginCall call) {
+              Context ctx = getContext();
+              SharedPreferences prefs = ctx.getSharedPreferences(ChatPollWorker.PREFS_NAME, Context.MODE_PRIVATE);
+              Set<String> set = new HashSet<>();
+              List<String> list = new ArrayList<>();
+              try {
+                JSONArray existing = new JSONArray(prefs.getString("notifiedIdsJson", "[]"));
+                for (int i = 0; i < existing.length(); i++) {
+                  String id = existing.optString(i, "");
+                  if (!id.isEmpty() && set.add(id)) list.add(id);
+                }
+              } catch (Exception ignored) {}
+              try {
+                JSONArray ids = call.getArray("ids");
+                if (ids != null) {
+                  for (int i = 0; i < ids.length(); i++) {
+                    String id = ids.optString(i, "");
+                    if (!id.isEmpty() && set.add(id)) list.add(id);
+                  }
+                }
+              } catch (Exception ignored) {}
+
+              JSONArray capped = new JSONArray();
+              int startIdx = Math.max(0, list.size() - 120);
+              for (int i = startIdx; i < list.size(); i++) {
+                capped.put(list.get(i));
+              }
+
+              String incomingLastSeen = call.getString("lastSeenAt", "");
+              String prevLastSeen = prefs.getString("lastSeenAt", "");
+              SharedPreferences.Editor ed = prefs.edit().putString("notifiedIdsJson", capped.toString());
+              if (ChatPollWorker.parseIsoMillis(incomingLastSeen) > ChatPollWorker.parseIsoMillis(prevLastSeen)) {
+                ed.putString("lastSeenAt", incomingLastSeen);
+              }
+              ed.apply();
+              call.resolve();
+            }
+
+            @PluginMethod
+            public void consumePendingSender(PluginCall call) {
+              String senderId = null;
+              Intent actIntent = getActivity() != null ? getActivity().getIntent() : null;
+              if (actIntent != null && actIntent.hasExtra(ChatPollWorker.EXTRA_SENDER_ID)) {
+                senderId = actIntent.getStringExtra(ChatPollWorker.EXTRA_SENDER_ID);
+                actIntent.removeExtra(ChatPollWorker.EXTRA_SENDER_ID);
+              }
+              JSObject res = new JSObject();
+              if (senderId != null && !senderId.isEmpty()) {
+                res.put("senderId", senderId);
+              }
+              call.resolve(res);
+            }
+
+            @PluginMethod
+            public void clear(PluginCall call) {
+              Context ctx = getContext();
+              ctx.getSharedPreferences(ChatPollWorker.PREFS_NAME, Context.MODE_PRIVATE).edit().clear().apply();
+              ChatPollReceiver.cancel(ctx);
+              ChatPollJobService.cancelJob(ctx);
+              call.resolve();
+            }
+          }
+          EOF
+
           MAIN_ACT="$JAVA_DIR/MainActivity.java"
           node -e '
             const fs = require("fs");
             const path = process.argv[1];
             let src = fs.readFileSync(path, "utf8");
-            if (!src.includes("CekBansosPlugin.class")) {
-              if (!src.includes("import android.os.Bundle;")) {
-                src = src.replace("import com.getcapacitor.BridgeActivity;", "import android.os.Bundle;\nimport com.getcapacitor.BridgeActivity;");
-              }
+            if (!src.includes("import android.content.Intent;")) {
+              src = src.replace("import com.getcapacitor.BridgeActivity;", "import android.content.Intent;\nimport com.getcapacitor.BridgeActivity;");
+            }
+            if (!src.includes("import android.os.Bundle;")) {
+              src = src.replace("import com.getcapacitor.BridgeActivity;", "import android.os.Bundle;\nimport com.getcapacitor.BridgeActivity;");
+            }
+            if (!src.includes("CekBansosPlugin.class") || !src.includes("MasdetaChatNotifierPlugin.class")) {
               if (src.includes("onCreate(")) {
-                src = src.replace(/super\.onCreate\([^)]*\);/, (m) => `registerPlugin(CekBansosPlugin.class);\n    ${m}`);
+                if (!src.includes("CekBansosPlugin.class")) {
+                  src = src.replace(/super\.onCreate\([^)]*\);/, (m) => `registerPlugin(CekBansosPlugin.class);\n    ${m}`);
+                }
+                if (!src.includes("MasdetaChatNotifierPlugin.class")) {
+                  src = src.replace(/super\.onCreate\([^)]*\);/, (m) => `registerPlugin(MasdetaChatNotifierPlugin.class);\n    ${m}`);
+                }
               } else {
                 src = src.replace(
                   /public class MainActivity extends BridgeActivity\s*\{\s*\}/,
-                  `public class MainActivity extends BridgeActivity {\n  @Override\n  public void onCreate(Bundle savedInstanceState) {\n    registerPlugin(CekBansosPlugin.class);\n    super.onCreate(savedInstanceState);\n  }\n}`
+                  `public class MainActivity extends BridgeActivity {\n  @Override\n  public void onCreate(Bundle savedInstanceState) {\n    registerPlugin(CekBansosPlugin.class);\n    registerPlugin(MasdetaChatNotifierPlugin.class);\n    super.onCreate(savedInstanceState);\n  }\n}`
                 );
               }
-              fs.writeFileSync(path, src);
             }
+            if (!src.includes("onNewIntent(")) {
+              src = src.replace(/\}\s*$/, "\n  @Override\n  protected void onNewIntent(Intent intent) {\n    super.onNewIntent(intent);\n    setIntent(intent);\n  }\n}\n");
+            }
+            fs.writeFileSync(path, src);
           ' "$MAIN_ACT"
 
       - name: Generate MASDETA Launcher Icons
@@ -417,6 +1151,34 @@ jobs:
             rsvg-convert -w "$SZ" -h "$SZ" /tmp/masdeta-legacy-square.svg -o "$RES_DIR/ic_launcher.png"
             rsvg-convert -w "$SZ" -h "$SZ" /tmp/masdeta-legacy-round.svg -o "$RES_DIR/ic_launcher_round.png"
             rsvg-convert -w "$FGSZ" -h "$FGSZ" /tmp/masdeta-adaptive-fg.svg -o "$RES_DIR/ic_launcher_foreground.png"
+          done
+
+          # Monochrome white transparent smallIcon for Android notification bar & lock screen
+          cat << 'EOF' > /tmp/masdeta-stat-icon.svg
+          <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 36 36" fill="none">
+            <path
+              d="M7 26.5V10.5C7 9.67157 7.67157 9 8.5 9H10.7C11.35 9 11.95 9.33 12.29 9.88L18 19.0L23.71 9.88C24.05 9.33 24.65 9 25.3 9H27.5C28.3284 9 29 9.67157 29 10.5V26.5"
+              stroke="#FFFFFF"
+              stroke-width="3.6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+            <path
+              d="M13.5 26.5L18 20.0L22.5 26.5"
+              stroke="#FFFFFF"
+              stroke-width="3.0"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          EOF
+
+          for STAT_PAIR in "mdpi:24" "hdpi:36" "xhdpi:48" "xxhdpi:72" "xxxhdpi:96"; do
+            STAT_DENSITY="${STAT_PAIR%%:*}"
+            STAT_SZ="${STAT_PAIR#*:}"
+            STAT_DIR="android/app/src/main/res/drawable-${STAT_DENSITY}"
+            mkdir -p "$STAT_DIR"
+            rsvg-convert -w "$STAT_SZ" -h "$STAT_SZ" /tmp/masdeta-stat-icon.svg -o "$STAT_DIR/ic_stat_masdeta.png"
           done
 
           mkdir -p android/app/src/main/res/values
@@ -532,12 +1294,34 @@ jobs:
             const perms = [
               "android.permission.CAMERA",
               "android.permission.REQUEST_INSTALL_PACKAGES",
-              "android.permission.POST_NOTIFICATIONS"
+              "android.permission.POST_NOTIFICATIONS",
+              "android.permission.VIBRATE",
+              "android.permission.WAKE_LOCK",
+              "android.permission.RECEIVE_BOOT_COMPLETED"
             ];
             for (const p of perms) {
               if (!xml.includes(p)) {
                 xml = xml.replace("<application", `    <uses-permission android:name="${p}" />\n    <application`);
               }
+            }
+            if (!xml.includes("com.masdeta.app.ChatPollReceiver")) {
+              const components = [
+                '        <receiver',
+                '            android:name="com.masdeta.app.ChatPollReceiver"',
+                '            android:enabled="true"',
+                '            android:exported="true">',
+                '            <intent-filter>',
+                '                <action android:name="com.masdeta.app.ACTION_CHAT_POLL" />',
+                '                <action android:name="android.intent.action.BOOT_COMPLETED" />',
+                '            </intent-filter>',
+                '        </receiver>',
+                '        <service',
+                '            android:name="com.masdeta.app.ChatPollJobService"',
+                '            android:permission="android.permission.BIND_JOB_SERVICE"',
+                '            android:exported="false" />',
+                ''
+              ].join("\n");
+              xml = xml.replace("</application>", `${components}    </application>`);
             }
             fs.writeFileSync(manifestPath, xml);
 

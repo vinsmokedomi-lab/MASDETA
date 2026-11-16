@@ -245,6 +245,7 @@ export interface DirectChatMessage {
   text: string;
   sharedKpm?: SharedKpmCard;
   createdAt: string;
+  deliveredAt?: string;
   readAt?: string;
 }
 
