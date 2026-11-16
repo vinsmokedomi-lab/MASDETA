@@ -589,7 +589,7 @@ export function ItemManagerView({
                     autoCapitalize="words"
                     value={masterSearch}
                     onChange={(e) => setMasterSearch(capitalizeWords(e.target.value))}
-                    placeholder="Cari atau ketik nama paket baru..."
+                    placeholder="Pencarian..."
                     className="min-h-[44px] w-full rounded-xl border border-slate-300 bg-white pr-9 pl-10 text-sm text-slate-900 focus:border-teal-700 focus:outline-none"
                   />
                   {masterSearch && (
@@ -679,7 +679,7 @@ export function ItemManagerView({
                         setSelectedSubItemDraft('');
                         setSubItemSearch(capitalizeWords(e.target.value));
                       }}
-                      placeholder="Contoh: Kompor Gas, Blender, Kulkas..."
+                      placeholder="Pencarian..."
                       className="min-h-[44px] w-full rounded-xl border border-slate-300 bg-white pr-9 pl-10 text-sm text-slate-900 focus:border-teal-700 focus:outline-none"
                     />
                     {(selectedSubItemDraft || subItemSearch) && (

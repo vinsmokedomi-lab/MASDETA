@@ -774,7 +774,7 @@ export function MenuDownloadView({
         onClose={() => setIsProposalModalOpen(false)}
         onSelect={handleSelectProposal}
         searchable
-        searchPlaceholder="Cari proposal, kelurahan, atau kecamatan..."
+        searchPlaceholder="Pencarian..."
       />
 
       {/* Pop-up Pilihan Pengelola */}
@@ -803,7 +803,7 @@ export function MenuDownloadView({
           setExcelFeedback(null);
         }}
         searchable
-        searchPlaceholder="Cari nama pengelola..."
+        searchPlaceholder="Pencarian..."
       />
     </div>
   );

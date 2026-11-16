@@ -11,13 +11,11 @@ import {
   FileCheck2,
   FolderPlus,
   Layers,
-  Lock,
   LogOut,
   MessageSquare,
   Package,
   RefreshCw,
   Trash2,
-  Unlock,
   User,
   UserCheck,
   UserPlus,
@@ -1109,44 +1107,28 @@ export function DashboardView({
                   onClick={() => onOpenProposalDetail(prop.id)}
                   className="block w-full px-4 py-3.5 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
                 >
-                  <div className="flex items-start gap-3">
-                    <div
-                      className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
-                        prop.status === 'locked'
-                          ? 'bg-slate-900 text-white'
-                          : 'bg-teal-50 text-[#0F766E]'
-                      }`}
-                    >
-                      {prop.status === 'locked' ? (
-                        <Lock className="h-4 w-4" />
-                      ) : (
-                        <Unlock className="h-4 w-4" />
-                      )}
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="truncate text-sm font-semibold text-slate-900">
+                        {prop.namaProposal}
+                      </p>
+                      <span className="shrink-0 text-xs font-bold text-slate-800 tabular-nums">
+                        {prop.totalKpm}/{prop.target}
+                      </span>
                     </div>
 
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="truncate text-sm font-semibold text-slate-900">
-                          {prop.namaProposal}
-                        </p>
-                        <span className="shrink-0 text-xs font-bold text-slate-800 tabular-nums">
-                          {prop.totalKpm}/{prop.target}
-                        </span>
-                      </div>
-
-                      <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] tabular-nums">
-                        <span className="min-w-0 truncate text-slate-500">
-                          {prop.tipe} · {prop.tahun} · {prop.acceptedCount} Diterima · Berkas{' '}
-                          {prop.checklistDone}/7
-                        </span>
-                        <span
-                          className={`shrink-0 font-semibold whitespace-nowrap ${
-                            prop.checklist.dinas ? 'text-[#0F766E]' : 'text-amber-700'
-                          }`}
-                        >
-                          {prop.checklist.dinas ? 'Sudah diantar' : 'Belum diantar'}
-                        </span>
-                      </div>
+                    <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] tabular-nums">
+                      <span className="min-w-0 truncate text-slate-500">
+                        {prop.tipe} · {prop.tahun} · {prop.acceptedCount} Diterima · Berkas{' '}
+                        {prop.checklistDone}/7
+                      </span>
+                      <span
+                        className={`shrink-0 font-semibold whitespace-nowrap ${
+                          prop.checklist.dinas ? 'text-[#0F766E]' : 'text-amber-700'
+                        }`}
+                      >
+                        {prop.checklist.dinas ? 'Sudah diantar' : 'Belum diantar'}
+                      </span>
                     </div>
                   </div>
                 </button>

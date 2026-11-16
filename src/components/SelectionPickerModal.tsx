@@ -50,7 +50,7 @@ export function SelectionPickerModal({
   onClose,
   onSelect,
   searchable = false,
-  searchPlaceholder = 'Cari pilihan...',
+  searchPlaceholder = 'Pencarian...',
   searchInputMode = 'text',
   emptyMessage = 'Belum ada pilihan tersedia.',
   emptySearchMessage,

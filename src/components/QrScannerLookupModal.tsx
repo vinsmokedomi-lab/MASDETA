@@ -217,7 +217,7 @@ export const QrScannerLookupModal: React.FC<QrScannerLookupModalProps> = ({
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Ketik 4 digit akhir NIK, Nama, atau Kode Register..."
+              placeholder="Pencarian..."
               className="w-full h-11 pl-10 pr-4 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-600"
               autoFocus
             />

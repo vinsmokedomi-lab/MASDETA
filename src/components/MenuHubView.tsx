@@ -3247,7 +3247,7 @@ export function MenuHubView({
                   type="search"
                   value={arsipQuery}
                   onChange={(e) => setArsipQuery(e.target.value)}
-                  placeholder="Cari nama, NIK, proposal..."
+                  placeholder="Pencarian..."
                   className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pr-3 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
                 />
               </div>
@@ -3502,7 +3502,7 @@ export function MenuHubView({
                       type="search"
                       value={adminQuery}
                       onChange={(e) => setAdminQuery(e.target.value)}
-                      placeholder="Cari nama, kode, proposal, wilayah..."
+                      placeholder="Pencarian..."
                       className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pr-3 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
                     />
                   </div>
@@ -3902,7 +3902,7 @@ export function MenuHubView({
                     type="search"
                     value={pengelolaQuery}
                     onChange={(e) => setPengelolaQuery(e.target.value)}
-                    placeholder="Cari nama pengelola, wilayah, kontak..."
+                    placeholder="Pencarian..."
                     className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pr-3 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
                   />
                 </div>
@@ -4320,7 +4320,7 @@ export function MenuHubView({
                     type="search"
                     value={pekerjaanQuery}
                     onChange={(e) => setPekerjaanQuery(e.target.value)}
-                    placeholder="Cari profesi atau pekerjaan..."
+                    placeholder="Pencarian..."
                     className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pr-3 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
                   />
                 </div>
@@ -4729,54 +4729,66 @@ export function MenuHubView({
         {renderSubHeader('Log Aktivitas Umum', () => onChangeSection('root'))}
 
         <div className="space-y-4 px-4 pt-4">
-          <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-3.5">
-            <div>
-              <h2 className="text-sm font-bold text-slate-900">Jejak Aktivitas Tim</h2>
-              <p className="mt-0.5 text-xs text-slate-500">
-                Memantau pembuatan/hapus proposal, perubahan KPM, item, dan pelaku.
-              </p>
-            </div>
-
-            <div className="relative">
-              <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <input
-                type="search"
-                value={activitySearch}
-                onChange={(e) => setActivitySearch(e.target.value)}
-                placeholder="Cari nama pelaku, proposal, KPM, atau aksi..."
-                className="min-h-[42px] w-full rounded-xl border border-slate-200 bg-slate-50 pr-3 pl-9 text-xs text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:bg-white focus:outline-none"
-              />
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="flex-1 min-w-[200px]">
-                <SegmentedTabs
-                  value={activityCategory}
-                  onChange={(val) => setActivityCategory(val)}
-                  tabs={[
-                    { key: 'all', label: 'Semua' },
-                    { key: 'proposal', label: 'Proposal' },
-                    { key: 'kpm', label: 'KPM' },
-                    { key: 'catalog', label: 'Katalog' },
-                  ]}
-                />
-              </div>
-              {activityYearOptions.length > 0 && (
-                <div className="w-32 shrink-0">
-                  <FilterSelect
-                    ariaLabel="Filter tahun log aktivitas"
-                    value={activityYear}
-                    onChange={setActivityYear}
-                  >
-                    <option value="all">Semua Tahun</option>
-                    {activityYearOptions.map((y) => (
-                      <option key={y} value={y}>
-                        {y}
-                      </option>
-                    ))}
-                  </FilterSelect>
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3.5">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-[#0F766E]">
+                  <History className="h-5 w-5" />
                 </div>
-              )}
+                <div className="min-w-0">
+                  <h2 className="truncate text-sm font-bold text-slate-900">
+                    Jejak Aktivitas Tim
+                  </h2>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    Rekaman perubahan proposal, KPM, &amp; katalog
+                  </p>
+                </div>
+              </div>
+              <span className="shrink-0 text-xs font-bold text-[#0F766E] tabular-nums">
+                {filteredActivities.length} log
+              </span>
+            </div>
+
+            <div className="space-y-2.5 p-3.5">
+              <div className="flex items-center gap-2">
+                <div className="relative min-w-0 flex-1">
+                  <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="search"
+                    value={activitySearch}
+                    onChange={(e) => setActivitySearch(e.target.value)}
+                    placeholder="Pencarian..."
+                    className="min-h-[42px] w-full rounded-xl border border-slate-200 bg-slate-50 pr-3 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:bg-white focus:outline-none"
+                  />
+                </div>
+                {activityYearOptions.length > 0 && (
+                  <div className="w-[116px] shrink-0">
+                    <FilterSelect
+                      ariaLabel="Filter tahun log aktivitas"
+                      value={activityYear}
+                      onChange={setActivityYear}
+                    >
+                      <option value="all">Semua</option>
+                      {activityYearOptions.map((y) => (
+                        <option key={y} value={y}>
+                          {y}
+                        </option>
+                      ))}
+                    </FilterSelect>
+                  </div>
+                )}
+              </div>
+
+              <SegmentedTabs
+                value={activityCategory}
+                onChange={(val) => setActivityCategory(val)}
+                tabs={[
+                  { key: 'all', label: 'Semua' },
+                  { key: 'proposal', label: 'Proposal' },
+                  { key: 'kpm', label: 'KPM' },
+                  { key: 'catalog', label: 'Katalog' },
+                ]}
+              />
             </div>
           </div>
 
@@ -4863,7 +4875,7 @@ export function MenuHubView({
                 type="search"
                 value={matrixQuery}
                 onChange={(e) => setMatrixQuery(e.target.value)}
-                placeholder="Cari nama, proposal, atau NIK..."
+                placeholder="Pencarian..."
                 className="min-h-[42px] w-full rounded-xl border border-slate-200 bg-white pr-3 pl-10 text-sm text-slate-900 focus:border-teal-700 focus:outline-none"
               />
             </div>

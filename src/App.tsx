@@ -956,7 +956,24 @@ export default function App() {
           setCustomYears((prev) => Array.from(new Set([...prev, ...snapshot.customYears!])));
         }
         if (snapshot.proposals && (snapshot.proposals.length > 0 || latestDataRef.current.proposals.length === 0)) {
-          setProposals(snapshot.proposals);
+          setProposals(
+            snapshot.proposals.map((prop) => {
+              const docs = prop.documents || {};
+              return {
+                ...prop,
+                checklist: {
+                  docx: Boolean(docs.proposalOpd || docs.proposalLurahCamat),
+                  dinas: Boolean(prop.checklist?.dinas),
+                  dinasAt: prop.checklist?.dinasAt,
+                  rab: Boolean(docs.rab),
+                  rt: Boolean(docs.capRt),
+                  rw: Boolean(docs.capRw),
+                  lurah: Boolean(docs.capLurah),
+                  camat: Boolean(docs.capCamat),
+                },
+              };
+            })
+          );
         }
         if (snapshot.items && snapshot.items.length > 0) {
           setItems(snapshot.items);

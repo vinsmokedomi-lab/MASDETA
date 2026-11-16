@@ -1759,7 +1759,7 @@ export function KpmRegistrationForm({
         onSelect={handleYearChange}
         searchable
         searchInputMode="numeric"
-        searchPlaceholder="Cari tahun anggaran..."
+        searchPlaceholder="Pencarian..."
         showAddButton
         addButtonLabel="Tambah Tahun Anggaran Baru"
         inlineCreateConfig={{
@@ -1807,7 +1807,7 @@ export function KpmRegistrationForm({
         onClose={() => setIsProposalModalOpen(false)}
         onSelect={(v) => handleProposalChange(v)}
         searchable
-        searchPlaceholder="Cari proposal, kelurahan, atau kecamatan..."
+        searchPlaceholder="Pencarian..."
         emptyMessage={`Belum ada proposal untuk tahun ${values.tahun || 'ini'}. Tekan tombol + di kanan atas untuk membuat baru.`}
         showAddButton={!isProposalScopeLocked && !editingProposalLocked}
         addButtonLabel="Tambah Proposal Baru"
@@ -1832,7 +1832,7 @@ export function KpmRegistrationForm({
           updateField('pekerjaan', canonical);
         }}
         searchable
-        searchPlaceholder="Cari pekerjaan..."
+        searchPlaceholder="Pencarian..."
         showAddButton
         addButtonLabel="Tambah Pekerjaan Baru"
         inlineCreateConfig={{

@@ -65,7 +65,19 @@ jobs:
           printf 'export const APP_VERSION = "%s";\nexport const APP_VERSION_CODE = %s;\nexport const GITHUB_REPO = "vinsmokedomi-lab/MASDETA";\n' "$VERSION_NAME" "$VERSION_CODE" > src/config/appVersion.ts
 
       - name: Install dependencies
-        run: npm install --legacy-peer-deps
+        run: |
+          npm config set fetch-retries 5
+          npm config set fetch-retry-mintimeout 5000
+          npm config set fetch-retry-maxtimeout 60000
+          for attempt in 1 2 3; do
+            echo "npm install attempt $attempt/3..."
+            if npm install --legacy-peer-deps --no-audit --no-fund; then
+              exit 0
+            fi
+            echo "npm install gagal (percobaan $attempt/3), mencoba ulang dalam 5 detik..."
+            sleep 5
+          done
+          exit 1
 
       - name: Build web bundle
         env:

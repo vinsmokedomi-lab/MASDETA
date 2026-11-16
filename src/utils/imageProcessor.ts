@@ -778,10 +778,23 @@ export function loadProposals(fallback: ProposalRecord[]): ProposalRecord[] {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return fallback;
     const validTipes = new Set(['Murni', 'Perubahan', 'Database', 'Arsip']);
-    return parsed.map((prop: ProposalRecord) => ({
-      ...prop,
-      tipe: validTipes.has(prop.tipe) ? prop.tipe : 'Murni',
-    }));
+    return parsed.map((prop: ProposalRecord) => {
+      const docs = prop.documents || {};
+      return {
+        ...prop,
+        tipe: validTipes.has(prop.tipe) ? prop.tipe : 'Murni',
+        checklist: {
+          docx: Boolean(docs.proposalOpd || docs.proposalLurahCamat),
+          dinas: Boolean(prop.checklist?.dinas),
+          dinasAt: prop.checklist?.dinasAt,
+          rab: Boolean(docs.rab),
+          rt: Boolean(docs.capRt),
+          rw: Boolean(docs.capRw),
+          lurah: Boolean(docs.capLurah),
+          camat: Boolean(docs.capCamat),
+        },
+      };
+    });
   } catch {
     return fallback;
   }

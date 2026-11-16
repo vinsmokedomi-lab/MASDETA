@@ -182,7 +182,15 @@ export function ProposalForm({
     namaProposal: proposal.namaProposal,
     jumlahKpm: proposal.jumlahKpm ?? 66,
     status: proposal.status,
-    checklist: { ...proposal.checklist },
+    checklist: {
+      ...proposal.checklist,
+      docx: Boolean(proposal.documents?.proposalOpd || proposal.documents?.proposalLurahCamat),
+      rab: Boolean(proposal.documents?.rab),
+      rt: Boolean(proposal.documents?.capRt),
+      rw: Boolean(proposal.documents?.capRw),
+      lurah: Boolean(proposal.documents?.capLurah),
+      camat: Boolean(proposal.documents?.capCamat),
+    },
     catatan: proposal.catatan,
     documents: { ...proposal.documents },
   });
@@ -202,7 +210,15 @@ export function ProposalForm({
       namaProposal: proposal.namaProposal,
       jumlahKpm: proposal.jumlahKpm ?? 66,
       status: proposal.status,
-      checklist: { ...proposal.checklist },
+      checklist: {
+        ...proposal.checklist,
+        docx: Boolean(proposal.documents?.proposalOpd || proposal.documents?.proposalLurahCamat),
+        rab: Boolean(proposal.documents?.rab),
+        rt: Boolean(proposal.documents?.capRt),
+        rw: Boolean(proposal.documents?.capRw),
+        lurah: Boolean(proposal.documents?.capLurah),
+        camat: Boolean(proposal.documents?.capCamat),
+      },
       catatan: proposal.catatan,
       documents: { ...proposal.documents },
     });

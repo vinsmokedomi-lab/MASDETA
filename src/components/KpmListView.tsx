@@ -388,7 +388,7 @@ export function KpmListView({
       {/* Sticky Header */}
       <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md">
         <h1 className="truncate text-base font-bold text-slate-900">
-          Keluarga Penerima Manfaat (KPM)
+          Keluarga Penerima Manfaat
         </h1>
         {canUpdate && onBulkUpdateKpms && (
           <button
@@ -438,7 +438,7 @@ export function KpmListView({
                 type="search"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Cari nama, NIK, wilayah..."
+                placeholder="Pencarian..."
                 className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pr-3 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
               />
             </div>

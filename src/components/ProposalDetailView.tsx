@@ -677,12 +677,15 @@ export function ProposalDetailView({
           {/* Document Checklist Inline Strip */}
           <div className="mt-3.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
             {[
-              { label: 'DOCX', done: proposal.checklist.docx },
-              { label: 'RAB', done: proposal.checklist.rab },
-              { label: 'Cap RT', done: proposal.checklist.rt },
-              { label: 'Cap RW', done: proposal.checklist.rw },
-              { label: 'Cap Lurah', done: proposal.checklist.lurah },
-              { label: 'Cap Camat', done: proposal.checklist.camat },
+              {
+                label: 'DOCX',
+                done: Boolean(proposal.documents?.proposalOpd || proposal.documents?.proposalLurahCamat),
+              },
+              { label: 'RAB', done: Boolean(proposal.documents?.rab) },
+              { label: 'Cap RT', done: Boolean(proposal.documents?.capRt) },
+              { label: 'Cap RW', done: Boolean(proposal.documents?.capRw) },
+              { label: 'Cap Lurah', done: Boolean(proposal.documents?.capLurah) },
+              { label: 'Cap Camat', done: Boolean(proposal.documents?.capCamat) },
             ].map((item) => (
               <span
                 key={item.label}
@@ -1400,7 +1403,7 @@ export function ProposalDetailView({
                       type="search"
                       value={transferQuery}
                       onChange={(e) => setTransferQuery(e.target.value)}
-                      placeholder="Cari nama / NIK..."
+                      placeholder="Pencarian..."
                       className="min-h-[40px] w-full rounded-xl border border-slate-200 bg-white pr-3 pl-9 text-xs text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none"
                     />
                   </div>
