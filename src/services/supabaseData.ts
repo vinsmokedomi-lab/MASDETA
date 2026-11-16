@@ -49,6 +49,32 @@ export interface SupabaseOperationalSnapshot {
   kpmAuditLogs: KpmAuditLogEntry[];
 }
 
+const SUPABASE_PAGE_SIZE = 1000;
+
+const SAFE_INTERNAL_USER_COLUMNS =
+  'id,nama,email,jabatan,kontak,role,status,perm_add,perm_update,perm_delete,presence_status,presence_manual,foto_url,foto_thumb_url,foto_file_id,last_active_at,registered_at,updated_at';
+
+async function fetchAllPages<T = Record<string, unknown>>(
+  fetchPage: (
+    from: number,
+    to: number
+  ) => PromiseLike<{ data: T[] | null; error: unknown }>,
+  maxRows = 50_000
+): Promise<T[]> {
+  const all: T[] = [];
+  let from = 0;
+  while (from < maxRows) {
+    const to = Math.min(from + SUPABASE_PAGE_SIZE - 1, maxRows - 1);
+    const { data, error } = await fetchPage(from, to);
+    if (error) throw error;
+    const chunk = data || [];
+    all.push(...chunk);
+    if (chunk.length < SUPABASE_PAGE_SIZE) break;
+    from += SUPABASE_PAGE_SIZE;
+  }
+  return all;
+}
+
 export function isSchemaMissingError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const err = error as { code?: string; message?: string; details?: string };
@@ -253,57 +279,148 @@ export async function checkSupabaseSchemaReady(): Promise<{
 // ============================================================================
 export async function fetchOperationalDataFromSupabase(): Promise<SupabaseOperationalSnapshot> {
   const [
-    kabRes,
-    kecRes,
-    kelRes,
-    pekerjaanRes,
-    itemsRes,
-    subItemsRes,
-    pengelolaRes,
-    proposalsRes,
-    proposalDocsRes,
-    kpmRes,
-    kpmDocsRes,
-    deliveriesRes,
-    historyRes,
-    auditRes,
+    kabData,
+    kecData,
+    kelData,
+    pekerjaanData,
+    itemsData,
+    subItemsData,
+    pengelolaData,
+    proposalsData,
+    proposalDocsData,
+    kpmData,
+    kpmDocsData,
+    deliveriesData,
+    historyData,
+    auditData,
   ] = await Promise.all([
-    supabase.from('wilayah_kabkota').select('*').order('sort_order', { ascending: true }),
-    supabase.from('wilayah_kecamatan').select('*').order('sort_order', { ascending: true }),
-    supabase.from('wilayah_kelurahan').select('*').order('sort_order', { ascending: true }),
-    supabase.from('pekerjaan_master').select('*').order('sort_order', { ascending: true }),
-    supabase.from('item_bantuan').select('*').order('tahun', { ascending: true }).order('sort_order', { ascending: true }),
-    supabase.from('item_sub_items').select('*').order('sort_order', { ascending: true }),
-    supabase.from('pengelola').select('*').order('display_name', { ascending: true }),
-    supabase.from('proposals').select('*').order('created_at', { ascending: false }),
-    supabase.from('proposal_documents').select('*'),
-    supabase.from('kpm_records').select('*').order('created_at', { ascending: false }),
-    supabase.from('kpm_documents').select('*').order('sort_order', { ascending: true }),
-    supabase.from('kpm_sub_item_deliveries').select('*'),
-    supabase.from('proposal_kpm_history').select('*').order('timestamp', { ascending: false }).limit(2000),
-    supabase.from('kpm_audit_logs').select('*').order('timestamp', { ascending: false }).limit(3000),
+    fetchAllPages((from, to) =>
+      supabase
+        .from('wilayah_kabkota')
+        .select('*')
+        .order('sort_order', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to)
+    ),
+    fetchAllPages((from, to) =>
+      supabase
+        .from('wilayah_kecamatan')
+        .select('*')
+        .order('sort_order', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to)
+    ),
+    fetchAllPages((from, to) =>
+      supabase
+        .from('wilayah_kelurahan')
+        .select('*')
+        .order('sort_order', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to)
+    ),
+    fetchAllPages((from, to) =>
+      supabase
+        .from('pekerjaan_master')
+        .select('*')
+        .order('sort_order', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to)
+    ),
+    fetchAllPages((from, to) =>
+      supabase
+        .from('item_bantuan')
+        .select('*')
+        .order('tahun', { ascending: true })
+        .order('sort_order', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to)
+    ),
+    fetchAllPages((from, to) =>
+      supabase
+        .from('item_sub_items')
+        .select('*')
+        .order('sort_order', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to)
+    ),
+    fetchAllPages((from, to) =>
+      supabase
+        .from('pengelola')
+        .select('*')
+        .order('display_name', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to)
+    ),
+    fetchAllPages((from, to) =>
+      supabase
+        .from('proposals')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: true })
+        .range(from, to)
+    ),
+    fetchAllPages((from, to) =>
+      supabase.from('proposal_documents').select('*').order('id', { ascending: true }).range(from, to)
+    ),
+    fetchAllPages((from, to) =>
+      supabase
+        .from('kpm_records')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: true })
+        .range(from, to)
+    ),
+    fetchAllPages((from, to) =>
+      supabase
+        .from('kpm_documents')
+        .select('*')
+        .order('sort_order', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to)
+    ),
+    fetchAllPages((from, to) =>
+      supabase
+        .from('kpm_sub_item_deliveries')
+        .select('*')
+        .order('id', { ascending: true })
+        .range(from, to)
+    ),
+    fetchAllPages(
+      (from, to) =>
+        supabase
+          .from('proposal_kpm_history')
+          .select('*')
+          .order('timestamp', { ascending: false })
+          .order('id', { ascending: true })
+          .range(from, to),
+      3000
+    ),
+    fetchAllPages(
+      (from, to) =>
+        supabase
+          .from('kpm_audit_logs')
+          .select('*')
+          .order('timestamp', { ascending: false })
+          .order('id', { ascending: true })
+          .range(from, to),
+      5000
+    ),
   ]);
 
-  const errors = [
-    kabRes.error,
-    kecRes.error,
-    kelRes.error,
-    pekerjaanRes.error,
-    itemsRes.error,
-    subItemsRes.error,
-    pengelolaRes.error,
-    proposalsRes.error,
-    proposalDocsRes.error,
-    kpmRes.error,
-    kpmDocsRes.error,
-    deliveriesRes.error,
-    historyRes.error,
-    auditRes.error,
-  ].filter(Boolean);
-
-  if (errors.length > 0) {
-    throw errors[0];
-  }
+  const kabRes = { data: kabData };
+  const kecRes = { data: kecData };
+  const kelRes = { data: kelData };
+  const pekerjaanRes = { data: pekerjaanData };
+  const itemsRes = { data: itemsData };
+  const subItemsRes = { data: subItemsData };
+  const pengelolaRes = { data: pengelolaData };
+  const proposalsRes = { data: proposalsData };
+  const proposalDocsRes = { data: proposalDocsData };
+  const kpmRes = { data: kpmData };
+  const kpmDocsRes = { data: kpmDocsData };
+  const deliveriesRes = { data: deliveriesData };
+  const historyRes = { data: historyData };
+  const auditRes = { data: auditData };
 
   // 1. Reconstruct Wilayah hierarchy
   const kelByKec = new Map<string, string[]>();
@@ -749,6 +866,165 @@ function buildKpmRecordRow(
   };
 }
 
+async function fetchExistingIdsByForeignKeyInChunks(
+  table: string,
+  fkColumn: string,
+  fkValues: string[],
+  chunkSize = 100
+): Promise<string[]> {
+  const existingIds: string[] = [];
+  for (let i = 0; i < fkValues.length; i += chunkSize) {
+    const chunk = fkValues.slice(i, i + chunkSize);
+    const rows = await fetchAllPages((from, to) =>
+      supabase
+        .from(table)
+        .select('id')
+        .in(fkColumn, chunk)
+        .order('id', { ascending: true })
+        .range(from, to)
+    );
+    rows.forEach((r) => existingIds.push(String(r.id)));
+  }
+  return existingIds;
+}
+
+async function syncKpmDocsAndDeliveriesNonDestructive(
+  recordsToSync: KpmRecord[],
+  includeDeliveries = true
+): Promise<void> {
+  if (recordsToSync.length === 0) return;
+  const nowIso = new Date().toISOString();
+  const kpmIds = Array.from(new Set(recordsToSync.map((r) => r.id).filter(Boolean)));
+
+  const allDocRows: Record<string, unknown>[] = [];
+  const keepDocIds = new Set<string>();
+  const deliveryKpmIds: string[] = [];
+  const allDeliveryRows: Record<string, unknown>[] = [];
+  const keepDeliveryIds = new Set<string>();
+
+  for (const rec of recordsToSync) {
+    const docRows = buildKpmDocumentRows(rec.id, rec.documents);
+    docRows.forEach((row) => {
+      keepDocIds.add(String(row.id));
+      allDocRows.push(row);
+    });
+
+    if (includeDeliveries && rec.subItemDeliveries) {
+      deliveryKpmIds.push(rec.id);
+      const seenSubNames = new Set<string>();
+      for (const [subName, state] of Object.entries(rec.subItemDeliveries)) {
+        const cleanSub = subName.trim();
+        if (!cleanSub || seenSubNames.has(cleanSub)) continue;
+        seenSubNames.add(cleanSub);
+        const delivId = `${rec.id}::${cleanSub}`;
+        keepDeliveryIds.add(delivId);
+        allDeliveryRows.push({
+          id: delivId,
+          kpm_id: rec.id,
+          sub_item_name: cleanSub,
+          delivered: Boolean(state.delivered),
+          updated_at: state.updatedAt || nowIso,
+          updated_by: state.updatedBy || null,
+        });
+      }
+    }
+  }
+
+  // Upsert terlebih dahulu agar data tidak pernah hilang jika jaringan terputus di tengah jalan
+  const existingDocIds = await fetchExistingIdsByForeignKeyInChunks('kpm_documents', 'kpm_id', kpmIds);
+  if (allDocRows.length > 0) {
+    await upsertInChunks('kpm_documents', allDocRows, 'id');
+  }
+  const obsoleteDocIds = existingDocIds.filter((id) => !keepDocIds.has(id));
+  if (obsoleteDocIds.length > 0) {
+    await deleteByIdsInChunks('kpm_documents', 'id', obsoleteDocIds);
+  }
+
+  if (includeDeliveries && deliveryKpmIds.length > 0) {
+    const existingDelivIds = await fetchExistingIdsByForeignKeyInChunks(
+      'kpm_sub_item_deliveries',
+      'kpm_id',
+      deliveryKpmIds
+    );
+    if (allDeliveryRows.length > 0) {
+      await upsertInChunks('kpm_sub_item_deliveries', allDeliveryRows, 'kpm_id,sub_item_name');
+    }
+    const obsoleteDelivIds = existingDelivIds.filter((id) => !keepDeliveryIds.has(id));
+    if (obsoleteDelivIds.length > 0) {
+      await deleteByIdsInChunks('kpm_sub_item_deliveries', 'id', obsoleteDelivIds);
+    }
+  }
+}
+
+export async function appendKpmAuditLogsInSupabase(
+  auditLogs: KpmAuditLogEntry[],
+  validKpmIdsHint?: Set<string>
+): Promise<void> {
+  if (auditLogs.length === 0) return;
+  const nowIso = new Date().toISOString();
+  const seenIds = new Set<string>();
+  const rows: Record<string, unknown>[] = [];
+  for (const a of auditLogs) {
+    if (!a.kpmId || seenIds.has(a.id)) continue;
+    if (validKpmIdsHint && !validKpmIdsHint.has(a.kpmId)) continue;
+    seenIds.add(a.id);
+    rows.push({
+      id: a.id,
+      kpm_id: a.kpmId,
+      action: a.action,
+      actor_name: a.actorName || 'Admin',
+      actor_email: a.actorEmail || null,
+      timestamp: a.timestamp || nowIso,
+      proposal: a.proposal || '',
+      tahun: a.tahun || '',
+      changes: a.changes || [],
+    });
+  }
+  if (rows.length > 0) {
+    await upsertInChunks('kpm_audit_logs', rows, 'id');
+  }
+}
+
+export async function appendProposalHistoryInSupabase(
+  historyEntries: ProposalKpmHistoryEntry[],
+  proposalsHint: ProposalRecord[] = [],
+  validKpmIdsHint?: Set<string>
+): Promise<void> {
+  if (historyEntries.length === 0) return;
+  const nowIso = new Date().toISOString();
+  const propIdByKey = new Map<string, string>();
+  proposalsHint.forEach((p) => {
+    propIdByKey.set(`${p.tahun}::${p.namaProposal.trim().toLowerCase()}`, p.id);
+  });
+
+  const seenIds = new Set<string>();
+  const rows: Record<string, unknown>[] = [];
+  for (const h of historyEntries) {
+    if (seenIds.has(h.id)) continue;
+    seenIds.add(h.id);
+    const cleanKpmId =
+      h.kpmId && (!validKpmIdsHint || validKpmIdsHint.has(h.kpmId)) ? h.kpmId : null;
+    rows.push({
+      id: h.id,
+      tahun: h.tahun,
+      proposal_id:
+        propIdByKey.get(`${h.tahun}::${h.proposalName.trim().toLowerCase()}`) || null,
+      proposal_name: h.proposalName,
+      kpm_id: cleanKpmId,
+      kpm_name: h.kpmName,
+      register_code: h.registerCode || '',
+      action: h.action,
+      from_proposal: h.fromProposal || null,
+      to_proposal: h.toProposal || null,
+      actor_name: h.actorName || 'Admin',
+      timestamp: h.timestamp || nowIso,
+    });
+  }
+  if (rows.length > 0) {
+    await upsertInChunks('proposal_kpm_history', rows, 'id');
+  }
+}
+
 export async function upsertKpmRecordInSupabase(
   record: KpmRecord,
   proposals: ProposalRecord[],
@@ -761,43 +1037,7 @@ export async function upsertKpmRecordInSupabase(
     .upsert(rowPayload, { onConflict: 'id' });
   if (upsertErr) throw upsertErr;
 
-  // Replace normalized kpm_documents for this KPM
-  const { error: delDocsErr } = await supabase
-    .from('kpm_documents')
-    .delete()
-    .eq('kpm_id', record.id);
-  if (delDocsErr) throw delDocsErr;
-
-  const docRows = buildKpmDocumentRows(record.id, record.documents);
-  if (docRows.length > 0) {
-    const { error: insDocsErr } = await supabase
-      .from('kpm_documents')
-      .upsert(docRows, { onConflict: 'id' });
-    if (insDocsErr) throw insDocsErr;
-  }
-
-  // Sync sub-item deliveries if present
-  if (record.subItemDeliveries) {
-    const delivRows = Object.entries(record.subItemDeliveries).map(([subName, state]) => ({
-      id: `${record.id}::${subName}`,
-      kpm_id: record.id,
-      sub_item_name: subName,
-      delivered: Boolean(state.delivered),
-      updated_at: state.updatedAt || new Date().toISOString(),
-      updated_by: state.updatedBy || null,
-    }));
-    const { error: delDelivErr } = await supabase
-      .from('kpm_sub_item_deliveries')
-      .delete()
-      .eq('kpm_id', record.id);
-    if (delDelivErr) throw delDelivErr;
-    if (delivRows.length > 0) {
-      const { error: insDelivErr } = await supabase
-        .from('kpm_sub_item_deliveries')
-        .upsert(delivRows, { onConflict: 'kpm_id,sub_item_name' });
-      if (insDelivErr) throw insDelivErr;
-    }
-  }
+  await syncKpmDocsAndDeliveriesNonDestructive([record], true);
 }
 
 export async function updateKpmDocumentsInSupabase(
@@ -811,6 +1051,161 @@ export async function updateKpmDocumentsInSupabase(
 export async function deleteKpmRecordInSupabase(kpmId: string): Promise<void> {
   const { error } = await supabase.from('kpm_records').delete().eq('id', kpmId);
   if (error) throw error;
+}
+
+export async function upsertKpmRecordsBatchInSupabase(params: {
+  records: KpmRecord[];
+  proposals: ProposalRecord[];
+  pengelolaList: PengelolaProfile[];
+  auditLogs?: KpmAuditLogEntry[];
+  historyEntries?: ProposalKpmHistoryEntry[];
+  includeDeliveries?: boolean;
+}): Promise<void> {
+  const {
+    records,
+    proposals,
+    pengelolaList,
+    auditLogs = [],
+    historyEntries = [],
+    includeDeliveries = true,
+  } = params;
+
+  if (records.length > 0) {
+    const kpmRows = records.map((rec) => buildKpmRecordRow(rec, proposals, pengelolaList));
+    await upsertInChunks('kpm_records', kpmRows, 'id');
+    await syncKpmDocsAndDeliveriesNonDestructive(records, includeDeliveries);
+  }
+
+  if (auditLogs.length > 0) {
+    const upsertedIds = records.length > 0 ? new Set(records.map((r) => r.id)) : undefined;
+    await appendKpmAuditLogsInSupabase(auditLogs, upsertedIds);
+  }
+  if (historyEntries.length > 0) {
+    await appendProposalHistoryInSupabase(historyEntries, proposals);
+  }
+}
+
+export async function deleteKpmRecordWithSideEffectsInSupabase(params: {
+  kpmId: string;
+  updatedRecordsInProposal?: KpmRecord[];
+  proposals: ProposalRecord[];
+  pengelolaList: PengelolaProfile[];
+  historyEntries?: ProposalKpmHistoryEntry[];
+}): Promise<void> {
+  const {
+    kpmId,
+    updatedRecordsInProposal = [],
+    proposals,
+    pengelolaList,
+    historyEntries = [],
+  } = params;
+
+  await deleteKpmRecordInSupabase(kpmId);
+
+  if (updatedRecordsInProposal.length > 0) {
+    const kpmRows = updatedRecordsInProposal.map((rec) =>
+      buildKpmRecordRow(rec, proposals, pengelolaList)
+    );
+    await upsertInChunks('kpm_records', kpmRows, 'id');
+  }
+
+  if (historyEntries.length > 0) {
+    // KPM sudah dihapus, pastikan kpm_id menjadi null agar tidak melanggar FK
+    await appendProposalHistoryInSupabase(historyEntries, proposals, new Set());
+  }
+}
+
+export async function updateKpmStatusesBatchInSupabase(params: {
+  updates: Array<{ id: string; validasi: KpmRecord['validasi']; updatedAt: string }>;
+  auditLogs?: KpmAuditLogEntry[];
+  historyEntries?: ProposalKpmHistoryEntry[];
+  proposals?: ProposalRecord[];
+}): Promise<void> {
+  const { updates, auditLogs = [], historyEntries = [], proposals = [] } = params;
+  const byStatus = new Map<KpmRecord['validasi'], typeof updates>();
+  for (const u of updates) {
+    const list = byStatus.get(u.validasi) || [];
+    list.push(u);
+    byStatus.set(u.validasi, list);
+  }
+  for (const [validasi, list] of byStatus.entries()) {
+    const ids = Array.from(new Set(list.map((x) => x.id).filter(Boolean)));
+    const updatedAt = list[0]?.updatedAt || new Date().toISOString();
+    for (let i = 0; i < ids.length; i += 100) {
+      const chunk = ids.slice(i, i + 100);
+      const { error } = await supabase
+        .from('kpm_records')
+        .update({ validasi, updated_at: updatedAt })
+        .in('id', chunk);
+      if (error) throw error;
+    }
+  }
+  if (auditLogs.length > 0) {
+    await appendKpmAuditLogsInSupabase(auditLogs);
+  }
+  if (historyEntries.length > 0) {
+    await appendProposalHistoryInSupabase(historyEntries, proposals);
+  }
+}
+
+export async function upsertKpmSubItemDeliveriesInSupabase(params: {
+  kpmId: string;
+  deliveries: Record<string, SubItemDeliveryState>;
+  updatedAt: string;
+  auditLogs?: KpmAuditLogEntry[];
+}): Promise<void> {
+  const { kpmId, deliveries, updatedAt, auditLogs = [] } = params;
+  const rows = Object.entries(deliveries)
+    .map(([subName, state]) => {
+      const cleanSub = subName.trim();
+      if (!cleanSub) return null;
+      return {
+        id: `${kpmId}::${cleanSub}`,
+        kpm_id: kpmId,
+        sub_item_name: cleanSub,
+        delivered: Boolean(state.delivered),
+        updated_at: state.updatedAt || updatedAt,
+        updated_by: state.updatedBy || null,
+      };
+    })
+    .filter((row): row is NonNullable<typeof row> => Boolean(row));
+
+  if (rows.length > 0) {
+    await upsertInChunks('kpm_sub_item_deliveries', rows, 'kpm_id,sub_item_name');
+  }
+  const { error: updErr } = await supabase
+    .from('kpm_records')
+    .update({ updated_at: updatedAt })
+    .eq('id', kpmId);
+  if (updErr) throw updErr;
+
+  if (auditLogs.length > 0) {
+    await appendKpmAuditLogsInSupabase(auditLogs, new Set([kpmId]));
+  }
+}
+
+export async function updateKpmBerkasDikembalikanInSupabase(params: {
+  kpmId: string;
+  berkasDikembalikan: boolean;
+  berkasDikembalikanAt?: string | null;
+  berkasDikembalikanBy?: string | null;
+  updatedAt: string;
+  auditLogs?: KpmAuditLogEntry[];
+}): Promise<void> {
+  const { error } = await supabase
+    .from('kpm_records')
+    .update({
+      berkas_dikembalikan: params.berkasDikembalikan,
+      berkas_dikembalikan_at: params.berkasDikembalikanAt || null,
+      berkas_dikembalikan_by: params.berkasDikembalikanBy || null,
+      updated_at: params.updatedAt,
+    })
+    .eq('id', params.kpmId);
+  if (error) throw error;
+
+  if (params.auditLogs && params.auditLogs.length > 0) {
+    await appendKpmAuditLogsInSupabase(params.auditLogs, new Set([params.kpmId]));
+  }
 }
 
 function buildProposalRow(proposal: ProposalRecord, resolvedId: string) {
@@ -912,21 +1307,618 @@ export async function upsertProposalInSupabase(proposal: ProposalRecord): Promis
     .upsert(rowPayload, { onConflict: 'id' });
   if (propErr) throw propErr;
 
-  const { error: delDocsErr } = await supabase
-    .from('proposal_documents')
-    .delete()
-    .eq('proposal_id', resolvedId);
-  if (delDocsErr) throw delDocsErr;
-
   const docRows = buildProposalDocumentRows(proposal, resolvedId);
-  if (docRows.length > 0) {
+  const keepSlots = new Set(docRows.map((d) => String(d.doc_slot)));
+
+  const { data: existingDocs, error: fetchDocsErr } = await supabase
+    .from('proposal_documents')
+    .select('id,doc_slot')
+    .eq('proposal_id', resolvedId);
+  if (fetchDocsErr) throw fetchDocsErr;
+
+  // Reuse canonical row ID per (proposal_id, doc_slot) & upsert before deleting obsolete slots
+  const existingIdBySlot = new Map<string, string>();
+  (existingDocs || []).forEach((d) => {
+    existingIdBySlot.set(String(d.doc_slot), String(d.id));
+  });
+  const mergedDocRows = docRows.map((row) => ({
+    ...row,
+    id: existingIdBySlot.get(String(row.doc_slot)) || row.id,
+  }));
+
+  if (mergedDocRows.length > 0) {
     const { error: insErr } = await supabase
       .from('proposal_documents')
-      .upsert(docRows, { onConflict: 'proposal_id,doc_slot' });
+      .upsert(mergedDocRows, { onConflict: 'proposal_id,doc_slot' });
     if (insErr) throw insErr;
   }
 
+  const obsoleteDocIds = (existingDocs || [])
+    .filter((d) => !keepSlots.has(String(d.doc_slot)))
+    .map((d) => String(d.id));
+  if (obsoleteDocIds.length > 0) {
+    await deleteByIdsInChunks('proposal_documents', 'id', obsoleteDocIds);
+  }
+
   return resolvedId;
+}
+
+export async function upsertProposalsBatchInSupabase(params: {
+  proposals: ProposalRecord[];
+  updatedRecords?: KpmRecord[];
+  pengelolaList?: PengelolaProfile[];
+  historyEntries?: ProposalKpmHistoryEntry[];
+  auditLogs?: KpmAuditLogEntry[];
+}): Promise<ProposalRecord[]> {
+  const {
+    proposals: proposalsToSave,
+    updatedRecords = [],
+    pengelolaList = [],
+    historyEntries = [],
+    auditLogs = [],
+  } = params;
+
+  const resolvedProposals: ProposalRecord[] = [];
+  for (const prop of proposalsToSave) {
+    const resolvedId = await upsertProposalInSupabase(prop);
+    resolvedProposals.push({ ...prop, id: resolvedId });
+  }
+
+  if (updatedRecords.length > 0) {
+    const kpmRows = updatedRecords.map((rec) =>
+      buildKpmRecordRow(rec, resolvedProposals, pengelolaList)
+    );
+    await upsertInChunks('kpm_records', kpmRows, 'id');
+  }
+
+  if (auditLogs.length > 0) {
+    await appendKpmAuditLogsInSupabase(auditLogs);
+  }
+  if (historyEntries.length > 0) {
+    await appendProposalHistoryInSupabase(historyEntries, resolvedProposals);
+  }
+
+  return resolvedProposals;
+}
+
+function buildPengelolaRow(p: PengelolaProfile, resolvedId: string, nowIso: string) {
+  const dispName = (p.displayName || '').trim();
+  const fotoUrl = sanitizeMediaUrl(p.foto?.directUrl || p.foto?.dataUrl);
+  const fileId = p.foto?.fileId || extractDriveFileId(fotoUrl) || null;
+  return {
+    id: resolvedId,
+    title: p.title,
+    nama: p.nama,
+    display_name: dispName,
+    kab_kota: p.kabKota || '',
+    kecamatan: p.kecamatan || '',
+    kelurahan: p.kelurahan || '',
+    alamat: p.alamat || '',
+    kontak: p.kontak || '',
+    foto_url: fotoUrl,
+    foto_thumb_url: fotoUrl
+      ? sanitizeMediaUrl(p.foto?.thumbnailUrl) || buildDriveFallbackThumbnailUrl(fileId || fotoUrl) || null
+      : null,
+    foto_view_url: sanitizeMediaUrl(p.foto?.viewUrl),
+    foto_file_id: fileId,
+    foto_file_name: p.foto?.fileName || null,
+    foto_meta: p.foto
+      ? {
+          id: p.foto.id,
+          originalSize: p.foto.originalSize,
+          compressedSize: p.foto.compressedSize,
+          width: p.foto.width,
+          height: p.foto.height,
+          mimeType: p.foto.mimeType,
+          uploadedAt: p.foto.uploadedAt,
+        }
+      : null,
+    created_at: p.createdAt || nowIso,
+    updated_at: nowIso,
+  };
+}
+
+export async function upsertPengelolaInSupabase(params: {
+  profile: PengelolaProfile;
+  updatedRecords?: KpmRecord[];
+  proposals?: ProposalRecord[];
+  pengelolaList?: PengelolaProfile[];
+  historyEntries?: ProposalKpmHistoryEntry[];
+}): Promise<string> {
+  const nowIso = new Date().toISOString();
+  const {
+    profile,
+    updatedRecords = [],
+    proposals = [],
+    pengelolaList = [],
+    historyEntries = [],
+  } = params;
+
+  let resolvedId = profile.id;
+  const { data: existingById } = await supabase
+    .from('pengelola')
+    .select('id')
+    .eq('id', profile.id)
+    .maybeSingle();
+  if (!existingById?.id && profile.displayName.trim()) {
+    const { data: existingByName } = await supabase
+      .from('pengelola')
+      .select('id')
+      .eq('display_name', profile.displayName.trim())
+      .maybeSingle();
+    if (existingByName?.id) {
+      resolvedId = String(existingByName.id);
+    }
+  }
+
+  const { error } = await supabase
+    .from('pengelola')
+    .upsert(buildPengelolaRow(profile, resolvedId, nowIso), { onConflict: 'id' });
+  if (error) throw error;
+
+  if (updatedRecords.length > 0) {
+    const mergedPengelola = pengelolaList.some((p) => p.id === profile.id)
+      ? pengelolaList.map((p) => (p.id === profile.id ? { ...profile, id: resolvedId } : p))
+      : [{ ...profile, id: resolvedId }, ...pengelolaList];
+    const kpmRows = updatedRecords.map((rec) =>
+      buildKpmRecordRow(rec, proposals, mergedPengelola)
+    );
+    await upsertInChunks('kpm_records', kpmRows, 'id');
+  }
+
+  if (historyEntries.length > 0) {
+    await appendProposalHistoryInSupabase(historyEntries, proposals);
+  }
+  return resolvedId;
+}
+
+export async function deletePengelolaInSupabase(params: {
+  pengelolaId: string;
+  historyEntries?: ProposalKpmHistoryEntry[];
+}): Promise<void> {
+  const { error } = await supabase.from('pengelola').delete().eq('id', params.pengelolaId);
+  if (error) throw error;
+  if (params.historyEntries && params.historyEntries.length > 0) {
+    await appendProposalHistoryInSupabase(params.historyEntries);
+  }
+}
+
+export async function upsertCatalogItemsInSupabase(params: {
+  itemsToSync: ItemBantuan[];
+  renamedFrom?: { tahun: string; oldCode: string };
+  deletedItem?: { tahun: string; code: string };
+  updatedRecords?: KpmRecord[];
+  proposals?: ProposalRecord[];
+  pengelolaList?: PengelolaProfile[];
+  historyEntries?: ProposalKpmHistoryEntry[];
+}): Promise<void> {
+  const nowIso = new Date().toISOString();
+  const {
+    itemsToSync,
+    renamedFrom,
+    deletedItem,
+    updatedRecords = [],
+    proposals = [],
+    pengelolaList = [],
+    historyEntries = [],
+  } = params;
+
+  if (deletedItem) {
+    const { error: delErr } = await supabase
+      .from('item_bantuan')
+      .delete()
+      .eq('tahun', deletedItem.tahun)
+      .eq('code', deletedItem.code);
+    if (delErr) throw delErr;
+  }
+
+  const existingItemsData = await fetchAllPages((from, to) =>
+    supabase
+      .from('item_bantuan')
+      .select('id,tahun,code')
+      .order('id', { ascending: true })
+      .range(from, to)
+  );
+  const existingItemByKey = new Map<string, string>();
+  existingItemsData.forEach((r) => {
+    existingItemByKey.set(`${String(r.tahun)}::${String(r.code)}`, String(r.id));
+  });
+
+  // Jika kode item diubah, pindahkan key peta ke kode baru agar ID kanonis database tetap terjaga
+  if (renamedFrom) {
+    const oldRealId = existingItemByKey.get(`${renamedFrom.tahun}::${renamedFrom.oldCode}`);
+    const targetItem = itemsToSync.find((i) => i.tahun === renamedFrom.tahun);
+    if (oldRealId && targetItem) {
+      existingItemByKey.set(`${targetItem.tahun}::${targetItem.code}`, oldRealId);
+    }
+  }
+
+  const itemRows: Record<string, unknown>[] = [];
+  const keepItemIds = new Set<string>();
+  const resolvedIdByKey = new Map<string, string>();
+
+  itemsToSync.forEach((it, idx) => {
+    const key = `${it.tahun}::${it.code}`;
+    if (resolvedIdByKey.has(key)) return;
+    let realId = existingItemByKey.get(key) || it.id || `${it.tahun}-${it.code}`;
+    if (keepItemIds.has(realId)) {
+      realId = `${it.tahun}-${it.code}-${idx + 1}`;
+    }
+    keepItemIds.add(realId);
+    resolvedIdByKey.set(key, realId);
+    itemRows.push({
+      id: realId,
+      tahun: it.tahun,
+      code: it.code,
+      name: it.name,
+      sort_order: idx + 1,
+      updated_at: nowIso,
+    });
+  });
+
+  if (itemRows.length > 0) {
+    await upsertInChunks('item_bantuan', itemRows, 'id');
+  }
+
+  const syncedItemIdList = Array.from(keepItemIds);
+  if (syncedItemIdList.length > 0) {
+    const existingSubRows: Record<string, unknown>[] = [];
+    for (let i = 0; i < syncedItemIdList.length; i += 100) {
+      const chunk = syncedItemIdList.slice(i, i + 100);
+      const rows = await fetchAllPages((from, to) =>
+        supabase
+          .from('item_sub_items')
+          .select('id,item_id,sub_item_name')
+          .in('item_id', chunk)
+          .order('id', { ascending: true })
+          .range(from, to)
+      );
+      existingSubRows.push(...rows);
+    }
+    const existingSubIdByKey = new Map<string, string>();
+    existingSubRows.forEach((r) => {
+      existingSubIdByKey.set(
+        `${String(r.item_id)}::${String(r.sub_item_name).trim().toLowerCase()}`,
+        String(r.id)
+      );
+    });
+
+    const subItemRows: Record<string, unknown>[] = [];
+    const keepSubIds = new Set<string>();
+    const seenSubKeys = new Set<string>();
+
+    for (const it of itemsToSync) {
+      const realId =
+        resolvedIdByKey.get(`${it.tahun}::${it.code}`) || it.id || `${it.tahun}-${it.code}`;
+      (it.subItems || []).forEach((rawSubName, idx) => {
+        const subName = (rawSubName || '').trim();
+        if (!subName) return;
+        const subKey = `${realId}::${subName.toLowerCase()}`;
+        if (seenSubKeys.has(subKey)) return;
+        seenSubKeys.add(subKey);
+        const subId =
+          existingSubIdByKey.get(subKey) || `${realId}-sub-${subItemRows.length + 1}`;
+        keepSubIds.add(subId);
+        subItemRows.push({
+          id: subId,
+          item_id: realId,
+          sub_item_name: subName,
+          sort_order: idx + 1,
+        });
+      });
+    }
+
+    if (subItemRows.length > 0) {
+      await upsertInChunks('item_sub_items', subItemRows, 'item_id,sub_item_name');
+    }
+    const obsoleteSubIds = existingSubRows
+      .map((r) => String(r.id))
+      .filter((id) => !keepSubIds.has(id));
+    if (obsoleteSubIds.length > 0) {
+      await deleteByIdsInChunks('item_sub_items', 'id', obsoleteSubIds);
+    }
+  }
+
+  if (updatedRecords.length > 0) {
+    const kpmRows = updatedRecords.map((rec) =>
+      buildKpmRecordRow(rec, proposals, pengelolaList)
+    );
+    await upsertInChunks('kpm_records', kpmRows, 'id');
+    await syncKpmDocsAndDeliveriesNonDestructive(updatedRecords, true);
+  }
+
+  if (historyEntries.length > 0) {
+    await appendProposalHistoryInSupabase(historyEntries, proposals);
+  }
+}
+
+export async function upsertPekerjaanListInSupabase(params: {
+  pekerjaanList: string[];
+  deletedName?: string;
+  updatedRecords?: KpmRecord[];
+  proposals?: ProposalRecord[];
+  pengelolaList?: PengelolaProfile[];
+  historyEntries?: ProposalKpmHistoryEntry[];
+}): Promise<void> {
+  const {
+    pekerjaanList,
+    deletedName,
+    updatedRecords = [],
+    proposals = [],
+    pengelolaList = [],
+    historyEntries = [],
+  } = params;
+
+  const existingJobsData = await fetchAllPages((from, to) =>
+    supabase
+      .from('pekerjaan_master')
+      .select('id,nama')
+      .order('id', { ascending: true })
+      .range(from, to)
+  );
+  const existingJobByName = new Map<string, string>();
+  existingJobsData.forEach((r) => {
+    existingJobByName.set(String(r.nama).trim().toLowerCase(), String(r.id));
+  });
+
+  if (deletedName) {
+    const delId = existingJobByName.get(deletedName.trim().toLowerCase());
+    if (delId) {
+      await deleteByIdsInChunks('pekerjaan_master', 'id', [delId]);
+    }
+  }
+
+  const jobRows: Record<string, unknown>[] = [];
+  const seenNames = new Set<string>();
+  const usedIds = new Set<string>();
+  pekerjaanList.forEach((rawNama, idx) => {
+    const nama = (rawNama || '').trim();
+    if (!nama) return;
+    const key = nama.toLowerCase();
+    if (seenNames.has(key)) return;
+    seenNames.add(key);
+
+    let jobId =
+      existingJobByName.get(key) ||
+      `job-${key.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || idx + 1}`;
+    if (usedIds.has(jobId)) {
+      jobId = `${jobId}-${idx + 1}`;
+    }
+    usedIds.add(jobId);
+    jobRows.push({
+      id: jobId,
+      nama,
+      sort_order: idx + 1,
+    });
+  });
+
+  if (jobRows.length > 0) {
+    await upsertInChunks('pekerjaan_master', jobRows, 'id');
+  }
+
+  if (updatedRecords.length > 0) {
+    const kpmRows = updatedRecords.map((rec) =>
+      buildKpmRecordRow(rec, proposals, pengelolaList)
+    );
+    await upsertInChunks('kpm_records', kpmRows, 'id');
+  }
+
+  if (historyEntries.length > 0) {
+    await appendProposalHistoryInSupabase(historyEntries, proposals);
+  }
+}
+
+export async function syncWilayahInSupabase(params: {
+  wilayahList: WilayahKabKota[];
+  historyEntries?: ProposalKpmHistoryEntry[];
+}): Promise<void> {
+  const nowIso = new Date().toISOString();
+  const [existingKabsData, existingKecData, existingKelData] = await Promise.all([
+    fetchAllPages((from, to) =>
+      supabase.from('wilayah_kabkota').select('id,nama').order('id', { ascending: true }).range(from, to)
+    ),
+    fetchAllPages((from, to) =>
+      supabase
+        .from('wilayah_kecamatan')
+        .select('id,kabkota_id,nama')
+        .order('id', { ascending: true })
+        .range(from, to)
+    ),
+    fetchAllPages((from, to) =>
+      supabase
+        .from('wilayah_kelurahan')
+        .select('id,kecamatan_id,nama')
+        .order('id', { ascending: true })
+        .range(from, to)
+    ),
+  ]);
+
+  const existingKabByName = new Map<string, string>();
+  existingKabsData.forEach((r) => {
+    existingKabByName.set(String(r.nama).trim().toLowerCase(), String(r.id));
+  });
+  const existingKecByKey = new Map<string, string>();
+  existingKecData.forEach((r) => {
+    existingKecByKey.set(
+      `${String(r.kabkota_id)}::${String(r.nama).trim().toLowerCase()}`,
+      String(r.id)
+    );
+  });
+  const existingKelByKey = new Map<string, string>();
+  existingKelData.forEach((r) => {
+    existingKelByKey.set(
+      `${String(r.kecamatan_id)}::${String(r.nama).trim().toLowerCase()}`,
+      String(r.id)
+    );
+  });
+
+  const kabRows: Record<string, unknown>[] = [];
+  const kecRows: Record<string, unknown>[] = [];
+  const kelRows: Record<string, unknown>[] = [];
+  const keepKabIds = new Set<string>();
+  const keepKecIds = new Set<string>();
+  const keepKelIds = new Set<string>();
+  const seenKabNames = new Set<string>();
+  const seenKecKeys = new Set<string>();
+  const seenKelKeys = new Set<string>();
+
+  params.wilayahList.forEach((kab, kabIdx) => {
+    const kabNama = (kab.nama || '').trim();
+    if (!kabNama) return;
+    const kabNameKey = kabNama.toLowerCase();
+    if (seenKabNames.has(kabNameKey)) return;
+    seenKabNames.add(kabNameKey);
+
+    let kabId = existingKabByName.get(kabNameKey) || kab.id || `kab-${kabIdx + 1}`;
+    if (keepKabIds.has(kabId)) kabId = `${kabId}-${kabIdx + 1}`;
+    keepKabIds.add(kabId);
+    kabRows.push({ id: kabId, nama: kabNama, sort_order: kabIdx + 1, updated_at: nowIso });
+
+    (kab.kecamatanList || []).forEach((kec, kIdx) => {
+      const kecNama = (kec.nama || '').trim();
+      if (!kecNama) return;
+      const kecKey = `${kabId}::${kecNama.toLowerCase()}`;
+      if (seenKecKeys.has(kecKey)) return;
+      seenKecKeys.add(kecKey);
+
+      let kecId = existingKecByKey.get(kecKey) || kec.id || `${kabId}-kec-${kIdx + 1}`;
+      if (keepKecIds.has(kecId)) kecId = `${kecId}-${kIdx + 1}`;
+      keepKecIds.add(kecId);
+      kecRows.push({
+        id: kecId,
+        kabkota_id: kabId,
+        nama: kecNama,
+        sort_order: kIdx + 1,
+        updated_at: nowIso,
+      });
+
+      (kec.kelurahanList || []).forEach((kel, vIdx) => {
+        const kelNama = (kel || '').trim();
+        if (!kelNama) return;
+        const kelKey = `${kecId}::${kelNama.toLowerCase()}`;
+        if (seenKelKeys.has(kelKey)) return;
+        seenKelKeys.add(kelKey);
+
+        let kelId = existingKelByKey.get(kelKey) || `${kecId}::${kelNama}`;
+        if (keepKelIds.has(kelId)) kelId = `${kelId}-${vIdx + 1}`;
+        keepKelIds.add(kelId);
+        kelRows.push({
+          id: kelId,
+          kecamatan_id: kecId,
+          nama: kelNama,
+          sort_order: vIdx + 1,
+          updated_at: nowIso,
+        });
+      });
+    });
+  });
+
+  const deleteKelIds = existingKelData
+    .map((r) => String(r.id))
+    .filter((id) => !keepKelIds.has(id));
+  if (deleteKelIds.length > 0) await deleteByIdsInChunks('wilayah_kelurahan', 'id', deleteKelIds);
+  const deleteKecIds = existingKecData
+    .map((r) => String(r.id))
+    .filter((id) => !keepKecIds.has(id));
+  if (deleteKecIds.length > 0) await deleteByIdsInChunks('wilayah_kecamatan', 'id', deleteKecIds);
+  const deleteKabIds = existingKabsData
+    .map((r) => String(r.id))
+    .filter((id) => !keepKabIds.has(id));
+  if (deleteKabIds.length > 0) await deleteByIdsInChunks('wilayah_kabkota', 'id', deleteKabIds);
+
+  if (kabRows.length > 0) await upsertInChunks('wilayah_kabkota', kabRows, 'id');
+  if (kecRows.length > 0) await upsertInChunks('wilayah_kecamatan', kecRows, 'id');
+  if (kelRows.length > 0) await upsertInChunks('wilayah_kelurahan', kelRows, 'id');
+
+  if (params.historyEntries && params.historyEntries.length > 0) {
+    await appendProposalHistoryInSupabase(params.historyEntries);
+  }
+}
+
+export async function importOperationalDeltaToSupabase(params: {
+  recordsToSave: KpmRecord[];
+  proposalsToSave: ProposalRecord[];
+  pengelolaToSave: PengelolaProfile[];
+  pekerjaanToAdd: string[];
+  allProposals: ProposalRecord[];
+  allPengelolaList: PengelolaProfile[];
+  auditLogs?: KpmAuditLogEntry[];
+  historyEntries?: ProposalKpmHistoryEntry[];
+}): Promise<void> {
+  const nowIso = new Date().toISOString();
+
+  if (params.pekerjaanToAdd.length > 0) {
+    const existingJobsData = await fetchAllPages((from, to) =>
+      supabase
+        .from('pekerjaan_master')
+        .select('id,nama,sort_order')
+        .order('id', { ascending: true })
+        .range(from, to)
+    );
+    const existingJobByName = new Map<string, string>();
+    let maxOrder = 0;
+    existingJobsData.forEach((r) => {
+      existingJobByName.set(String(r.nama).trim().toLowerCase(), String(r.id));
+      maxOrder = Math.max(maxOrder, Number(r.sort_order || 0));
+    });
+    const newJobRows: Record<string, unknown>[] = [];
+    params.pekerjaanToAdd.forEach((rawNama) => {
+      const nama = rawNama.trim();
+      if (!nama) return;
+      const key = nama.toLowerCase();
+      if (existingJobByName.has(key)) return;
+      maxOrder += 1;
+      const jobId = `job-${key.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || maxOrder}`;
+      existingJobByName.set(key, jobId);
+      newJobRows.push({ id: jobId, nama, sort_order: maxOrder });
+    });
+    if (newJobRows.length > 0) {
+      await upsertInChunks('pekerjaan_master', newJobRows, 'id');
+    }
+  }
+
+  let resolvedPengelolaAll = params.allPengelolaList;
+  if (params.pengelolaToSave.length > 0) {
+    const idMap = new Map<string, string>();
+    for (const p of params.pengelolaToSave) {
+      const realId = await upsertPengelolaInSupabase({ profile: p });
+      idMap.set(p.id, realId);
+    }
+    resolvedPengelolaAll = params.allPengelolaList.map((p) =>
+      idMap.has(p.id) ? { ...p, id: idMap.get(p.id)! } : p
+    );
+  }
+
+  let resolvedProposalsAll = params.allProposals;
+  if (params.proposalsToSave.length > 0) {
+    const propIdMap = new Map<string, string>();
+    for (const prop of params.proposalsToSave) {
+      const realId = await upsertProposalInSupabase(prop);
+      propIdMap.set(prop.id, realId);
+    }
+    resolvedProposalsAll = params.allProposals.map((p) =>
+      propIdMap.has(p.id) ? { ...p, id: propIdMap.get(p.id)! } : p
+    );
+  }
+
+  if (params.recordsToSave.length > 0) {
+    await upsertKpmRecordsBatchInSupabase({
+      records: params.recordsToSave,
+      proposals: resolvedProposalsAll,
+      pengelolaList: resolvedPengelolaAll,
+      auditLogs: params.auditLogs,
+      historyEntries: params.historyEntries,
+      includeDeliveries: true,
+    });
+  } else {
+    if (params.auditLogs && params.auditLogs.length > 0) {
+      await appendKpmAuditLogsInSupabase(params.auditLogs);
+    }
+    if (params.historyEntries && params.historyEntries.length > 0) {
+      await appendProposalHistoryInSupabase(params.historyEntries, resolvedProposalsAll);
+    }
+  }
+  void nowIso;
 }
 
 export async function supabaseUpdateProposalLockStatus(
@@ -1046,14 +2038,28 @@ export async function syncAllOperationalDataToSupabase(
   const nowIso = new Date().toISOString();
 
   // 1. Wilayah: fetch existing rows to preserve canonical DB IDs and avoid 23505 on natural unique keys
-  const [existingKabsRes, existingKecRes, existingKelRes] = await Promise.all([
-    supabase.from('wilayah_kabkota').select('id,nama'),
-    supabase.from('wilayah_kecamatan').select('id,kabkota_id,nama'),
-    supabase.from('wilayah_kelurahan').select('id,kecamatan_id,nama'),
+  const [existingKabsData, existingKecData, existingKelData] = await Promise.all([
+    fetchAllPages((from, to) =>
+      supabase.from('wilayah_kabkota').select('id,nama').order('id', { ascending: true }).range(from, to)
+    ),
+    fetchAllPages((from, to) =>
+      supabase
+        .from('wilayah_kecamatan')
+        .select('id,kabkota_id,nama')
+        .order('id', { ascending: true })
+        .range(from, to)
+    ),
+    fetchAllPages((from, to) =>
+      supabase
+        .from('wilayah_kelurahan')
+        .select('id,kecamatan_id,nama')
+        .order('id', { ascending: true })
+        .range(from, to)
+    ),
   ]);
-  if (existingKabsRes.error) throw existingKabsRes.error;
-  if (existingKecRes.error) throw existingKecRes.error;
-  if (existingKelRes.error) throw existingKelRes.error;
+  const existingKabsRes = { data: existingKabsData };
+  const existingKecRes = { data: existingKecData };
+  const existingKelRes = { data: existingKelData };
 
   const existingKabByName = new Map<string, string>();
   (existingKabsRes.data || []).forEach((r) => {
@@ -1177,8 +2183,10 @@ export async function syncAllOperationalDataToSupabase(
   }
 
   // 2. Pekerjaan (deduplicated, preserving canonical DB IDs, deleting removed rows)
-  const existingJobsRes = await supabase.from('pekerjaan_master').select('id,nama');
-  if (existingJobsRes.error) throw existingJobsRes.error;
+  const existingJobsData = await fetchAllPages((from, to) =>
+    supabase.from('pekerjaan_master').select('id,nama').order('id', { ascending: true }).range(from, to)
+  );
+  const existingJobsRes = { data: existingJobsData };
   const existingJobByName = new Map<string, string>();
   (existingJobsRes.data || []).forEach((r) => {
     existingJobByName.set(String(r.nama).trim().toLowerCase(), String(r.id));
@@ -1217,8 +2225,10 @@ export async function syncAllOperationalDataToSupabase(
   }
 
   // 3. Items & Sub-Items (preserve canonical item IDs before upserting to prevent FK breakage)
-  const existingItemsRes = await supabase.from('item_bantuan').select('id,tahun,code');
-  if (existingItemsRes.error) throw existingItemsRes.error;
+  const existingItemsData = await fetchAllPages((from, to) =>
+    supabase.from('item_bantuan').select('id,tahun,code').order('id', { ascending: true }).range(from, to)
+  );
+  const existingItemsRes = { data: existingItemsData };
   const existingItemByKey = new Map<string, string>();
   (existingItemsRes.data || []).forEach((r) => {
     existingItemByKey.set(`${String(r.tahun)}::${String(r.code)}`, String(r.id));
@@ -1261,7 +2271,23 @@ export async function syncAllOperationalDataToSupabase(
     await upsertInChunks('item_bantuan', itemRows, 'id');
   }
 
+  const existingSubsData = await fetchAllPages((from, to) =>
+    supabase
+      .from('item_sub_items')
+      .select('id,item_id,sub_item_name')
+      .order('id', { ascending: true })
+      .range(from, to)
+  );
+  const existingSubIdByKey = new Map<string, string>();
+  existingSubsData.forEach((r) => {
+    existingSubIdByKey.set(
+      `${String(r.item_id)}::${String(r.sub_item_name).trim().toLowerCase()}`,
+      String(r.id)
+    );
+  });
+
   const subItemRows: Record<string, unknown>[] = [];
+  const keepSubIds = new Set<string>();
   const seenSubItemKeys = new Set<string>();
   for (const it of snapshot.items) {
     const realId = resolvedItemIdByKey.get(`${it.tahun}::${it.code}`) || it.id || `${it.tahun}-${it.code}`;
@@ -1271,23 +2297,31 @@ export async function syncAllOperationalDataToSupabase(
       const subKey = `${realId}::${subName.toLowerCase()}`;
       if (seenSubItemKeys.has(subKey)) return;
       seenSubItemKeys.add(subKey);
+      const subId = existingSubIdByKey.get(subKey) || `${realId}-sub-${subItemRows.length + 1}`;
+      keepSubIds.add(subId);
       subItemRows.push({
-        id: `${realId}-sub-${subItemRows.length + 1}`,
+        id: subId,
         item_id: realId,
         sub_item_name: subName,
         sort_order: idx + 1,
       });
     });
   }
-  const { error: delSubErr } = await supabase.from('item_sub_items').delete().neq('id', '');
-  if (delSubErr) throw delSubErr;
   if (subItemRows.length > 0) {
     await upsertInChunks('item_sub_items', subItemRows, 'item_id,sub_item_name');
   }
+  const obsoleteSubIds = existingSubsData
+    .map((r) => String(r.id))
+    .filter((id) => !keepSubIds.has(id));
+  if (obsoleteSubIds.length > 0) {
+    await deleteByIdsInChunks('item_sub_items', 'id', obsoleteSubIds);
+  }
 
   // 4. Pengelola (preserve existing IDs on edit, delete removed rows)
-  const existingPengelolaRes = await supabase.from('pengelola').select('id,display_name');
-  if (existingPengelolaRes.error) throw existingPengelolaRes.error;
+  const existingPengelolaData = await fetchAllPages((from, to) =>
+    supabase.from('pengelola').select('id,display_name').order('id', { ascending: true }).range(from, to)
+  );
+  const existingPengelolaRes = { data: existingPengelolaData };
   const existingPengelolaIds = new Set<string>();
   const existingPengelolaByName = new Map<string, string>();
   (existingPengelolaRes.data || []).forEach((r) => {
@@ -1362,8 +2396,14 @@ export async function syncAllOperationalDataToSupabase(
   }
 
   // 5. Proposals & Proposal Documents (resolve canonical IDs by (tahun, nama_proposal))
-  const existingPropsRes = await supabase.from('proposals').select('id,tahun,nama_proposal');
-  if (existingPropsRes.error) throw existingPropsRes.error;
+  const existingPropsData = await fetchAllPages((from, to) =>
+    supabase
+      .from('proposals')
+      .select('id,tahun,nama_proposal')
+      .order('id', { ascending: true })
+      .range(from, to)
+  );
+  const existingPropsRes = { data: existingPropsData };
   const existingPropByKey = new Map<string, string>();
   const existingPropIds = new Set<string>();
   (existingPropsRes.data || []).forEach((p) => {
@@ -1374,7 +2414,7 @@ export async function syncAllOperationalDataToSupabase(
 
   const effectiveProposals: ProposalRecord[] = [];
   const proposalRows: Record<string, unknown>[] = [];
-  const proposalDocRows: Record<string, unknown>[] = [];
+  const proposalDocRowsRaw: Record<string, unknown>[] = [];
   const seenPropKeys = new Set<string>();
   const keepPropIds = new Set<string>();
 
@@ -1390,7 +2430,7 @@ export async function syncAllOperationalDataToSupabase(
     keepPropIds.add(resolvedPropId);
     effectiveProposals.push({ ...prop, id: resolvedPropId });
     proposalRows.push(buildProposalRow(prop, resolvedPropId));
-    proposalDocRows.push(...buildProposalDocumentRows(prop, resolvedPropId));
+    proposalDocRowsRaw.push(...buildProposalDocumentRows(prop, resolvedPropId));
   }
 
   const deletePropIds = Array.from(existingPropIds).filter((id) => !keepPropIds.has(id));
@@ -1402,45 +2442,58 @@ export async function syncAllOperationalDataToSupabase(
   }
   const keepPropIdList = Array.from(keepPropIds);
   if (keepPropIdList.length > 0) {
-    await deleteByIdsInChunks('proposal_documents', 'proposal_id', keepPropIdList);
-  }
-  if (proposalDocRows.length > 0) {
-    await upsertInChunks('proposal_documents', proposalDocRows, 'proposal_id,doc_slot');
+    const existingPropDocs: Record<string, unknown>[] = [];
+    for (let i = 0; i < keepPropIdList.length; i += 100) {
+      const chunk = keepPropIdList.slice(i, i + 100);
+      const rows = await fetchAllPages((from, to) =>
+        supabase
+          .from('proposal_documents')
+          .select('id,proposal_id,doc_slot')
+          .in('proposal_id', chunk)
+          .order('id', { ascending: true })
+          .range(from, to)
+      );
+      existingPropDocs.push(...rows);
+    }
+    const propDocIdByKey = new Map<string, string>();
+    existingPropDocs.forEach((d) => {
+      propDocIdByKey.set(`${String(d.proposal_id)}::${String(d.doc_slot)}`, String(d.id));
+    });
+    const keepPropDocIds = new Set<string>();
+    const mergedPropDocs = proposalDocRowsRaw.map((row) => {
+      const k = `${String(row.proposal_id)}::${String(row.doc_slot)}`;
+      const realDocId = propDocIdByKey.get(k) || String(row.id);
+      keepPropDocIds.add(realDocId);
+      return { ...row, id: realDocId };
+    });
+    if (mergedPropDocs.length > 0) {
+      await upsertInChunks('proposal_documents', mergedPropDocs, 'proposal_id,doc_slot');
+    }
+    const obsoletePropDocIds = existingPropDocs
+      .map((d) => String(d.id))
+      .filter((id) => !keepPropDocIds.has(id));
+    if (obsoletePropDocIds.length > 0) {
+      await deleteByIdsInChunks('proposal_documents', 'id', obsoletePropDocIds);
+    }
   }
 
-  // 6. KPM Records, Documents & Sub-Item Deliveries (bulk batched)
-  const existingKpmsRes = await supabase.from('kpm_records').select('id');
-  if (existingKpmsRes.error) throw existingKpmsRes.error;
+  // 6. KPM Records, Documents & Sub-Item Deliveries (bulk batched, paginated lookup, non-destructive child upsert)
+  const existingKpmsData = await fetchAllPages((from, to) =>
+    supabase.from('kpm_records').select('id').order('id', { ascending: true }).range(from, to)
+  );
 
   const kpmRows: Record<string, unknown>[] = [];
-  const allKpmDocRows: Record<string, unknown>[] = [];
-  const allDeliveryRows: Record<string, unknown>[] = [];
   const keepKpmIds = new Set<string>();
+  const dedupedRecords: KpmRecord[] = [];
 
   for (const rec of snapshot.records) {
     if (keepKpmIds.has(rec.id)) continue;
     keepKpmIds.add(rec.id);
+    dedupedRecords.push(rec);
     kpmRows.push(buildKpmRecordRow(rec, effectiveProposals, effectivePengelolaList));
-    allKpmDocRows.push(...buildKpmDocumentRows(rec.id, rec.documents));
-    if (rec.subItemDeliveries) {
-      const seenSubNames = new Set<string>();
-      for (const [subName, state] of Object.entries(rec.subItemDeliveries)) {
-        const cleanSub = subName.trim();
-        if (!cleanSub || seenSubNames.has(cleanSub)) continue;
-        seenSubNames.add(cleanSub);
-        allDeliveryRows.push({
-          id: `${rec.id}::${cleanSub}`,
-          kpm_id: rec.id,
-          sub_item_name: cleanSub,
-          delivered: Boolean(state.delivered),
-          updated_at: state.updatedAt || nowIso,
-          updated_by: state.updatedBy || null,
-        });
-      }
-    }
   }
 
-  const deleteKpmIds = (existingKpmsRes.data || [])
+  const deleteKpmIds = existingKpmsData
     .map((r) => String(r.id))
     .filter((id) => !keepKpmIds.has(id));
   if (deleteKpmIds.length > 0) {
@@ -1449,16 +2502,8 @@ export async function syncAllOperationalDataToSupabase(
   if (kpmRows.length > 0) {
     await upsertInChunks('kpm_records', kpmRows, 'id');
   }
-  const keepKpmIdList = Array.from(keepKpmIds);
-  if (keepKpmIdList.length > 0) {
-    await deleteByIdsInChunks('kpm_documents', 'kpm_id', keepKpmIdList);
-    await deleteByIdsInChunks('kpm_sub_item_deliveries', 'kpm_id', keepKpmIdList);
-  }
-  if (allKpmDocRows.length > 0) {
-    await upsertInChunks('kpm_documents', allKpmDocRows, 'id');
-  }
-  if (allDeliveryRows.length > 0) {
-    await upsertInChunks('kpm_sub_item_deliveries', allDeliveryRows, 'kpm_id,sub_item_name');
+  if (dedupedRecords.length > 0) {
+    await syncKpmDocsAndDeliveriesNonDestructive(dedupedRecords, true);
   }
 
   // 7. History & Audit Logs (upsert latest in chunks)
@@ -1580,12 +2625,15 @@ export async function runAdminDataActionInSupabase(
 // AUTH, USERS & CHAT (SUPABASE)
 // ============================================================================
 export async function supabaseFetchInternalUsers(): Promise<InternalUser[]> {
-  const { data, error } = await supabase
-    .from('internal_users')
-    .select('*')
-    .order('registered_at', { ascending: true });
-  if (error) throw error;
-  return (data || []).map((r) => mapSupabaseUserRow(r as Record<string, unknown>));
+  const rows = await fetchAllPages((from, to) =>
+    supabase
+      .from('internal_users')
+      .select(SAFE_INTERNAL_USER_COLUMNS)
+      .order('registered_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to)
+  );
+  return rows.map((r) => mapSupabaseUserRow(r as Record<string, unknown>));
 }
 
 export async function supabaseLogin(
@@ -1595,7 +2643,7 @@ export async function supabaseLogin(
   const normalizedEmail = email.trim().toLowerCase();
   const { data, error } = await supabase
     .from('internal_users')
-    .select('*')
+    .select(`${SAFE_INTERNAL_USER_COLUMNS},password_hash`)
     .ilike('email', normalizedEmail)
     .limit(1)
     .maybeSingle();
@@ -1636,7 +2684,7 @@ export async function supabaseLogin(
       updated_at: nowIso,
     })
     .eq('id', data.id)
-    .select('*')
+    .select(SAFE_INTERNAL_USER_COLUMNS)
     .single();
 
   if (updErr) {
@@ -1698,7 +2746,7 @@ export async function supabaseRegisterInternalUser(payload: {
       registered_at: nowIso,
       updated_at: nowIso,
     })
-    .select('*')
+    .select(SAFE_INTERNAL_USER_COLUMNS)
     .single();
 
   if (error) {
@@ -1755,7 +2803,7 @@ export async function supabaseCreateInternalUserBySuperAdmin(payload: {
       registered_at: nowIso,
       updated_at: nowIso,
     })
-    .select('*')
+    .select(SAFE_INTERNAL_USER_COLUMNS)
     .single();
 
   if (error) return { ok: false, error: error.message };
@@ -1801,7 +2849,7 @@ export async function supabaseUpdateInternalUserProfile(
     .from('internal_users')
     .update(updateBody)
     .eq('id', userId)
-    .select('*')
+    .select(SAFE_INTERNAL_USER_COLUMNS)
     .single();
 
   if (error) throw error;
@@ -1852,7 +2900,7 @@ export async function supabaseAdminControlInternalUser(
     .from('internal_users')
     .update(updateBody)
     .eq('id', userId)
-    .select('*')
+    .select(SAFE_INTERNAL_USER_COLUMNS)
     .single();
 
   if (error) throw error;
@@ -1929,12 +2977,17 @@ export function supabaseMarkOfflineKeepalive(userId: string): void {
 }
 
 export async function supabaseFetchDirectMessages(): Promise<DirectChatMessage[]> {
-  const { data, error } = await supabase
-    .from('direct_chat_messages')
-    .select('*')
-    .order('created_at', { ascending: true });
-  if (error) throw error;
-  return (data || []).map((r) => mapSupabaseChatRow(r as Record<string, unknown>));
+  const rows = await fetchAllPages(
+    (from, to) =>
+      supabase
+        .from('direct_chat_messages')
+        .select('*')
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to),
+    20_000
+  );
+  return rows.map((r) => mapSupabaseChatRow(r as Record<string, unknown>));
 }
 
 export async function supabaseSendDirectMessage(payload: {

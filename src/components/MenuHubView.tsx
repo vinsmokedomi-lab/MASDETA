@@ -50,8 +50,8 @@ import { MenuDownloadView } from './MenuDownloadView';
 import { AddPengelolaModal } from './PengelolaSelectorModal';
 import { PresenceDot, getPresenceMeta } from './PresenceDot';
 import { SwipeAction, SwipeableRow } from './SwipeableRow';
-import { APP_VERSION } from '../config/appVersion';
-import { APP_CHANGELOG } from '../data/changelogData';
+import { APP_VERSION, GITHUB_REPO } from '../config/appVersion';
+import { APP_CHANGELOG, ChangelogRelease } from '../data/changelogData';
 import { CorrespondentKpmListPanel } from './CorrespondentKpmListPanel';
 import { DTSEN_OPTION_ITEMS } from '../data/kpmOptions';
 import {
@@ -347,6 +347,8 @@ export function MenuHubView({
   // SuperAdmin drill flag (lifted when provided)
   const [localUsersOpenedFromSuperAdmin, setLocalUsersOpenedFromSuperAdmin] = useState(false);
   const [changelogSortNewestFirst, setChangelogSortNewestFirst] = useState(true);
+  const [githubReleases, setGithubReleases] = useState<ChangelogRelease[]>([]);
+  const [loadingGithubReleases, setLoadingGithubReleases] = useState(false);
   const usersOpenedFromSuperAdmin =
     controlledUsersFromSuperAdmin !== undefined
       ? controlledUsersFromSuperAdmin
@@ -551,6 +553,86 @@ export function MenuHubView({
       setDuplikasiYearFilter(selectedYear || 'all');
     }
   }, [activeSection, usersOpenedFromSuperAdmin, selectedYear, dtsenDrill]);
+
+  useEffect(() => {
+    if (activeSection !== 'changelog' || githubReleases.length > 0) return;
+    let cancelled = false;
+    setLoadingGithubReleases(true);
+
+    const normalizeVer = (raw: string) =>
+      raw.trim().replace(/^v/i, '').split('-')[0] || '0.0.0';
+    const parseHighlights = (body: string, fallbackTitle: string): string[] => {
+      const lines = body
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(
+          (line) =>
+            /^[-*•]\s+/.test(line) || /^\d+\.\s+/.test(line)
+        )
+        .map((line) =>
+          line
+            .replace(/^[-*•]\s+/, '')
+            .replace(/^\d+\.\s+/, '')
+            .replace(/\*\*(.*?)\*\*/g, '$1')
+            .trim()
+        )
+        .filter((line) => line.length > 0 && !line.toLowerCase().startsWith('file apk:'));
+      if (lines.length > 0) return lines.slice(0, 12);
+      const cleanBody = body
+        .replace(/#+\s*/g, '')
+        .replace(/\*\*(.*?)\*\*/g, '$1')
+        .trim();
+      return cleanBody ? [cleanBody.slice(0, 260)] : [fallbackTitle];
+    };
+    const formatWib = (iso?: string): string => {
+      if (!iso) return '-';
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return '-';
+      return `${d.toLocaleString('id-ID', {
+        timeZone: 'Asia/Jakarta',
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      })} WIB`;
+    };
+
+    void fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=25`, {
+      headers: { Accept: 'application/vnd.github+json' },
+    })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('Gagal'))))
+      .then((data: unknown) => {
+        if (cancelled || !Array.isArray(data)) return;
+        const parsed: ChangelogRelease[] = [];
+        for (const rel of data) {
+          if (!rel || typeof rel !== 'object') continue;
+          const r = rel as Record<string, unknown>;
+          if (r.draft) continue;
+          const ver = normalizeVer(String(r.tag_name || ''));
+          if (!/^\d+\.\d+\.\d+$/.test(ver)) continue;
+          const title = String(r.name || `Rilis v${ver}`).replace(/^MASDETA\s*/i, '').trim() || `Rilis v${ver}`;
+          const body = String(r.body || '');
+          parsed.push({
+            version: ver,
+            title,
+            releasedAt: formatWib(String(r.published_at || r.created_at || '')),
+            highlights: parseHighlights(body, title),
+          });
+        }
+        setGithubReleases(parsed);
+      })
+      .catch(() => {
+        // Fallback ke APP_CHANGELOG lokal
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingGithubReleases(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection, githubReleases.length]);
 
   const [duplikasiYearFilter, setDuplikasiYearFilter] = useState<string>(selectedYear || 'all');
   const seenDuplicatesStorageKey = useMemo(
@@ -5301,11 +5383,40 @@ export function MenuHubView({
     );
   }
 
-  // 13. RIWAYAT PEMBARUAN (CHANGELOG v1.0.0 - v1.1.2)
+  // 13. RIWAYAT PEMBARUAN (CHANGELOG + SINKRONISASI GITHUB RELEASES)
   if (activeSection === 'changelog') {
+    const compareSemverDesc = (a: string, b: string) => {
+      const pa = a.split('.').map((n) => parseInt(n, 10) || 0);
+      const pb = b.split('.').map((n) => parseInt(n, 10) || 0);
+      for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+        const diff = (pb[i] || 0) - (pa[i] || 0);
+        if (diff !== 0) return diff;
+      }
+      return 0;
+    };
+
+    const mergedMap = new Map<string, ChangelogRelease>();
+    for (const rel of githubReleases) {
+      mergedMap.set(rel.version, { ...rel, badge: undefined });
+    }
+    for (const localRel of APP_CHANGELOG) {
+      mergedMap.set(localRel.version, { ...localRel, badge: undefined });
+    }
+    const sortedNewest = Array.from(mergedMap.values()).sort((a, b) =>
+      compareSemverDesc(a.version, b.version)
+    );
+    if (sortedNewest.length > 0) {
+      sortedNewest[0] = {
+        ...sortedNewest[0],
+        badge:
+          sortedNewest[0].version === APP_VERSION ? 'Versi Terpasang' : 'Versi Terbaru GitHub',
+      };
+    }
+
+    const latestVersionLabel = sortedNewest[0]?.version || APP_VERSION;
     const orderedReleases = changelogSortNewestFirst
-      ? APP_CHANGELOG
-      : [...APP_CHANGELOG].reverse();
+      ? sortedNewest
+      : [...sortedNewest].reverse();
 
     return (
       <div className="min-h-screen pb-24">
@@ -5321,8 +5432,8 @@ export function MenuHubView({
                   Versi Terpasang v{APP_VERSION}
                 </h2>
                 <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                  Daftar lengkap pembaruan dan penambahan fitur dari versi 1.0.0 hingga versi{' '}
-                  {APP_VERSION}.
+                  Daftar lengkap pembaruan dari versi 1.0.0 hingga versi {latestVersionLabel}
+                  {loadingGithubReleases ? ' (menyinkronkan GitHub Releases...)' : '.'}
                 </p>
               </div>
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
@@ -5332,7 +5443,7 @@ export function MenuHubView({
 
             <div className="mt-3 flex items-center justify-between gap-2 border-t border-slate-100 pt-3">
               <span className="text-xs font-medium text-slate-500 tabular-nums">
-                Total {APP_CHANGELOG.length} rilis tercatat
+                Total {sortedNewest.length} rilis tercatat
               </span>
               <button
                 type="button"
@@ -5342,8 +5453,8 @@ export function MenuHubView({
                 <History className="h-3.5 w-3.5 text-teal-700" />
                 <span>
                   {changelogSortNewestFirst
-                    ? `Urutan: v${APP_VERSION} → v1.0.0`
-                    : `Urutan: v1.0.0 → v${APP_VERSION}`}
+                    ? `Urutan: v${latestVersionLabel} → v1.0.0`
+                    : `Urutan: v1.0.0 → v${latestVersionLabel}`}
                 </span>
               </button>
             </div>
@@ -5351,7 +5462,7 @@ export function MenuHubView({
 
           <div className="space-y-3">
             {orderedReleases.map((release) => {
-              const isLatest = release.version === APP_VERSION;
+              const isLatest = release.version === latestVersionLabel;
               return (
                 <article
                   key={release.version}

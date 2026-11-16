@@ -17,33 +17,46 @@ import {
 } from '../utils/imageProcessor';
 import { SegmentedTabs } from './FormControls';
 
+export type RecapDrillTarget =
+  | { kind: 'item'; code: string; name: string }
+  | { kind: 'subitem'; key: string; name: string }
+  | { kind: 'pending_all' }
+  | null;
+
 interface SubItemRecapViewProps {
   records: KpmRecord[];
   items: ItemBantuan[];
   selectedYear: string;
   onChangeYear: (year: string) => void;
+  drillTarget?: RecapDrillTarget;
+  onChangeDrillTarget?: (next: RecapDrillTarget) => void;
   onBack: () => void;
   onSelectKpm: (record: KpmRecord) => void;
 }
 
 type RecapMainTab = 'item' | 'subitem';
 
-type RecapDrillTarget =
-  | { kind: 'item'; code: string; name: string }
-  | { kind: 'subitem'; key: string; name: string }
-  | { kind: 'pending_all' }
-  | null;
-
 export function SubItemRecapView({
   records,
   items,
   selectedYear,
   onChangeYear,
+  drillTarget: controlledDrillTarget,
+  onChangeDrillTarget,
   onBack,
   onSelectKpm,
 }: SubItemRecapViewProps) {
   const [activeTab, setActiveTab] = useState<RecapMainTab>('item');
-  const [drillTarget, setDrillTarget] = useState<RecapDrillTarget>(null);
+  const [internalDrillTarget, setInternalDrillTarget] = useState<RecapDrillTarget>(null);
+  const drillTarget =
+    controlledDrillTarget !== undefined ? controlledDrillTarget : internalDrillTarget;
+  const setDrillTarget = (next: RecapDrillTarget) => {
+    if (onChangeDrillTarget) {
+      onChangeDrillTarget(next);
+    } else {
+      setInternalDrillTarget(next);
+    }
+  };
 
   const yearOptions = useMemo(() => {
     const set = new Set<string>(TAHUN_OPTIONS);

@@ -6,6 +6,7 @@ export type OfflineQueuedAction =
       createdAt: string;
       kind: 'save_kpm';
       label: string;
+      clientRecordId?: string;
       editingRecordId?: string;
       values: KpmFormValues;
     }

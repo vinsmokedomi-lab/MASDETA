@@ -19,6 +19,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -1405,10 +1407,24 @@ jobs:
 
       - name: Prepare Release Notes
         run: |
-          if [ -f "RELEASE_NOTES.md" ] && [ -s "RELEASE_NOTES.md" ]; then
+          VER_NAME="${{ steps.ver.outputs.version_name }}"
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || true)
+          if [ -n "$PREV_TAG" ]; then
+            COMMITS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"- %s" --no-merges | head -n 20)
+          else
+            COMMITS=$(git log -n 10 --pretty=format:"- %s" --no-merges)
+          fi
+          if [ -f "RELEASE_NOTES.md" ] && [ -s "RELEASE_NOTES.md" ] && grep -q "v${VER_NAME}" RELEASE_NOTES.md; then
+            cp RELEASE_NOTES.md /tmp/release_notes.md
+          elif [ -n "$COMMITS" ]; then
+            {
+              printf 'Pembaruan Resmi MASDETA v%s:\n\n' "$VER_NAME"
+              printf '%s\n' "$COMMITS"
+            } > /tmp/release_notes.md
+          elif [ -f "RELEASE_NOTES.md" ] && [ -s "RELEASE_NOTES.md" ]; then
             cp RELEASE_NOTES.md /tmp/release_notes.md
           else
-            printf 'Pembaruan resmi aplikasi MASDETA v%s.\n- Pembaruan antarmuka & fitur terbaru\n- Mendukung pembaruan langsung dari dalam aplikasi Android\n' "${{ steps.ver.outputs.version_name }}" > /tmp/release_notes.md
+            printf 'Pembaruan resmi aplikasi MASDETA v%s.\n- Pembaruan antarmuka & fitur terbaru\n- Mendukung pembaruan langsung dari dalam aplikasi Android\n' "$VER_NAME" > /tmp/release_notes.md
           fi
 
       - name: Publish to GitHub Releases

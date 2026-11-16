@@ -1,7 +1,7 @@
-Pembaruan Resmi MASDETA v1.1.2:
+Pembaruan Resmi MASDETA v1.1.9:
 
-- **Notifikasi Pendaftaran Khusus SuperAdmin**: Notifikasi pendaftar akun baru hanya dikirim ke SuperAdmin agar Admin lain tidak menerima notifikasi yang tidak relevan.
-- **Notifikasi Proposal Dihapus**: Seluruh SuperAdmin, Admin, dan Viewer menerima notifikasi saat ada proposal dihapus beserta tombol tutup pesan (X).
-- **Presensi Aktif Lebih Presisi**: Status "Sedang Aktif", "Idle", dan "Tidak Aktif" kini lebih responsif mengikuti interaksi pengguna serta saat aplikasi ditutup atau layar dikunci.
-- **Menu Riwayat Pembaruan (Changelog)**: Tersedia menu baru di halaman Menu untuk melihat histori fitur lengkap mulai v1.0.0 hingga v1.1.2.
-- **Catatan Pembaruan Ringkas**: Kotak Catatan Pembaruan kini fokus menampilkan catatan rilis versi terbaru saja.
+- **Perbaikan Notifikasi Chat Berulang**: Pesan yang sudah dibuka/dibaca tidak lagi memunculkan notifikasi ulang setiap kali aplikasi dibuka kembali.
+- **Paginasi Penuh Supabase (> 1.000 Baris)**: Seluruh data KPM, dokumen, riwayat audit, dan pesan obrolan dimuat utuh tanpa terpotong batas 1.000 baris default.
+- **Sinkronisasi Granular Multi-Admin**: Edit dan simpan KPM, proposal, item, pengelola, serta wilayah tidak lagi menimpa perubahan admin lain secara bersamaan.
+- **Pemulihan Posisi Scroll Lengkap**: Menjaga posisi gulir pada edit KPM, edit proposal, serta drill-down Rekap Sub-Item dan Detail Proposal.
+- **Riwayat Pembaruan & Update Cerdas**: Sinkronisasi daftar changelog terbaru hingga v1.1.9 beserta fleksibilitas pembaruan patch.

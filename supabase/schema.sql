@@ -337,6 +337,9 @@ CREATE INDEX IF NOT EXISTS idx_chat_recipient_unread ON public.direct_chat_messa
 -- Kebijakan di bawah mengizinkan klien MASDETA (anon & authenticated via Publishable Key)
 -- menjalankan operasi aplikasi internal multi-admin, sembari menjaga integritas
 -- aturan role (SuperAdmin / Admin / Viewer) dan validasi Base64 di level skema & aplikasi.
+-- Catatan Keamanan: Aplikasi klien menghindari SELECT * pada internal_users untuk daftar user
+-- (mengecualikan kolom password_hash). Untuk pengerasan lanjutan di produksi, verifikasi login
+-- & kontrol akun dapat dipindahkan ke RPC SECURITY DEFINER atau Supabase Auth.
 
 ALTER TABLE public.wilayah_kabkota ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.wilayah_kecamatan ENABLE ROW LEVEL SECURITY;

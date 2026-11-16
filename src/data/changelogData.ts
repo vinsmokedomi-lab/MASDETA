@@ -8,10 +8,67 @@ export interface ChangelogRelease {
 
 export const APP_CHANGELOG: ChangelogRelease[] = [
   {
+    version: '1.1.9',
+    title: 'Sinkronisasi Changelog GitHub, Keandalan Chat & Integritas Multi-Admin',
+    releasedAt: '17 Nov 2026, 01:23 WIB',
+    badge: 'Versi Terbaru',
+    highlights: [
+      'Perbaikan Notifikasi Chat Berulang: Pesan yang sudah dibuka atau dibaca tidak lagi memunculkan notifikasi ulang setiap kali aplikasi dibuka kembali.',
+      'Paginasi & Mutasi Granular Supabase: Pengambilan data menembus batas 1.000 baris dan setiap simpan/ubah/hapus tidak menimpa perubahan admin lain secara bersamaan.',
+      'Sinkronisasi Changelog Langsung dari GitHub Releases: Riwayat pembaruan kini menyelaraskan rilis terbaru otomatis dari repositori GitHub sekaligus catatan rilis berbasis commit.',
+      'Pembaruan Patch Opsional: Rilis perbaikan kecil (patch) kini menyediakan opsi "Ingatkan Nanti", sedangkan update fitur besar atau berlabel [WAJIB] tetap terkunci.',
+      'Pemulihan Posisi Scroll & Perlindungan Query Akun: Mempertahankan posisi scroll setelah edit KPM/proposal dan rekap sub-item, serta menyembunyikan hash kata sandi dari kueri daftar user.',
+    ],
+  },
+  {
+    version: '1.1.8',
+    title: 'Penyempurnaan Stabilitas Navigasi & Antarmuka',
+    releasedAt: '17 Nov 2026, 01:16 WIB',
+    highlights: [
+      'Konsistensi Navigasi Detail: Menyempurnakan transisi antar detail KPM, detail proposal, dan tab utama.',
+      'Stabilitas Build APK: Penyelarasan konfigurasi rilis dan optimasi komponen daftar.',
+    ],
+  },
+  {
+    version: '1.1.7',
+    title: 'Presisi Scroll Kembali & Sinkronisasi Daftar',
+    releasedAt: '17 Nov 2026, 00:57 WIB',
+    highlights: [
+      'Pemulihan Posisi Scroll Daftar KPM: Kembali dari detail KPM mempertahankan posisi baris sebelumnya tanpa meloncat ke atas halaman.',
+      'Sinkronisasi Filter & Status: Memastikan filter daftar KPM dan proposal tetap terjaga saat berpindah tampilan.',
+    ],
+  },
+  {
+    version: '1.1.6',
+    title: 'Manajemen Scroll & Drill-Down Konsisten',
+    releasedAt: '17 Nov 2026, 00:26 WIB',
+    highlights: [
+      'Memori Scroll Terstruktur: Penyimpanan posisi scroll per halaman untuk daftar KPM, proposal, dan sub-menu drill-down.',
+      'Navigasi Kembali Bertahap: Tombol kembali serta tombol Back Android menelusuri drill-down pengelola, pekerjaan, dan DTSEN secara berurutan.',
+    ],
+  },
+  {
+    version: '1.1.5',
+    title: 'Optimasi Pengalaman Pengguna & Performa Daftar',
+    releasedAt: '17 Nov 2026, 00:14 WIB',
+    highlights: [
+      'Performa Daftar Data: Peningkatan responsivitas daftar dan interaksi sentuh pada perangkat seluler.',
+      'Penyempurnaan Tampilan Kartu: Kerapian tata letak informasi KPM dan status berkas.',
+    ],
+  },
+  {
+    version: '1.1.4',
+    title: 'Pengelolaan Data Proposal & UX Pendaftaran',
+    releasedAt: '16 Nov 2026, 22:33 WIB',
+    highlights: [
+      'Penyempurnaan Pengelolaan Proposal: Alur edit, kunci berkas, dan validasi data proposal lebih andal.',
+      'Perbaikan UX Formulir & Validasi: Penanganan data calon KPM dan berkas lampiran lebih mulus.',
+    ],
+  },
+  {
     version: '1.1.2',
     title: 'Notifikasi Cerdas, Presensi Akurat & Riwayat Pembaruan',
     releasedAt: '16 Nov 2026, 21:50 WIB',
-    badge: 'Versi Terbaru',
     highlights: [
       'Notifikasi Pendaftaran Akun Khusus SuperAdmin: Pemberitahuan pendaftar akun baru hanya dikirim ke SuperAdmin agar Admin lain tidak menerima notifikasi yang tidak relevan.',
       'Notifikasi Proposal Dihapus: Seluruh SuperAdmin, Admin, dan Viewer menerima notifikasi saat proposal dihapus beserta tombol tutup pesan (X) pada banner notis.',

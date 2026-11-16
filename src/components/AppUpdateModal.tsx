@@ -8,6 +8,7 @@ import {
   Loader2,
   Lock,
   ShieldCheck,
+  X,
 } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 import {
@@ -21,6 +22,7 @@ import {
 interface AppUpdateModalProps {
   updateInfo: AppUpdateInfo | null;
   open: boolean;
+  onDismissLater?: () => void;
 }
 
 function renderInlineBold(text: string) {
@@ -75,7 +77,7 @@ function renderReleaseNotesContent(rawNotes: string) {
   );
 }
 
-export function AppUpdateModal({ updateInfo, open }: AppUpdateModalProps) {
+export function AppUpdateModal({ updateInfo, open, onDismissLater }: AppUpdateModalProps) {
   const [phase, setPhase] = useState<'idle' | 'downloading' | 'installing' | 'error'>('idle');
   const [progress, setProgress] = useState(0);
   const [downloadedBytes, setDownloadedBytes] = useState(0);
@@ -170,26 +172,46 @@ export function AppUpdateModal({ updateInfo, open }: AppUpdateModalProps) {
     );
   };
 
+  const isMandatory = Boolean(updateInfo.isMandatory);
+
   return (
     <div
       role="dialog"
       aria-modal="true"
       aria-labelledby="masdeta-update-title"
       className="fixed inset-0 z-[100] flex items-end justify-center bg-slate-950/75 p-0 backdrop-blur-sm sm:items-center sm:p-4"
+      onClick={() => {
+        if (!isMandatory && phase !== 'downloading' && phase !== 'installing') {
+          onDismissLater?.();
+        }
+      }}
     >
       <div
         className="flex max-h-[92vh] w-full max-w-md flex-col overflow-hidden rounded-t-3xl border border-slate-200 bg-white shadow-2xl sm:rounded-3xl"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header Bertema #0F766E — Terkunci Tanpa Tombol Tutup */}
+        {/* Header Bertema #0F766E */}
         <div className="shrink-0 bg-[#0F766E] px-5 pt-5 pb-4 text-white">
-          <div className="min-w-0">
-            <h2 id="masdeta-update-title" className="text-base font-bold tracking-tight">
-              Update MASDETA Tersedia
-            </h2>
-            <p className="mt-0.5 truncate text-xs text-teal-100">
-              {updateInfo.releaseName || `MASDETA v${updateInfo.latestVersion}`}
-            </p>
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <h2 id="masdeta-update-title" className="text-base font-bold tracking-tight">
+                Update MASDETA Tersedia
+              </h2>
+              <p className="mt-0.5 truncate text-xs text-teal-100">
+                {updateInfo.releaseName || `MASDETA v${updateInfo.latestVersion}`}
+              </p>
+            </div>
+            {!isMandatory && onDismissLater && (
+              <button
+                type="button"
+                disabled={phase === 'downloading' || phase === 'installing'}
+                onClick={onDismissLater}
+                aria-label="Tutup sementara"
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white/15 text-white transition-colors hover:bg-white/25 disabled:opacity-50"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </div>
 
           {/* Perbandingan Versi Lama vs Baru */}
@@ -216,13 +238,22 @@ export function AppUpdateModal({ updateInfo, open }: AppUpdateModalProps) {
 
         {/* Body & Release Notes */}
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
-          {/* Peringatan Penguncian Versi Lama */}
-          <div className="flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
-            <Lock className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
-            <p className="leading-snug">
-              <span className="font-bold">Versi lama dikunci sementara.</span> Demi menjaga konsistensi data, Anda wajib memasang pembaruan terbaru sebelum melanjutkan menggunakan aplikasi.
-            </p>
-          </div>
+          {/* Peringatan Penguncian Versi Lama atau Info Anjuran Update */}
+          {isMandatory ? (
+            <div className="flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+              <Lock className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+              <p className="leading-snug">
+                <span className="font-bold">Versi lama dikunci sementara.</span> Demi menjaga konsistensi data, Anda wajib memasang pembaruan terbaru sebelum melanjutkan menggunakan aplikasi.
+              </p>
+            </div>
+          ) : (
+            <div className="flex items-start gap-2.5 rounded-2xl border border-teal-200 bg-teal-50/70 p-3 text-xs text-teal-900">
+              <Info className="mt-0.5 h-4 w-4 shrink-0 text-[#0F766E]" />
+              <p className="leading-snug">
+                <span className="font-bold">Pembaruan tambalan tersedia.</span> Disarankan segera memperbarui APK untuk perbaikan bug dan peningkatan performa terbaru.
+              </p>
+            </div>
+          )}
 
           <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3.5">
             <div className="flex items-center justify-between gap-2 border-b border-slate-200/70 pb-2">
@@ -330,6 +361,17 @@ export function AppUpdateModal({ updateInfo, open }: AppUpdateModalProps) {
               <ExternalLink className="h-3.5 w-3.5 shrink-0 text-slate-500" />
               <span>Buka Halaman Pengaturan Izin / Unduh Manual</span>
             </button>
+
+            {!isMandatory && onDismissLater && (
+              <button
+                type="button"
+                disabled={phase === 'downloading' || phase === 'installing'}
+                onClick={onDismissLater}
+                className="inline-flex min-h-[42px] w-full items-center justify-center rounded-xl text-xs font-semibold text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
+              >
+                Ingatkan Nanti
+              </button>
+            )}
           </div>
         </div>
       </div>

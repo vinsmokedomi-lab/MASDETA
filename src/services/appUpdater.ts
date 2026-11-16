@@ -24,6 +24,7 @@ interface GitHubLatestReleaseResponse {
 
 export interface AppUpdateInfo {
   hasUpdate: boolean;
+  isMandatory: boolean;
   currentVersion: string;
   latestVersion: string;
   tagName: string;
@@ -63,6 +64,27 @@ export function compareSemver(a: string, b: string): number {
   return 0;
 }
 
+export function computeIsMandatoryUpdate(
+  currentVersion: string,
+  latestVersion: string,
+  releaseNotes: string
+): boolean {
+  if (compareSemver(latestVersion, currentVersion) <= 0) return false;
+  const upperNotes = (releaseNotes || '').toUpperCase();
+  if (upperNotes.includes('[WAJIB]') || upperNotes.includes('WAJIB UPDATE')) {
+    return true;
+  }
+  const curParts = normalizeSemver(currentVersion)
+    .split('.')
+    .map((n) => parseInt(n.replace(/\D/g, ''), 10) || 0);
+  const latParts = normalizeSemver(latestVersion)
+    .split('.')
+    .map((n) => parseInt(n.replace(/\D/g, ''), 10) || 0);
+  const majorDiff = (latParts[0] ?? 0) > (curParts[0] ?? 0);
+  const minorDiff = (latParts[0] ?? 0) === (curParts[0] ?? 0) && (latParts[1] ?? 0) > (curParts[1] ?? 0);
+  return majorDiff || minorDiff;
+}
+
 export function formatBytes(bytes?: number | null): string {
   if (!bytes || bytes <= 0) return '';
   const mb = bytes / (1024 * 1024);
@@ -80,6 +102,7 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
   if (response.status === 404) {
     return {
       hasUpdate: false,
+      isMandatory: false,
       currentVersion: APP_VERSION,
       latestVersion: APP_VERSION,
       tagName: `v${APP_VERSION}`,
@@ -111,14 +134,19 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
     : undefined;
 
   const hasNewerTag = compareSemver(latestVersion, APP_VERSION) > 0;
+  const hasApk = Boolean(apkAsset?.browser_download_url);
+  const releaseNotes = (release.body || '').trim();
+  const isMandatory =
+    hasNewerTag && hasApk && computeIsMandatoryUpdate(APP_VERSION, latestVersion, releaseNotes);
 
   const result: AppUpdateInfo = {
-    hasUpdate: hasNewerTag && Boolean(apkAsset?.browser_download_url),
+    hasUpdate: hasNewerTag && hasApk,
+    isMandatory,
     currentVersion: APP_VERSION,
     latestVersion,
     tagName,
     releaseName: (release.name || `MASDETA v${latestVersion}`).trim(),
-    releaseNotes: (release.body || '').trim(),
+    releaseNotes,
     releaseUrl: (release.html_url || `https://github.com/${GITHUB_REPO}/releases`).trim(),
     apkDownloadUrl: apkAsset?.browser_download_url ?? null,
     apkFileName: apkAsset?.name ?? null,
@@ -144,8 +172,18 @@ export function getCachedMandatoryUpdate(): AppUpdateInfo | null {
       window.localStorage.removeItem(REQUIRED_UPDATE_CACHE_KEY);
       return null;
     }
+    const isMandatory = computeIsMandatoryUpdate(
+      APP_VERSION,
+      parsed.latestVersion,
+      parsed.releaseNotes || ''
+    );
+    if (!isMandatory) {
+      window.localStorage.removeItem(REQUIRED_UPDATE_CACHE_KEY);
+      return null;
+    }
     return {
       ...parsed,
+      isMandatory: true,
       currentVersion: APP_VERSION,
       hasUpdate: true,
     };
@@ -157,9 +195,9 @@ export function getCachedMandatoryUpdate(): AppUpdateInfo | null {
 export function persistMandatoryUpdate(info: AppUpdateInfo | null): void {
   if (typeof window === 'undefined' || !Capacitor.isNativePlatform()) return;
   try {
-    if (info && info.hasUpdate && info.apkDownloadUrl) {
+    if (info && info.hasUpdate && info.isMandatory && info.apkDownloadUrl) {
       window.localStorage.setItem(REQUIRED_UPDATE_CACHE_KEY, JSON.stringify(info));
-    } else if (info && compareSemver(info.latestVersion, APP_VERSION) <= 0) {
+    } else if (info && (!info.isMandatory || compareSemver(info.latestVersion, APP_VERSION) <= 0)) {
       window.localStorage.removeItem(REQUIRED_UPDATE_CACHE_KEY);
     }
   } catch {

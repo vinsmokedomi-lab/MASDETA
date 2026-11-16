@@ -10,11 +10,14 @@ import {
 } from 'lucide-react';
 import { isSupabaseConfigured, supabase } from './lib/supabaseClient';
 import {
+  appendKpmAuditLogsInSupabase,
   checkSupabaseSchemaReady,
-  deleteKpmRecordInSupabase,
+  deleteKpmRecordWithSideEffectsInSupabase,
+  deletePengelolaInSupabase,
   fetchAppStateSlice,
   fetchChatDeliveryWatermarks,
   fetchOperationalDataFromSupabase,
+  importOperationalDeltaToSupabase,
   isSchemaMissingError,
   runAdminDataActionInSupabase,
   saveAppStateSlice,
@@ -34,9 +37,17 @@ import {
   supabaseUpdateInternalUserProfile,
   supabaseUpdateProposalLockStatus,
   supabaseVerifyUserPassword,
-  syncAllOperationalDataToSupabase,
+  syncWilayahInSupabase,
+  updateKpmBerkasDikembalikanInSupabase,
   updateKpmDocumentsInSupabase,
+  updateKpmStatusesBatchInSupabase,
+  upsertCatalogItemsInSupabase,
+  upsertKpmRecordsBatchInSupabase,
+  upsertKpmSubItemDeliveriesInSupabase,
+  upsertPekerjaanListInSupabase,
+  upsertPengelolaInSupabase,
   upsertProposalInSupabase,
+  upsertProposalsBatchInSupabase,
 } from './services/supabaseData';
 import {
   INITIAL_INTERNAL_USERS,
@@ -122,7 +133,7 @@ import { TAHUN_OPTIONS } from './data/kpmOptions';
 import { importProposalKpmFromCsv } from './utils/csvImporter';
 import { KpmRegistrationForm } from './components/KpmRegistrationForm';
 import { KpmDetailView } from './components/KpmDetailView';
-import { SubItemRecapView } from './components/SubItemRecapView';
+import { RecapDrillTarget, SubItemRecapView } from './components/SubItemRecapView';
 import { AddProposalForm } from './components/AddProposalForm';
 import { ProposalForm } from './components/ProposalForm';
 import { ProposalDetailView } from './components/ProposalDetailView';
@@ -202,6 +213,30 @@ const SESSION_STORAGE_KEY = 'masdeta_session_user_id_v1';
 const SESSION_TOKEN_STORAGE_KEY = 'masdeta_session_token_v1';
 const PUSH_ENABLED_STORAGE_KEY = 'masdeta_push_enabled_v1';
 const APP_NOTIFICATIONS_STORAGE_KEY = 'masdeta_app_notifications_v1';
+const CHAT_NOTIFIED_IDS_STORAGE_PREFIX = 'masdeta_notified_chat_ids_v1_';
+
+function loadPersistedNotifiedChatIds(userId: string): Set<string> {
+  if (!userId) return new Set();
+  try {
+    const raw = localStorage.getItem(`${CHAT_NOTIFIED_IDS_STORAGE_PREFIX}${userId}`);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.map((id) => String(id)).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
+function savePersistedNotifiedChatIds(userId: string, ids: Set<string>): void {
+  if (!userId) return;
+  try {
+    const trimmed = Array.from(ids).slice(-400);
+    localStorage.setItem(`${CHAT_NOTIFIED_IDS_STORAGE_PREFIX}${userId}`, JSON.stringify(trimmed));
+  } catch {
+    // Ignore storage write error
+  }
+}
 
 function playMessageChime() {
   try {
@@ -483,7 +518,10 @@ export default function App() {
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState<boolean>(() =>
     Boolean(getCachedMandatoryUpdate())
   );
+  const [dismissedUpdateVersion, setDismissedUpdateVersion] = useState<string | null>(null);
   const [checkingAppUpdate, setCheckingAppUpdate] = useState(false);
+  const [recapDrillTarget, setRecapDrillTarget] = useState<RecapDrillTarget>(null);
+  const [chatBaselineReady, setChatBaselineReady] = useState<boolean>(false);
   const [isOperationalLoading, setIsOperationalLoading] = useState<boolean>(true);
   const [offlineQueueCount, setOfflineQueueCount] = useState<number>(0);
   const [schedules, setSchedules] = useState<ScheduleEventItem[]>([]);
@@ -531,6 +569,9 @@ export default function App() {
   const currentUserAliasesRef = useRef<Record<string, string>>({});
   const isFlushingQueueRef = useRef<boolean>(false);
   const notifiedChatMsgIdsRef = useRef<Set<string>>(new Set());
+  const initialMessagesHydratedRef = useRef<boolean>(false);
+  const directMessagesRef = useRef<DirectChatMessage[]>(directMessages);
+  const dismissedUpdateVersionRef = useRef<string | null>(dismissedUpdateVersion);
   const syncIncomingMessagesRef = useRef<() => Promise<void>>(async () => {});
   const openChatViewRef = useRef<(peerId?: string) => void>(() => {});
   const scrollMemoryRef = useRef<Record<string, number>>({});
@@ -541,6 +582,8 @@ export default function App() {
   const prevAuthenticatedRef = useRef<boolean>(false);
 
   kpmBastMapRef.current = kpmBastMap;
+  directMessagesRef.current = directMessages;
+  dismissedUpdateVersionRef.current = dismissedUpdateVersion;
 
   useEffect(() => {
     isOnlineRef.current = isOnline;
@@ -564,7 +607,9 @@ export default function App() {
         const info = await checkForAppUpdate();
         if (!cancelled && info.hasUpdate) {
           setAppUpdateInfo(info);
-          setIsUpdateModalOpen(true);
+          if (info.isMandatory || dismissedUpdateVersionRef.current !== info.latestVersion) {
+            setIsUpdateModalOpen(true);
+          }
         }
       } catch {
         // Abaikan error jaringan diam-diam; versi lama tetap terkunci jika cache update wajib sudah tercatat
@@ -595,6 +640,8 @@ export default function App() {
   const handleManualCheckAppUpdate = async () => {
     if (checkingAppUpdate) return;
     setCheckingAppUpdate(true);
+    setDismissedUpdateVersion(null);
+    dismissedUpdateVersionRef.current = null;
     try {
       const info = await checkForAppUpdate();
       if (info.hasUpdate) {
@@ -1160,6 +1207,35 @@ export default function App() {
     }
   }, [internalUsers, currentUser, authReady, pushAppNotification]);
 
+  const markMessagesAsNotified = useCallback((uid: string, msgIds: string[]) => {
+    if (!uid || msgIds.length === 0) return;
+    let changed = false;
+    for (const id of msgIds) {
+      if (id && !notifiedChatMsgIdsRef.current.has(id)) {
+        notifiedChatMsgIdsRef.current.add(id);
+        changed = true;
+      }
+    }
+    if (changed) {
+      savePersistedNotifiedChatIds(uid, notifiedChatMsgIdsRef.current);
+    }
+  }, []);
+
+  const seedChatNotificationBaseline = useCallback(
+    (uid: string, userMsgs: DirectChatMessage[]) => {
+      const persisted = loadPersistedNotifiedChatIds(uid);
+      notifiedChatMsgIdsRef.current = persisted;
+      const alreadyHandledIds = userMsgs
+        .filter((m) => Boolean(m.readAt) || m.senderId === uid)
+        .map((m) => m.id);
+      markMessagesAsNotified(uid, alreadyHandledIds);
+      prevMessageIdsRef.current = new Set(userMsgs.map((m) => m.id));
+      initialMessagesHydratedRef.current = true;
+      setChatBaselineReady(true);
+    },
+    [markMessagesAsNotified]
+  );
+
   const clearSessionState = useCallback(() => {
     setSessionToken(null);
     setSessionUserId(null);
@@ -1168,6 +1244,9 @@ export default function App() {
     setActiveChatPeerId(null);
     setBellAckChatCount(0);
     notifiedChatMsgIdsRef.current.clear();
+    prevMessageIdsRef.current.clear();
+    initialMessagesHydratedRef.current = false;
+    setChatBaselineReady(false);
     void clearNativeChatNotifier();
     try {
       localStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
@@ -1452,6 +1531,37 @@ export default function App() {
     return run;
   }, []);
 
+  const runSupabaseMutation = useCallback(
+    async (task: () => Promise<unknown>, errorPrefix: string): Promise<boolean> => {
+      if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+        setFeedback({
+          type: 'error',
+          message: 'Aksi ditolak: Aplikasi MASDETA wajib terhubung ke internet aktif.',
+        });
+        return false;
+      }
+      return enqueueOperationalSync(async () => {
+        try {
+          await task();
+          return true;
+        } catch (err) {
+          const msg =
+            err instanceof Error
+              ? err.message
+              : err && typeof err === 'object' && 'message' in err
+                ? String((err as { message: unknown }).message)
+                : 'Gagal menyimpan perubahan ke Supabase.';
+          setFeedback({
+            type: 'error',
+            message: `${errorPrefix}: ${msg}`,
+          });
+          return false;
+        }
+      });
+    },
+    [enqueueOperationalSync]
+  );
+
   const syncOperationalData = useCallback(
     async (
       patch: Partial<OperationalDataPayload>,
@@ -1471,25 +1581,6 @@ export default function App() {
           ...latestDataRef.current,
           ...patch,
         };
-
-        if (supabaseReadyRef.current) {
-          try {
-            await syncAllOperationalDataToSupabase(merged);
-            return true;
-          } catch (err) {
-            const msg =
-              err instanceof Error
-                ? err.message
-                : err && typeof err === 'object' && 'message' in err
-                  ? String((err as { message: unknown }).message)
-                  : 'Gagal menyimpan perubahan ke Supabase.';
-            setFeedback({
-              type: 'error',
-              message: `Gagal sinkronisasi ke Supabase: ${msg}`,
-            });
-            return false;
-          }
-        }
 
         if (!sessionTokenRef.current) return false;
         try {
@@ -1586,7 +1677,7 @@ export default function App() {
           const userMsgs = msgs.filter(
             (m) => m.senderId === activeUser.id || m.recipientId === activeUser.id
           );
-          prevMessageIdsRef.current = new Set(userMsgs.map((m) => m.id));
+          seedChatNotificationBaseline(activeUser.id, userMsgs);
           setChatDeliveryWatermarks(watermarks);
           setDirectMessages(userMsgs);
 
@@ -1663,7 +1754,7 @@ export default function App() {
               setInternalUsers(mergeFetchedInternalUsers(data.users));
             }
             if (Array.isArray(data.messages)) {
-              prevMessageIdsRef.current = new Set(data.messages.map((m) => m.id));
+              seedChatNotificationBaseline(data.user.id, data.messages);
               setDirectMessages(data.messages);
             }
             setSessionUserId(data.user.id);
@@ -1688,24 +1779,41 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [sessionToken, authFetch, clearSessionState, loadOrBootstrapOperationalData, sessionUserId]);
+  }, [
+    sessionToken,
+    authFetch,
+    clearSessionState,
+    loadOrBootstrapOperationalData,
+    sessionUserId,
+    seedChatNotificationBaseline,
+  ]);
 
   const handleMarkChatRead = useCallback(
     async (peerId: string) => {
       if (!currentUser || !peerId) return;
-      const hasUnread = directMessages.some(
-        (m) => m.senderId === peerId && m.recipientId === currentUser.id && !m.readAt
+      const incomingFromPeer = directMessagesRef.current.filter(
+        (m) => m.senderId === peerId && m.recipientId === currentUser.id
       );
-      if (!hasUnread) return;
+      const incomingIds = incomingFromPeer.map((m) => m.id);
+      if (incomingIds.length > 0) {
+        markMessagesAsNotified(currentUser.id, incomingIds);
+        const latestIncoming = incomingFromPeer[incomingFromPeer.length - 1];
+        void markNativeNotifiedIds(incomingIds, latestIncoming?.createdAt);
+      }
+
+      const hasUnread = incomingFromPeer.some((m) => !m.readAt);
+      if (!hasUnread && initialMessagesHydratedRef.current) return;
 
       const now = new Date().toISOString();
-      setDirectMessages((prev) =>
-        prev.map((m) =>
-          m.senderId === peerId && m.recipientId === currentUser.id && !m.readAt
-            ? { ...m, deliveredAt: m.deliveredAt || now, readAt: now }
-            : m
-        )
-      );
+      if (hasUnread) {
+        setDirectMessages((prev) =>
+          prev.map((m) =>
+            m.senderId === peerId && m.recipientId === currentUser.id && !m.readAt
+              ? { ...m, deliveredAt: m.deliveredAt || now, readAt: now }
+              : m
+          )
+        );
+      }
 
       if (supabaseReadyRef.current) {
         try {
@@ -1727,7 +1835,7 @@ export default function App() {
         // Abaikan jika offline sementara
       }
     },
-    [currentUser, directMessages, authFetch]
+    [currentUser, authFetch, markMessagesAsNotified]
   );
 
   const handleManualRefresh = useCallback(async () => {
@@ -1770,7 +1878,7 @@ export default function App() {
 
         if (uid) {
           const userMsgs = msgs.filter((m) => m.senderId === uid || m.recipientId === uid);
-          prevMessageIdsRef.current = new Set(userMsgs.map((m) => m.id));
+          seedChatNotificationBaseline(uid, userMsgs);
           setDirectMessages(userMsgs);
         }
 
@@ -1875,9 +1983,15 @@ export default function App() {
         if (disposed) return;
 
         const mine = all.filter((m) => m.senderId === uid || m.recipientId === uid);
-        const newIncoming = mine.filter(
-          (m) => m.recipientId === uid && !prevMessageIdsRef.current.has(m.id)
-        );
+        const wasHydrated = initialMessagesHydratedRef.current;
+        if (!wasHydrated) {
+          seedChatNotificationBaseline(uid, mine);
+        }
+        const newIncoming = wasHydrated
+          ? mine.filter(
+              (m) => m.recipientId === uid && !m.readAt && !prevMessageIdsRef.current.has(m.id)
+            )
+          : [];
         prevMessageIdsRef.current = new Set(mine.map((m) => m.id));
         setChatDeliveryWatermarks(watermarks);
         setDirectMessages(mine);
@@ -1916,21 +2030,25 @@ export default function App() {
             document.visibilityState === 'visible';
 
           if (isViewingThread) {
+            const readAtNow = new Date().toISOString();
+            const incomingIds = newIncoming.map((m) => m.id);
+            const incomingIdSet = new Set(incomingIds);
+            setDirectMessages((prev) =>
+              prev.map((m) =>
+                incomingIdSet.has(m.id) ? { ...m, deliveredAt: m.deliveredAt || readAtNow, readAt: readAtNow } : m
+              )
+            );
+            markMessagesAsNotified(uid, incomingIds);
             const sorted = [uid, latestNew.senderId].sort();
             void supabaseMarkDirectMessagesRead(`${sorted[0]}::${sorted[1]}`, uid);
-            void markNativeNotifiedIds(
-              newIncoming.map((m) => m.id),
-              latestNew.createdAt
-            );
+            void markNativeNotifiedIds(incomingIds, latestNew.createdAt);
           } else {
             const unnotified = newIncoming.filter(
               (m) => !notifiedChatMsgIdsRef.current.has(m.id)
             );
-            newIncoming.forEach((m) => notifiedChatMsgIdsRef.current.add(m.id));
-            void markNativeNotifiedIds(
-              newIncoming.map((m) => m.id),
-              latestNew.createdAt
-            );
+            const newIncomingIds = newIncoming.map((m) => m.id);
+            markMessagesAsNotified(uid, newIncomingIds);
+            void markNativeNotifiedIds(newIncomingIds, latestNew.createdAt);
 
             if (unnotified.length > 0) {
               const targetMsg = unnotified[unnotified.length - 1];
@@ -2151,7 +2269,14 @@ export default function App() {
       syncIncomingMessagesRef.current = async () => {};
       void supabase.removeChannel(channel);
     };
-  }, [currentUser?.id, supabaseReady, applyRemoteOperationalState, pushAppNotification]);
+  }, [
+    currentUser?.id,
+    supabaseReady,
+    applyRemoteOperationalState,
+    pushAppNotification,
+    markMessagesAsNotified,
+    seedChatNotificationBaseline,
+  ]);
 
   // Koneksi WebSocket Real-time (Fallback saat schema Supabase belum dijalankan)
   useEffect(() => {
@@ -2261,6 +2386,7 @@ export default function App() {
               void markNativeNotifiedIds([msg.id], msg.createdAt);
 
               if (isViewingThread) {
+                markMessagesAsNotified(uid, [msg.id]);
                 authFetch('/api/chat/read', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
@@ -2274,7 +2400,7 @@ export default function App() {
                 }).catch(() => {});
 
                 if (!notifiedChatMsgIdsRef.current.has(msg.id)) {
-                  notifiedChatMsgIdsRef.current.add(msg.id);
+                  markMessagesAsNotified(uid, [msg.id]);
                   const senderName =
                     (currentUserAliasesRef.current[msg.senderId] || '').trim() ||
                     String(data.senderName || 'Pengguna Internal');
@@ -2358,19 +2484,26 @@ export default function App() {
           setInternalUsers(mergeFetchedInternalUsers(data.users));
         }
         if (Array.isArray(data.messages)) {
-          const incomingNew = data.messages.filter(
-            (m) => m.recipientId === uid && !prevMessageIdsRef.current.has(m.id)
-          );
+          const wasHydrated = initialMessagesHydratedRef.current;
+          if (!wasHydrated) {
+            seedChatNotificationBaseline(uid, data.messages);
+          }
+          const incomingNew = wasHydrated
+            ? data.messages.filter(
+                (m) => m.recipientId === uid && !m.readAt && !prevMessageIdsRef.current.has(m.id)
+              )
+            : [];
           prevMessageIdsRef.current = new Set(data.messages.map((m) => m.id));
           setDirectMessages(data.messages);
 
           const latestNew = incomingNew[incomingNew.length - 1];
-          if (latestNew && !notifiedChatMsgIdsRef.current.has(latestNew.id)) {
-            incomingNew.forEach((m) => notifiedChatMsgIdsRef.current.add(m.id));
-            void markNativeNotifiedIds(
-              incomingNew.map((m) => m.id),
-              latestNew.createdAt
+          if (latestNew) {
+            const incomingIds = incomingNew.map((m) => m.id);
+            const alreadyNotifiedAll = incomingNew.every((m) =>
+              notifiedChatMsgIdsRef.current.has(m.id)
             );
+            markMessagesAsNotified(uid, incomingIds);
+            void markNativeNotifiedIds(incomingIds, latestNew.createdAt);
             const isViewingThread =
               subViewRef.current === 'chat' &&
               activeChatPeerIdRef.current === latestNew.senderId &&
@@ -2381,7 +2514,7 @@ export default function App() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ peerId: latestNew.senderId }),
               }).catch(() => {});
-            } else if (pushEnabledRef.current) {
+            } else if (!alreadyNotifiedAll && pushEnabledRef.current) {
               const sender = internalUsersRef.current.find((u) => u.id === latestNew.senderId);
               const senderName =
                 (currentUserAliasesRef.current[latestNew.senderId] || '').trim() ||
@@ -2432,12 +2565,21 @@ export default function App() {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [currentUser?.id, sessionToken, supabaseReady, authFetch, applyRemoteOperationalState, pushAppNotification]);
+  }, [
+    currentUser?.id,
+    sessionToken,
+    supabaseReady,
+    authFetch,
+    applyRemoteOperationalState,
+    pushAppNotification,
+    markMessagesAsNotified,
+    seedChatNotificationBaseline,
+  ]);
 
   // Sinkronisasi native Android background notifier (saat layar terkunci / app ditutup) + wake-up resync
   useEffect(() => {
     const uid = currentUser?.id;
-    if (!uid) return;
+    if (!uid || !chatBaselineReady || !initialMessagesHydratedRef.current) return;
 
     const senderNames: Record<string, string> = {};
     internalUsers.forEach((u) => {
@@ -2446,7 +2588,7 @@ export default function App() {
       }
     });
 
-    let maxMsgIso = new Date().toISOString();
+    let maxMsgIso = directMessages.length === 0 ? new Date().toISOString() : '';
     let maxMsgTs = 0;
     directMessages.forEach((m) => {
       const ts = new Date(m.createdAt).getTime();
@@ -2455,6 +2597,9 @@ export default function App() {
         maxMsgIso = m.createdAt;
       }
     });
+    if (!maxMsgIso) {
+      maxMsgIso = new Date().toISOString();
+    }
 
     void syncNativeChatNotifierConfig({
       userId: uid,
@@ -2466,6 +2611,7 @@ export default function App() {
     });
   }, [
     currentUser?.id,
+    chatBaselineReady,
     internalUsers,
     currentUserAliases,
     pushEnabled,
@@ -2906,6 +3052,11 @@ export default function App() {
         return `sub:kpm-detail:${activeKpmId ?? ''}`;
       case 'proposal-detail':
         return `sub:proposal-detail:${activeProposalId ?? ''}`;
+      case 'subitem-recap':
+        if (recapDrillTarget?.kind === 'item') return `sub:subitem-recap:item:${recapDrillTarget.code}`;
+        if (recapDrillTarget?.kind === 'subitem') return `sub:subitem-recap:sub:${recapDrillTarget.key}`;
+        if (recapDrillTarget?.kind === 'pending_all') return 'sub:subitem-recap:pending_all';
+        return 'sub:subitem-recap';
       case 'chat':
         return `sub:chat:${activeChatPeerId ?? '__list__'}`;
       default:
@@ -3025,7 +3176,12 @@ export default function App() {
   const handleAndroidBackRef = useRef<() => void>(() => {});
   handleAndroidBackRef.current = () => {
     if (isUpdateModalOpen) {
-      // Aplikasi versi lama terkunci wajib update: tombol Back tidak boleh menutup popup
+      if (appUpdateInfo && !appUpdateInfo.isMandatory) {
+        setDismissedUpdateVersion(appUpdateInfo.latestVersion);
+        dismissedUpdateVersionRef.current = appUpdateInfo.latestVersion;
+        setIsUpdateModalOpen(false);
+      }
+      // Update wajib: tombol Back tidak boleh menutup popup
       return;
     }
 
@@ -3116,7 +3272,19 @@ export default function App() {
       return;
     }
 
-    if (subView === 'proposal-detail' || subView === 'subitem-recap') {
+    if (subView === 'subitem-recap') {
+      navigateRestoreScroll();
+      if (recapDrillTarget) {
+        setRecapDrillTarget(null);
+      } else {
+        setFeedback(null);
+        setSubView('none');
+        setActiveTab(returnToTab);
+      }
+      return;
+    }
+
+    if (subView === 'proposal-detail') {
       navigateRestoreScroll();
       setFeedback(null);
       setSubView('none');
@@ -3348,6 +3516,23 @@ export default function App() {
       const nextAuditLogs = [...result.newAuditLogs, ...kpmAuditLogs];
       const nextProposalHistory = [importSummaryLog, ...result.newProposalHistory, ...proposalHistory];
 
+      const prevRecById = new Map(state.records.map((r) => [r.id, r]));
+      const existingPropIds = new Set(state.proposals.map((p) => p.id));
+      const existingPengelolaIds = new Set(state.pengelolaList.map((p) => p.id));
+      const existingPekerjaanLower = new Set(
+        state.pekerjaanList.map((p) => p.trim().toLowerCase())
+      );
+
+      const recordsToSave = result.nextRecords.filter((r) => {
+        const old = prevRecById.get(r.id);
+        return !old || old.registerCode !== r.registerCode || old.updatedAt !== r.updatedAt;
+      });
+      const proposalsToSave = result.nextProposals.filter((p) => !existingPropIds.has(p.id));
+      const pengelolaToSave = result.nextPengelolaList.filter((p) => !existingPengelolaIds.has(p.id));
+      const pekerjaanToAdd = result.nextPekerjaanList.filter(
+        (j) => !existingPekerjaanLower.has(j.trim().toLowerCase())
+      );
+
       setProposals(result.nextProposals);
       setPengelolaList(result.nextPengelolaList);
       setPekerjaanList(result.nextPekerjaanList);
@@ -3356,17 +3541,34 @@ export default function App() {
         setKpmAuditLogs(nextAuditLogs);
       }
       setProposalHistory(nextProposalHistory);
-      void syncOperationalData(
-        {
-          records: result.nextRecords,
-          proposals: result.nextProposals,
-          pengelolaList: result.nextPengelolaList,
-          pekerjaanList: result.nextPekerjaanList,
-          kpmAuditLogs: nextAuditLogs,
-          proposalHistory: nextProposalHistory,
-        },
-        'add'
-      );
+      if (supabaseReadyRef.current) {
+        void runSupabaseMutation(
+          () =>
+            importOperationalDeltaToSupabase({
+              recordsToSave,
+              proposalsToSave,
+              pengelolaToSave,
+              pekerjaanToAdd,
+              allProposals: result.nextProposals,
+              allPengelolaList: result.nextPengelolaList,
+              auditLogs: result.newAuditLogs,
+              historyEntries: [importSummaryLog, ...result.newProposalHistory],
+            }),
+          'Gagal menyinkronkan impor CSV ke Supabase'
+        );
+      } else {
+        void syncOperationalData(
+          {
+            records: result.nextRecords,
+            proposals: result.nextProposals,
+            pengelolaList: result.nextPengelolaList,
+            pekerjaanList: result.nextPekerjaanList,
+            kpmAuditLogs: nextAuditLogs,
+            proposalHistory: nextProposalHistory,
+          },
+          'add'
+        );
+      }
       setFeedback({
         type: 'success',
         message: `${result.importedRecordsCount} calon KPM${
@@ -3405,6 +3607,7 @@ export default function App() {
   const openSubItemRecap = (fromTab: MainTab = activeTab) => {
     navigateForwardScroll();
     setFeedback(null);
+    setRecapDrillTarget(null);
     setReturnToTab(fromTab);
     setSubView('subitem-recap');
   };
@@ -3503,7 +3706,18 @@ export default function App() {
       const nextHistory = [actEntry, ...proposalHistory];
       setProposals(nextProposals);
       setProposalHistory(nextHistory);
-      void syncOperationalData({ proposals: nextProposals, proposalHistory: nextHistory }, 'add');
+      if (supabaseReadyRef.current) {
+        void runSupabaseMutation(
+          () =>
+            upsertProposalsBatchInSupabase({
+              proposals: [created],
+              historyEntries: [actEntry],
+            }),
+          'Gagal menyimpan proposal ke Supabase'
+        );
+      } else {
+        void syncOperationalData({ proposals: nextProposals, proposalHistory: nextHistory }, 'add');
+      }
       openProposalDetailById(created.id, returnToTab);
     }
   };
@@ -3519,7 +3733,18 @@ export default function App() {
     const nextHistory = [actEntry, ...proposalHistory];
     setPengelolaList(nextPengelola);
     setProposalHistory(nextHistory);
-    void syncOperationalData({ pengelolaList: nextPengelola, proposalHistory: nextHistory }, 'add');
+    if (supabaseReadyRef.current) {
+      void runSupabaseMutation(
+        () =>
+          upsertPengelolaInSupabase({
+            profile,
+            historyEntries: [actEntry],
+          }),
+        'Gagal menyimpan pengelola ke Supabase'
+      );
+    } else {
+      void syncOperationalData({ pengelolaList: nextPengelola, proposalHistory: nextHistory }, 'add');
+    }
   };
 
   const handleUpdatePengelola = (profile: PengelolaProfile, previousDisplayName: string) => {
@@ -3573,12 +3798,29 @@ export default function App() {
     const nextHistory = [actEntry, ...proposalHistory];
     setProposalHistory(nextHistory);
 
-    void syncOperationalData(
-      nameChanged
-        ? { pengelolaList: nextPengelola, records: nextRecords, proposalHistory: nextHistory }
-        : { pengelolaList: nextPengelola, proposalHistory: nextHistory },
-      'update'
-    );
+    const changedRecords = nameChanged
+      ? nextRecords.filter((rec, idx) => rec !== records[idx])
+      : [];
+    if (supabaseReadyRef.current) {
+      void runSupabaseMutation(
+        () =>
+          upsertPengelolaInSupabase({
+            profile,
+            updatedRecords: changedRecords,
+            proposals,
+            pengelolaList: nextPengelola,
+            historyEntries: [actEntry],
+          }),
+        'Gagal memperbarui pengelola di Supabase'
+      );
+    } else {
+      void syncOperationalData(
+        nameChanged
+          ? { pengelolaList: nextPengelola, records: nextRecords, proposalHistory: nextHistory }
+          : { pengelolaList: nextPengelola, proposalHistory: nextHistory },
+        'update'
+      );
+    }
     setFeedback({
       type: 'success',
       message: `Data pengelola "${profile.displayName}" berhasil diperbarui.`,
@@ -3608,7 +3850,18 @@ export default function App() {
     });
     const nextHistory = [actEntry, ...proposalHistory];
     setProposalHistory(nextHistory);
-    void syncOperationalData({ pengelolaList: nextPengelola, proposalHistory: nextHistory }, 'delete');
+    if (supabaseReadyRef.current) {
+      void runSupabaseMutation(
+        () =>
+          deletePengelolaInSupabase({
+            pengelolaId,
+            historyEntries: [actEntry],
+          }),
+        'Gagal menghapus pengelola dari Supabase'
+      );
+    } else {
+      void syncOperationalData({ pengelolaList: nextPengelola, proposalHistory: nextHistory }, 'delete');
+    }
     setFeedback({
       type: 'success',
       message: `Pengelola "${target.displayName}" berhasil dihapus.`,
@@ -3737,10 +3990,14 @@ export default function App() {
         setEditingKpmRecord(null);
         if (kpmFormReturnToDetail && activeKpmId) {
           setKpmFormReturnToDetail(false);
-          navigateForwardScroll('smooth');
+          navigateRestoreScroll();
           setSubView('kpm-detail');
+        } else if (kpmFormReturnToProposalDetail && activeProposal) {
+          setKpmFormReturnToProposalDetail(false);
+          navigateRestoreScroll();
+          setSubView('proposal-detail');
         } else {
-          navigateForwardScroll('smooth');
+          navigateRestoreScroll();
           setSubView('none');
           setActiveTab(returnToTab);
         }
@@ -3751,24 +4008,51 @@ export default function App() {
         return true;
       }
 
-      const ok = await syncOperationalData(
-        {
-          records: nextRecords,
-          kpmAuditLogs: nextAuditLogs,
-          proposalHistory: nextProposalHistory,
-        },
-        'update'
+      const prevById = new Map(records.map((r) => [r.id, r]));
+      const affectedRecords = nextRecords.filter(
+        (r) => r.id === editingId || prevById.get(r.id)?.registerCode !== r.registerCode
       );
+      const addedLogs =
+        nextAuditLogs.length > kpmAuditLogs.length ? [nextAuditLogs[0]] : [];
+      const addedHistory = nextProposalHistory.slice(
+        0,
+        Math.max(0, nextProposalHistory.length - proposalHistory.length)
+      );
+
+      const ok = supabaseReadyRef.current
+        ? await runSupabaseMutation(
+            () =>
+              upsertKpmRecordsBatchInSupabase({
+                records: affectedRecords,
+                proposals,
+                pengelolaList,
+                auditLogs: addedLogs,
+                historyEntries: addedHistory,
+                includeDeliveries: false,
+              }),
+            'Gagal menyimpan perubahan KPM ke Supabase'
+          )
+        : await syncOperationalData(
+            {
+              records: nextRecords,
+              kpmAuditLogs: nextAuditLogs,
+              proposalHistory: nextProposalHistory,
+            },
+            'update'
+          );
       if (!ok) return false;
 
       setKpmAuditLogs(nextAuditLogs);
       setProposalHistory(nextProposalHistory);
       setRecords(nextRecords);
       setEditingKpmRecord(null);
-      navigateForwardScroll('smooth');
+      navigateRestoreScroll();
       if (kpmFormReturnToDetail && activeKpmId) {
         setKpmFormReturnToDetail(false);
         setSubView('kpm-detail');
+      } else if (kpmFormReturnToProposalDetail && activeProposal) {
+        setKpmFormReturnToProposalDetail(false);
+        setSubView('proposal-detail');
       } else {
         setSubView('none');
         setActiveTab(returnToTab);
@@ -3854,6 +4138,7 @@ export default function App() {
         createdAt: now,
         kind: 'save_kpm',
         label: `Tambah KPM: ${values.nama}`,
+        clientRecordId: rawNewRecord.id,
         values,
       });
       const queue = await getOfflineQueue();
@@ -3883,14 +4168,33 @@ export default function App() {
       return true;
     }
 
-    const ok = await syncOperationalData(
-      {
-        records: nextRecordsList,
-        kpmAuditLogs: nextAuditLogs,
-        proposalHistory: nextProposalHistory,
-      },
-      'add'
+    const prevCreateById = new Map(records.map((r) => [r.id, r]));
+    const affectedCreatedRecords = nextRecordsList.filter(
+      (r) =>
+        r.id === savedNewRecord.id || prevCreateById.get(r.id)?.registerCode !== r.registerCode
     );
+
+    const ok = supabaseReadyRef.current
+      ? await runSupabaseMutation(
+          () =>
+            upsertKpmRecordsBatchInSupabase({
+              records: affectedCreatedRecords,
+              proposals,
+              pengelolaList,
+              auditLogs: [createdAuditEntry],
+              historyEntries: [enteredHistory],
+              includeDeliveries: true,
+            }),
+          'Gagal menyimpan calon KPM ke Supabase'
+        )
+      : await syncOperationalData(
+          {
+            records: nextRecordsList,
+            kpmAuditLogs: nextAuditLogs,
+            proposalHistory: nextProposalHistory,
+          },
+          'add'
+        );
     if (!ok) return false;
 
     setRecords(nextRecordsList);
@@ -3975,15 +4279,23 @@ export default function App() {
     setProposalHistory(nextHistory);
     setRecords(nextRecords);
 
+    const prevById = new Map(records.map((r) => [r.id, r]));
+    const updatedRecordsInProposal = nextRecords.filter(
+      (r) => prevById.get(r.id)?.registerCode !== r.registerCode
+    );
+
     if (supabaseReadyRef.current) {
-      lastLocalSyncAtRef.current = Date.now();
-      void deleteKpmRecordInSupabase(id)
-        .then(() =>
-          syncOperationalData({ records: nextRecords, proposalHistory: nextHistory }, 'delete')
-        )
-        .catch(() => {
-          void syncOperationalData({ records: nextRecords, proposalHistory: nextHistory }, 'delete');
-        });
+      void runSupabaseMutation(
+        () =>
+          deleteKpmRecordWithSideEffectsInSupabase({
+            kpmId: id,
+            updatedRecordsInProposal,
+            proposals,
+            pengelolaList,
+            historyEntries: [removedHistory],
+          }),
+        'Gagal menghapus calon KPM dari Supabase'
+      );
     } else {
       void syncOperationalData({ records: nextRecords, proposalHistory: nextHistory }, 'delete');
     }
@@ -4033,18 +4345,17 @@ export default function App() {
     setRecords(nextRecords);
 
     if (supabaseReadyRef.current) {
-      try {
-        lastLocalSyncAtRef.current = Date.now();
+      const ok = await runSupabaseMutation(async () => {
         await updateKpmDocumentsInSupabase(updatedRecord, proposals, pengelolaList);
-        await syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
+        await appendKpmAuditLogsInSupabase([auditEntry], new Set([kpmId]));
+      }, 'Gagal memperbarui dokumen KPM di Supabase');
+      if (ok) {
         setFeedback({
           type: 'success',
           message: `${auditChange.field} berhasil diperbarui di Google Drive & Supabase.`,
         });
-        return;
-      } catch (err) {
-        console.error('Supabase doc update failed:', err);
       }
+      return;
     }
 
     await syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
@@ -4160,7 +4471,18 @@ export default function App() {
       return;
     }
 
-    void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
+    if (supabaseReadyRef.current) {
+      void runSupabaseMutation(
+        () =>
+          updateKpmStatusesBatchInSupabase({
+            updates: [{ id, validasi: status, updatedAt: now }],
+            auditLogs: [statusAudit],
+          }),
+        'Gagal memperbarui status validasi ke Supabase'
+      );
+    } else {
+      void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
+    }
   };
 
   const handleToggleSubItem = (
@@ -4200,19 +4522,20 @@ export default function App() {
       ],
     };
 
+    const nextDeliveriesMap = {
+      ...(target.subItemDeliveries || {}),
+      [subItemKey]: {
+        delivered: nextDelivered,
+        updatedAt: now,
+        updatedBy: currentActor.nama,
+      },
+    };
     const nextLogs = [auditEntry, ...kpmAuditLogs];
     const nextRecords = records.map((r) =>
       r.id === kpmId
         ? {
             ...r,
-            subItemDeliveries: {
-              ...(r.subItemDeliveries || {}),
-              [subItemKey]: {
-                delivered: nextDelivered,
-                updatedAt: now,
-                updatedBy: currentActor.nama,
-              },
-            },
+            subItemDeliveries: nextDeliveriesMap,
             updatedAt: now,
           }
         : r
@@ -4238,7 +4561,20 @@ export default function App() {
       return;
     }
 
-    void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
+    if (supabaseReadyRef.current) {
+      void runSupabaseMutation(
+        () =>
+          upsertKpmSubItemDeliveriesInSupabase({
+            kpmId,
+            deliveries: nextDeliveriesMap,
+            updatedAt: now,
+            auditLogs: [auditEntry],
+          }),
+        'Gagal memperbarui checklist sub-item ke Supabase'
+      );
+    } else {
+      void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
+    }
   };
 
   const handleMarkAllSubItemsDelivered = (
@@ -4296,7 +4632,20 @@ export default function App() {
     );
     setKpmAuditLogs(nextLogs);
     setRecords(nextRecords);
-    void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
+    if (supabaseReadyRef.current) {
+      void runSupabaseMutation(
+        () =>
+          upsertKpmSubItemDeliveriesInSupabase({
+            kpmId,
+            deliveries: nextDeliveries,
+            updatedAt: now,
+            auditLogs: [auditEntry],
+          }),
+        'Gagal memperbarui sub-item KPM ke Supabase'
+      );
+    } else {
+      void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
+    }
   };
 
   const handleFlushOfflineQueue = useCallback(async () => {
@@ -4311,17 +4660,37 @@ export default function App() {
 
     isFlushingQueueRef.current = true;
     try {
-      let workRecords = [...latestDataRef.current.records];
-      let workAuditLogs = [...latestDataRef.current.kpmAuditLogs];
-      let workHistory = [...latestDataRef.current.proposalHistory];
-      const workProposals = latestDataRef.current.proposals;
-      const workItems = latestDataRef.current.items;
-      const workWilayah = latestDataRef.current.wilayahList;
+      let baseSnapshot = latestDataRef.current;
+      if (supabaseReadyRef.current) {
+        try {
+          const freshRemote = await fetchOperationalDataFromSupabase();
+          baseSnapshot = {
+            ...freshRemote,
+            wilayahList:
+              freshRemote.wilayahList.length > 0
+                ? freshRemote.wilayahList
+                : latestDataRef.current.wilayahList,
+          };
+        } catch {
+          // Fallback ke snapshot lokal terakhir jika fetch sementara gagal
+        }
+      }
+
+      const prevRecordById = new Map(baseSnapshot.records.map((r) => [r.id, r]));
+      let workRecords = [...baseSnapshot.records];
+      let workAuditLogs = [...baseSnapshot.kpmAuditLogs];
+      const workHistory = [...baseSnapshot.proposalHistory];
+      const workProposals = baseSnapshot.proposals;
+      const workItems = baseSnapshot.items;
+      const workWilayah = baseSnapshot.wilayahList;
+      const workPengelola = baseSnapshot.pengelolaList;
       const actor = {
         nama: currentUser?.nama ?? 'Petugas Internal',
         email: currentUser?.email,
       };
 
+      const touchedRecordIds = new Set<string>();
+      const addedAuditLogs: KpmAuditLogEntry[] = [];
       let processedCount = 0;
       const processedIds: string[] = [];
 
@@ -4341,14 +4710,19 @@ export default function App() {
                       }
                     : r
                 );
+                touchedRecordIds.add(act.editingRecordId);
               }
             } else {
+              const targetId =
+                act.clientRecordId ||
+                `kpm-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+              const dupById = workRecords.some((r) => r.id === targetId);
               const dupByNik =
                 act.values.nikKtp &&
                 workRecords.some((r) => r.nikKtp === act.values.nikKtp && r.nama === act.values.nama);
-              if (!dupByNik) {
+              if (!dupById && !dupByNik) {
                 const newRec: KpmRecord = {
-                  id: `kpm-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+                  id: targetId,
                   registerCode: generateRegisterCode(
                     act.values.tahun,
                     act.values.item,
@@ -4362,6 +4736,9 @@ export default function App() {
                   updatedAt: act.createdAt,
                 };
                 workRecords = [newRec, ...workRecords];
+                touchedRecordIds.add(targetId);
+              } else if (dupById) {
+                touchedRecordIds.add(targetId);
               }
             }
             processedIds.push(act.id);
@@ -4369,29 +4746,29 @@ export default function App() {
           } else if (act.kind === 'update_status') {
             const target = workRecords.find((r) => r.id === act.kpmId);
             if (target && target.validasi !== act.status) {
-              workAuditLogs = [
-                {
-                  id: `audit-off-st-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-                  kpmId: target.id,
-                  action: 'status_changed',
-                  actorName: actor.nama,
-                  actorEmail: actor.email,
-                  timestamp: act.createdAt,
-                  proposal: target.proposal,
-                  tahun: target.tahun,
-                  changes: [
-                    {
-                      field: 'Status Validasi',
-                      before: formatValidationLabel(target.validasi),
-                      after: formatValidationLabel(act.status),
-                    },
-                  ],
-                },
-                ...workAuditLogs,
-              ];
+              const auditEntry: KpmAuditLogEntry = {
+                id: `audit-off-st-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+                kpmId: target.id,
+                action: 'status_changed',
+                actorName: actor.nama,
+                actorEmail: actor.email,
+                timestamp: act.createdAt,
+                proposal: target.proposal,
+                tahun: target.tahun,
+                changes: [
+                  {
+                    field: 'Status Validasi',
+                    before: formatValidationLabel(target.validasi),
+                    after: formatValidationLabel(act.status),
+                  },
+                ],
+              };
+              workAuditLogs = [auditEntry, ...workAuditLogs];
+              addedAuditLogs.push(auditEntry);
               workRecords = workRecords.map((r) =>
                 r.id === act.kpmId ? { ...r, validasi: act.status, updatedAt: act.createdAt } : r
               );
+              touchedRecordIds.add(act.kpmId);
             }
             processedIds.push(act.id);
             processedCount++;
@@ -4414,6 +4791,7 @@ export default function App() {
                     }
                   : r
               );
+              touchedRecordIds.add(act.kpmId);
             }
             processedIds.push(act.id);
             processedCount++;
@@ -4433,6 +4811,7 @@ export default function App() {
               workRecords = workRecords.map((r) =>
                 r.id === act.kpmId ? { ...r, documents: docs, updatedAt: act.createdAt } : r
               );
+              touchedRecordIds.add(act.kpmId);
             }
             processedIds.push(act.id);
             processedCount++;
@@ -4450,21 +4829,43 @@ export default function App() {
       );
 
       if (processedIds.length > 0) {
-        const ok = await syncOperationalData(
-          {
-            records: workRecords,
-            kpmAuditLogs: workAuditLogs,
-            proposalHistory: workHistory,
-          },
-          'update'
+        const changedRecords = workRecords.filter(
+          (r) =>
+            touchedRecordIds.has(r.id) ||
+            !prevRecordById.has(r.id) ||
+            prevRecordById.get(r.id)?.registerCode !== r.registerCode
         );
+
+        const ok = supabaseReadyRef.current
+          ? await runSupabaseMutation(
+              () =>
+                upsertKpmRecordsBatchInSupabase({
+                  records: changedRecords,
+                  proposals: workProposals,
+                  pengelolaList: workPengelola,
+                  auditLogs: addedAuditLogs,
+                  includeDeliveries: true,
+                }),
+              'Gagal menyinkronkan antrean offline ke Supabase'
+            )
+          : await syncOperationalData(
+              {
+                records: workRecords,
+                kpmAuditLogs: workAuditLogs,
+                proposalHistory: workHistory,
+              },
+              'update'
+            );
         if (ok) {
           for (const id of processedIds) {
             await removeOfflineAction(id);
           }
-          setRecords(mergeBastIntoRecords(workRecords, kpmBastMapRef.current));
-          setKpmAuditLogs(workAuditLogs);
-          setProposalHistory(workHistory);
+          applyRemoteOperationalState({
+            ...baseSnapshot,
+            records: workRecords,
+            kpmAuditLogs: workAuditLogs,
+            proposalHistory: workHistory,
+          });
           const remaining = await getOfflineQueue();
           setOfflineQueueCount(remaining.length);
           setFeedback({
@@ -4476,7 +4877,7 @@ export default function App() {
     } finally {
       isFlushingQueueRef.current = false;
     }
-  }, [currentUser, mergeBastIntoRecords, syncOperationalData]);
+  }, [currentUser, applyRemoteOperationalState, runSupabaseMutation, syncOperationalData]);
 
   useEffect(() => {
     const onOnline = () => {
@@ -4604,12 +5005,30 @@ export default function App() {
       : mapped;
     const nextLogs = [...newLogs, ...kpmAuditLogs];
 
+    const prevById = new Map(records.map((r) => [r.id, r]));
+    const changedIdSet = new Set(newLogs.map((l) => l.kpmId));
+    const changedRecords = nextRecords.filter(
+      (r) => changedIdSet.has(r.id) || prevById.get(r.id)?.registerCode !== r.registerCode
+    );
+
     setRecords(nextRecords);
     setKpmAuditLogs(nextLogs);
-    const ok = await syncOperationalData(
-      { records: nextRecords, kpmAuditLogs: nextLogs },
-      'update'
-    );
+    const ok = supabaseReadyRef.current
+      ? await runSupabaseMutation(
+          () =>
+            upsertKpmRecordsBatchInSupabase({
+              records: changedRecords,
+              proposals,
+              pengelolaList,
+              auditLogs: newLogs,
+              includeDeliveries: Boolean(patch.markAllSubItems),
+            }),
+          'Gagal memperbarui data massal ke Supabase'
+        )
+      : await syncOperationalData(
+          { records: nextRecords, kpmAuditLogs: nextLogs },
+          'update'
+        );
     if (ok) {
       setFeedback({
         type: 'success',
@@ -4666,9 +5085,24 @@ export default function App() {
     const nextRecords = records.map((r) =>
       r.id === kpmId ? { ...r, bast: bastInfo, updatedAt: now } : r
     );
+    const updatedRec = nextRecords.find((r) => r.id === kpmId);
     setKpmAuditLogs(nextLogs);
     setRecords(nextRecords);
-    await syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
+    if (supabaseReadyRef.current && updatedRec) {
+      await runSupabaseMutation(
+        () =>
+          upsertKpmRecordsBatchInSupabase({
+            records: [updatedRec],
+            proposals,
+            pengelolaList,
+            auditLogs: [auditEntry],
+            includeDeliveries: false,
+          }),
+        'Gagal menyimpan tanda terima BAST ke Supabase'
+      );
+    } else {
+      await syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
+    }
     setFeedback({
       type: 'success',
       message: `Tanda terima digital (BAST) "${target.nama}" berhasil disimpan ke Google Drive & Supabase.`,
@@ -4711,14 +5145,33 @@ export default function App() {
       };
       const nextHistory = [restoreHist, ...proposalHistory];
 
+      const prevById = new Map(records.map((r) => [r.id, r]));
+      const affectedRecords = nextRecords.filter(
+        (r) => r.id === kpm.id || prevById.get(r.id)?.registerCode !== r.registerCode
+      );
+
       setTrashBin(nextTrash);
       setRecords(nextRecords);
       setProposalHistory(nextHistory);
       void saveAppStateSlice('masdeta_trash_bin_v1', nextTrash);
-      void syncOperationalData(
-        { records: nextRecords, proposalHistory: nextHistory },
-        'add'
-      );
+      if (supabaseReadyRef.current) {
+        void runSupabaseMutation(
+          () =>
+            upsertKpmRecordsBatchInSupabase({
+              records: affectedRecords,
+              proposals,
+              pengelolaList,
+              historyEntries: [restoreHist],
+              includeDeliveries: true,
+            }),
+          'Gagal memulihkan data KPM ke Supabase'
+        );
+      } else {
+        void syncOperationalData(
+          { records: nextRecords, proposalHistory: nextHistory },
+          'add'
+        );
+      }
       setFeedback({
         type: 'success',
         message: `Calon KPM "${kpm.nama}" berhasil dipulihkan beserta foto terkait.`,
@@ -4734,7 +5187,8 @@ export default function App() {
           (p.namaProposal.toLowerCase() === prop.namaProposal.toLowerCase() &&
             p.tahun === prop.tahun)
       );
-      const nextProposals = exists ? proposals : [{ ...prop, updatedAt: now }, ...proposals];
+      const restoredProp: ProposalRecord = { ...prop, updatedAt: now };
+      const nextProposals = exists ? proposals : [restoredProp, ...proposals];
       const restoreHist = createActivityHistoryEntry('proposal_restored', {
         proposalName: prop.namaProposal,
         detail: `Memulihkan proposal "${prop.namaProposal}" (${prop.tahun}) dari Tempat Sampah.`,
@@ -4747,10 +5201,21 @@ export default function App() {
       setProposals(nextProposals);
       setProposalHistory(nextHistory);
       void saveAppStateSlice('masdeta_trash_bin_v1', nextTrash);
-      void syncOperationalData(
-        { proposals: nextProposals, proposalHistory: nextHistory },
-        'add'
-      );
+      if (supabaseReadyRef.current) {
+        void runSupabaseMutation(
+          () =>
+            upsertProposalsBatchInSupabase({
+              proposals: exists ? [] : [restoredProp],
+              historyEntries: [restoreHist],
+            }),
+          'Gagal memulihkan proposal ke Supabase'
+        );
+      } else {
+        void syncOperationalData(
+          { proposals: nextProposals, proposalHistory: nextHistory },
+          'add'
+        );
+      }
       setFeedback({
         type: 'success',
         message: `Proposal "${prop.namaProposal}" berhasil dipulihkan dari Tempat Sampah.`,
@@ -4961,12 +5426,43 @@ export default function App() {
     });
     const nextHistory = [actEntry, ...proposalHistory];
 
+    const prevRecById = new Map(records.map((r) => [r.id, r]));
+    const changedRecords = originalCode
+      ? nextRecords.filter((r) => {
+          const old = prevRecById.get(r.id);
+          return (
+            !old ||
+            old.item !== r.item ||
+            old.registerCode !== r.registerCode ||
+            (r.tahun === savedItem.tahun && r.item === savedItem.code)
+          );
+        })
+      : [];
+    const codeChanged = Boolean(originalCode && originalCode !== savedItem.code);
+
     setItems(nextItems);
     setProposalHistory(nextHistory);
-    void syncOperationalData(
-      { items: nextItems, records: nextRecords, proposalHistory: nextHistory },
-      originalCode ? 'update' : 'add'
-    );
+    if (supabaseReadyRef.current) {
+      void runSupabaseMutation(
+        () =>
+          upsertCatalogItemsInSupabase({
+            itemsToSync: nextItems.filter((i) => i.tahun === savedItem.tahun),
+            renamedFrom: codeChanged
+              ? { tahun: savedItem.tahun, oldCode: originalCode! }
+              : undefined,
+            updatedRecords: changedRecords,
+            proposals,
+            pengelolaList,
+            historyEntries: [actEntry],
+          }),
+        'Gagal menyimpan master item ke Supabase'
+      );
+    } else {
+      void syncOperationalData(
+        { items: nextItems, records: nextRecords, proposalHistory: nextHistory },
+        originalCode ? 'update' : 'add'
+      );
+    }
   };
 
   const handleDeleteCatalogItem = (tahun: string, code: string) => {
@@ -4982,7 +5478,21 @@ export default function App() {
     const nextHistory = [actEntry, ...proposalHistory];
     setItems(nextItems);
     setProposalHistory(nextHistory);
-    void syncOperationalData({ items: nextItems, proposalHistory: nextHistory }, 'delete');
+    if (supabaseReadyRef.current) {
+      void runSupabaseMutation(
+        () =>
+          upsertCatalogItemsInSupabase({
+            itemsToSync: nextItems.filter((i) => i.tahun === tahun),
+            deletedItem: { tahun, code },
+            proposals,
+            pengelolaList,
+            historyEntries: [actEntry],
+          }),
+        'Gagal menghapus master item dari Supabase'
+      );
+    } else {
+      void syncOperationalData({ items: nextItems, proposalHistory: nextHistory }, 'delete');
+    }
   };
 
   const handleMoveItemOrder = (tahun: string, code: string, direction: 'up' | 'down') => {
@@ -5000,7 +5510,19 @@ export default function App() {
     const idxB = yearIndices[targetPos];
     [nextItems[idxA], nextItems[idxB]] = [nextItems[idxB], nextItems[idxA]];
     setItems(nextItems);
-    void syncOperationalData({ items: nextItems }, 'update');
+    if (supabaseReadyRef.current) {
+      void runSupabaseMutation(
+        () =>
+          upsertCatalogItemsInSupabase({
+            itemsToSync: nextItems.filter((i) => i.tahun === tahun),
+            proposals,
+            pengelolaList,
+          }),
+        'Gagal memperbarui urutan item di Supabase'
+      );
+    } else {
+      void syncOperationalData({ items: nextItems }, 'update');
+    }
   };
 
   const handleUpdateItemSubItems = (tahun: string, code: string, subItems: string[]) => {
@@ -5031,14 +5553,31 @@ export default function App() {
       action: 'entered',
     });
     const nextHistory = [actEntry, ...proposalHistory];
+    const affectedSubRecords = oldItem
+      ? nextRecords.filter((r) => r.tahun === tahun && r.item === code)
+      : [];
 
     setItems(nextItems);
     if (oldItem) setRecords(nextRecords);
     setProposalHistory(nextHistory);
-    void syncOperationalData(
-      { items: nextItems, records: nextRecords, proposalHistory: nextHistory },
-      'update'
-    );
+    if (supabaseReadyRef.current) {
+      void runSupabaseMutation(
+        () =>
+          upsertCatalogItemsInSupabase({
+            itemsToSync: nextItems.filter((i) => i.tahun === tahun),
+            updatedRecords: affectedSubRecords,
+            proposals,
+            pengelolaList,
+            historyEntries: [actEntry],
+          }),
+        'Gagal memperbarui sub-item di Supabase'
+      );
+    } else {
+      void syncOperationalData(
+        { items: nextItems, records: nextRecords, proposalHistory: nextHistory },
+        'update'
+      );
+    }
   };
 
   const handleCopyItemsFromYear = (fromYear: string, toYear: string) => {
@@ -5063,7 +5602,20 @@ export default function App() {
     const nextHistory = additions.length > 0 ? [actEntry, ...proposalHistory] : proposalHistory;
     setItems(nextItems);
     if (additions.length > 0) setProposalHistory(nextHistory);
-    void syncOperationalData({ items: nextItems, proposalHistory: nextHistory }, 'add');
+    if (supabaseReadyRef.current) {
+      void runSupabaseMutation(
+        () =>
+          upsertCatalogItemsInSupabase({
+            itemsToSync: nextItems.filter((i) => i.tahun === toYear),
+            proposals,
+            pengelolaList,
+            historyEntries: additions.length > 0 ? [actEntry] : [],
+          }),
+        'Gagal menyalin katalog item ke Supabase'
+      );
+    } else {
+      void syncOperationalData({ items: nextItems, proposalHistory: nextHistory }, 'add');
+    }
   };
 
   const handleCreateProposal = (values: ProposalFormValues) => {
@@ -5100,7 +5652,18 @@ export default function App() {
 
     setProposals(nextProposals);
     setProposalHistory(nextHistory);
-    void syncOperationalData({ proposals: nextProposals, proposalHistory: nextHistory }, 'add');
+    if (supabaseReadyRef.current) {
+      void runSupabaseMutation(
+        () =>
+          upsertProposalsBatchInSupabase({
+            proposals: [newProposal],
+            historyEntries: [actEntry],
+          }),
+        'Gagal menyimpan proposal baru ke Supabase'
+      );
+    } else {
+      void syncOperationalData({ proposals: nextProposals, proposalHistory: nextHistory }, 'add');
+    }
 
     if (addProposalFromKpmForm && newProposal.status === 'unlocked') {
       setPendingSelectedProposal({
@@ -5197,19 +5760,42 @@ export default function App() {
     });
     nextProposalHistory = [actEntry, ...nextProposalHistory];
 
+    const updatedProposal = nextProposals.find((p) => p.id === proposalId);
+    const prevPropRecById = new Map(records.map((r) => [r.id, r]));
+    const changedPropRecords =
+      values.tahun !== existing.tahun
+        ? nextRecords.filter((r) => {
+            const old = prevPropRecById.get(r.id);
+            return !old || old.tahun !== r.tahun || old.registerCode !== r.registerCode;
+          })
+        : [];
+
     setProposalHistory(nextProposalHistory);
     setProposals(nextProposals);
-    void syncOperationalData(
-      {
-        proposals: nextProposals,
-        records: nextRecords,
-        proposalHistory: nextProposalHistory,
-        kpmAuditLogs: nextKpmAuditLogs,
-      },
-      'update'
-    );
+    if (supabaseReadyRef.current && updatedProposal) {
+      void runSupabaseMutation(
+        () =>
+          upsertProposalsBatchInSupabase({
+            proposals: [updatedProposal],
+            updatedRecords: changedPropRecords,
+            pengelolaList,
+            historyEntries: [actEntry],
+          }),
+        'Gagal memperbarui proposal di Supabase'
+      );
+    } else {
+      void syncOperationalData(
+        {
+          proposals: nextProposals,
+          records: nextRecords,
+          proposalHistory: nextProposalHistory,
+          kpmAuditLogs: nextKpmAuditLogs,
+        },
+        'update'
+      );
+    }
 
-    navigateForwardScroll('smooth');
+    navigateRestoreScroll();
     setSubView('proposal-detail');
     setFeedback({
       type: 'success',
@@ -5598,7 +6184,7 @@ export default function App() {
         const userMsgs = msgs.filter(
           (m) => m.senderId === res.user!.id || m.recipientId === res.user!.id
         );
-        prevMessageIdsRef.current = new Set(userMsgs.map((m) => m.id));
+        seedChatNotificationBaseline(res.user.id, userMsgs);
         if (users.length > 0) {
           const loggedInId = res.user.id;
           const nowIso = new Date().toISOString();
@@ -5657,7 +6243,10 @@ export default function App() {
         setInternalUsers(data.users);
       }
       if (Array.isArray(data.messages)) {
+        seedChatNotificationBaseline(data.user.id, data.messages);
         setDirectMessages(data.messages);
+      } else {
+        seedChatNotificationBaseline(data.user.id, []);
       }
       setSessionToken(data.token);
       setSessionUserId(data.user.id);
@@ -5790,6 +6379,7 @@ export default function App() {
     clearSessionState();
     scrollMemoryRef.current = {};
     pendingScrollModeRef.current = null;
+    setRecapDrillTarget(null);
     setSelectedPengelolaDrill(null);
     setSelectedPekerjaanDrill(null);
     setSelectedDtsenDrill(null);
@@ -6375,10 +6965,27 @@ export default function App() {
     setKpmAuditLogs(nextLogs);
     setProposalHistory(nextHistory);
     setRecords(nextRecords);
-    void syncOperationalData(
-      { records: nextRecords, kpmAuditLogs: nextLogs, proposalHistory: nextHistory },
-      'update'
-    );
+    if (supabaseReadyRef.current) {
+      void runSupabaseMutation(
+        () =>
+          updateKpmStatusesBatchInSupabase({
+            updates: targets.map((t) => ({
+              id: t.id,
+              validasi: 'accepted' as ValidationStatus,
+              updatedAt: now,
+            })),
+            auditLogs: newLogs,
+            historyEntries: [actEntry],
+            proposals,
+          }),
+        'Gagal menyetujui massal ke Supabase'
+      );
+    } else {
+      void syncOperationalData(
+        { records: nextRecords, kpmAuditLogs: nextLogs, proposalHistory: nextHistory },
+        'update'
+      );
+    }
     setFeedback({
       type: 'success',
       message: `${targets.length} calon KPM pada "${proposalName}" (${tahun}) disetujui menjadi Diterima.`,
@@ -6528,14 +7135,31 @@ export default function App() {
     const nextAuditLogs = [...addedAuditLogs, ...kpmAuditLogs];
     const nextProposalHistory = [...addedHistoryEntries, ...proposalHistory];
 
-    const ok = await syncOperationalData(
-      {
-        records: nextRecords,
-        kpmAuditLogs: nextAuditLogs,
-        proposalHistory: nextProposalHistory,
-      },
-      'update'
+    const prevTransferById = new Map(records.map((r) => [r.id, r]));
+    const changedTransferRecords = nextRecords.filter(
+      (r) => eligibleIdSet.has(r.id) || prevTransferById.get(r.id)?.registerCode !== r.registerCode
     );
+    const ok = supabaseReadyRef.current
+      ? await runSupabaseMutation(
+          () =>
+            upsertKpmRecordsBatchInSupabase({
+              records: changedTransferRecords,
+              proposals,
+              pengelolaList,
+              auditLogs: addedAuditLogs,
+              historyEntries: addedHistoryEntries,
+              includeDeliveries: false,
+            }),
+          'Gagal mentransfer KPM ke Supabase'
+        )
+      : await syncOperationalData(
+          {
+            records: nextRecords,
+            kpmAuditLogs: nextAuditLogs,
+            proposalHistory: nextProposalHistory,
+          },
+          'update'
+        );
     if (!ok) return false;
 
     setKpmAuditLogs(nextAuditLogs);
@@ -6596,7 +7220,22 @@ export default function App() {
     );
     setKpmAuditLogs(nextLogs);
     setRecords(nextRecords);
-    void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
+    if (supabaseReadyRef.current) {
+      void runSupabaseMutation(
+        () =>
+          updateKpmBerkasDikembalikanInSupabase({
+            kpmId,
+            berkasDikembalikan: nextValue,
+            berkasDikembalikanAt: nextValue ? now : null,
+            berkasDikembalikanBy: nextValue ? currentActor.nama : null,
+            updatedAt: now,
+            auditLogs: [auditEntry],
+          }),
+        'Gagal memperbarui status pengembalian berkas ke Supabase'
+      );
+    } else {
+      void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
+    }
   };
 
   const handleUpdatePekerjaan = (oldName: string, newName: string) => {
@@ -6642,12 +7281,30 @@ export default function App() {
     const nextHistory = [actEntry, ...proposalHistory];
     setProposalHistory(nextHistory);
 
-    void syncOperationalData(
-      anyRecordChanged
-        ? { pekerjaanList: nextPekerjaan, records: nextRecords, proposalHistory: nextHistory }
-        : { pekerjaanList: nextPekerjaan, proposalHistory: nextHistory },
-      'update'
-    );
+    const changedJobRecords = anyRecordChanged
+      ? nextRecords.filter((rec, idx) => rec !== records[idx])
+      : [];
+    if (supabaseReadyRef.current) {
+      void runSupabaseMutation(
+        () =>
+          upsertPekerjaanListInSupabase({
+            pekerjaanList: nextPekerjaan,
+            deletedName: oldName,
+            updatedRecords: changedJobRecords,
+            proposals,
+            pengelolaList,
+            historyEntries: [actEntry],
+          }),
+        'Gagal memperbarui master pekerjaan di Supabase'
+      );
+    } else {
+      void syncOperationalData(
+        anyRecordChanged
+          ? { pekerjaanList: nextPekerjaan, records: nextRecords, proposalHistory: nextHistory }
+          : { pekerjaanList: nextPekerjaan, proposalHistory: nextHistory },
+        'update'
+      );
+    }
     setFeedback({
       type: 'success',
       message: `Pekerjaan "${oldName}" berhasil diperbarui menjadi "${newName}".`,
@@ -6671,7 +7328,21 @@ export default function App() {
     });
     const nextHistory = [actEntry, ...proposalHistory];
     setProposalHistory(nextHistory);
-    void syncOperationalData({ pekerjaanList: nextPekerjaan, proposalHistory: nextHistory }, 'delete');
+    if (supabaseReadyRef.current) {
+      void runSupabaseMutation(
+        () =>
+          upsertPekerjaanListInSupabase({
+            pekerjaanList: nextPekerjaan,
+            deletedName: name,
+            proposals,
+            pengelolaList,
+            historyEntries: [actEntry],
+          }),
+        'Gagal menghapus master pekerjaan di Supabase'
+      );
+    } else {
+      void syncOperationalData({ pekerjaanList: nextPekerjaan, proposalHistory: nextHistory }, 'delete');
+    }
     setFeedback({
       type: 'success',
       message: `Pekerjaan "${name}" berhasil dihapus.`,
@@ -6688,7 +7359,19 @@ export default function App() {
     if (pekerjaanList.some((p) => p.trim().toLowerCase() === clean.toLowerCase())) return;
     const nextPekerjaan = [...pekerjaanList, clean];
     setPekerjaanList(nextPekerjaan);
-    void syncOperationalData({ pekerjaanList: nextPekerjaan }, hasPermission('add') ? 'add' : 'update');
+    if (supabaseReadyRef.current) {
+      void runSupabaseMutation(
+        () =>
+          upsertPekerjaanListInSupabase({
+            pekerjaanList: nextPekerjaan,
+            proposals,
+            pengelolaList,
+          }),
+        'Gagal menambahkan pekerjaan ke Supabase'
+      );
+    } else {
+      void syncOperationalData({ pekerjaanList: nextPekerjaan }, hasPermission('add') ? 'add' : 'update');
+    }
   };
 
   const handleAddCustomYear = (year: string) => {
@@ -6714,6 +7397,14 @@ export default function App() {
     return Array.from(set).sort((a, b) => b.localeCompare(a));
   }, [customYears, proposals, items, records]);
 
+  const handleDismissUpdateLater = () => {
+    if (appUpdateInfo && !appUpdateInfo.isMandatory) {
+      setDismissedUpdateVersion(appUpdateInfo.latestVersion);
+      dismissedUpdateVersionRef.current = appUpdateInfo.latestVersion;
+      setIsUpdateModalOpen(false);
+    }
+  };
+
   const showBottomNav = subView === 'none' && !(activeTab === 'menu' && menuSection !== 'root');
 
   if (!onlineVerified || (!currentUser && !isOnline)) {
@@ -6730,7 +7421,13 @@ export default function App() {
           isChecking={checkingInternet}
           onRetry={checkConnection}
         />
-        <AppUpdateModal updateInfo={appUpdateInfo} open={isUpdateModalOpen} />
+        <AppUpdateModal
+          updateInfo={appUpdateInfo}
+          open={isUpdateModalOpen}
+          onDismissLater={
+            appUpdateInfo && !appUpdateInfo.isMandatory ? handleDismissUpdateLater : undefined
+          }
+        />
       </div>
     );
   }
@@ -6747,7 +7444,13 @@ export default function App() {
           isChecking={checkingInternet}
           onRetry={checkConnection}
         />
-        <AppUpdateModal updateInfo={appUpdateInfo} open={isUpdateModalOpen} />
+        <AppUpdateModal
+          updateInfo={appUpdateInfo}
+          open={isUpdateModalOpen}
+          onDismissLater={
+            appUpdateInfo && !appUpdateInfo.isMandatory ? handleDismissUpdateLater : undefined
+          }
+        />
       </div>
     );
   }
@@ -6785,7 +7488,13 @@ export default function App() {
             onLogin={handleLogin}
             onRegister={handleRegister}
           />
-          <AppUpdateModal updateInfo={appUpdateInfo} open={isUpdateModalOpen} />
+          <AppUpdateModal
+            updateInfo={appUpdateInfo}
+            open={isUpdateModalOpen}
+            onDismissLater={
+              appUpdateInfo && !appUpdateInfo.isMandatory ? handleDismissUpdateLater : undefined
+            }
+          />
         </div>
       </div>
     );
@@ -7134,8 +7843,18 @@ export default function App() {
               items={items}
               selectedYear={selectedYear}
               onChangeYear={setSelectedYear}
+              drillTarget={recapDrillTarget}
+              onChangeDrillTarget={(next) => {
+                if (next) {
+                  navigateForwardScroll();
+                } else {
+                  navigateRestoreScroll();
+                }
+                setRecapDrillTarget(next);
+              }}
               onBack={() => {
                 navigateRestoreScroll();
+                setRecapDrillTarget(null);
                 setFeedback(null);
                 setSubView('none');
                 setActiveTab(returnToTab);
@@ -7224,47 +7943,55 @@ export default function App() {
           />
         )}
 
-        {subView === 'proposal-detail' && activeProposal && (
-          <ProposalDetailView
-            proposal={activeProposal}
-            allProposals={proposals}
-            records={records}
-            items={items}
-            historyEntries={proposalHistory}
-            canAdd={hasPermission('add')}
-            canUpdate={hasPermission('update')}
-            onBack={() => {
-              navigateRestoreScroll();
-              setFeedback(null);
-              setSubView('none');
-              setActiveTab(returnToTab);
-            }}
-            onEditProposal={(id) => openEditProposalById(id, returnToTab)}
-            onAddKpmInProposal={(proposalName, tahun) => {
-              openKpmForm(null, returnToTab, false, true, {
-                namaProposal: proposalName,
-                tahun,
-              });
-            }}
-            onViewKpmInProposal={(proposalName, tahun) => {
-              navigateForwardScroll();
-              setSelectedYear(tahun);
-              setKpmStatusFilter('all');
-              setKpmItemFilter('all');
-              setKpmProposalFilter(proposalName);
-              setKpmOpenedFromProposalDetail(true);
-              setSubView('none');
-              setActiveTab('kpm');
-            }}
-            onAcceptAllKpm={handleAcceptAllInProposal}
-            onTransferKpm={handleTransferProposalKpms}
-            onOpenFullHistory={() => {
-              navigateForwardScroll();
-              setSubView('proposal-history');
-            }}
-            onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
-            onUpdateProposalDocuments={handleQuickSyncProposalDocuments}
-          />
+        {activeProposal &&
+          (subView === 'proposal-detail' ||
+            subView === 'proposal-history' ||
+            subView === 'edit-proposal' ||
+            (subView === 'kpm-detail' && kpmDetailReturnToProposalDetail) ||
+            (subView === 'kpm-form' && kpmFormReturnToProposalDetail) ||
+            (subView === 'none' && activeTab === 'kpm' && kpmOpenedFromProposalDetail)) && (
+          <div className={subView === 'proposal-detail' ? '' : 'hidden'}>
+            <ProposalDetailView
+              proposal={activeProposal}
+              allProposals={proposals}
+              records={records}
+              items={items}
+              historyEntries={proposalHistory}
+              canAdd={hasPermission('add')}
+              canUpdate={hasPermission('update')}
+              onBack={() => {
+                navigateRestoreScroll();
+                setFeedback(null);
+                setSubView('none');
+                setActiveTab(returnToTab);
+              }}
+              onEditProposal={(id) => openEditProposalById(id, returnToTab)}
+              onAddKpmInProposal={(proposalName, tahun) => {
+                openKpmForm(null, returnToTab, false, true, {
+                  namaProposal: proposalName,
+                  tahun,
+                });
+              }}
+              onViewKpmInProposal={(proposalName, tahun) => {
+                navigateForwardScroll();
+                setSelectedYear(tahun);
+                setKpmStatusFilter('all');
+                setKpmItemFilter('all');
+                setKpmProposalFilter(proposalName);
+                setKpmOpenedFromProposalDetail(true);
+                setSubView('none');
+                setActiveTab('kpm');
+              }}
+              onAcceptAllKpm={handleAcceptAllInProposal}
+              onTransferKpm={handleTransferProposalKpms}
+              onOpenFullHistory={() => {
+                navigateForwardScroll();
+                setSubView('proposal-history');
+              }}
+              onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
+              onUpdateProposalDocuments={handleQuickSyncProposalDocuments}
+            />
+          </div>
         )}
 
         {subView === 'proposal-history' && activeProposal && (
@@ -7531,7 +8258,19 @@ export default function App() {
               if (!requirePermission('add', 'menambah daftar pekerjaan')) return;
               const nextPekerjaan = [...pekerjaanList, job];
               setPekerjaanList(nextPekerjaan);
-              void syncOperationalData({ pekerjaanList: nextPekerjaan }, 'add');
+              if (supabaseReadyRef.current) {
+                void runSupabaseMutation(
+                  () =>
+                    upsertPekerjaanListInSupabase({
+                      pekerjaanList: nextPekerjaan,
+                      proposals,
+                      pengelolaList,
+                    }),
+                  'Gagal menambahkan pekerjaan ke Supabase'
+                );
+              } else {
+                void syncOperationalData({ pekerjaanList: nextPekerjaan }, 'add');
+              }
             }}
             onUpdatePekerjaan={handleUpdatePekerjaan}
             onDeletePekerjaan={handleDeletePekerjaan}
@@ -7545,10 +8284,21 @@ export default function App() {
               const nextHistory = [actEntry, ...proposalHistory];
               setWilayahList(nextList);
               setProposalHistory(nextHistory);
-              void syncOperationalData(
-                { wilayahList: nextList, proposalHistory: nextHistory },
-                'update'
-              );
+              if (supabaseReadyRef.current) {
+                void runSupabaseMutation(
+                  () =>
+                    syncWilayahInSupabase({
+                      wilayahList: nextList,
+                      historyEntries: [actEntry],
+                    }),
+                  'Gagal memperbarui data wilayah di Supabase'
+                );
+              } else {
+                void syncOperationalData(
+                  { wilayahList: nextList, proposalHistory: nextHistory },
+                  'update'
+                );
+              }
             }}
             onOpenSubItemRecap={() => openSubItemRecap('menu')}
             onAddPengelola={handleCreatePengelola}
@@ -7635,8 +8385,14 @@ export default function App() {
         onClose={() => setLightboxDoc(null)}
       />
 
-      {/* In-App Android APK Auto-Updater Modal (Wajib Update, Tidak Bisa Ditutup) */}
-      <AppUpdateModal updateInfo={appUpdateInfo} open={isUpdateModalOpen} />
+      {/* In-App Android APK Auto-Updater Modal (Update Wajib / Patch Opsional) */}
+      <AppUpdateModal
+        updateInfo={appUpdateInfo}
+        open={isUpdateModalOpen}
+        onDismissLater={
+          appUpdateInfo && !appUpdateInfo.isMandatory ? handleDismissUpdateLater : undefined
+        }
+      />
     </div>
   );
 }
