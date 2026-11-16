@@ -531,7 +531,8 @@ jobs:
             let xml = fs.readFileSync(manifestPath, "utf8");
             const perms = [
               "android.permission.CAMERA",
-              "android.permission.REQUEST_INSTALL_PACKAGES"
+              "android.permission.REQUEST_INSTALL_PACKAGES",
+              "android.permission.POST_NOTIFICATIONS"
             ];
             for (const p of perms) {
               if (!xml.includes(p)) {

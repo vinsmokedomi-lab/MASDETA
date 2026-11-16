@@ -269,40 +269,6 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
           </p>
         </div>
 
-        {/* Mode Toggle */}
-        <div className="grid grid-cols-2 rounded-2xl bg-slate-200/75 p-1">
-          <button
-            type="button"
-            onClick={() => {
-              setMode('login');
-              setError(null);
-              setSuccessMsg(null);
-            }}
-            className={`min-h-[44px] whitespace-nowrap rounded-xl text-xs font-bold transition-all ${
-              mode === 'login' || mode === 'forgot'
-                ? 'bg-white text-slate-900 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Masuk Akun
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setMode('register');
-              setError(null);
-              setSuccessMsg(null);
-            }}
-            className={`min-h-[44px] whitespace-nowrap rounded-xl text-xs font-bold transition-all ${
-              mode === 'register'
-                ? 'bg-white text-slate-900 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Registrasi Baru
-          </button>
-        </div>
-
         {error && (
           <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-medium text-rose-700">
             {error}
@@ -402,6 +368,21 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
               >
                 {submitting ? 'Memverifikasi...' : 'Masuk'}
               </button>
+
+              <div className="mt-5 flex flex-col items-center gap-1.5 border-t border-slate-100 pt-4 text-center">
+                <span className="text-xs text-slate-500">Belum punya akun?</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('register');
+                    setError(null);
+                    setSuccessMsg(null);
+                  }}
+                  className="inline-flex min-h-[36px] items-center justify-center rounded-xl px-4 text-xs font-bold text-teal-700 transition-colors hover:bg-teal-50 hover:text-teal-800"
+                >
+                  Registrasi di sini
+                </button>
+              </div>
             </div>
           </form>
         ) : mode === 'forgot' ? (
@@ -482,11 +463,25 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
             onSubmit={handleRegisterSubmit}
             className="space-y-4 rounded-3xl border border-slate-200/90 bg-white p-5 shadow-xs"
           >
-            <div className="text-center">
-              <h2 className="text-base font-bold text-slate-900">Registrasi Akun Baru</h2>
-              <p className="mt-0.5 text-xs text-slate-500">
-                Silakan masukkan data diri Anda.
-              </p>
+            <div className="flex items-start gap-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('login');
+                  setError(null);
+                  setSuccessMsg(null);
+                }}
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50"
+                aria-label="Kembali ke Masuk"
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </button>
+              <div>
+                <h2 className="text-base font-bold text-slate-900">Registrasi Akun Baru</h2>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  Silakan masukkan data diri Anda.
+                </p>
+              </div>
             </div>
 
             {/* Upload Foto Profil (Opsional) — Diperbesar & Bersih */}
@@ -632,6 +627,21 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
               <UserPlus className="h-4 w-4" />
               <span>{submitting ? 'Mengirim...' : 'Daftar Akun Baru'}</span>
             </button>
+
+            <div className="mt-4 flex flex-col items-center gap-1 border-t border-slate-100 pt-3.5 text-center">
+              <span className="text-xs text-slate-500">Sudah punya akun?</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('login');
+                  setError(null);
+                  setSuccessMsg(null);
+                }}
+                className="inline-flex min-h-[36px] items-center justify-center rounded-xl px-4 text-xs font-bold text-teal-700 transition-colors hover:bg-teal-50 hover:text-teal-800"
+              >
+                Masuk di sini
+              </button>
+            </div>
           </form>
         )}
       </div>

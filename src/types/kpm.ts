@@ -273,5 +273,15 @@ export interface KpmAuditLogEntry {
   changes: KpmFieldChange[];
 }
 
+export type AppNotificationType = 'proposal_deleted' | 'user_registered';
 
-
+export interface AppNotificationItem {
+  id: string;
+  type: AppNotificationType;
+  title: string;
+  message: string;
+  actorName?: string;
+  createdAt: string;
+  read: boolean;
+  targetAction?: 'proposals' | 'users';
+}

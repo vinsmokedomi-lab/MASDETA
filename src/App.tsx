@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Database, MessageSquare, X } from 'lucide-react';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Database,
+  MessageSquare,
+  Trash2,
+  UserPlus,
+  X,
+} from 'lucide-react';
 import { isSupabaseConfigured, supabase } from './lib/supabaseClient';
 import {
   checkSupabaseSchemaReady,
@@ -14,6 +22,7 @@ import {
   supabaseFetchInternalUsers,
   supabaseLogin,
   supabaseMarkDirectMessagesRead,
+  supabaseMarkOfflineKeepalive,
   supabaseRegisterInternalUser,
   supabaseSendDirectMessage,
   supabaseSetUserPresence,
@@ -35,6 +44,7 @@ import {
   SAMPLE_KPM_RECORDS,
 } from './data/kpmOptions';
 import {
+  AppNotificationItem,
   DirectChatMessage,
   InternalUser,
   InternalUserRole,
@@ -110,6 +120,7 @@ import { ScrollToTopButton } from './components/ScrollToTopButton';
 import { AuthView } from './components/AuthView';
 import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
+import { LocalNotifications } from '@capacitor/local-notifications';
 import { ChatView } from './components/ChatView';
 import { UserProfileView } from './components/UserProfileView';
 import { AppUpdateModal } from './components/AppUpdateModal';
@@ -163,6 +174,7 @@ interface OperationalDataPayload {
 const SESSION_STORAGE_KEY = 'masdeta_session_user_id_v1';
 const SESSION_TOKEN_STORAGE_KEY = 'masdeta_session_token_v1';
 const PUSH_ENABLED_STORAGE_KEY = 'masdeta_push_enabled_v1';
+const APP_NOTIFICATIONS_STORAGE_KEY = 'masdeta_app_notifications_v1';
 
 function playMessageChime() {
   try {
@@ -191,8 +203,53 @@ function playMessageChime() {
   }
 }
 
+let androidNotifChannelCreated = false;
+
+async function ensureAndroidNotificationChannel() {
+  if (!Capacitor.isNativePlatform() || androidNotifChannelCreated) return;
+  try {
+    await LocalNotifications.createChannel({
+      id: 'masdeta_chat',
+      name: 'Pesan & Notifikasi MASDETA',
+      description: 'Notifikasi pesan langsung dan pemberitahuan penting MASDETA',
+      importance: 5,
+      visibility: 1,
+      sound: 'default',
+      vibration: true,
+    });
+    androidNotifChannelCreated = true;
+  } catch {
+    // Abaikan jika channel sudah ada atau device tidak mendukung
+  }
+}
+
 async function triggerPushNotification(title: string, body: string) {
-  if (typeof window === 'undefined' || !('Notification' in window)) return;
+  if (typeof window === 'undefined') return;
+
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const perm = await LocalNotifications.checkPermissions();
+      if (perm.display !== 'granted') return;
+      await ensureAndroidNotificationChannel();
+      const notifId = Math.max(1, Math.floor((Date.now() + Math.random() * 1000) % 2147483000));
+      await LocalNotifications.schedule({
+        notifications: [
+          {
+            id: notifId,
+            title,
+            body,
+            channelId: 'masdeta_chat',
+            schedule: { at: new Date(Date.now() + 120) },
+          },
+        ],
+      });
+    } catch {
+      // Abaikan jika plugin notifikasi native sementara dibatasi OS
+    }
+    return;
+  }
+
+  if (!('Notification' in window)) return;
   if (Notification.permission !== 'granted') return;
 
   try {
@@ -342,13 +399,27 @@ export default function App() {
   });
   const [pushPermission, setPushPermission] = useState<NotificationPermission | 'unsupported'>(
     () => {
-      if (typeof window === 'undefined' || !('Notification' in window)) {
+      if (typeof window === 'undefined') return 'unsupported';
+      if (Capacitor.isNativePlatform()) return 'default';
+      if (!('Notification' in window)) {
         return 'unsupported';
       }
       return Notification.permission;
     }
   );
   const [incomingToast, setIncomingToast] = useState<IncomingToastBanner | null>(null);
+  const [bellAckChatCount, setBellAckChatCount] = useState<number>(0);
+  const [appNotifications, setAppNotifications] = useState<AppNotificationItem[]>(() => {
+    try {
+      const raw = localStorage.getItem(APP_NOTIFICATIONS_STORAGE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw) as unknown;
+      return Array.isArray(parsed) ? (parsed as AppNotificationItem[]).slice(0, 25) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [appAlertToast, setAppAlertToast] = useState<AppNotificationItem | null>(null);
   const [supabaseReady, setSupabaseReady] = useState<boolean>(false);
   const [supabaseSchemaMissing, setSupabaseSchemaMissing] = useState<boolean>(false);
   const [dismissedSchemaNotice, setDismissedSchemaNotice] = useState<boolean>(false);
@@ -373,12 +444,22 @@ export default function App() {
   const pushEnabledRef = useRef<boolean>(pushEnabled);
   const sessionTokenRef = useRef<string | null>(sessionToken);
   const currentUserIdRef = useRef<string | null>(sessionUserId);
+  const currentUserRoleRef = useRef<InternalUserRole | null>(null);
+  const currentUserPresenceRef = useRef<UserPresenceStatus>('offline');
   const supabaseReadyRef = useRef<boolean>(supabaseReady);
   const isOnlineRef = useRef<boolean>(isOnline);
   const lastLocalSyncAtRef = useRef<number>(0);
   const isManualRefreshingRef = useRef<boolean>(false);
   const hasAppliedRemoteRef = useRef<boolean>(false);
   const lastUpdateCheckAtRef = useRef<number>(0);
+  const internalUsersRef = useRef<InternalUser[]>(internalUsers);
+  const proposalsRef = useRef<ProposalRecord[]>(proposals);
+  const realtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const knownPendingUserIdsRef = useRef<Set<string> | null>(null);
+  const seenNotificationIdsRef = useRef<Set<string>>(new Set());
+  const notifiedDeletedProposalIdsRef = useRef<Set<string>>(new Set());
+  const appAlertToastTimerRef = useRef<number | undefined>(undefined);
+  const nativePushRequestedRef = useRef<boolean>(false);
 
   useEffect(() => {
     isOnlineRef.current = isOnline;
@@ -459,12 +540,54 @@ export default function App() {
   pushEnabledRef.current = pushEnabled;
   sessionTokenRef.current = sessionToken;
   supabaseReadyRef.current = supabaseReady;
+  internalUsersRef.current = internalUsers;
+  proposalsRef.current = proposals;
 
   const currentUser = useMemo(() => {
     if (!sessionUserId) return null;
     return internalUsers.find((u) => u.id === sessionUserId && u.status === 'active') ?? null;
   }, [internalUsers, sessionUserId]);
   currentUserIdRef.current = currentUser?.id ?? null;
+  currentUserRoleRef.current = currentUser?.role ?? null;
+  currentUserPresenceRef.current = currentUser?.presenceStatus ?? 'offline';
+
+  const pushAppNotification = useCallback(
+    (
+      notif: AppNotificationItem,
+      options?: { showToast?: boolean; playSound?: boolean; push?: boolean }
+    ) => {
+      // Notifikasi pendaftaran user baru HANYA untuk SuperAdmin
+      if (notif.type === 'user_registered' && currentUserRoleRef.current !== 'SuperAdmin') {
+        return;
+      }
+      if (seenNotificationIdsRef.current.has(notif.id)) return;
+      seenNotificationIdsRef.current.add(notif.id);
+
+      setAppNotifications((prev) => {
+        if (prev.some((n) => n.id === notif.id)) return prev;
+        return [notif, ...prev].slice(0, 25);
+      });
+
+      if (options?.showToast !== false) {
+        setAppAlertToast(notif);
+        if (appAlertToastTimerRef.current) {
+          window.clearTimeout(appAlertToastTimerRef.current);
+        }
+        appAlertToastTimerRef.current = window.setTimeout(() => {
+          setAppAlertToast((curr) => (curr?.id === notif.id ? null : curr));
+        }, 6500);
+      }
+
+      if (options?.playSound !== false) {
+        playMessageChime();
+      }
+
+      if (options?.push !== false && pushEnabledRef.current) {
+        void triggerPushNotification(notif.title, notif.message);
+      }
+    },
+    []
+  );
 
   const latestDataRef = useRef<OperationalDataPayload>({
     records,
@@ -508,6 +631,89 @@ export default function App() {
     if (!currentUser) return 0;
     return directMessages.filter((m) => m.recipientId === currentUser.id && !m.readAt).length;
   }, [directMessages, currentUser]);
+
+  useEffect(() => {
+    setBellAckChatCount((prev) => (unreadChatCount < prev ? unreadChatCount : prev));
+  }, [unreadChatCount]);
+
+  const visibleUnreadAppNotifCount = useMemo(() => {
+    if (!currentUser) return 0;
+    return appNotifications.filter(
+      (n) => !n.read && (n.type !== 'user_registered' || currentUser.role === 'SuperAdmin')
+    ).length;
+  }, [appNotifications, currentUser]);
+
+  const bellHasUnread =
+    visibleUnreadAppNotifCount > 0 || unreadChatCount > bellAckChatCount;
+
+  const createActivityHistoryEntry = useCallback(
+    (
+      eventKey: string,
+      params: {
+        proposalName: string;
+        detail: string;
+        tahun?: string;
+        action?: ProposalKpmHistoryEntry['action'];
+        actorName?: string;
+      }
+    ): ProposalKpmHistoryEntry => ({
+      id: `act-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      tahun: params.tahun || selectedYear || '2026',
+      proposalName: params.proposalName,
+      kpmId: '',
+      kpmName: params.detail,
+      registerCode: `ACTLOG::${eventKey}`,
+      action: params.action || 'entered',
+      fromProposal: currentUser?.role || 'Admin',
+      toProposal: eventKey,
+      actorName: params.actorName || currentActor.nama,
+      timestamp: new Date().toISOString(),
+    }),
+    [currentActor.nama, currentUser?.role, selectedYear]
+  );
+
+  // Sinkronkan izin notifikasi native Android (Capacitor APK) saat startup & login
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    let cancelled = false;
+    void LocalNotifications.checkPermissions()
+      .then(async (perm) => {
+        if (cancelled) return;
+        const mapped: NotificationPermission =
+          perm.display === 'granted'
+            ? 'granted'
+            : perm.display === 'denied'
+              ? 'denied'
+              : 'default';
+        setPushPermission(mapped);
+        if (mapped === 'granted') {
+          await ensureAndroidNotificationChannel();
+        } else if (
+          currentUser &&
+          pushEnabledRef.current &&
+          perm.display !== 'denied' &&
+          !nativePushRequestedRef.current
+        ) {
+          nativePushRequestedRef.current = true;
+          const req = await LocalNotifications.requestPermissions();
+          if (cancelled) return;
+          const nextMapped: NotificationPermission =
+            req.display === 'granted'
+              ? 'granted'
+              : req.display === 'denied'
+                ? 'denied'
+                : 'default';
+          setPushPermission(nextMapped);
+          if (nextMapped === 'granted') {
+            await ensureAndroidNotificationChannel();
+          }
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser]);
 
   const pendingUsersCount = useMemo(
     () => internalUsers.filter((u) => u.status === 'pending').length,
@@ -688,11 +894,59 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [feedback]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(APP_NOTIFICATIONS_STORAGE_KEY, JSON.stringify(appNotifications));
+    } catch {
+      // Ignore storage write error
+    }
+  }, [appNotifications]);
+
+  // Deteksi pendaftar user baru secara real-time -> HANYA SuperAdmin yang mendapat notifikasi
+  useEffect(() => {
+    if (!currentUser || !authReady) {
+      knownPendingUserIdsRef.current = null;
+      return;
+    }
+
+    // Pastikan Admin/Viewer tidak menyimpan sisa notifikasi pendaftaran user baru
+    if (currentUser.role !== 'SuperAdmin') {
+      setAppNotifications((prev) => {
+        const filtered = prev.filter((n) => n.type !== 'user_registered');
+        return filtered.length === prev.length ? prev : filtered;
+      });
+    }
+
+    const pendingUsers = internalUsers.filter((u) => u.status === 'pending');
+    if (knownPendingUserIdsRef.current === null) {
+      knownPendingUserIdsRef.current = new Set(pendingUsers.map((u) => u.id));
+      return;
+    }
+
+    const newlyPending = pendingUsers.filter((u) => !knownPendingUserIdsRef.current!.has(u.id));
+    knownPendingUserIdsRef.current = new Set(pendingUsers.map((u) => u.id));
+
+    if (newlyPending.length > 0 && currentUser.role === 'SuperAdmin') {
+      for (const nu of newlyPending) {
+        pushAppNotification({
+          id: `notif-reg-${nu.id}`,
+          type: 'user_registered',
+          title: 'Pendaftar User Baru',
+          message: `${nu.nama} (${nu.email}) mendaftar dan menunggu persetujuan SuperAdmin.`,
+          createdAt: nu.registeredAt || new Date().toISOString(),
+          read: false,
+          targetAction: 'users',
+        });
+      }
+    }
+  }, [internalUsers, currentUser, authReady, pushAppNotification]);
+
   const clearSessionState = useCallback(() => {
     setSessionToken(null);
     setSessionUserId(null);
     setDirectMessages([]);
     setActiveChatPeerId(null);
+    setBellAckChatCount(0);
     try {
       localStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
       localStorage.removeItem(SESSION_STORAGE_KEY);
@@ -946,7 +1200,17 @@ export default function App() {
           const users = await supabaseFetchInternalUsers();
           if (cancelled) return;
           if (users.length > 0) {
-            setInternalUsers(users);
+            const activeTarget = users.find((u) => u.id === sessionUserId && u.status === 'active');
+            const nowIso = new Date().toISOString();
+            setInternalUsers(
+              activeTarget && !activeTarget.presenceManual
+                ? users.map((u) =>
+                    u.id === activeTarget.id
+                      ? { ...u, presenceStatus: 'online', lastActiveAt: nowIso }
+                      : u
+                  )
+                : users
+            );
           }
 
           if (!sessionUserId) {
@@ -959,6 +1223,10 @@ export default function App() {
             clearSessionState();
             setAuthReady(true);
             return;
+          }
+
+          if (!activeUser.presenceManual) {
+            void supabaseSetUserPresence(activeUser.id, 'online', false);
           }
 
           const msgs = await supabaseFetchDirectMessages();
@@ -1228,7 +1496,7 @@ export default function App() {
             const sorted = [uid, latestNew.senderId].sort();
             void supabaseMarkDirectMessagesRead(`${sorted[0]}::${sorted[1]}`, uid);
           } else {
-            const sender = internalUsers.find((u) => u.id === latestNew.senderId);
+            const sender = internalUsersRef.current.find((u) => u.id === latestNew.senderId);
             const senderName = sender?.nama || 'Pengguna Internal';
             const senderRole = sender?.role || 'Admin';
             const displayMsgText =
@@ -1264,7 +1532,36 @@ export default function App() {
     };
 
     const channel = supabase
-      .channel('masdeta-realtime-sync')
+      .channel('masdeta-realtime-sync', {
+        config: {
+          broadcast: { self: false },
+        },
+      })
+      .on('broadcast', { event: 'app:notification' }, ({ payload }) => {
+        if (!payload || typeof payload !== 'object') return;
+        const p = payload as Record<string, unknown>;
+        if (p.actorId && String(p.actorId) === currentUserIdRef.current) return;
+        const notifId = String(p.id || '');
+        const notifType = p.type === 'user_registered' ? 'user_registered' : 'proposal_deleted';
+        if (notifType === 'user_registered' && currentUserRoleRef.current !== 'SuperAdmin') {
+          return;
+        }
+        const proposalId = p.proposalId ? String(p.proposalId) : '';
+        if (proposalId) {
+          if (notifiedDeletedProposalIdsRef.current.has(proposalId)) return;
+          notifiedDeletedProposalIdsRef.current.add(proposalId);
+        }
+        pushAppNotification({
+          id: notifId || `notif-rt-${Date.now()}`,
+          type: notifType,
+          title: String(p.title || 'Notifikasi Sistem'),
+          message: String(p.message || ''),
+          actorName: p.actorName ? String(p.actorName) : undefined,
+          createdAt: String(p.createdAt || new Date().toISOString()),
+          read: false,
+          targetAction: p.targetAction === 'users' ? 'users' : 'proposals',
+        });
+      })
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'internal_users' },
@@ -1293,8 +1590,38 @@ export default function App() {
       )
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'proposals' },
+        { event: 'INSERT', schema: 'public', table: 'proposals' },
         scheduleOperationalRefresh
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'proposals' },
+        scheduleOperationalRefresh
+      )
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'proposals' },
+        (payload) => {
+          const oldRow = (payload.old || {}) as Record<string, unknown>;
+          const deletedId = String(oldRow.id || '');
+          const isLocalAction = Date.now() - lastLocalSyncAtRef.current < 1500;
+          if (deletedId && !isLocalAction && !notifiedDeletedProposalIdsRef.current.has(deletedId)) {
+            const known = proposalsRef.current.find((p) => p.id === deletedId);
+            const propName = String(oldRow.nama_proposal || known?.namaProposal || 'Proposal');
+            const propYear = String(oldRow.tahun || known?.tahun || '');
+            notifiedDeletedProposalIdsRef.current.add(deletedId);
+            pushAppNotification({
+              id: `notif-prop-del-${deletedId}`,
+              type: 'proposal_deleted',
+              title: 'Proposal Dihapus',
+              message: `Proposal "${propName}"${propYear ? ` (${propYear})` : ''} telah dihapus.`,
+              createdAt: new Date().toISOString(),
+              read: false,
+              targetAction: 'proposals',
+            });
+          }
+          scheduleOperationalRefresh();
+        }
       )
       .on(
         'postgres_changes',
@@ -1311,14 +1638,29 @@ export default function App() {
         { event: '*', schema: 'public', table: 'item_bantuan' },
         scheduleOperationalRefresh
       )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'proposal_kpm_history' },
+        scheduleOperationalRefresh
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'kpm_audit_logs' },
+        scheduleOperationalRefresh
+      )
       .subscribe();
+
+    realtimeChannelRef.current = channel;
 
     return () => {
       if (refreshTimer) window.clearTimeout(refreshTimer);
       if (toastTimer) window.clearTimeout(toastTimer);
+      if (realtimeChannelRef.current === channel) {
+        realtimeChannelRef.current = null;
+      }
       void supabase.removeChannel(channel);
     };
-  }, [currentUser?.id, supabaseReady, applyRemoteOperationalState, internalUsers]);
+  }, [currentUser?.id, supabaseReady, applyRemoteOperationalState, pushAppNotification]);
 
   // Koneksi WebSocket Real-time (Fallback saat schema Supabase belum dijalankan)
   useEffect(() => {
@@ -1344,6 +1686,7 @@ export default function App() {
 
       socket.onopen = () => {
         socket.send(JSON.stringify({ type: 'auth', token: sessionTokenRef.current || token }));
+        window.dispatchEvent(new CustomEvent('masdeta-ws-open'));
       };
 
       socket.onmessage = (event) => {
@@ -1351,6 +1694,41 @@ export default function App() {
           const data = JSON.parse(String(event.data)) as Record<string, unknown>;
           if (data.type === 'users:updated' && Array.isArray(data.users)) {
             setInternalUsers(data.users as InternalUser[]);
+            return;
+          }
+
+          if (data.type === 'user:registered' && data.user) {
+            if (currentUserRoleRef.current !== 'SuperAdmin') return;
+            const nu = data.user as InternalUser;
+            pushAppNotification({
+              id: `notif-reg-${nu.id}`,
+              type: 'user_registered',
+              title: 'Pendaftar User Baru',
+              message: `${nu.nama} (${nu.email}) mendaftar dan menunggu persetujuan SuperAdmin.`,
+              createdAt: nu.registeredAt || new Date().toISOString(),
+              read: false,
+              targetAction: 'users',
+            });
+            return;
+          }
+
+          if (data.type === 'app:notification' && data.notification) {
+            const notif = data.notification as AppNotificationItem;
+            if (notif.type === 'user_registered' && currentUserRoleRef.current !== 'SuperAdmin') {
+              return;
+            }
+            if (data.actorId && String(data.actorId) === currentUserIdRef.current) {
+              return;
+            }
+            const propId = data.proposalId ? String(data.proposalId) : '';
+            if (propId) {
+              if (notifiedDeletedProposalIdsRef.current.has(propId)) return;
+              notifiedDeletedProposalIdsRef.current.add(propId);
+            }
+            pushAppNotification({
+              ...notif,
+              read: false,
+            });
             return;
           }
 
@@ -1450,51 +1828,231 @@ export default function App() {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [currentUser?.id, sessionToken, supabaseReady, authFetch, applyRemoteOperationalState]);
+  }, [currentUser?.id, sessionToken, supabaseReady, authFetch, applyRemoteOperationalState, pushAppNotification]);
 
-  // Pelacak Aktivitas Otomatis untuk Presence Dot (Hijau = Aktif, Oranye = Idle)
+  // Pelacak Aktivitas Otomatis Presisi Tinggi untuk Presence Dot (Hijau = Aktif, Oranye = Idle, Abu-abu = Offline)
   useEffect(() => {
-    if (!currentUser || currentUser.presenceManual) return;
+    const uid = currentUser?.id;
+    const isManual = currentUser?.presenceManual;
+    if (!uid || isManual) return;
+
+    const VISIBLE_IDLE_MS = 300_000; // 5 menit tanpa interaksi di layar aktif
+    const HIDDEN_IDLE_MS = 25_000; // Grace 25 detik saat APK ke background/kamera/file picker
+    const HEARTBEAT_MS = 45_000; // Segarkan status online & lastActiveAt berkala
 
     let idleTimer: number | undefined;
-    let lastSent: UserPresenceStatus | null = null;
+    let hiddenIdleTimer: number | undefined;
+    let heartbeatTimer: number | undefined;
+    let committedStatus: UserPresenceStatus | null = null;
+    let lastInteractionAt = Date.now();
+    let lastCommittedAt = 0;
+    let disposed = false;
+    let appStateHandle: PluginListenerHandle | undefined;
 
-    const sendPresence = (status: UserPresenceStatus) => {
-      if (lastSent === status) return;
-      lastSent = status;
+    const applyLocalPresence = (status: UserPresenceStatus) => {
+      const nowIso = new Date().toISOString();
+      setInternalUsers((prev) => {
+        let changed = false;
+        const next = prev.map((u) => {
+          if (u.id !== uid || u.presenceManual) return u;
+          const prevActiveMs = u.lastActiveAt ? new Date(u.lastActiveAt).getTime() : 0;
+          if (
+            u.presenceStatus === status &&
+            Number.isFinite(prevActiveMs) &&
+            Date.now() - prevActiveMs < 30_000
+          ) {
+            return u;
+          }
+          changed = true;
+          return {
+            ...u,
+            presenceStatus: status,
+            lastActiveAt: nowIso,
+          };
+        });
+        return changed ? next : prev;
+      });
+    };
+
+    const sendPresence = (status: UserPresenceStatus, forceNetworkSync = false) => {
+      applyLocalPresence(status);
+
       if (supabaseReadyRef.current) {
-        void supabaseSetUserPresence(currentUser.id, status, false);
+        const shouldSkip =
+          !forceNetworkSync &&
+          committedStatus === status &&
+          currentUserPresenceRef.current === status &&
+          Date.now() - lastCommittedAt < HEARTBEAT_MS;
+        if (shouldSkip) return;
+        committedStatus = status;
+        lastCommittedAt = Date.now();
+        void supabaseSetUserPresence(uid, status, false);
         return;
       }
+
       const sock = wsRef.current;
       if (sock && sock.readyState === WebSocket.OPEN) {
+        const shouldSkip =
+          !forceNetworkSync &&
+          committedStatus === status &&
+          currentUserPresenceRef.current === status &&
+          Date.now() - lastCommittedAt < HEARTBEAT_MS;
+        if (shouldSkip) return;
+        committedStatus = status;
+        lastCommittedAt = Date.now();
         sock.send(JSON.stringify({ type: 'presence:activity', status }));
       }
     };
 
-    const scheduleIdle = () => {
-      if (idleTimer) window.clearTimeout(idleTimer);
-      if (document.visibilityState === 'hidden') {
-        sendPresence('idle');
+    const startHiddenIdleCountdown = () => {
+      if (idleTimer) {
+        window.clearTimeout(idleTimer);
+        idleTimer = undefined;
+      }
+      if (hiddenIdleTimer) return;
+      hiddenIdleTimer = window.setTimeout(() => {
+        hiddenIdleTimer = undefined;
+        if (document.visibilityState === 'hidden') {
+          sendPresence('idle', true);
+        }
+      }, HIDDEN_IDLE_MS);
+    };
+
+    const markActive = (throttled = false) => {
+      const now = Date.now();
+      if (
+        throttled &&
+        committedStatus === 'online' &&
+        currentUserPresenceRef.current === 'online' &&
+        now - lastInteractionAt < 1000
+      ) {
         return;
       }
+      lastInteractionAt = now;
+
+      if (hiddenIdleTimer) {
+        window.clearTimeout(hiddenIdleTimer);
+        hiddenIdleTimer = undefined;
+      }
+      if (idleTimer) {
+        window.clearTimeout(idleTimer);
+        idleTimer = undefined;
+      }
+
+      if (document.visibilityState === 'hidden') {
+        startHiddenIdleCountdown();
+        return;
+      }
+
       sendPresence('online');
       idleTimer = window.setTimeout(() => {
-        sendPresence('idle');
-      }, 120_000);
+        sendPresence('idle', true);
+      }, VISIBLE_IDLE_MS);
     };
 
-    scheduleIdle();
-    const events: (keyof WindowEventMap)[] = ['pointerdown', 'keydown', 'touchstart', 'scroll'];
-    events.forEach((ev) => window.addEventListener(ev, scheduleIdle, { passive: true }));
-    document.addEventListener('visibilitychange', scheduleIdle);
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'hidden') {
+        startHiddenIdleCountdown();
+      } else {
+        markActive(false);
+      }
+    };
+
+    const handlePointerMove = () => markActive(true);
+    const handleImmediateInteraction = () => markActive(false);
+    const handleWsOpen = () => {
+      if (document.visibilityState === 'visible') {
+        sendPresence('online', true);
+      }
+    };
+    const handleUnload = () => {
+      if (idleTimer) window.clearTimeout(idleTimer);
+      if (hiddenIdleTimer) window.clearTimeout(hiddenIdleTimer);
+      if (supabaseReadyRef.current) {
+        supabaseMarkOfflineKeepalive(uid);
+      }
+    };
+
+    markActive(false);
+
+    heartbeatTimer = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      const sinceInteraction = Date.now() - lastInteractionAt;
+      if (sinceInteraction >= VISIBLE_IDLE_MS) {
+        if (committedStatus !== 'idle') {
+          sendPresence('idle', true);
+        }
+        return;
+      }
+      if (
+        currentUserPresenceRef.current !== 'online' ||
+        Date.now() - lastCommittedAt >= HEARTBEAT_MS
+      ) {
+        sendPresence('online', true);
+      }
+    }, HEARTBEAT_MS);
+
+    const immediateEvents: (keyof WindowEventMap)[] = [
+      'pointerdown',
+      'touchstart',
+      'touchmove',
+      'keydown',
+      'click',
+      'wheel',
+    ];
+    immediateEvents.forEach((ev) =>
+      window.addEventListener(ev, handleImmediateInteraction, { passive: true })
+    );
+    window.addEventListener('pointermove', handlePointerMove, { passive: true });
+    // capture: true wajib agar scroll pada container internal (overflow-y-auto) ikut terdeteksi
+    window.addEventListener('scroll', handlePointerMove, { capture: true, passive: true });
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    window.addEventListener('pageshow', handleVisibilityOrFocus);
+    window.addEventListener('masdeta-ws-open', handleWsOpen);
+    window.addEventListener('pagehide', handleUnload);
+    window.addEventListener('beforeunload', handleUnload);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
+    if (Capacitor.isNativePlatform()) {
+      CapacitorApp.addListener('appStateChange', ({ isActive }) => {
+        if (disposed) return;
+        if (isActive) {
+          markActive(false);
+        } else {
+          startHiddenIdleCountdown();
+        }
+      })
+        .then((handle) => {
+          if (disposed) {
+            void handle.remove();
+          } else {
+            appStateHandle = handle;
+          }
+        })
+        .catch(() => {});
+    }
 
     return () => {
+      disposed = true;
       if (idleTimer) window.clearTimeout(idleTimer);
-      events.forEach((ev) => window.removeEventListener(ev, scheduleIdle));
-      document.removeEventListener('visibilitychange', scheduleIdle);
+      if (hiddenIdleTimer) window.clearTimeout(hiddenIdleTimer);
+      if (heartbeatTimer) window.clearInterval(heartbeatTimer);
+      immediateEvents.forEach((ev) =>
+        window.removeEventListener(ev, handleImmediateInteraction)
+      );
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('scroll', handlePointerMove, { capture: true });
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      window.removeEventListener('pageshow', handleVisibilityOrFocus);
+      window.removeEventListener('masdeta-ws-open', handleWsOpen);
+      window.removeEventListener('pagehide', handleUnload);
+      window.removeEventListener('beforeunload', handleUnload);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      if (appStateHandle) {
+        void appStateHandle.remove();
+      }
     };
-  }, [currentUser?.id, currentUser?.presenceManual]);
+  }, [currentUser?.id, currentUser?.presenceManual, supabaseReady]);
 
   // Tombol Back Android: TERKUNCI saat BottomNav (botnavig) tampil di layar,
   // dan HANYA berfungsi melakukan navigasi kembali jika tidak ada BottomNav di layar.
@@ -1799,8 +2357,15 @@ export default function App() {
     });
 
     if (result.importedRecordsCount > 0) {
+      const importSummaryLog = createActivityHistoryEntry('csv_imported', {
+        proposalName: sourceLabel || 'Import CSV Massal',
+        detail: `Mengimpor ${result.importedRecordsCount} KPM (${result.importedProposalsCount} proposal baru${result.skippedCount > 0 ? `, ${result.skippedCount} dilewati` : ''}).`,
+        tahun: result.nextRecords[0]?.tahun || selectedYear,
+        action: 'entered',
+        actorName: state.currentActor.nama,
+      });
       const nextAuditLogs = [...result.newAuditLogs, ...kpmAuditLogs];
-      const nextProposalHistory = [...result.newProposalHistory, ...proposalHistory];
+      const nextProposalHistory = [importSummaryLog, ...result.newProposalHistory, ...proposalHistory];
 
       setProposals(result.nextProposals);
       setPengelolaList(result.nextPengelolaList);
@@ -1809,9 +2374,7 @@ export default function App() {
       if (result.newAuditLogs.length > 0) {
         setKpmAuditLogs(nextAuditLogs);
       }
-      if (result.newProposalHistory.length > 0) {
-        setProposalHistory(nextProposalHistory);
-      }
+      setProposalHistory(nextProposalHistory);
       void syncOperationalData(
         {
           records: result.nextRecords,
@@ -1950,8 +2513,16 @@ export default function App() {
         updatedAt: now,
       };
       const nextProposals = [created, ...proposals];
+      const actEntry = createActivityHistoryEntry('proposal_created', {
+        proposalName: created.namaProposal,
+        detail: `Proposal baru "${created.namaProposal}" (${created.tahun}) dibuat otomatis dari detail KPM.`,
+        tahun: created.tahun,
+        action: 'entered',
+      });
+      const nextHistory = [actEntry, ...proposalHistory];
       setProposals(nextProposals);
-      void syncOperationalData({ proposals: nextProposals }, 'add');
+      setProposalHistory(nextHistory);
+      void syncOperationalData({ proposals: nextProposals, proposalHistory: nextHistory }, 'add');
       openProposalDetailById(created.id, returnToTab);
     }
   };
@@ -1959,8 +2530,15 @@ export default function App() {
   const handleCreatePengelola = (profile: PengelolaProfile) => {
     if (!requirePermission('add', 'menambah pengelola lapangan')) return;
     const nextPengelola = [profile, ...pengelolaList];
+    const actEntry = createActivityHistoryEntry('pengelola_added', {
+      proposalName: profile.displayName,
+      detail: `Menambahkan pengelola lapangan "${profile.displayName}"${profile.kecamatan ? ` · Kec. ${profile.kecamatan}` : ''}.`,
+      action: 'entered',
+    });
+    const nextHistory = [actEntry, ...proposalHistory];
     setPengelolaList(nextPengelola);
-    void syncOperationalData({ pengelolaList: nextPengelola }, 'add');
+    setProposalHistory(nextHistory);
+    void syncOperationalData({ pengelolaList: nextPengelola, proposalHistory: nextHistory }, 'add');
   };
 
   const handleUpdatePengelola = (profile: PengelolaProfile, previousDisplayName: string) => {
@@ -2004,8 +2582,20 @@ export default function App() {
       }
     }
 
+    const actEntry = createActivityHistoryEntry('pengelola_updated', {
+      proposalName: profile.displayName,
+      detail: nameChanged
+        ? `Memperbarui pengelola "${previousDisplayName}" menjadi "${profile.displayName}".`
+        : `Memperbarui profil pengelola "${profile.displayName}".`,
+      action: 'entered',
+    });
+    const nextHistory = [actEntry, ...proposalHistory];
+    setProposalHistory(nextHistory);
+
     void syncOperationalData(
-      nameChanged ? { pengelolaList: nextPengelola, records: nextRecords } : { pengelolaList: nextPengelola },
+      nameChanged
+        ? { pengelolaList: nextPengelola, records: nextRecords, proposalHistory: nextHistory }
+        : { pengelolaList: nextPengelola, proposalHistory: nextHistory },
       'update'
     );
     setFeedback({
@@ -2030,7 +2620,14 @@ export default function App() {
     ) {
       setSelectedPengelolaDrill(null);
     }
-    void syncOperationalData({ pengelolaList: nextPengelola }, 'delete');
+    const actEntry = createActivityHistoryEntry('pengelola_deleted', {
+      proposalName: target.displayName,
+      detail: `Menghapus pengelola lapangan "${target.displayName}".`,
+      action: 'removed',
+    });
+    const nextHistory = [actEntry, ...proposalHistory];
+    setProposalHistory(nextHistory);
+    void syncOperationalData({ pengelolaList: nextPengelola, proposalHistory: nextHistory }, 'delete');
     setFeedback({
       type: 'success',
       message: `Pengelola "${target.displayName}" berhasil dihapus.`,
@@ -2683,18 +3280,38 @@ export default function App() {
       setRecords(nextRecords);
     }
 
+    const actEntry = createActivityHistoryEntry('item_saved', {
+      proposalName: `${savedItem.code} — ${savedItem.name}`,
+      detail: originalCode
+        ? `Memperbarui master item "${savedItem.name}" (${savedItem.code}) dengan ${savedItem.subItems.length} sub-item.`
+        : `Menambahkan master item baru "${savedItem.name}" (${savedItem.code}) dengan ${savedItem.subItems.length} sub-item.`,
+      tahun: savedItem.tahun,
+      action: 'entered',
+    });
+    const nextHistory = [actEntry, ...proposalHistory];
+
     setItems(nextItems);
+    setProposalHistory(nextHistory);
     void syncOperationalData(
-      { items: nextItems, records: nextRecords },
+      { items: nextItems, records: nextRecords, proposalHistory: nextHistory },
       originalCode ? 'update' : 'add'
     );
   };
 
   const handleDeleteCatalogItem = (tahun: string, code: string) => {
     if (!requirePermission('delete', 'menghapus master item')) return;
+    const removed = items.find((i) => i.tahun === tahun && i.code === code);
     const nextItems = items.filter((i) => !(i.tahun === tahun && i.code === code));
+    const actEntry = createActivityHistoryEntry('item_deleted', {
+      proposalName: removed ? `${removed.code} — ${removed.name}` : code,
+      detail: `Menghapus master item "${removed?.name || code}" (${code}) tahun ${tahun}.`,
+      tahun,
+      action: 'removed',
+    });
+    const nextHistory = [actEntry, ...proposalHistory];
     setItems(nextItems);
-    void syncOperationalData({ items: nextItems }, 'delete');
+    setProposalHistory(nextHistory);
+    void syncOperationalData({ items: nextItems, proposalHistory: nextHistory }, 'delete');
   };
 
   const handleMoveItemOrder = (tahun: string, code: string, direction: 'up' | 'down') => {
@@ -2736,9 +3353,21 @@ export default function App() {
         )
       : records;
 
+    const actEntry = createActivityHistoryEntry('item_subitems', {
+      proposalName: oldItem ? `${oldItem.code} — ${oldItem.name}` : code,
+      detail: `Memperbarui daftar sub-item (${subItems.length} item) pada "${oldItem?.name || code}".`,
+      tahun,
+      action: 'entered',
+    });
+    const nextHistory = [actEntry, ...proposalHistory];
+
     setItems(nextItems);
     if (oldItem) setRecords(nextRecords);
-    void syncOperationalData({ items: nextItems, records: nextRecords }, 'update');
+    setProposalHistory(nextHistory);
+    void syncOperationalData(
+      { items: nextItems, records: nextRecords, proposalHistory: nextHistory },
+      'update'
+    );
   };
 
   const handleCopyItemsFromYear = (fromYear: string, toYear: string) => {
@@ -2754,8 +3383,16 @@ export default function App() {
         subItems: [...s.subItems],
       }));
     const nextItems = [...items, ...additions];
+    const actEntry = createActivityHistoryEntry('item_copied', {
+      proposalName: `Salin Katalog ${fromYear} → ${toYear}`,
+      detail: `Menyalin ${additions.length} master item dari tahun ${fromYear} ke ${toYear}.`,
+      tahun: toYear,
+      action: 'entered',
+    });
+    const nextHistory = additions.length > 0 ? [actEntry, ...proposalHistory] : proposalHistory;
     setItems(nextItems);
-    void syncOperationalData({ items: nextItems }, 'add');
+    if (additions.length > 0) setProposalHistory(nextHistory);
+    void syncOperationalData({ items: nextItems, proposalHistory: nextHistory }, 'add');
   };
 
   const handleCreateProposal = (values: ProposalFormValues) => {
@@ -2782,8 +3419,17 @@ export default function App() {
     };
 
     const nextProposals = [newProposal, ...proposals];
+    const actEntry = createActivityHistoryEntry('proposal_created', {
+      proposalName: newProposal.namaProposal,
+      detail: `Membuat proposal "${newProposal.namaProposal}" (${newProposal.tipe}, ${newProposal.tahun}) · Target ${newProposal.jumlahKpm} KPM.`,
+      tahun: newProposal.tahun,
+      action: 'entered',
+    });
+    const nextHistory = [actEntry, ...proposalHistory];
+
     setProposals(nextProposals);
-    void syncOperationalData({ proposals: nextProposals }, 'add');
+    setProposalHistory(nextHistory);
+    void syncOperationalData({ proposals: nextProposals, proposalHistory: nextHistory }, 'add');
 
     if (addProposalFromKpmForm && newProposal.status === 'unlocked') {
       setPendingSelectedProposal({
@@ -2869,10 +3515,18 @@ export default function App() {
           : l
       );
       setRecords(nextRecords);
-      setProposalHistory(nextProposalHistory);
       setKpmAuditLogs(nextKpmAuditLogs);
     }
 
+    const actEntry = createActivityHistoryEntry('proposal_updated', {
+      proposalName: existing.namaProposal,
+      detail: `Memperbarui detail/berkas proposal "${existing.namaProposal}" (${values.tipe}, ${values.tahun}).`,
+      tahun: values.tahun,
+      action: 'entered',
+    });
+    nextProposalHistory = [actEntry, ...nextProposalHistory];
+
+    setProposalHistory(nextProposalHistory);
     setProposals(nextProposals);
     void syncOperationalData(
       {
@@ -2907,8 +3561,26 @@ export default function App() {
           }
         : p
     );
+    const actEntry = createActivityHistoryEntry(
+      nextStatus === 'locked' ? 'proposal_locked' : 'proposal_unlocked',
+      {
+        proposalName: target.namaProposal,
+        detail:
+          nextStatus === 'locked'
+            ? `Mengunci proposal "${target.namaProposal}" (${target.tahun}).`
+            : `Membuka kunci proposal "${target.namaProposal}" (${target.tahun}).`,
+        tahun: target.tahun,
+        action: nextStatus === 'locked' ? 'removed' : 'entered',
+      }
+    );
+    const nextHistory = [actEntry, ...proposalHistory];
+
     setProposals(nextProposals);
-    void syncOperationalData({ proposals: nextProposals }, 'update');
+    setProposalHistory(nextHistory);
+    void syncOperationalData(
+      { proposals: nextProposals, proposalHistory: nextHistory },
+      'update'
+    );
     setFeedback({
       type: 'success',
       message:
@@ -2939,13 +3611,55 @@ export default function App() {
     }
 
     const nextProposals = proposals.filter((p) => p.id !== proposalId);
+    const actorName = currentUser?.nama || 'Petugas Internal';
+    const deletedNotif: AppNotificationItem = {
+      id: `notif-prop-del-${proposalId}-${Date.now()}`,
+      type: 'proposal_deleted',
+      title: 'Proposal Dihapus',
+      message: `Proposal "${target.namaProposal}" (${target.tahun}) telah dihapus oleh ${actorName}.`,
+      actorName,
+      createdAt: new Date().toISOString(),
+      read: true,
+      targetAction: 'proposals',
+    };
+
+    const actEntry = createActivityHistoryEntry('proposal_deleted', {
+      proposalName: target.namaProposal,
+      detail: `Menghapus proposal "${target.namaProposal}" (${target.tipe}, ${target.tahun}).`,
+      tahun: target.tahun,
+      action: 'removed',
+      actorName,
+    });
+    const nextHistory = [actEntry, ...proposalHistory];
+
+    notifiedDeletedProposalIdsRef.current.add(proposalId);
+    seenNotificationIdsRef.current.add(deletedNotif.id);
+    setAppNotifications((prev) => [deletedNotif, ...prev].slice(0, 25));
+
     setProposals(nextProposals);
+    setProposalHistory(nextHistory);
     if (activeProposalId === proposalId) {
       setActiveProposalId(null);
       setSubView('none');
       setActiveTab('proposal');
     }
-    void syncOperationalData({ proposals: nextProposals }, 'delete');
+    void syncOperationalData(
+      { proposals: nextProposals, proposalHistory: nextHistory },
+      'delete'
+    ).then((synced) => {
+      if (synced && supabaseReadyRef.current && realtimeChannelRef.current) {
+        void realtimeChannelRef.current.send({
+          type: 'broadcast',
+          event: 'app:notification',
+          payload: {
+            ...deletedNotif,
+            read: false,
+            proposalId,
+            actorId: currentUser?.id,
+          },
+        });
+      }
+    });
     setFeedback({
       type: 'success',
       message: `Proposal "${target.namaProposal}" (${target.tahun}) berhasil dihapus.`,
@@ -3589,6 +4303,35 @@ export default function App() {
   };
 
   const handleRequestPushPermission = async () => {
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const res = await LocalNotifications.requestPermissions();
+        const mapped: NotificationPermission =
+          res.display === 'granted'
+            ? 'granted'
+            : res.display === 'denied'
+              ? 'denied'
+              : 'default';
+        setPushPermission(mapped);
+        if (mapped === 'granted') {
+          await ensureAndroidNotificationChannel();
+          setPushEnabled(true);
+          try {
+            localStorage.setItem(PUSH_ENABLED_STORAGE_KEY, 'true');
+          } catch {
+            // Ignore
+          }
+          void triggerPushNotification(
+            'Notifikasi MASDETA Aktif',
+            'Pesan masuk dan pemberitahuan penting akan muncul di notifikasi Android Anda.'
+          );
+        }
+      } catch {
+        // Ignore
+      }
+      return;
+    }
+
     if (typeof window === 'undefined' || !('Notification' in window)) {
       setPushPermission('unsupported');
       return;
@@ -3682,13 +4425,25 @@ export default function App() {
       ],
     }));
 
+    const actEntry = createActivityHistoryEntry('kpm_accept_all', {
+      proposalName,
+      detail: `Menyetujui ${targets.length} calon KPM pada "${proposalName}" menjadi Diterima.`,
+      tahun,
+      action: 'entered',
+    });
+
     const nextLogs = [...newLogs, ...kpmAuditLogs];
+    const nextHistory = [actEntry, ...proposalHistory];
     const nextRecords = records.map((r) =>
       targetIds.has(r.id) ? { ...r, validasi: 'accepted' as ValidationStatus, updatedAt: now } : r
     );
     setKpmAuditLogs(nextLogs);
+    setProposalHistory(nextHistory);
     setRecords(nextRecords);
-    void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
+    void syncOperationalData(
+      { records: nextRecords, kpmAuditLogs: nextLogs, proposalHistory: nextHistory },
+      'update'
+    );
     setFeedback({
       type: 'success',
       message: `${targets.length} calon KPM pada "${proposalName}" (${tahun}) disetujui menjadi Diterima.`,
@@ -3944,8 +4699,18 @@ export default function App() {
       setSelectedPekerjaanDrill(newName);
     }
 
+    const actEntry = createActivityHistoryEntry('pekerjaan_updated', {
+      proposalName: newName,
+      detail: `Mengubah nama pekerjaan "${oldName}" menjadi "${newName}".`,
+      action: 'entered',
+    });
+    const nextHistory = [actEntry, ...proposalHistory];
+    setProposalHistory(nextHistory);
+
     void syncOperationalData(
-      anyRecordChanged ? { pekerjaanList: nextPekerjaan, records: nextRecords } : { pekerjaanList: nextPekerjaan },
+      anyRecordChanged
+        ? { pekerjaanList: nextPekerjaan, records: nextRecords, proposalHistory: nextHistory }
+        : { pekerjaanList: nextPekerjaan, proposalHistory: nextHistory },
       'update'
     );
     setFeedback({
@@ -3964,7 +4729,14 @@ export default function App() {
     ) {
       setSelectedPekerjaanDrill(null);
     }
-    void syncOperationalData({ pekerjaanList: nextPekerjaan }, 'delete');
+    const actEntry = createActivityHistoryEntry('pekerjaan_deleted', {
+      proposalName: name,
+      detail: `Menghapus master pekerjaan "${name}".`,
+      action: 'removed',
+    });
+    const nextHistory = [actEntry, ...proposalHistory];
+    setProposalHistory(nextHistory);
+    void syncOperationalData({ pekerjaanList: nextPekerjaan, proposalHistory: nextHistory }, 'delete');
     setFeedback({
       type: 'success',
       message: `Pekerjaan "${name}" berhasil dihapus.`,
@@ -4183,6 +4955,69 @@ export default function App() {
               type="button"
               onClick={() => setIncomingToast(null)}
               aria-label="Tutup notifikasi pesan"
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Interactive In-App System Alert Toast (Proposal Deleted / SuperAdmin New Registration) */}
+      {appAlertToast && !incomingToast && (
+        <div className="fixed top-3 left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2">
+          <div
+            className={`flex items-start gap-3 rounded-2xl border bg-white p-3 shadow-lg shadow-slate-900/10 ${
+              appAlertToast.type === 'proposal_deleted'
+                ? 'border-rose-200'
+                : 'border-amber-200'
+            }`}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                const action = appAlertToast.targetAction;
+                const notifId = appAlertToast.id;
+                setAppAlertToast(null);
+                setAppNotifications((prev) =>
+                  prev.map((n) => (n.id === notifId ? { ...n, read: true } : n))
+                );
+                if (action === 'users' && currentUser.role === 'SuperAdmin') {
+                  setSubView('none');
+                  setMenuOpenedFromDashboard(false);
+                  setMenuSection('users');
+                  setActiveTab('menu');
+                } else if (action === 'proposals') {
+                  setSubView('none');
+                  setActiveTab('proposal');
+                }
+              }}
+              className="flex min-w-0 flex-1 items-start gap-2.5 text-left"
+            >
+              <div
+                className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
+                  appAlertToast.type === 'proposal_deleted'
+                    ? 'bg-rose-600 text-white'
+                    : 'bg-amber-600 text-white'
+                }`}
+              >
+                {appAlertToast.type === 'proposal_deleted' ? (
+                  <Trash2 className="h-4.5 w-4.5" />
+                ) : (
+                  <UserPlus className="h-4.5 w-4.5" />
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-bold text-slate-900">{appAlertToast.title}</p>
+                <p className="mt-0.5 line-clamp-2 text-xs text-slate-600">
+                  {appAlertToast.message}
+                </p>
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setAppAlertToast(null)}
+              aria-label="Tutup notifikasi"
               className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100"
             >
               <X className="h-3.5 w-3.5" />
@@ -4515,6 +5350,25 @@ export default function App() {
             items={items}
             pendingUsersCount={currentUser.role === 'SuperAdmin' ? pendingUsersCount : 0}
             duplicateNikCount={duplicateNikCount}
+            appNotifications={appNotifications}
+            bellHasUnread={bellHasUnread}
+            onOpenBell={() => {
+              setBellAckChatCount(unreadChatCount);
+              setAppNotifications((prev) =>
+                prev.some((n) => !n.read) ? prev.map((n) => ({ ...n, read: true })) : prev
+              );
+            }}
+            onMarkNotificationsRead={() =>
+              setAppNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
+            }
+            onDismissNotification={(id) =>
+              setAppNotifications((prev) => prev.filter((n) => n.id !== id))
+            }
+            onClearNotifications={() => {
+              setBellAckChatCount(unreadChatCount);
+              setAppNotifications([]);
+              setAppAlertToast(null);
+            }}
             feedback={feedback}
             onDismissFeedback={() => setFeedback(null)}
             onOpenChat={() => openChatView()}
@@ -4648,6 +5502,8 @@ export default function App() {
             pengelolaList={pengelolaList}
             wilayahList={wilayahList}
             internalUsers={internalUsers}
+            proposalHistory={proposalHistory}
+            kpmAuditLogs={kpmAuditLogs}
             onOpenChat={(peerId) => openChatView(peerId)}
             onOpenProfile={openProfileView}
             onCheckAppUpdate={() => void handleManualCheckAppUpdate()}
@@ -4667,8 +5523,18 @@ export default function App() {
             onDeletePekerjaan={handleDeletePekerjaan}
             onUpdateWilayahList={(nextList) => {
               if (!requirePermission('update', 'mengubah data wilayah')) return;
+              const actEntry = createActivityHistoryEntry('wilayah_updated', {
+                proposalName: 'Master Wilayah',
+                detail: `Memperbarui daftar wilayah operasional (${nextList.length} Kab/Kota).`,
+                action: 'entered',
+              });
+              const nextHistory = [actEntry, ...proposalHistory];
               setWilayahList(nextList);
-              void syncOperationalData({ wilayahList: nextList }, 'update');
+              setProposalHistory(nextHistory);
+              void syncOperationalData(
+                { wilayahList: nextList, proposalHistory: nextHistory },
+                'update'
+              );
             }}
             onOpenSubItemRecap={() => openSubItemRecap('menu')}
             onAddPengelola={handleCreatePengelola}

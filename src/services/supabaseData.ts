@@ -1,4 +1,9 @@
-import { isSupabaseConfigured, supabase } from '../lib/supabaseClient';
+import {
+  SUPABASE_ANON_KEY,
+  SUPABASE_URL,
+  isSupabaseConfigured,
+  supabase,
+} from '../lib/supabaseClient';
 import {
   buildDriveFallbackThumbnailUrl,
   extractDriveFileId,
@@ -1759,15 +1764,42 @@ export async function supabaseSetUserPresence(
   presenceStatus: UserPresenceStatus,
   presenceManual = false
 ): Promise<void> {
+  const nowIso = new Date().toISOString();
   await supabase
     .from('internal_users')
     .update({
       presence_status: presenceStatus,
       presence_manual: presenceManual,
-      last_active_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      last_active_at: nowIso,
+      updated_at: nowIso,
     })
     .eq('id', userId);
+}
+
+export function supabaseMarkOfflineKeepalive(userId: string): void {
+  if (!isSupabaseConfigured || !userId || typeof fetch !== 'function') return;
+  const nowIso = new Date().toISOString();
+  const endpoint = `${SUPABASE_URL}/rest/v1/internal_users?id=eq.${encodeURIComponent(userId)}`;
+  try {
+    void fetch(endpoint, {
+      method: 'PATCH',
+      keepalive: true,
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify({
+        presence_status: 'offline',
+        presence_manual: false,
+        last_active_at: nowIso,
+        updated_at: nowIso,
+      }),
+    }).catch(() => {});
+  } catch {
+    // Ignore unload fetch failure
+  }
 }
 
 export async function supabaseFetchDirectMessages(): Promise<DirectChatMessage[]> {

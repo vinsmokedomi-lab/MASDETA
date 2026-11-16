@@ -460,6 +460,15 @@ async function startServer() {
     }
   }
 
+  function sendToRole(role: InternalUserRole, payload: unknown) {
+    const recipientIds = store.users
+      .filter((u) => u.role === role && u.status === 'active')
+      .map((u) => u.id);
+    if (recipientIds.length > 0) {
+      sendToUsers(recipientIds, payload);
+    }
+  }
+
   function broadcastUsers() {
     broadcastAll({
       type: 'users:updated',
@@ -482,9 +491,14 @@ async function startServer() {
     const user = store.users.find((u) => u.id === userId);
     if (!user || user.presenceManual) return;
     const nextPresence = computeAutoPresence(userId);
-    if (user.presenceStatus !== nextPresence) {
+    const nowMs = Date.now();
+    const prevMs = user.lastActiveAt ? new Date(user.lastActiveAt).getTime() : 0;
+    const shouldBumpHeartbeat =
+      nextPresence === 'online' && (!Number.isFinite(prevMs) || nowMs - prevMs >= 30_000);
+
+    if (user.presenceStatus !== nextPresence || shouldBumpHeartbeat) {
       user.presenceStatus = nextPresence;
-      user.lastActiveAt = new Date().toISOString();
+      user.lastActiveAt = new Date(nowMs).toISOString();
       saveStore(store);
       broadcastUsers();
     }
@@ -664,6 +678,10 @@ async function startServer() {
     store.users.unshift(created);
     saveStore(store);
     broadcastUsers();
+    sendToRole('SuperAdmin', {
+      type: 'user:registered',
+      user: sanitizeUser(created),
+    });
 
     res.status(201).json({
       user: sanitizeUser(created),
@@ -1170,6 +1188,19 @@ async function startServer() {
     }
 
     const body = req.body || {};
+    const previousProposals = Array.isArray(dataStore.proposals)
+      ? (dataStore.proposals as Array<{ id?: unknown; namaProposal?: unknown; tahun?: unknown }>)
+      : [];
+    const deletedProposals =
+      reqPerm === 'delete' && Array.isArray(body.proposals)
+        ? (() => {
+            const incomingIds = new Set(
+              (body.proposals as Array<{ id?: unknown }>).map((p) => String(p?.id || ''))
+            );
+            return previousProposals.filter((p) => p?.id && !incomingIds.has(String(p.id)));
+          })()
+        : [];
+
     if (Array.isArray(body.records)) dataStore.records = body.records;
     if (Array.isArray(body.proposals)) dataStore.proposals = body.proposals;
     if (Array.isArray(body.items)) dataStore.items = body.items;
@@ -1190,6 +1221,27 @@ async function startServer() {
       state: dataStore,
       updatedBy: authUser.id,
     });
+
+    for (const dp of deletedProposals) {
+      const dpId = String(dp.id || '');
+      const dpName = String(dp.namaProposal || 'Proposal');
+      const dpYear = String(dp.tahun || '');
+      broadcastAll({
+        type: 'app:notification',
+        actorId: authUser.id,
+        proposalId: dpId,
+        notification: {
+          id: `notif-prop-del-${dpId}-${Date.now()}`,
+          type: 'proposal_deleted',
+          title: 'Proposal Dihapus',
+          message: `Proposal "${dpName}"${dpYear ? ` (${dpYear})` : ''} telah dihapus oleh ${authUser.nama}.`,
+          actorName: authUser.nama,
+          createdAt: new Date().toISOString(),
+          read: false,
+          targetAction: 'proposals',
+        },
+      });
+    }
 
     res.json({ ok: true, state: dataStore });
   });

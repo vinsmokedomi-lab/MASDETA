@@ -15,13 +15,22 @@ import {
   LogOut,
   MessageSquare,
   Package,
+  Trash2,
   Unlock,
   User,
   UserCheck,
+  UserPlus,
   Users,
   X,
 } from 'lucide-react';
-import { InternalUser, ItemBantuan, KpmRecord, ProposalRecord, ValidationStatus } from '../types/kpm';
+import {
+  AppNotificationItem,
+  InternalUser,
+  ItemBantuan,
+  KpmRecord,
+  ProposalRecord,
+  ValidationStatus,
+} from '../types/kpm';
 import { TAHUN_OPTIONS } from '../data/kpmOptions';
 import {
   HIGH_DESIL_VALUES,
@@ -45,6 +54,12 @@ interface DashboardViewProps {
   items: ItemBantuan[];
   pendingUsersCount: number;
   duplicateNikCount: number;
+  appNotifications?: AppNotificationItem[];
+  bellHasUnread?: boolean;
+  onOpenBell?: () => void;
+  onMarkNotificationsRead?: () => void;
+  onDismissNotification?: (id: string) => void;
+  onClearNotifications?: () => void;
   feedback?: { type: 'success' | 'error'; message: string } | null;
   onDismissFeedback?: () => void;
   onOpenChat: () => void;
@@ -74,6 +89,12 @@ export function DashboardView({
   items,
   pendingUsersCount,
   duplicateNikCount,
+  appNotifications = [],
+  bellHasUnread,
+  onOpenBell,
+  onMarkNotificationsRead,
+  onDismissNotification,
+  onClearNotifications,
   feedback,
   onDismissFeedback,
   onOpenChat,
@@ -92,7 +113,14 @@ export function DashboardView({
   onOpenAdministrasi,
 }: DashboardViewProps) {
   const [openHeaderMenu, setOpenHeaderMenu] = useState<'none' | 'notifications' | 'profile'>('none');
+  const [dismissedPendingBellCount, setDismissedPendingBellCount] = useState(0);
   const headerActionsRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (pendingUsersCount < dismissedPendingBellCount) {
+      setDismissedPendingBellCount(pendingUsersCount);
+    }
+  }, [pendingUsersCount, dismissedPendingBellCount]);
 
   useEffect(() => {
     if (openHeaderMenu === 'none') return;
@@ -317,20 +345,29 @@ export function DashboardView({
     [proposalSummaryList]
   );
 
-  const totalQuotaShortage = useMemo(
-    () =>
-      incompleteQuotaProposals.reduce(
-        (sum, p) => sum + Math.max(0, p.target - p.activeKpmCount),
-        0
-      ),
-    [incompleteQuotaProposals]
-  );
-
   const hasAttentionItems =
     pendingUsersCount > 0 ||
     duplicateNikCount > 0 ||
     attentionCounts.pendingDinas > 0 ||
     incompleteQuotaProposals.length > 0;
+
+  const visibleNotifications = useMemo(
+    () =>
+      appNotifications.filter(
+        (n) => n.type !== 'user_registered' || currentUser.role === 'SuperAdmin'
+      ),
+    [appNotifications, currentUser.role]
+  );
+
+  const unreadAppNotifCount = useMemo(
+    () => visibleNotifications.filter((n) => !n.read).length,
+    [visibleNotifications]
+  );
+
+  const showBellRedDot =
+    bellHasUnread !== undefined
+      ? bellHasUnread
+      : unreadChatCount > 0 || unreadAppNotifCount > 0;
 
   return (
     <div className="min-h-screen pb-24">
@@ -348,20 +385,25 @@ export function DashboardView({
           <button
             type="button"
             onClick={() =>
-              setOpenHeaderMenu((prev) => (prev === 'notifications' ? 'none' : 'notifications'))
+              setOpenHeaderMenu((prev) => {
+                const next = prev === 'notifications' ? 'none' : 'notifications';
+                if (next === 'notifications') {
+                  onOpenBell?.();
+                  if (unreadAppNotifCount > 0) {
+                    onMarkNotificationsRead?.();
+                  }
+                }
+                return next;
+              })
             }
             aria-label="Notifikasi"
             aria-expanded={openHeaderMenu === 'notifications'}
             className="relative inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 transition-colors hover:bg-slate-50"
           >
             <Bell className="h-4.5 w-4.5" />
-            {unreadChatCount > 0 ? (
-              <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-rose-600 px-1 text-[9px] font-bold text-white tabular-nums">
-                {unreadChatCount > 99 ? '99+' : unreadChatCount}
-              </span>
-            ) : hasAttentionItems ? (
+            {showBellRedDot && (
               <span className="absolute top-1.5 right-1.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-rose-600" />
-            ) : null}
+            )}
           </button>
 
           {/* Avatar-Only Profile Button -> Opens Mini Menu (Profil / Chat) */}
@@ -393,17 +435,36 @@ export function DashboardView({
 
           {/* Notification Bell Popover */}
           {openHeaderMenu === 'notifications' && (
-            <div className="absolute top-12 right-0 z-40 w-72 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg">
+            <div className="absolute top-12 right-0 z-40 w-80 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg">
               <div className="flex items-center justify-between border-b border-slate-100 px-3.5 py-2.5">
-                <span className="text-xs font-bold text-slate-900">Notifikasi</span>
-                {unreadChatCount > 0 && (
-                  <span className="text-[11px] font-semibold text-rose-600 tabular-nums">
-                    {unreadChatCount} chat masuk
-                  </span>
-                )}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-900">Notifikasi</span>
+                  {unreadChatCount > 0 && (
+                    <span className="text-[11px] font-semibold text-rose-600 tabular-nums">
+                      {unreadChatCount} chat
+                    </span>
+                  )}
+                </div>
+                {(visibleNotifications.length > 0 ||
+                  unreadChatCount > 0 ||
+                  (currentUser.role === 'SuperAdmin' &&
+                    pendingUsersCount > dismissedPendingBellCount)) &&
+                  onClearNotifications && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDismissedPendingBellCount(pendingUsersCount);
+                        onClearNotifications();
+                      }}
+                      className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold text-rose-600 transition-colors hover:bg-rose-50"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                      <span>Bersihkan</span>
+                    </button>
+                  )}
               </div>
 
-              <div className="max-h-72 divide-y divide-slate-100 overflow-y-auto">
+              <div className="max-h-80 divide-y divide-slate-100 overflow-y-auto">
                 {unreadChatCount > 0 && (
                   <button
                     type="button"
@@ -426,107 +487,91 @@ export function DashboardView({
                   </button>
                 )}
 
-                {pendingUsersCount > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setOpenHeaderMenu('none');
-                      onOpenUserApproval();
-                    }}
-                    className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-slate-50"
+                {visibleNotifications.map((notif) => (
+                  <div
+                    key={notif.id}
+                    className={`flex items-start gap-2.5 px-3.5 py-2.5 transition-colors hover:bg-slate-50 ${
+                      !notif.read ? 'bg-teal-50/35' : ''
+                    }`}
                   >
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-700">
-                      <UserCheck className="h-4 w-4" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold text-slate-900">
-                        {pendingUsersCount} Pendaftar User Baru
-                      </p>
-                      <p className="text-[11px] text-slate-500">Menunggu persetujuan SuperAdmin</p>
-                    </div>
-                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-                  </button>
-                )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOpenHeaderMenu('none');
+                        if (notif.targetAction === 'users' && currentUser.role === 'SuperAdmin') {
+                          onOpenUserApproval();
+                        } else if (notif.targetAction === 'proposals') {
+                          onOpenProposalList?.();
+                        }
+                      }}
+                      className="flex min-w-0 flex-1 items-start gap-2.5 text-left"
+                    >
+                      <div
+                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
+                          notif.type === 'proposal_deleted'
+                            ? 'bg-rose-50 text-rose-600'
+                            : 'bg-amber-50 text-amber-700'
+                        }`}
+                      >
+                        {notif.type === 'proposal_deleted' ? (
+                          <Trash2 className="h-4 w-4" />
+                        ) : (
+                          <UserPlus className="h-4 w-4" />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-semibold text-slate-900">{notif.title}</p>
+                        <p className="mt-0.5 text-[11px] leading-snug text-slate-600">
+                          {notif.message}
+                        </p>
+                        <p className="mt-0.5 text-[10px] text-slate-400">
+                          {formatUploadDateTime(notif.createdAt)}
+                        </p>
+                      </div>
+                    </button>
+                    {onDismissNotification && (
+                      <button
+                        type="button"
+                        onClick={() => onDismissNotification(notif.id)}
+                        aria-label="Hapus notifikasi"
+                        className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                ))}
 
-                {incompleteQuotaProposals.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setOpenHeaderMenu('none');
-                      if (incompleteQuotaProposals.length === 1) {
-                        onOpenProposalDetail(incompleteQuotaProposals[0].id);
-                      } else {
-                        onOpenProposalList?.();
-                      }
-                    }}
-                    className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-slate-50"
-                  >
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-700">
-                      <ClipboardList className="h-4 w-4" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold text-slate-900">
-                        {incompleteQuotaProposals.length} Proposal Belum Penuh
-                      </p>
-                      <p className="text-[11px] text-slate-500 tabular-nums">
-                        Kurang {totalQuotaShortage} calon penerima
-                      </p>
-                    </div>
-                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-                  </button>
-                )}
-
-                {duplicateNikCount > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setOpenHeaderMenu('none');
-                      onOpenDuplicateCheck();
-                    }}
-                    className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-slate-50"
-                  >
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-rose-50 text-rose-700">
-                      <AlertTriangle className="h-4 w-4" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold text-slate-900">
-                        {duplicateNikCount} Terindikasi NIK Ganda
-                      </p>
-                      <p className="text-[11px] text-slate-500">Periksa &amp; bersihkan duplikasi</p>
-                    </div>
-                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-                  </button>
-                )}
-
-                {attentionCounts.pendingDinas > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setOpenHeaderMenu('none');
-                      onOpenProposalList?.();
-                    }}
-                    className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-slate-50"
-                  >
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-700">
-                      <FileCheck2 className="h-4 w-4" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold text-slate-900">
-                        {attentionCounts.pendingDinas} Proposal Belum Diantar ke Dinas
-                      </p>
-                      <p className="text-[11px] text-slate-500">Periksa kelengkapan pengantaran</p>
-                    </div>
-                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-                  </button>
-                )}
+                {pendingUsersCount > dismissedPendingBellCount &&
+                  currentUser.role === 'SuperAdmin' &&
+                  !visibleNotifications.some((n) => n.type === 'user_registered') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOpenHeaderMenu('none');
+                        onOpenUserApproval();
+                      }}
+                      className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-slate-50"
+                    >
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-700">
+                        <UserCheck className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-semibold text-slate-900">
+                          {pendingUsersCount} Pendaftar User Baru
+                        </p>
+                        <p className="text-[11px] text-slate-500">Menunggu persetujuan SuperAdmin</p>
+                      </div>
+                      <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                    </button>
+                  )}
 
                 {unreadChatCount === 0 &&
-                  pendingUsersCount === 0 &&
-                  duplicateNikCount === 0 &&
-                  incompleteQuotaProposals.length === 0 &&
-                  attentionCounts.pendingDinas === 0 && (
-                    <div className="px-4 py-6 text-center text-xs text-slate-500">
-                      Tidak ada notifikasi baru.
+                  visibleNotifications.length === 0 &&
+                  (currentUser.role !== 'SuperAdmin' ||
+                    pendingUsersCount <= dismissedPendingBellCount) && (
+                    <div className="px-4 py-7 text-center text-xs text-slate-500">
+                      Tidak ada notifikasi.
                     </div>
                   )}
               </div>

@@ -25,9 +25,9 @@ export function HistoryDetailView({
   onBack,
 }: HistoryDetailViewProps) {
   if (mode === 'proposal' && proposal) {
-    const entries = [...proposalHistory].sort((a, b) =>
-      b.timestamp.localeCompare(a.timestamp)
-    );
+    const entries = proposalHistory
+      .filter((h) => !h.registerCode?.startsWith('ACTLOG::'))
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 
     return (
       <div className="min-h-screen pb-10">

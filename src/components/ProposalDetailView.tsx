@@ -256,11 +256,12 @@ export function ProposalDetailView({
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
   }, [proposalRecords]);
 
-  // History for this proposal (newest first)
+  // History for this proposal (newest first, excluding general ACTLOG:: entries)
   const proposalHistory = useMemo(() => {
     return historyEntries
       .filter(
         (h) =>
+          !h.registerCode?.startsWith('ACTLOG::') &&
           h.proposalName === proposal.namaProposal &&
           (!h.tahun || h.tahun === proposal.tahun)
       )

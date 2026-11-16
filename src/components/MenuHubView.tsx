@@ -16,6 +16,7 @@ import {
   Eye,
   EyeOff,
   FileSpreadsheet,
+  History,
   Layers,
   Lock,
   MapPin,
@@ -52,9 +53,11 @@ import {
   InternalUserRole,
   InternalUserStatus,
   ItemBantuan,
+  KpmAuditLogEntry,
   KpmDocumentFile,
   KpmRecord,
   PengelolaProfile,
+  ProposalKpmHistoryEntry,
   ProposalRecord,
   UserPermissions,
   WilayahKabKota,
@@ -63,6 +66,7 @@ import {
   capitalizeWords,
   formatNikDisplay,
   formatRupiah,
+  formatUploadDateTime,
   formatWhatsAppUrl,
   getAbsenSeq,
   isArchivedKpm,
@@ -82,6 +86,7 @@ export type MenuSection =
   | 'dtsen'
   | 'pengelola'
   | 'pekerjaan'
+  | 'activity'
   | 'download'
   | 'laporan';
 
@@ -110,6 +115,8 @@ interface MenuHubViewProps {
   wilayahList: WilayahKabKota[];
   pengelolaList: PengelolaProfile[];
   internalUsers: InternalUser[];
+  proposalHistory?: ProposalKpmHistoryEntry[];
+  kpmAuditLogs?: KpmAuditLogEntry[];
   onOpenChat: (peerId?: string) => void;
   onOpenProfile: () => void;
   onCheckAppUpdate?: () => void;
@@ -184,6 +191,8 @@ export function MenuHubView({
   wilayahList,
   pengelolaList,
   internalUsers,
+  proposalHistory = [],
+  kpmAuditLogs = [],
   onOpenChat,
   onOpenProfile,
   onCheckAppUpdate,
@@ -314,6 +323,141 @@ export function MenuHubView({
   const [verifyingSuperAdminPwd, setVerifyingSuperAdminPwd] = useState(false);
   const [pendingResetAction, setPendingResetAction] = useState<AdminDataActionType | null>(null);
   const [isRunningReset, setIsRunningReset] = useState(false);
+
+  // General Activity Log state & unified feed
+  const [activitySearch, setActivitySearch] = useState('');
+  const [activityCategory, setActivityCategory] = useState<'all' | 'proposal' | 'kpm' | 'catalog'>('all');
+  const [activityYear, setActivityYear] = useState<string>('all');
+
+  const unifiedActivityLogs = useMemo(() => {
+    interface ActivityTimelineItem {
+      id: string;
+      category: 'proposal' | 'kpm' | 'catalog';
+      badge: string;
+      tone: 'teal' | 'amber' | 'rose' | 'slate';
+      title: string;
+      detail: string;
+      actorName: string;
+      tahun: string;
+      timestamp: string;
+    }
+
+    const itemsList: ActivityTimelineItem[] = [];
+    const kpmNameById = new Map<string, string>();
+    records.forEach((r) => kpmNameById.set(r.id, r.nama));
+
+    const actLabelMap: Record<
+      string,
+      { badge: string; category: 'proposal' | 'kpm' | 'catalog'; tone: 'teal' | 'amber' | 'rose' | 'slate' }
+    > = {
+      proposal_created: { badge: 'Buat Proposal', category: 'proposal', tone: 'teal' },
+      proposal_updated: { badge: 'Edit Proposal', category: 'proposal', tone: 'slate' },
+      proposal_locked: { badge: 'Kunci Proposal', category: 'proposal', tone: 'amber' },
+      proposal_unlocked: { badge: 'Buka Kunci', category: 'proposal', tone: 'teal' },
+      proposal_deleted: { badge: 'Hapus Proposal', category: 'proposal', tone: 'rose' },
+      kpm_accept_all: { badge: 'Terima Semua KPM', category: 'kpm', tone: 'teal' },
+      kpm_transfer: { badge: 'Transfer KPM', category: 'kpm', tone: 'amber' },
+      csv_imported: { badge: 'Import CSV', category: 'kpm', tone: 'teal' },
+      item_saved: { badge: 'Kelola Item', category: 'catalog', tone: 'teal' },
+      item_deleted: { badge: 'Hapus Item', category: 'catalog', tone: 'rose' },
+      item_reordered: { badge: 'Urutan Item', category: 'catalog', tone: 'slate' },
+      item_subitems: { badge: 'Sub-Item', category: 'catalog', tone: 'slate' },
+      item_copied: { badge: 'Salin Item', category: 'catalog', tone: 'teal' },
+      pengelola_added: { badge: 'Tambah Pengelola', category: 'catalog', tone: 'teal' },
+      pengelola_updated: { badge: 'Edit Pengelola', category: 'catalog', tone: 'slate' },
+      pengelola_deleted: { badge: 'Hapus Pengelola', category: 'catalog', tone: 'rose' },
+      pekerjaan_updated: { badge: 'Edit Pekerjaan', category: 'catalog', tone: 'slate' },
+      pekerjaan_deleted: { badge: 'Hapus Pekerjaan', category: 'catalog', tone: 'rose' },
+      wilayah_updated: { badge: 'Kelola Wilayah', category: 'catalog', tone: 'slate' },
+      admin_reset: { badge: 'Kontrol SuperAdmin', category: 'catalog', tone: 'rose' },
+    };
+
+    for (const h of proposalHistory) {
+      if (h.registerCode?.startsWith('ACTLOG::')) {
+        const key = h.registerCode.slice('ACTLOG::'.length);
+        const meta = actLabelMap[key] ?? {
+          badge: 'Aktivitas Sistem',
+          category: 'catalog',
+          tone: 'slate',
+        };
+        itemsList.push({
+          id: `hist-${h.id}`,
+          category: meta.category,
+          badge: meta.badge,
+          tone: meta.tone,
+          title: h.proposalName || 'Operasional MASDETA',
+          detail: h.kpmName || '-',
+          actorName: h.actorName || 'Petugas Internal',
+          tahun: h.tahun || '',
+          timestamp: h.timestamp,
+        });
+      } else {
+        const badge =
+          h.action === 'moved_in'
+            ? 'KPM Pindah Masuk'
+            : h.action === 'moved_out'
+              ? 'KPM Pindah Keluar'
+              : h.action === 'removed'
+                ? 'Hapus KPM'
+                : 'KPM Masuk Proposal';
+        const tone: 'teal' | 'amber' | 'rose' | 'slate' =
+          h.action === 'removed'
+            ? 'rose'
+            : h.action === 'moved_out'
+              ? 'amber'
+              : 'teal';
+        const detail =
+          h.action === 'moved_in'
+            ? `Pindah dari ${h.fromProposal || '-'} ke ${h.proposalName}`
+            : h.action === 'moved_out'
+              ? `Dipindahkan dari ${h.proposalName} ke ${h.toProposal || '-'}`
+              : h.action === 'removed'
+                ? `Dihapus dari proposal ${h.proposalName}`
+                : `Didaftarkan ke proposal ${h.proposalName}`;
+        itemsList.push({
+          id: `hist-${h.id}`,
+          category: 'kpm',
+          badge,
+          tone,
+          title: h.kpmName || h.registerCode || 'Calon KPM',
+          detail,
+          actorName: h.actorName || 'Petugas Internal',
+          tahun: h.tahun || '',
+          timestamp: h.timestamp,
+        });
+      }
+    }
+
+    for (const a of kpmAuditLogs) {
+      const targetName = kpmNameById.get(a.kpmId) || a.proposal || 'Data KPM';
+      const badge =
+        a.action === 'created'
+          ? 'Tambah KPM'
+          : a.action === 'status_changed'
+            ? 'Verifikasi KPM'
+            : 'Perubahan KPM';
+      const tone: 'teal' | 'amber' | 'rose' | 'slate' =
+        a.action === 'created' ? 'teal' : a.action === 'status_changed' ? 'amber' : 'slate';
+      const changeSummary = a.changes
+        .slice(0, 3)
+        .map((c) => `${c.field}: ${c.before} → ${c.after}`)
+        .join(' · ');
+      const extraCount = a.changes.length > 3 ? ` (+${a.changes.length - 3} lainnya)` : '';
+      itemsList.push({
+        id: `audit-${a.id}`,
+        category: 'kpm',
+        badge,
+        tone,
+        title: `${targetName}${a.proposal ? ` · ${a.proposal}` : ''}`,
+        detail: `${changeSummary || 'Pembaruan data KPM'}${extraCount}`,
+        actorName: a.actorName || 'Petugas Internal',
+        tahun: a.tahun || '',
+        timestamp: a.timestamp,
+      });
+    }
+
+    return itemsList.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+  }, [proposalHistory, kpmAuditLogs, records]);
 
   // Re-lock Kontrol Super Admin whenever navigating away
   useEffect(() => {
@@ -662,8 +806,14 @@ export function MenuHubView({
                 onClick={() => onOpenChat()}
                 className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
               >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-700 text-white">
+                <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-700 text-white">
                   <MessageSquare className="h-5 w-5" />
+                  {unreadChatCount > 0 && (
+                    <span
+                      aria-label={`${unreadChatCount} pesan belum dibaca`}
+                      className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full bg-rose-600 ring-2 ring-white"
+                    />
+                  )}
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
@@ -783,6 +933,23 @@ export function MenuHubView({
                   <p className="text-sm font-semibold text-slate-900">Download</p>
                   <p className="mt-0.5 truncate text-xs text-slate-500">
                     Unduh PDF F4 &amp; ekspor Excel (.xlsx)
+                  </p>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onChangeSection('activity')}
+                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+              >
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+                  <History className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-slate-900">Log Aktivitas Umum</p>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    Rekam pergerakan proposal, KPM &amp; pelaku
                   </p>
                 </div>
                 <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -1256,9 +1423,39 @@ export function MenuHubView({
   // 2. MANAJEMEN USER & AKSES (Kontrol SuperAdmin -> Admin)
   if (activeSection === 'users') {
     const isSuperAdmin = currentUser.role === 'SuperAdmin';
-    const filteredUsers = internalUsers.filter((u) =>
+    const visibleUsers = isSuperAdmin
+      ? internalUsers
+      : internalUsers.filter((u) => u.status !== 'pending');
+    const filteredUsers = visibleUsers.filter((u) =>
       userStatusFilter === 'all' ? true : u.status === userStatusFilter
     );
+
+    const userTabs: Array<{
+      key: 'all' | InternalUserStatus;
+      label: string;
+      count: number;
+    }> = [
+      { key: 'all', label: 'Semua', count: visibleUsers.length },
+      ...(isSuperAdmin
+        ? [
+            {
+              key: 'pending' as const,
+              label: 'Menunggu',
+              count: visibleUsers.filter((u) => u.status === 'pending').length,
+            },
+          ]
+        : []),
+      {
+        key: 'active',
+        label: 'Aktif',
+        count: visibleUsers.filter((u) => u.status === 'active').length,
+      },
+      {
+        key: 'rejected',
+        label: 'Nonaktif',
+        count: visibleUsers.filter((u) => u.status === 'rejected').length,
+      },
+    ];
 
     return (
       <div className="min-h-screen pb-24">
@@ -1301,26 +1498,9 @@ export function MenuHubView({
 
             <SegmentedTabs<'all' | InternalUserStatus>
               className="mt-3"
-              value={userStatusFilter}
+              value={userStatusFilter === 'pending' && !isSuperAdmin ? 'all' : userStatusFilter}
               onChange={setUserStatusFilter}
-              tabs={[
-                { key: 'all', label: 'Semua', count: internalUsers.length },
-                {
-                  key: 'pending',
-                  label: 'Menunggu',
-                  count: internalUsers.filter((u) => u.status === 'pending').length,
-                },
-                {
-                  key: 'active',
-                  label: 'Aktif',
-                  count: internalUsers.filter((u) => u.status === 'active').length,
-                },
-                {
-                  key: 'rejected',
-                  label: 'Nonaktif',
-                  count: internalUsers.filter((u) => u.status === 'rejected').length,
-                },
-              ]}
+              tabs={userTabs}
             />
           </div>
 
@@ -3588,7 +3768,127 @@ export function MenuHubView({
     );
   }
 
-  // 8. DOWNLOAD DATA (PDF F4 & EXCEL)
+  // 8. LOG AKTIVITAS UMUM
+  if (activeSection === 'activity') {
+    const activityYearOptions = Array.from(
+      new Set(unifiedActivityLogs.map((a) => a.tahun).filter(Boolean))
+    ).sort((a, b) => b.localeCompare(a));
+
+    const queryLower = activitySearch.trim().toLowerCase();
+    const filteredActivities = unifiedActivityLogs.filter((entry) => {
+      if (activityCategory !== 'all' && entry.category !== activityCategory) return false;
+      if (activityYear !== 'all' && entry.tahun !== activityYear) return false;
+      if (!queryLower) return true;
+      return (
+        entry.actorName.toLowerCase().includes(queryLower) ||
+        entry.title.toLowerCase().includes(queryLower) ||
+        entry.detail.toLowerCase().includes(queryLower) ||
+        entry.badge.toLowerCase().includes(queryLower)
+      );
+    });
+
+    const toneBadgeClass: Record<'teal' | 'amber' | 'rose' | 'slate', string> = {
+      teal: 'bg-teal-50 text-teal-800 border-teal-200',
+      amber: 'bg-amber-50 text-amber-800 border-amber-200',
+      rose: 'bg-rose-50 text-rose-700 border-rose-200',
+      slate: 'bg-slate-100 text-slate-700 border-slate-200',
+    };
+
+    return (
+      <div className="min-h-screen pb-24">
+        {renderSubHeader('Log Aktivitas Umum', () => onChangeSection('root'))}
+
+        <div className="space-y-4 px-4 pt-4">
+          <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-3.5">
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">Jejak Aktivitas Tim</h2>
+              <p className="mt-0.5 text-xs text-slate-500">
+                Memantau pembuatan/hapus proposal, perubahan KPM, item, dan pelaku.
+              </p>
+            </div>
+
+            <div className="relative">
+              <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                type="search"
+                value={activitySearch}
+                onChange={(e) => setActivitySearch(e.target.value)}
+                placeholder="Cari nama pelaku, proposal, KPM, atau aksi..."
+                className="min-h-[42px] w-full rounded-xl border border-slate-200 bg-slate-50 pr-3 pl-9 text-xs text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:bg-white focus:outline-none"
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex-1 min-w-[200px]">
+                <SegmentedTabs
+                  value={activityCategory}
+                  onChange={(val) => setActivityCategory(val)}
+                  tabs={[
+                    { key: 'all', label: 'Semua' },
+                    { key: 'proposal', label: 'Proposal' },
+                    { key: 'kpm', label: 'KPM' },
+                    { key: 'catalog', label: 'Katalog' },
+                  ]}
+                />
+              </div>
+              {activityYearOptions.length > 0 && (
+                <div className="w-32 shrink-0">
+                  <FilterSelect
+                    ariaLabel="Filter tahun log aktivitas"
+                    value={activityYear}
+                    onChange={setActivityYear}
+                  >
+                    <option value="all">Semua Tahun</option>
+                    {activityYearOptions.map((y) => (
+                      <option key={y} value={y}>
+                        {y}
+                      </option>
+                    ))}
+                  </FilterSelect>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+            {filteredActivities.length === 0 ? (
+              <div className="px-4 py-10 text-center">
+                <History className="mx-auto h-8 w-8 text-slate-300" />
+                <p className="mt-2 text-xs font-medium text-slate-600">
+                  Belum ada aktivitas yang cocok dengan filter.
+                </p>
+              </div>
+            ) : (
+              filteredActivities.slice(0, 200).map((entry) => (
+                <div key={entry.id} className="space-y-1.5 px-4 py-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span
+                      className={`inline-flex items-center rounded-lg border px-2 py-0.5 text-[10px] font-bold ${toneBadgeClass[entry.tone]}`}
+                    >
+                      {entry.badge}
+                    </span>
+                    <span className="text-[10px] font-medium text-slate-400 tabular-nums">
+                      {formatUploadDateTime(entry.timestamp)}
+                    </span>
+                  </div>
+                  <p className="text-xs font-bold text-slate-900">{entry.title}</p>
+                  <p className="text-xs leading-relaxed text-slate-600">{entry.detail}</p>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 pt-0.5 text-[11px] text-slate-500">
+                    <span>
+                      Pelaku: <strong className="font-semibold text-slate-700">{entry.actorName}</strong>
+                    </span>
+                    {entry.tahun && <span>· Tahun {entry.tahun}</span>}
+                  </div>
+                </div>
+              ))
+            )}
+          </section>
+        </div>
+      </div>
+    );
+  }
+
+  // 9. DOWNLOAD DATA (PDF F4 & EXCEL)
   if (activeSection === 'download') {
     return (
       <MenuDownloadView
