@@ -1286,7 +1286,7 @@ jobs:
             -destkeystore android/app/masdeta-release.jks -deststoretype JKS -deststorepass "$PASS" \
             -alias "$ALIAS"
 
-          node -e '
+          node << 'EOF'
             const fs = require("fs");
 
             const manifestPath = "android/app/src/main/AndroidManifest.xml";
@@ -1352,7 +1352,7 @@ jobs:
               gradle = gradle + "\n" + signingAppend;
             }
             fs.writeFileSync(gradlePath, gradle);
-          '
+          EOF
 
       - name: Sync Capacitor Android
         run: npx cap sync android
