@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -367,6 +367,7 @@ export default function App() {
   const [usersOpenedFromSuperAdmin, setUsersOpenedFromSuperAdmin] = useState(false);
   const [selectedPengelolaDrill, setSelectedPengelolaDrill] = useState<string | null>(null);
   const [selectedPekerjaanDrill, setSelectedPekerjaanDrill] = useState<string | null>(null);
+  const [selectedDtsenDrill, setSelectedDtsenDrill] = useState<string | null>(null);
   const [menuOpenedFromDashboard, setMenuOpenedFromDashboard] = useState(false);
   const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
 
@@ -532,6 +533,12 @@ export default function App() {
   const notifiedChatMsgIdsRef = useRef<Set<string>>(new Set());
   const syncIncomingMessagesRef = useRef<() => Promise<void>>(async () => {});
   const openChatViewRef = useRef<(peerId?: string) => void>(() => {});
+  const scrollMemoryRef = useRef<Record<string, number>>({});
+  const activeScrollKeyRef = useRef<string>('tab:dashboard');
+  const prevScrollKeyRef = useRef<string>('tab:dashboard');
+  const pendingScrollModeRef = useRef<'top' | 'top-smooth' | 'restore' | null>(null);
+  const isRestoringScrollRef = useRef<boolean>(false);
+  const prevAuthenticatedRef = useRef<boolean>(false);
 
   kpmBastMapRef.current = kpmBastMap;
 
@@ -2879,6 +2886,140 @@ export default function App() {
     };
   }, []);
 
+  const currentScrollKey = (() => {
+    switch (subView) {
+      case 'none':
+        if (activeTab === 'menu') {
+          if (menuSection === 'pengelola' && selectedPengelolaDrill) {
+            return `menu:pengelola:drill:${selectedPengelolaDrill}`;
+          }
+          if (menuSection === 'pekerjaan' && selectedPekerjaanDrill) {
+            return `menu:pekerjaan:drill:${selectedPekerjaanDrill}`;
+          }
+          if (menuSection === 'dtsen' && selectedDtsenDrill) {
+            return `menu:dtsen:drill:${selectedDtsenDrill}`;
+          }
+          return `menu:${menuSection}`;
+        }
+        return `tab:${activeTab}`;
+      case 'kpm-detail':
+        return `sub:kpm-detail:${activeKpmId ?? ''}`;
+      case 'proposal-detail':
+        return `sub:proposal-detail:${activeProposalId ?? ''}`;
+      case 'chat':
+        return `sub:chat:${activeChatPeerId ?? '__list__'}`;
+      default:
+        return `sub:${subView}`;
+    }
+  })();
+
+  const captureCurrentScroll = () => {
+    const key = activeScrollKeyRef.current;
+    if (key && !pendingScrollModeRef.current && !isRestoringScrollRef.current) {
+      scrollMemoryRef.current[key] =
+        window.scrollY || document.documentElement.scrollTop || 0;
+    }
+  };
+
+  const navigateForwardScroll = (behavior: 'auto' | 'smooth' = 'auto') => {
+    captureCurrentScroll();
+    pendingScrollModeRef.current = behavior === 'smooth' ? 'top-smooth' : 'top';
+  };
+
+  const navigateRestoreScroll = () => {
+    captureCurrentScroll();
+    pendingScrollModeRef.current = 'restore';
+  };
+
+  useEffect(() => {
+    const handleWindowScroll = () => {
+      if (isRestoringScrollRef.current || pendingScrollModeRef.current) return;
+      const key = activeScrollKeyRef.current;
+      if (!key) return;
+      scrollMemoryRef.current[key] =
+        window.scrollY || document.documentElement.scrollTop || 0;
+    };
+    window.addEventListener('scroll', handleWindowScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleWindowScroll);
+  }, []);
+
+  const isUserAuthenticated = Boolean(currentUserIdRef.current || sessionUserId);
+
+  useLayoutEffect(() => {
+    const wasAuth = prevAuthenticatedRef.current;
+    prevAuthenticatedRef.current = isUserAuthenticated;
+
+    if (!isUserAuthenticated) {
+      activeScrollKeyRef.current = currentScrollKey;
+      prevScrollKeyRef.current = currentScrollKey;
+      pendingScrollModeRef.current = null;
+      return;
+    }
+
+    if (!wasAuth) {
+      activeScrollKeyRef.current = currentScrollKey;
+      prevScrollKeyRef.current = currentScrollKey;
+      pendingScrollModeRef.current = null;
+      window.scrollTo({ top: 0, behavior: 'auto' });
+      window.dispatchEvent(new Event('masdeta-scroll-sync'));
+      return;
+    }
+
+    const prevKey = prevScrollKeyRef.current;
+    if (prevKey === currentScrollKey) return;
+    prevScrollKeyRef.current = currentScrollKey;
+
+    const mode = pendingScrollModeRef.current ?? 'restore';
+    pendingScrollModeRef.current = null;
+    activeScrollKeyRef.current = currentScrollKey;
+
+    let targetY = 0;
+    let behavior: ScrollBehavior = 'auto';
+
+    if (mode === 'top') {
+      targetY = 0;
+      scrollMemoryRef.current[currentScrollKey] = 0;
+    } else if (mode === 'top-smooth') {
+      targetY = 0;
+      behavior = 'smooth';
+      scrollMemoryRef.current[currentScrollKey] = 0;
+    } else {
+      targetY = scrollMemoryRef.current[currentScrollKey] ?? 0;
+    }
+
+    isRestoringScrollRef.current = true;
+    window.scrollTo({ top: targetY, behavior });
+
+    let raf1 = 0;
+    let raf2 = 0;
+    let timer = 0;
+
+    if (behavior === 'auto') {
+      raf1 = window.requestAnimationFrame(() => {
+        if (targetY > 0 && Math.abs((window.scrollY || 0) - targetY) > 2) {
+          window.scrollTo({ top: targetY, behavior: 'auto' });
+        }
+        window.dispatchEvent(new Event('masdeta-scroll-sync'));
+        raf2 = window.requestAnimationFrame(() => {
+          isRestoringScrollRef.current = false;
+          window.dispatchEvent(new Event('masdeta-scroll-sync'));
+        });
+      });
+    } else {
+      timer = window.setTimeout(() => {
+        isRestoringScrollRef.current = false;
+        window.dispatchEvent(new Event('masdeta-scroll-sync'));
+      }, 450);
+    }
+
+    return () => {
+      if (raf1) window.cancelAnimationFrame(raf1);
+      if (raf2) window.cancelAnimationFrame(raf2);
+      if (timer) window.clearTimeout(timer);
+      isRestoringScrollRef.current = false;
+    };
+  }, [currentScrollKey, isUserAuthenticated]);
+
   // Tombol Back Android: TERKUNCI saat BottomNav (botnavig) tampil di layar,
   // dan HANYA berfungsi melakukan navigasi kembali jika tidak ada BottomNav di layar.
   const handleAndroidBackRef = useRef<() => void>(() => {});
@@ -2902,25 +3043,26 @@ export default function App() {
     }
 
     if (subView === 'kpm-history') {
+      navigateRestoreScroll();
       setSubView('kpm-detail');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
 
     if (subView === 'proposal-history') {
+      navigateRestoreScroll();
       setSubView('proposal-detail');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
 
     if (subView === 'edit-proposal') {
+      navigateRestoreScroll();
       setFeedback(null);
       setSubView('proposal-detail');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
 
     if (subView === 'add-proposal') {
+      navigateRestoreScroll();
       setFeedback(null);
       if (addProposalFromKpmForm) {
         setAddProposalFromKpmForm(false);
@@ -2929,11 +3071,11 @@ export default function App() {
         setSubView('none');
         setActiveTab(returnToTab);
       }
-      window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
 
     if (subView === 'kpm-form') {
+      navigateRestoreScroll();
       setFeedback(null);
       setEditingKpmRecord(null);
       setLockedKpmProposalScope(null);
@@ -2947,11 +3089,11 @@ export default function App() {
         setSubView('none');
         setActiveTab(returnToTab);
       }
-      window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
 
     if (subView === 'kpm-detail') {
+      navigateRestoreScroll();
       setFeedback(null);
       setActiveKpmId(null);
       if (kpmDetailReturnToChatPeerId) {
@@ -2971,19 +3113,19 @@ export default function App() {
         setSubView('none');
         setActiveTab(returnToTab);
       }
-      window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
 
     if (subView === 'proposal-detail' || subView === 'subitem-recap') {
+      navigateRestoreScroll();
       setFeedback(null);
       setSubView('none');
       setActiveTab(returnToTab);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
 
     if (subView === 'chat') {
+      navigateRestoreScroll();
       if (activeChatPeerId) {
         setActiveChatPeerId(null);
       } else {
@@ -2991,51 +3133,56 @@ export default function App() {
         setSubView('none');
         setActiveTab(returnToTab);
       }
-      window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
 
     if (subView === 'profile') {
+      navigateRestoreScroll();
       setSubView('none');
       setActiveTab(returnToTab);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
 
     if (subView === 'none' && activeTab === 'menu' && menuSection !== 'root') {
       if (menuSection === 'pengelola' && selectedPengelolaDrill) {
+        navigateRestoreScroll();
         setSelectedPengelolaDrill(null);
-        window.scrollTo({ top: 0, behavior: 'smooth' });
         return;
       }
       if (menuSection === 'pekerjaan' && selectedPekerjaanDrill) {
+        navigateRestoreScroll();
         setSelectedPekerjaanDrill(null);
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      }
+      if (menuSection === 'dtsen' && selectedDtsenDrill) {
+        navigateRestoreScroll();
+        setSelectedDtsenDrill(null);
         return;
       }
       if (menuSection === 'users' && usersOpenedFromSuperAdmin) {
+        navigateRestoreScroll();
         setUsersOpenedFromSuperAdmin(false);
         setMenuSection('superadmin');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
         return;
       }
       if (menuSection === 'administrasi' || menuSection === 'sampah') {
+        navigateRestoreScroll();
         setMenuSection('superadmin');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
         return;
       }
       if (menuOpenedFromDashboard) {
+        navigateRestoreScroll();
         setMenuOpenedFromDashboard(false);
         setMenuSection('root');
         setActiveTab('dashboard');
-        window.scrollTo({ top: 0, behavior: 'smooth' });
         return;
       }
+      navigateRestoreScroll();
       setSelectedPengelolaDrill(null);
       setSelectedPekerjaanDrill(null);
+      setSelectedDtsenDrill(null);
       setUsersOpenedFromSuperAdmin(false);
       setMenuSection('root');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
 
@@ -3112,6 +3259,7 @@ export default function App() {
   // Fallback navigasi jika data KPM atau Proposal target terhapus saat sedang dilihat
   useEffect(() => {
     if ((subView === 'kpm-detail' || subView === 'kpm-history') && !activeKpmRecord) {
+      navigateRestoreScroll();
       setActiveKpmId(null);
       setSubView('none');
       setActiveTab(returnToTab);
@@ -3121,6 +3269,7 @@ export default function App() {
         subView === 'edit-proposal') &&
       !activeProposal
     ) {
+      navigateRestoreScroll();
       setActiveProposalId(null);
       setSubView('none');
       setActiveTab(returnToTab);
@@ -3243,6 +3392,7 @@ export default function App() {
     fromRecap = false,
     fromChatPeerId: string | null = null
   ) => {
+    navigateForwardScroll();
     setFeedback(null);
     setReturnToTab(fromTab);
     setKpmDetailReturnToRecap(fromRecap);
@@ -3250,14 +3400,13 @@ export default function App() {
     setKpmDetailReturnToChatPeerId(fromChatPeerId);
     setActiveKpmId(record.id);
     setSubView('kpm-detail');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const openSubItemRecap = (fromTab: MainTab = activeTab) => {
+    navigateForwardScroll();
     setFeedback(null);
     setReturnToTab(fromTab);
     setSubView('subitem-recap');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const openKpmForm = (
@@ -3272,6 +3421,7 @@ export default function App() {
     } else {
       if (!requirePermission('add', 'mendaftarkan calon KPM baru')) return;
     }
+    navigateForwardScroll();
     setFeedback(null);
     setReturnToTab(fromTab);
     setKpmFormReturnToDetail(returnToDetail);
@@ -3279,7 +3429,6 @@ export default function App() {
     setLockedKpmProposalScope(lockedScope);
     setEditingKpmRecord(record);
     setSubView('kpm-form');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const openAddProposalForm = (
@@ -3288,29 +3437,29 @@ export default function App() {
     initialTahun?: string
   ) => {
     if (!requirePermission('add', 'menambah proposal baru')) return;
+    navigateForwardScroll();
     setFeedback(null);
     setReturnToTab(fromTab);
     setAddProposalFromKpmForm(fromKpmForm);
     setAddProposalInitialYear(initialTahun);
     setSubView('add-proposal');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const openProposalDetailById = (proposalId: string, fromTab: MainTab = activeTab) => {
+    navigateForwardScroll();
     setFeedback(null);
     setReturnToTab(fromTab);
     setActiveProposalId(proposalId);
     setSubView('proposal-detail');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const openEditProposalById = (proposalId: string, fromTab: MainTab = returnToTab) => {
     if (!requirePermission('update', 'mengubah data proposal')) return;
+    navigateForwardScroll();
     setFeedback(null);
     setReturnToTab(fromTab);
     setActiveProposalId(proposalId);
     setSubView('edit-proposal');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleOpenProposalDetailByName = (proposalName: string, tahun: string) => {
@@ -3588,8 +3737,10 @@ export default function App() {
         setEditingKpmRecord(null);
         if (kpmFormReturnToDetail && activeKpmId) {
           setKpmFormReturnToDetail(false);
+          navigateForwardScroll('smooth');
           setSubView('kpm-detail');
         } else {
+          navigateForwardScroll('smooth');
           setSubView('none');
           setActiveTab(returnToTab);
         }
@@ -3597,7 +3748,6 @@ export default function App() {
           type: 'success',
           message: `Mode Offline: Perubahan "${values.nama}" disimpan ke antrean & akan disinkronkan saat internet kembali.`,
         });
-        window.scrollTo({ top: 0, behavior: 'smooth' });
         return true;
       }
 
@@ -3615,6 +3765,7 @@ export default function App() {
       setProposalHistory(nextProposalHistory);
       setRecords(nextRecords);
       setEditingKpmRecord(null);
+      navigateForwardScroll('smooth');
       if (kpmFormReturnToDetail && activeKpmId) {
         setKpmFormReturnToDetail(false);
         setSubView('kpm-detail');
@@ -3626,7 +3777,6 @@ export default function App() {
         type: 'success',
         message: `Data calon KPM "${values.nama}" berhasil diperbarui.`,
       });
-      window.scrollTo({ top: 0, behavior: 'smooth' });
       return true;
     }
 
@@ -3724,12 +3874,12 @@ export default function App() {
         setKpmDetailReturnToProposalDetail(false);
         setReturnToTab('kpm');
       }
+      navigateForwardScroll('smooth');
       setSubView('kpm-detail');
       setFeedback({
         type: 'success',
         message: `Mode Offline: "${savedNewRecord.nama}" disimpan ke antrean & akan dikirim saat internet kembali.`,
       });
-      window.scrollTo({ top: 0, behavior: 'smooth' });
       return true;
     }
 
@@ -3759,12 +3909,12 @@ export default function App() {
       setKpmDetailReturnToProposalDetail(false);
       setReturnToTab('kpm');
     }
+    navigateForwardScroll('smooth');
     setSubView('kpm-detail');
     setFeedback({
       type: 'success',
       message: `Calon KPM "${savedNewRecord.nama}" (${savedNewRecord.registerCode}) berhasil disimpan.`,
     });
-    window.scrollTo({ top: 0, behavior: 'smooth' });
     return true;
   };
 
@@ -4962,6 +5112,7 @@ export default function App() {
     }
 
     setSelectedYear(newProposal.tahun);
+    navigateForwardScroll('smooth');
     if (addProposalFromKpmForm) {
       setAddProposalFromKpmForm(false);
       setSubView('kpm-form');
@@ -4976,7 +5127,6 @@ export default function App() {
           ? `Proposal "${newProposal.namaProposal}" (${newProposal.tahun}) disimpan dalam status Terkunci.`
           : `Proposal "${newProposal.namaProposal}" (${newProposal.tahun}) berhasil ditambahkan.`,
     });
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleUpdateProposal = (proposalId: string, values: ProposalFormValues) => {
@@ -5059,12 +5209,12 @@ export default function App() {
       'update'
     );
 
+    navigateForwardScroll('smooth');
     setSubView('proposal-detail');
     setFeedback({
       type: 'success',
       message: `Proposal "${existing.namaProposal}" (${values.tahun}) berhasil diperbarui.`,
     });
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleToggleProposalLock = (proposalId: string) => {
@@ -5638,6 +5788,12 @@ export default function App() {
     wsRef.current?.close();
     wsRef.current = null;
     clearSessionState();
+    scrollMemoryRef.current = {};
+    pendingScrollModeRef.current = null;
+    setSelectedPengelolaDrill(null);
+    setSelectedPekerjaanDrill(null);
+    setSelectedDtsenDrill(null);
+    setMenuSection('root');
     setSubView('none');
     setActiveTab('dashboard');
   };
@@ -6144,6 +6300,7 @@ export default function App() {
   };
 
   const openChatView = (peerId?: string) => {
+    navigateForwardScroll();
     setFeedback(null);
     setIncomingToast(null);
     setReturnToTab(activeTab);
@@ -6152,15 +6309,14 @@ export default function App() {
     if (peerId) {
       void handleMarkChatRead(peerId);
     }
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
   openChatViewRef.current = openChatView;
 
   const openProfileView = () => {
+    navigateForwardScroll();
     setFeedback(null);
     setReturnToTab(activeTab);
     setSubView('profile');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleAcceptAllInProposal = (proposalName: string, tahun: string) => {
@@ -6764,11 +6920,13 @@ export default function App() {
                   prev.map((n) => (n.id === notifId ? { ...n, read: true } : n))
                 );
                 if (action === 'users' && currentUser.role === 'SuperAdmin') {
+                  navigateForwardScroll();
                   setSubView('none');
                   setMenuOpenedFromDashboard(false);
                   setMenuSection('users');
                   setActiveTab('menu');
                 } else if (action === 'proposals') {
+                  navigateForwardScroll();
                   setSubView('none');
                   setActiveTab('proposal');
                 }
@@ -6823,43 +6981,54 @@ export default function App() {
       >
         <div className="mx-auto min-h-screen w-full max-w-md overflow-x-hidden bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm">
         {/* Sub-Views */}
-        {subView === 'chat' && (
-          <ChatView
-            currentUser={currentUser}
-            users={internalUsers}
-            userAliases={currentUserAliases}
-            onSaveUserAlias={handleSaveUserAlias}
-            messages={messagesWithDelivery}
-            records={records}
-            activePeerId={activeChatPeerId}
-            onSelectPeer={(peerId) => {
-              setActiveChatPeerId(peerId);
-              if (peerId) {
-                void handleMarkChatRead(peerId);
-              }
-            }}
-            onSendMessage={handleSendChatMessage}
-            onMarkConversationRead={handleMarkChatRead}
-            onOpenSharedKpm={(kpmId) => {
-              const found = records.find((r) => r.id === kpmId);
-              if (found) {
-                openKpmDetail(found, returnToTab, false, activeChatPeerId || '__list__');
-              } else {
-                setFeedback({
-                  type: 'error',
-                  message: 'Data KPM ini sudah tidak tersedia atau telah dihapus.',
-                });
-              }
-            }}
-            pushPermission={pushPermission}
-            onRequestPushPermission={handleRequestPushPermission}
-            onBack={() => {
-              setActiveChatPeerId(null);
-              setSubView('none');
-              setActiveTab(returnToTab);
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-          />
+        {(subView === 'chat' ||
+          (Boolean(kpmDetailReturnToChatPeerId) &&
+            (subView === 'kpm-detail' ||
+              subView === 'kpm-history' ||
+              subView === 'kpm-form'))) && (
+          <div className={subView === 'chat' ? '' : 'hidden'}>
+            <ChatView
+              currentUser={currentUser}
+              users={internalUsers}
+              userAliases={currentUserAliases}
+              onSaveUserAlias={handleSaveUserAlias}
+              messages={messagesWithDelivery}
+              records={records}
+              activePeerId={activeChatPeerId}
+              onSelectPeer={(peerId) => {
+                if (peerId) {
+                  navigateForwardScroll();
+                } else {
+                  navigateRestoreScroll();
+                }
+                setActiveChatPeerId(peerId);
+                if (peerId) {
+                  void handleMarkChatRead(peerId);
+                }
+              }}
+              onSendMessage={handleSendChatMessage}
+              onMarkConversationRead={handleMarkChatRead}
+              onOpenSharedKpm={(kpmId) => {
+                const found = records.find((r) => r.id === kpmId);
+                if (found) {
+                  openKpmDetail(found, returnToTab, false, activeChatPeerId || '__list__');
+                } else {
+                  setFeedback({
+                    type: 'error',
+                    message: 'Data KPM ini sudah tidak tersedia atau telah dihapus.',
+                  });
+                }
+              }}
+              pushPermission={pushPermission}
+              onRequestPushPermission={handleRequestPushPermission}
+              onBack={() => {
+                navigateRestoreScroll();
+                setActiveChatPeerId(null);
+                setSubView('none');
+                setActiveTab(returnToTab);
+              }}
+            />
+          </div>
         )}
 
         {subView === 'profile' && (
@@ -6874,9 +7043,9 @@ export default function App() {
             onCheckAppUpdate={() => void handleManualCheckAppUpdate()}
             checkingAppUpdate={checkingAppUpdate}
             onBack={() => {
+              navigateRestoreScroll();
               setSubView('none');
               setActiveTab(returnToTab);
-              window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
           />
         )}
@@ -6897,6 +7066,7 @@ export default function App() {
             feedback={feedback}
             onDismissFeedback={() => setFeedback(null)}
             onBack={() => {
+              navigateRestoreScroll();
               setFeedback(null);
               setActiveKpmId(null);
               if (kpmDetailReturnToChatPeerId) {
@@ -6916,7 +7086,6 @@ export default function App() {
                 setSubView('none');
                 setActiveTab(returnToTab);
               }
-              window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onEditRecord={(rec) => openKpmForm(rec, returnToTab, true)}
             onDeleteRecord={handleDeleteKpm}
@@ -6925,15 +7094,15 @@ export default function App() {
             onMarkAllSubItemsDelivered={handleMarkAllSubItemsDelivered}
             onShareToChat={handleShareKpmToChat}
             onSelectDuplicateRecord={(dup) => {
+              navigateForwardScroll();
               setActiveKpmId(dup.id);
-              window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onOpenProposal={(proposalName, tahun) =>
               handleOpenProposalDetailByName(proposalName, tahun)
             }
             onOpenFullHistory={() => {
+              navigateForwardScroll();
               setSubView('kpm-history');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
             onUpdateKpmDocuments={handleUpdateKpmDocuments}
@@ -6948,26 +7117,32 @@ export default function App() {
             record={activeKpmRecord}
             kpmAuditLogs={kpmAuditLogs.filter((l) => l.kpmId === activeKpmRecord.id)}
             onBack={() => {
+              navigateRestoreScroll();
               setSubView('kpm-detail');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
           />
         )}
 
-        {subView === 'subitem-recap' && (
-          <SubItemRecapView
-            records={records}
-            items={items}
-            selectedYear={selectedYear}
-            onChangeYear={setSelectedYear}
-            onBack={() => {
-              setFeedback(null);
-              setSubView('none');
-              setActiveTab(returnToTab);
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            onSelectKpm={(rec) => openKpmDetail(rec, returnToTab, true)}
-          />
+        {(subView === 'subitem-recap' ||
+          (kpmDetailReturnToRecap &&
+            (subView === 'kpm-detail' ||
+              subView === 'kpm-history' ||
+              subView === 'kpm-form'))) && (
+          <div className={subView === 'subitem-recap' ? '' : 'hidden'}>
+            <SubItemRecapView
+              records={records}
+              items={items}
+              selectedYear={selectedYear}
+              onChangeYear={setSelectedYear}
+              onBack={() => {
+                navigateRestoreScroll();
+                setFeedback(null);
+                setSubView('none');
+                setActiveTab(returnToTab);
+              }}
+              onSelectKpm={(rec) => openKpmDetail(rec, returnToTab, true)}
+            />
+          </div>
         )}
 
         {(subView === 'kpm-form' || (subView === 'add-proposal' && addProposalFromKpmForm)) && (
@@ -6987,6 +7162,7 @@ export default function App() {
               lockedProposalScope={lockedKpmProposalScope}
               onClearPreselectedProposal={() => setPendingSelectedProposal(null)}
               onBack={() => {
+                navigateRestoreScroll();
                 setFeedback(null);
                 setEditingKpmRecord(null);
                 setLockedKpmProposalScope(null);
@@ -7000,7 +7176,6 @@ export default function App() {
                   setSubView('none');
                   setActiveTab(returnToTab);
                 }
-                window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
               onOpenAddProposal={(selectedYr) => openAddProposalForm('kpm', true, selectedYr)}
               onCreatePengelola={handleCreatePengelola}
@@ -7009,6 +7184,7 @@ export default function App() {
               onSave={handleSaveKpm}
               onQuickSyncKpmDocuments={handleQuickSyncKpmDocuments}
               onCancelEdit={() => {
+                navigateRestoreScroll();
                 setEditingKpmRecord(null);
                 setLockedKpmProposalScope(null);
                 if (kpmFormReturnToDetail && activeKpmId) {
@@ -7034,6 +7210,7 @@ export default function App() {
             yearOptions={allKnownYears}
             initialTahun={addProposalInitialYear}
             onBack={() => {
+              navigateRestoreScroll();
               setFeedback(null);
               if (addProposalFromKpmForm) {
                 setAddProposalFromKpmForm(false);
@@ -7042,7 +7219,6 @@ export default function App() {
                 setSubView('none');
                 setActiveTab(returnToTab);
               }
-              window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onSaveNewProposal={handleCreateProposal}
           />
@@ -7058,10 +7234,10 @@ export default function App() {
             canAdd={hasPermission('add')}
             canUpdate={hasPermission('update')}
             onBack={() => {
+              navigateRestoreScroll();
               setFeedback(null);
               setSubView('none');
               setActiveTab(returnToTab);
-              window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onEditProposal={(id) => openEditProposalById(id, returnToTab)}
             onAddKpmInProposal={(proposalName, tahun) => {
@@ -7071,6 +7247,7 @@ export default function App() {
               });
             }}
             onViewKpmInProposal={(proposalName, tahun) => {
+              navigateForwardScroll();
               setSelectedYear(tahun);
               setKpmStatusFilter('all');
               setKpmItemFilter('all');
@@ -7078,13 +7255,12 @@ export default function App() {
               setKpmOpenedFromProposalDetail(true);
               setSubView('none');
               setActiveTab('kpm');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onAcceptAllKpm={handleAcceptAllInProposal}
             onTransferKpm={handleTransferProposalKpms}
             onOpenFullHistory={() => {
+              navigateForwardScroll();
               setSubView('proposal-history');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
             onUpdateProposalDocuments={handleQuickSyncProposalDocuments}
@@ -7101,8 +7277,8 @@ export default function App() {
                 (!h.tahun || h.tahun === activeProposal.tahun)
             )}
             onBack={() => {
+              navigateRestoreScroll();
               setSubView('proposal-detail');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
           />
         )}
@@ -7115,9 +7291,9 @@ export default function App() {
             feedback={feedback}
             onDismissFeedback={() => setFeedback(null)}
             onBack={() => {
+              navigateRestoreScroll();
               setFeedback(null);
               setSubView('proposal-detail');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onSaveProposal={handleUpdateProposal}
             onQuickSyncProposalDocuments={handleQuickSyncProposalDocuments}
@@ -7126,8 +7302,8 @@ export default function App() {
           />
         )}
 
-        {/* Top-Level Main Tabs */}
-        {subView === 'none' && activeTab === 'dashboard' && (
+        {/* Top-Level Main Tabs (kept mounted so scroll position, pagination & local filters persist across sub-views) */}
+        <div className={subView === 'none' && activeTab === 'dashboard' ? '' : 'hidden'}>
           <DashboardView
             logo={<MasdetaLogo />}
             currentUser={currentUser}
@@ -7166,58 +7342,58 @@ export default function App() {
             onSyncOfflineQueue={() => void handleFlushOfflineQueue()}
             schedules={schedules}
             onOpenSchedules={() => {
+              navigateForwardScroll();
               setMenuOpenedFromDashboard(true);
               setMenuSection('jadwal');
               setActiveTab('menu');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onOpenChat={() => openChatView()}
             onOpenProfile={openProfileView}
             onLogout={handleLogout}
             onOpenKpmList={(filter) => {
+              navigateForwardScroll();
               setKpmStatusFilter(filter?.status ?? 'all');
               setKpmItemFilter(filter?.item ?? 'all');
               setKpmProposalFilter('all');
               setKpmOpenedFromProposalDetail(false);
               setActiveTab('kpm');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onOpenKpmDetail={(rec) => openKpmDetail(rec, 'dashboard')}
             onOpenSubItemRecap={() => openSubItemRecap('dashboard')}
             onOpenProposalList={() => {
+              navigateForwardScroll();
               setActiveTab('proposal');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onOpenProposalDetail={(id) => openProposalDetailById(id, 'dashboard')}
             onOpenAddProposal={() => openAddProposalForm('dashboard')}
             onOpenUserApproval={() => {
+              navigateForwardScroll();
               setMenuOpenedFromDashboard(true);
               setMenuSection('users');
               setActiveTab('menu');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onOpenDuplicateCheck={() => {
+              navigateForwardScroll();
               setMenuOpenedFromDashboard(true);
               setMenuSection('duplikasi');
               setActiveTab('menu');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onOpenArsip={() => {
+              navigateForwardScroll();
               setMenuOpenedFromDashboard(true);
               setMenuSection('arsip');
               setActiveTab('menu');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onOpenDtsen={() => {
+              navigateForwardScroll();
               setMenuOpenedFromDashboard(true);
               setMenuSection('dtsen');
               setActiveTab('menu');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
           />
-        )}
+        </div>
 
-        {subView === 'none' && activeTab === 'kpm' && (
+        <div className={subView === 'none' && activeTab === 'kpm' ? '' : 'hidden'}>
           <KpmListView
             records={records}
             proposals={proposals}
@@ -7235,22 +7411,22 @@ export default function App() {
             canDelete={hasPermission('delete')}
             isLoading={isOperationalLoading}
             onBack={() => {
+              navigateRestoreScroll();
               if (kpmOpenedFromProposalDetail && activeProposal) {
                 setKpmOpenedFromProposalDetail(false);
                 setSubView('proposal-detail');
               } else {
                 setActiveTab('dashboard');
               }
-              window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onCreateNew={() => openKpmForm(null, 'kpm')}
             onSelectRecord={(rec) => openKpmDetail(rec, 'kpm')}
             onDeleteRecord={handleDeleteKpm}
             onBulkUpdateKpms={handleBulkUpdateKpms}
           />
-        )}
+        </div>
 
-        {subView === 'none' && activeTab === 'proposal' && (
+        <div className={subView === 'none' && activeTab === 'proposal' ? '' : 'hidden'}>
           <ProposalListView
             proposals={proposals}
             records={records}
@@ -7265,14 +7441,27 @@ export default function App() {
             onBulkSetProposalLock={handleBulkSetProposalLock}
             onDeleteProposal={handleDeleteProposal}
           />
-        )}
+        </div>
 
-        {subView === 'none' && activeTab === 'menu' && (
+        <div className={subView === 'none' && activeTab === 'menu' ? '' : 'hidden'}>
           <MenuHubView
             activeSection={menuSection}
             onChangeSection={(section) => {
+              if (section === 'root') {
+                navigateRestoreScroll();
+              } else if (
+                section === 'superadmin' &&
+                (menuSection === 'users' ||
+                  menuSection === 'administrasi' ||
+                  menuSection === 'sampah')
+              ) {
+                navigateRestoreScroll();
+              } else {
+                navigateForwardScroll();
+              }
               setSelectedPengelolaDrill(null);
               setSelectedPekerjaanDrill(null);
+              setSelectedDtsenDrill(null);
               if (section !== 'users' && section !== 'superadmin') {
                 setUsersOpenedFromSuperAdmin(false);
               }
@@ -7280,15 +7469,37 @@ export default function App() {
                 setMenuOpenedFromDashboard(false);
                 setMenuSection('root');
                 setActiveTab('dashboard');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
                 return;
               }
               setMenuSection(section);
             }}
             selectedPengelolaDrill={selectedPengelolaDrill}
-            onSelectPengelolaDrill={setSelectedPengelolaDrill}
+            onSelectPengelolaDrill={(name) => {
+              if (name) {
+                navigateForwardScroll();
+              } else {
+                navigateRestoreScroll();
+              }
+              setSelectedPengelolaDrill(name);
+            }}
             selectedPekerjaanDrill={selectedPekerjaanDrill}
-            onSelectPekerjaanDrill={setSelectedPekerjaanDrill}
+            onSelectPekerjaanDrill={(name) => {
+              if (name) {
+                navigateForwardScroll();
+              } else {
+                navigateRestoreScroll();
+              }
+              setSelectedPekerjaanDrill(name);
+            }}
+            selectedDtsenDrill={selectedDtsenDrill}
+            onSelectDtsenDrill={(val) => {
+              if (val) {
+                navigateForwardScroll();
+              } else {
+                navigateRestoreScroll();
+              }
+              setSelectedDtsenDrill(val);
+            }}
             usersOpenedFromSuperAdmin={usersOpenedFromSuperAdmin}
             onChangeUsersOpenedFromSuperAdmin={setUsersOpenedFromSuperAdmin}
             currentUser={currentUser}
@@ -7363,7 +7574,7 @@ export default function App() {
             reportTemplate={reportTemplate}
             onSaveReportTemplate={handleSaveReportTemplate}
           />
-        )}
+        </div>
         </div>
       </PullToRefresh>
 
@@ -7384,14 +7595,23 @@ export default function App() {
           onSelectTab={(tab) => {
             setFeedback(null);
             setMenuOpenedFromDashboard(false);
+            const isSameActiveRootTab =
+              subView === 'none' &&
+              activeTab === tab &&
+              !(tab === 'menu' && menuSection !== 'root');
+            if (isSameActiveRootTab) {
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+              return;
+            }
+            navigateRestoreScroll();
             if (tab === 'menu') {
               setMenuSection('root');
               setUsersOpenedFromSuperAdmin(false);
               setSelectedPengelolaDrill(null);
               setSelectedPekerjaanDrill(null);
+              setSelectedDtsenDrill(null);
             }
             setActiveTab(tab);
-            window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
           onOpenQuickAdd={() => {
             if (!requirePermission('add', 'menambah data KPM atau proposal baru')) return;

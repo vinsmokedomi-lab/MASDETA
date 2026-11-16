@@ -26,9 +26,11 @@ export function ScrollToTopButton({
     updateVisibility();
     window.addEventListener('scroll', updateVisibility, { passive: true });
     window.addEventListener('resize', updateVisibility, { passive: true });
+    window.addEventListener('masdeta-scroll-sync', updateVisibility);
     return () => {
       window.removeEventListener('scroll', updateVisibility);
       window.removeEventListener('resize', updateVisibility);
+      window.removeEventListener('masdeta-scroll-sync', updateVisibility);
     };
   }, []);
 

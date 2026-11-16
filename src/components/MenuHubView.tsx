@@ -119,6 +119,8 @@ interface MenuHubViewProps {
   onSelectPengelolaDrill?: (name: string | null) => void;
   selectedPekerjaanDrill?: string | null;
   onSelectPekerjaanDrill?: (name: string | null) => void;
+  selectedDtsenDrill?: string | null;
+  onSelectDtsenDrill?: (value: string | null) => void;
   usersOpenedFromSuperAdmin?: boolean;
   onChangeUsersOpenedFromSuperAdmin?: (value: boolean) => void;
   currentUser: InternalUser;
@@ -216,6 +218,8 @@ export function MenuHubView({
   onSelectPengelolaDrill,
   selectedPekerjaanDrill,
   onSelectPekerjaanDrill,
+  selectedDtsenDrill,
+  onSelectDtsenDrill,
   usersOpenedFromSuperAdmin: controlledUsersFromSuperAdmin,
   onChangeUsersOpenedFromSuperAdmin,
   currentUser,
@@ -296,10 +300,11 @@ export function MenuHubView({
   const [newKecamatanByKab, setNewKecamatanByKab] = useState<Record<string, string>>({});
   const [newKelurahanByKec, setNewKelurahanByKec] = useState<Record<string, string>>({});
 
-  // Pengelola & Pekerjaan drill-down state (lifted when provided)
+  // Pengelola, Pekerjaan & DTSEN drill-down state (lifted when provided)
   const [isAddPengelolaOpen, setIsAddPengelolaOpen] = useState(false);
   const [localPengelolaDrill, setLocalPengelolaDrill] = useState<string | null>(null);
   const [localPekerjaanDrill, setLocalPekerjaanDrill] = useState<string | null>(null);
+  const [localDtsenDrill, setLocalDtsenDrill] = useState<string | null>(null);
   const activePengelolaDrill =
     selectedPengelolaDrill !== undefined ? selectedPengelolaDrill : localPengelolaDrill;
   const setPengelolaDrill = (name: string | null) => {
@@ -308,7 +313,6 @@ export function MenuHubView({
     } else {
       setLocalPengelolaDrill(name);
     }
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
   const activePekerjaanDrill =
     selectedPekerjaanDrill !== undefined ? selectedPekerjaanDrill : localPekerjaanDrill;
@@ -318,7 +322,14 @@ export function MenuHubView({
     } else {
       setLocalPekerjaanDrill(name);
     }
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  const dtsenDrill = selectedDtsenDrill !== undefined ? selectedDtsenDrill : localDtsenDrill;
+  const setDtsenDrill = (value: string | null) => {
+    if (onSelectDtsenDrill) {
+      onSelectDtsenDrill(value);
+    } else {
+      setLocalDtsenDrill(value);
+    }
   };
 
   // Internal User creation form (SuperAdmin adds active user with password)
@@ -533,15 +544,14 @@ export function MenuHubView({
       setSuperAdminPwdError(null);
       setShowSuperAdminPwd(false);
     }
-    if (activeSection !== 'dtsen') {
+    if (activeSection !== 'dtsen' && dtsenDrill !== null) {
       setDtsenDrill(null);
     }
     if (activeSection !== 'duplikasi') {
       setDuplikasiYearFilter(selectedYear || 'all');
     }
-  }, [activeSection, usersOpenedFromSuperAdmin, selectedYear]);
+  }, [activeSection, usersOpenedFromSuperAdmin, selectedYear, dtsenDrill]);
 
-  const [dtsenDrill, setDtsenDrill] = useState<string | null>(null);
   const [duplikasiYearFilter, setDuplikasiYearFilter] = useState<string>(selectedYear || 'all');
   const seenDuplicatesStorageKey = useMemo(
     () => `masdeta_seen_duplicates_v1_${currentUser.id}`,
