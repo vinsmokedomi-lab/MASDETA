@@ -1,11 +1,7 @@
-Pembaruan Resmi MASDETA:
+Pembaruan Resmi MASDETA v1.1.2:
 
-- Scan KTP & KK Otomatis: Unggah foto KTP dan KK saat pendaftaran KPM untuk mengisi data formulir secara otomatis.
-- Deteksi Duplikasi NIK / KK Lintas Tahun: Pengecekan NIK KTP & Nomor KK ganda lintas tahun anggaran dengan hitungan akurat, serta dot merah & angka duplikasi otomatis hilang setelah menu Duplikasi dibuka (muncul lagi jika ada duplikasi baru).
-- Status Aktif & Centang Chat Real-Time: Penanda kontak "Sedang aktif", centang 1 (terkirim), centang 2 (masuk), dan centang 2 biru (dibaca), serta perbaikan error chat.
-- Notifikasi Chat Android: Perbaikan notifikasi latar belakang, layar terkunci, suara masuk, serta ikon notifikasi resmi MASDETA.
-- Ubah Nama Pribadi User: Pengguna bisa mengganti nama tampilan kontak atau akun lain khusus untuk pemakaian pribadi tanpa mengubah nama asli akun.
-- Penanda Dot Merah Lengkap: Indikator dot merah berjenjang dari Menu ke Kontrol Super Admin, Kelola Akun Admin, hingga tab Menunggu serta menu Duplikasi, Jadwal, Pembaruan, dan Tempat Sampah.
-- Keamanan Reset Sistem SuperAdmin: Seluruh aksi hapus massal & reset sistem kini mewajibkan konfirmasi ganda dengan verifikasi kata sandi SuperAdmin.
-- Catatan Pembaruan & Versi Baru: Container Catatan Pembaruan kini mendukung scroll ke bawah dengan format rapi dan sistem versi naik ke v1.1.x.
-- PDF Detail KPM: Menghapus bagian Biaya Administrasi dari hasil unduhan PDF detail KPM.
+- **Notifikasi Pendaftaran Khusus SuperAdmin**: Notifikasi pendaftar akun baru hanya dikirim ke SuperAdmin agar Admin lain tidak menerima notifikasi yang tidak relevan.
+- **Notifikasi Proposal Dihapus**: Seluruh SuperAdmin, Admin, dan Viewer menerima notifikasi saat ada proposal dihapus beserta tombol tutup pesan (X).
+- **Presensi Aktif Lebih Presisi**: Status "Sedang Aktif", "Idle", dan "Tidak Aktif" kini lebih responsif mengikuti interaksi pengguna serta saat aplikasi ditutup atau layar dikunci.
+- **Menu Riwayat Pembaruan (Changelog)**: Tersedia menu baru di halaman Menu untuk melihat histori fitur lengkap mulai v1.0.0 hingga v1.1.2.
+- **Catatan Pembaruan Ringkas**: Kotak Catatan Pembaruan kini fokus menampilkan catatan rilis versi terbaru saja.

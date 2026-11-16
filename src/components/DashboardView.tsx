@@ -179,19 +179,11 @@ export function DashboardView({
     const pending = filteredRecords.filter((r) => r.validasi === 'pending').length;
     const rejected = filteredRecords.filter((r) => r.validasi === 'rejected').length;
     const total = filteredRecords.length;
-    const acceptanceRate = total > 0 ? Math.round((accepted / total) * 100) : 0;
-    const acceptedPct = total > 0 ? (accepted / total) * 100 : 0;
-    const pendingPct = total > 0 ? (pending / total) * 100 : 0;
-    const rejectedPct = total > 0 ? (rejected / total) * 100 : 0;
     return {
       accepted,
       pending,
       rejected,
       total,
-      acceptanceRate,
-      acceptedPct,
-      pendingPct,
-      rejectedPct,
     };
   }, [filteredRecords]);
 
@@ -276,7 +268,6 @@ export function DashboardView({
       const acceptedCount = propRecords.filter((r) => r.validasi === 'accepted').length;
       const pendingCount = propRecords.filter((r) => r.validasi === 'pending').length;
       const target = prop.jumlahKpm ?? 66;
-      const fillPct = target > 0 ? Math.min(100, Math.round((propRecords.length / target) * 100)) : 0;
       const checklistDone = [
         prop.checklist.docx,
         prop.checklist.rt,
@@ -294,7 +285,6 @@ export function DashboardView({
         acceptedCount,
         pendingCount,
         target,
-        fillPct,
         checklistDone,
       };
     });
@@ -724,7 +714,7 @@ export function DashboardView({
 
         {isLoading && records.length === 0 ? (
           <div className="space-y-4 animate-pulse">
-            <div className="h-48 rounded-3xl bg-slate-200" />
+            <div className="h-44 rounded-3xl bg-slate-200" />
             <div className="grid grid-cols-2 gap-3">
               <div className="h-24 rounded-2xl bg-slate-200" />
               <div className="h-24 rounded-2xl bg-slate-200" />
@@ -734,12 +724,12 @@ export function DashboardView({
         ) : (
           <>
         {/* 1. EXECUTIVE COMMAND HERO */}
-        <section className="rounded-3xl bg-slate-900 p-5 text-white">
+        <section className="rounded-3xl bg-[#29384D] p-5 text-white">
           <div className="min-w-0">
             <p className="break-words text-lg leading-snug font-bold tracking-tight text-white">
               Halo, {currentUser.nama}
             </p>
-            <p className="mt-0.5 text-xs font-medium text-slate-400">
+            <p className="mt-0.5 text-xs font-medium text-slate-300">
               {currentUser.role}
             </p>
           </div>
@@ -750,7 +740,7 @@ export function DashboardView({
               onClick={() => onOpenKpmList({ status: 'all' })}
               className="min-w-0 flex-1 text-left transition-opacity hover:opacity-90"
             >
-              <p className="text-xs font-medium text-slate-400">
+              <p className="text-xs font-medium text-slate-300">
                 Total KPM
               </p>
               <p className="mt-1 text-3xl font-bold tracking-tight tabular-nums">
@@ -758,7 +748,7 @@ export function DashboardView({
               </p>
             </button>
 
-            <div className="relative inline-flex min-h-[44px] min-w-[104px] shrink-0 items-center rounded-xl border border-white/50 bg-white/15 transition-colors hover:border-white/75 hover:bg-white/20">
+            <div className="relative inline-flex min-h-[44px] min-w-[104px] shrink-0 items-center rounded-xl border border-white/40 bg-white/12 transition-colors hover:border-white/65 hover:bg-white/18">
               <select
                 aria-label="Pilih tahun anggaran"
                 value={selectedYear}
@@ -778,22 +768,14 @@ export function DashboardView({
             </div>
           </div>
 
-          {/* Acceptance Ratio Bar */}
-          <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-slate-800">
-            <div
-              className="h-full rounded-full bg-teal-400 transition-all duration-300"
-              style={{ width: `${kpmStats.acceptanceRate}%` }}
-            />
-          </div>
-
           {/* 4-Column Quick Status Strip */}
-          <div className="mt-4 grid grid-cols-4 divide-x divide-slate-800 border-t border-slate-800 pt-3.5">
+          <div className="mt-4 grid grid-cols-4 divide-x divide-white/15 border-t border-white/15 pt-3.5">
             <button
               type="button"
               onClick={() => onOpenKpmList({ status: 'accepted' })}
               className="px-2 text-center transition-opacity hover:opacity-80"
             >
-              <p className="text-[11px] text-slate-400">Diterima</p>
+              <p className="text-[11px] text-slate-300">Diterima</p>
               <p className="mt-0.5 text-base font-bold text-teal-300 tabular-nums">
                 {kpmStats.accepted}
               </p>
@@ -804,7 +786,7 @@ export function DashboardView({
               onClick={() => onOpenKpmList({ status: 'pending' })}
               className="px-2 text-center transition-opacity hover:opacity-80"
             >
-              <p className="text-[11px] text-slate-400">Menunggu</p>
+              <p className="text-[11px] text-slate-300">Menunggu</p>
               <p className="mt-0.5 text-base font-bold text-amber-300 tabular-nums">
                 {kpmStats.pending}
               </p>
@@ -815,7 +797,7 @@ export function DashboardView({
               onClick={() => onOpenKpmList({ status: 'rejected' })}
               className="px-2 text-center transition-opacity hover:opacity-80"
             >
-              <p className="text-[11px] text-slate-400">Ditolak</p>
+              <p className="text-[11px] text-slate-300">Ditolak</p>
               <p className="mt-0.5 text-base font-bold text-rose-300 tabular-nums">
                 {kpmStats.rejected}
               </p>
@@ -826,7 +808,7 @@ export function DashboardView({
               onClick={() => onOpenProposalList?.()}
               className="px-2 text-center transition-opacity hover:opacity-80"
             >
-              <p className="text-[11px] text-slate-400">Proposal</p>
+              <p className="text-[11px] text-slate-300">Proposal</p>
               <p className="mt-0.5 text-base font-bold text-white tabular-nums">
                 {filteredProposals.length}
               </p>
@@ -905,23 +887,34 @@ export function DashboardView({
         {/* 3. PERLU TINDAKAN / PENGINGAT OPERASIONAL */}
         {hasAttentionItems && (
           <section>
-            <h2 className="mb-2 px-0.5 text-sm font-bold text-slate-900">Perlu Tindakan</h2>
+            <div className="mb-2 flex items-center justify-between px-0.5">
+              <h2 className="text-sm font-bold text-slate-900">Perlu Tindakan</h2>
+              <span className="text-xs font-medium text-slate-500">Tindak lanjut cepat</span>
+            </div>
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
               {currentUser.role === 'SuperAdmin' && pendingUsersCount > 0 && (
                 <button
                   type="button"
                   onClick={onOpenUserApproval}
-                  className="flex min-h-[50px] w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-slate-50"
+                  className="flex min-h-[58px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
                 >
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
                     <UserCheck className="h-4 w-4" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs font-medium text-slate-900">
-                      {pendingUsersCount} pendaftar user menunggu persetujuan
+                    <p className="truncate text-xs font-semibold text-slate-900">
+                      Pendaftar User Menunggu Persetujuan
+                    </p>
+                    <p className="mt-0.5 truncate text-[11px] text-slate-500">
+                      Tinjau akun baru pada Kontrol SuperAdmin
                     </p>
                   </div>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <span className="text-xs font-bold text-amber-700 tabular-nums">
+                      {pendingUsersCount}
+                    </span>
+                    <ChevronRight className="h-4 w-4 text-slate-400" />
+                  </div>
                 </button>
               )}
 
@@ -929,17 +922,25 @@ export function DashboardView({
                 <button
                   type="button"
                   onClick={onOpenDuplicateCheck}
-                  className="flex min-h-[50px] w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-slate-50"
+                  className="flex min-h-[58px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
                 >
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
                     <AlertTriangle className="h-4 w-4" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs font-medium text-slate-900">
-                      Terdeteksi {duplicateNikCount} duplikasi NIK / KK
+                    <p className="truncate text-xs font-semibold text-slate-900">
+                      Duplikasi NIK / KK Terdeteksi
+                    </p>
+                    <p className="mt-0.5 truncate text-[11px] text-slate-500">
+                      Periksa kesamaan data lintas tahun anggaran
                     </p>
                   </div>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <span className="text-xs font-bold text-rose-600 tabular-nums">
+                      {duplicateNikCount}
+                    </span>
+                    <ChevronRight className="h-4 w-4 text-slate-400" />
+                  </div>
                 </button>
               )}
 
@@ -947,17 +948,25 @@ export function DashboardView({
                 <button
                   type="button"
                   onClick={() => onOpenKpmList({ status: 'all', item: '__missing__' })}
-                  className="flex min-h-[50px] w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-slate-50"
+                  className="flex min-h-[58px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
                 >
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
                     <Package className="h-4 w-4" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs font-medium text-slate-900">
-                      {missingItemCount} KPM belum memiliki item
+                    <p className="truncate text-xs font-semibold text-slate-900">
+                      KPM Belum Memiliki Item Bantuan
+                    </p>
+                    <p className="mt-0.5 truncate text-[11px] text-slate-500">
+                      Lengkapi penetapan paket bantuan penerima
                     </p>
                   </div>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <span className="text-xs font-bold text-amber-700 tabular-nums">
+                      {missingItemCount}
+                    </span>
+                    <ChevronRight className="h-4 w-4 text-slate-400" />
+                  </div>
                 </button>
               )}
 
@@ -971,19 +980,29 @@ export function DashboardView({
                       onOpenProposalList?.();
                     }
                   }}
-                  className="flex min-h-[50px] w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-slate-50"
+                  className="flex min-h-[58px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
                 >
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
                     <ClipboardList className="h-4 w-4" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs font-medium text-slate-900">
+                    <p className="truncate text-xs font-semibold text-slate-900">
                       {incompleteQuotaProposals.length === 1
-                        ? `Proposal ${incompleteQuotaProposals[0].namaProposal} belum penuh (${incompleteQuotaProposals[0].totalKpm}/${incompleteQuotaProposals[0].target})`
-                        : `${incompleteQuotaProposals.length} proposal belum terisi penuh`}
+                        ? `Proposal ${incompleteQuotaProposals[0].namaProposal}`
+                        : 'Proposal Belum Terisi Penuh'}
+                    </p>
+                    <p className="mt-0.5 truncate text-[11px] text-slate-500 tabular-nums">
+                      {incompleteQuotaProposals.length === 1
+                        ? `Terisi ${incompleteQuotaProposals[0].totalKpm} dari ${incompleteQuotaProposals[0].target} kuota KPM`
+                        : 'Kuota calon KPM masih di bawah target'}
                     </p>
                   </div>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <span className="text-xs font-bold text-amber-700 tabular-nums">
+                      {incompleteQuotaProposals.length}
+                    </span>
+                    <ChevronRight className="h-4 w-4 text-slate-400" />
+                  </div>
                 </button>
               )}
 
@@ -991,17 +1010,25 @@ export function DashboardView({
                 <button
                   type="button"
                   onClick={() => onOpenProposalList?.()}
-                  className="flex min-h-[50px] w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-slate-50"
+                  className="flex min-h-[58px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
                 >
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
                     <FileCheck2 className="h-4 w-4" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs font-medium text-slate-900">
-                      {attentionCounts.pendingDinas} proposal belum diantar ke Dinas
+                    <p className="truncate text-xs font-semibold text-slate-900">
+                      Proposal Belum Diantar ke Dinas
+                    </p>
+                    <p className="mt-0.5 truncate text-[11px] text-slate-500">
+                      Perbarui status pengantaran berkas fisik
                     </p>
                   </div>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <span className="text-xs font-bold text-slate-800 tabular-nums">
+                      {attentionCounts.pendingDinas}
+                    </span>
+                    <ChevronRight className="h-4 w-4 text-slate-400" />
+                  </div>
                 </button>
               )}
 
@@ -1009,19 +1036,29 @@ export function DashboardView({
                 <button
                   type="button"
                   onClick={() => onOpenSchedules?.()}
-                  className="flex min-h-[50px] w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-slate-50"
+                  className="flex min-h-[58px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
                 >
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-[#0F766E]">
                     <CalendarClock className="h-4 w-4" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs font-medium text-slate-900">
+                    <p className="truncate text-xs font-semibold text-slate-900">
                       {urgentSchedules.length === 1
-                        ? `Jadwal: ${urgentSchedules[0].title} (${urgentSchedules[0].targetDate})`
-                        : `${urgentSchedules.length} jadwal kegiatan mendekati tenggat`}
+                        ? urgentSchedules[0].title
+                        : 'Jadwal Kegiatan Mendekati Tenggat'}
+                    </p>
+                    <p className="mt-0.5 truncate text-[11px] text-slate-500 tabular-nums">
+                      {urgentSchedules.length === 1
+                        ? `Tenggat ${urgentSchedules[0].targetDate}`
+                        : 'Agenda operasional dalam 3 hari ke depan'}
                     </p>
                   </div>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <span className="text-xs font-bold text-[#0F766E] tabular-nums">
+                      {urgentSchedules.length}
+                    </span>
+                    <ChevronRight className="h-4 w-4 text-slate-400" />
+                  </div>
                 </button>
               )}
             </div>
@@ -1036,7 +1073,7 @@ export function DashboardView({
               <button
                 type="button"
                 onClick={onOpenProposalList}
-                className="inline-flex items-center gap-0.5 text-xs font-semibold text-teal-700 hover:underline"
+                className="inline-flex min-h-[36px] items-center gap-0.5 text-xs font-semibold text-[#0F766E] hover:underline"
               >
                 <span>Semua ({filteredProposals.length})</span>
                 <ChevronRight className="h-3.5 w-3.5" />
@@ -1056,7 +1093,7 @@ export function DashboardView({
                 <button
                   type="button"
                   onClick={onOpenAddProposal}
-                  className="mt-3 inline-flex min-h-[38px] items-center gap-1.5 rounded-xl bg-teal-700 px-3.5 text-xs font-semibold text-white hover:bg-teal-800"
+                  className="mt-3 inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-[#0F766E] px-4 text-xs font-semibold text-white hover:bg-teal-800"
                 >
                   <FolderPlus className="h-3.5 w-3.5" />
                   <span>Tambah Proposal</span>
@@ -1070,14 +1107,14 @@ export function DashboardView({
                   key={prop.id}
                   type="button"
                   onClick={() => onOpenProposalDetail(prop.id)}
-                  className="block w-full px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
+                  className="block w-full px-4 py-3.5 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
                 >
                   <div className="flex items-start gap-3">
                     <div
                       className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
                         prop.status === 'locked'
                           ? 'bg-slate-900 text-white'
-                          : 'bg-teal-50 text-teal-800'
+                          : 'bg-teal-50 text-[#0F766E]'
                       }`}
                     >
                       {prop.status === 'locked' ? (
@@ -1089,34 +1126,25 @@ export function DashboardView({
 
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
-                        <p className="truncate text-sm font-medium text-slate-900">
+                        <p className="truncate text-sm font-semibold text-slate-900">
                           {prop.namaProposal}
                         </p>
-                        <span className="shrink-0 text-xs font-medium text-slate-800 tabular-nums">
+                        <span className="shrink-0 text-xs font-bold text-slate-800 tabular-nums">
                           {prop.totalKpm}/{prop.target}
                         </span>
                       </div>
 
-                      <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-                        <div
-                          className={`h-full rounded-full transition-all duration-300 ${
-                            prop.fillPct >= 100 ? 'bg-teal-700' : 'bg-teal-600'
-                          }`}
-                          style={{ width: `${prop.fillPct}%` }}
-                        />
-                      </div>
-
-                      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[11px] tabular-nums">
-                        <span className="text-slate-500">
+                      <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] tabular-nums">
+                        <span className="min-w-0 truncate text-slate-500">
                           {prop.tipe} · {prop.tahun} · {prop.acceptedCount} Diterima · Berkas{' '}
                           {prop.checklistDone}/7
                         </span>
                         <span
-                          className={`font-medium ${
-                            prop.checklist.dinas ? 'text-teal-700' : 'text-amber-700'
+                          className={`shrink-0 font-semibold whitespace-nowrap ${
+                            prop.checklist.dinas ? 'text-[#0F766E]' : 'text-amber-700'
                           }`}
                         >
-                          {prop.checklist.dinas ? 'Sudah diantar ke Dinas' : 'Belum diantar ke Dinas'}
+                          {prop.checklist.dinas ? 'Sudah diantar' : 'Belum diantar'}
                         </span>
                       </div>
                     </div>

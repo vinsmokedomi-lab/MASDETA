@@ -29,6 +29,7 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  ScrollText,
   Search,
   ShieldAlert,
   ShieldCheck,
@@ -50,6 +51,7 @@ import { AddPengelolaModal } from './PengelolaSelectorModal';
 import { PresenceDot, getPresenceMeta } from './PresenceDot';
 import { SwipeAction, SwipeableRow } from './SwipeableRow';
 import { APP_VERSION } from '../config/appVersion';
+import { APP_CHANGELOG } from '../data/changelogData';
 import { CorrespondentKpmListPanel } from './CorrespondentKpmListPanel';
 import { DTSEN_OPTION_ITEMS } from '../data/kpmOptions';
 import {
@@ -100,6 +102,7 @@ export type MenuSection =
   | 'kelengkapan'
   | 'jadwal'
   | 'sampah'
+  | 'changelog'
   | 'laporan';
 
 export type AdminDataActionType =
@@ -332,6 +335,7 @@ export function MenuHubView({
 
   // SuperAdmin drill flag (lifted when provided)
   const [localUsersOpenedFromSuperAdmin, setLocalUsersOpenedFromSuperAdmin] = useState(false);
+  const [changelogSortNewestFirst, setChangelogSortNewestFirst] = useState(true);
   const usersOpenedFromSuperAdmin =
     controlledUsersFromSuperAdmin !== undefined
       ? controlledUsersFromSuperAdmin
@@ -1422,6 +1426,28 @@ export function MenuHubView({
                   <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
                 </button>
               )}
+
+              <button
+                type="button"
+                onClick={() => onChangeSection('changelog')}
+                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+              >
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+                  <ScrollText className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-slate-900">Riwayat Pembaruan</p>
+                    <span className="shrink-0 rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-bold text-teal-700 ring-1 ring-inset ring-teal-200 tabular-nums">
+                      v{APP_VERSION}
+                    </span>
+                  </div>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    Changelog lengkap dari v1.0.0 hingga v{APP_VERSION}
+                  </p>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+              </button>
             </div>
           </section>
         </div>
@@ -5250,6 +5276,133 @@ export function MenuHubView({
         onSaveReportTemplate={onSaveReportTemplate}
         onBack={() => onChangeSection('root')}
       />
+    );
+  }
+
+  // 13. RIWAYAT PEMBARUAN (CHANGELOG v1.0.0 - v1.1.2)
+  if (activeSection === 'changelog') {
+    const orderedReleases = changelogSortNewestFirst
+      ? APP_CHANGELOG
+      : [...APP_CHANGELOG].reverse();
+
+    return (
+      <div className="min-h-screen pb-24">
+        {renderSubHeader('Riwayat Pembaruan', () => onChangeSection('root'))}
+        <div className="space-y-4 px-4 pt-4">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase tracking-wide text-teal-700">
+                  Changelog Aplikasi
+                </p>
+                <h2 className="mt-0.5 text-base font-bold text-slate-900">
+                  Versi Terpasang v{APP_VERSION}
+                </h2>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                  Daftar lengkap pembaruan dan penambahan fitur dari versi 1.0.0 hingga versi{' '}
+                  {APP_VERSION}.
+                </p>
+              </div>
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                <ScrollText className="h-5 w-5" />
+              </div>
+            </div>
+
+            <div className="mt-3 flex items-center justify-between gap-2 border-t border-slate-100 pt-3">
+              <span className="text-xs font-medium text-slate-500 tabular-nums">
+                Total {APP_CHANGELOG.length} rilis tercatat
+              </span>
+              <button
+                type="button"
+                onClick={() => setChangelogSortNewestFirst((prev) => !prev)}
+                className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+              >
+                <History className="h-3.5 w-3.5 text-teal-700" />
+                <span>
+                  {changelogSortNewestFirst
+                    ? `Urutan: v${APP_VERSION} → v1.0.0`
+                    : `Urutan: v1.0.0 → v${APP_VERSION}`}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {orderedReleases.map((release) => {
+              const isLatest = release.version === APP_VERSION;
+              return (
+                <article
+                  key={release.version}
+                  className={`rounded-2xl border bg-white p-4 shadow-xs ${
+                    isLatest ? 'border-teal-300 ring-1 ring-teal-100' : 'border-slate-200'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`inline-flex items-center rounded-lg px-2.5 py-1 text-xs font-bold tabular-nums ${
+                          isLatest
+                            ? 'bg-teal-700 text-white'
+                            : 'bg-slate-100 text-slate-800'
+                        }`}
+                      >
+                        v{release.version}
+                      </span>
+                      {release.badge && (
+                        <span className="inline-flex items-center rounded-lg bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200">
+                          {release.badge}
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[11px] font-medium text-slate-400 tabular-nums">
+                      {release.highlights.length} pembaruan
+                    </span>
+                  </div>
+
+                  <h3 className="mt-2.5 text-sm font-bold text-slate-900">{release.title}</h3>
+
+                  <div className="mt-1.5 flex items-center gap-1.5 text-[11px] font-medium text-slate-500 tabular-nums">
+                    <Clock className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                    <span>Diperbarui {release.releasedAt}</span>
+                  </div>
+
+                  <ul className="mt-2.5 space-y-2 border-t border-slate-100 pt-2.5">
+                    {release.highlights.map((item, idx) => {
+                      const colonIdx = item.indexOf(':');
+                      const hasPrefix = colonIdx > 0 && colonIdx < 48;
+                      const label = hasPrefix ? item.slice(0, colonIdx) : '';
+                      const desc = hasPrefix ? item.slice(colonIdx + 1).trim() : item;
+
+                      return (
+                        <li
+                          key={`${release.version}-${idx}`}
+                          className="flex items-start gap-2 text-xs leading-relaxed text-slate-600"
+                        >
+                          <span
+                            className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${
+                              isLatest ? 'bg-teal-600' : 'bg-slate-400'
+                            }`}
+                          />
+                          <span>
+                            {hasPrefix ? (
+                              <>
+                                <strong className="font-semibold text-slate-800">{label}:</strong>{' '}
+                                {desc}
+                              </>
+                            ) : (
+                              item
+                            )}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </article>
+              );
+            })}
+          </div>
+        </div>
+      </div>
     );
   }
 
