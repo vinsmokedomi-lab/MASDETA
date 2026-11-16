@@ -439,26 +439,29 @@ export function PengelolaSelectorModal({
             </div>
 
             {/* Search & Add New Trigger */}
-            <div className="space-y-2.5 border-b border-slate-100 px-5 py-3.5">
-              <div className="relative">
-                <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="search"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Cari nama pengelola..."
-                  className="min-h-[44px] w-full rounded-xl border border-slate-300 bg-white pr-3.5 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
-                />
-              </div>
+            <div className="border-b border-slate-100 px-5 py-3.5">
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1 min-w-0">
+                  <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="search"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Cari nama pengelola..."
+                    className="min-h-[44px] w-full rounded-xl border border-slate-300 bg-white pr-3.5 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
+                  />
+                </div>
 
-              <button
-                type="button"
-                onClick={() => setMode('create')}
-                className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl border border-teal-200 bg-teal-50/70 px-4 text-sm font-semibold text-teal-800 transition-colors hover:bg-teal-100/70 active:scale-[0.99]"
-              >
-                <Plus className="h-4 w-4 shrink-0" />
-                <span>Tambah Pengelola Baru</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setMode('create')}
+                  aria-label="Tambah Pengelola Baru"
+                  title="Tambah Pengelola Baru"
+                  className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-teal-700 text-white shadow-xs transition-colors hover:bg-teal-800 active:scale-[0.96]"
+                >
+                  <Plus className="h-5 w-5" />
+                </button>
+              </div>
             </div>
 
             {/* Pengelola List */}

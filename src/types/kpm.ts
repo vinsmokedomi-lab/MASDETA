@@ -217,6 +217,10 @@ export interface SharedKpmCard {
   itemName?: string;
   proposal: string;
   kontak?: string;
+  dtsen?: string;
+  kelurahan?: string;
+  kecamatan?: string;
+  pengelola?: string;
   validasi: ValidationStatus;
   fotoDataUrl?: string;
   fotoThumbnailUrl?: string;

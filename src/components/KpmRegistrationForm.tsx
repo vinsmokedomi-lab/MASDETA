@@ -3,10 +3,8 @@ import {
   AlertCircle,
   ArrowLeft,
   Check,
-  CheckCircle2,
   ChevronDown,
   Lock,
-  Plus,
   RotateCcw,
   Save,
   UserCheck,
@@ -34,6 +32,7 @@ import {
 } from '../types/kpm';
 import {
   blockNonNumericKeyDown,
+  capitalizeWords,
   formatAlamatLengkap,
   getItemsForYear,
   getKelurahanOptionsForProposal,
@@ -43,12 +42,15 @@ import {
   isValidRtRw,
   resolvePackageForKpm,
   resolveProposalDomicile,
+  resolveProposalKecamatanCategory,
   sanitizeDigits,
+  sortKecamatanCategoryNames,
 } from '../utils/imageProcessor';
 import { DocumentUploadCard } from './DocumentUploadCard';
 import { DriveImage } from './DriveImage';
 import { MultiDocumentUploadCard } from './MultiDocumentUploadCard';
 import { PengelolaSelectorModal } from './PengelolaSelectorModal';
+import { SelectionPickerModal, SelectionPickerOption } from './SelectionPickerModal';
 import { PlaceholderSelect } from './FormControls';
 
 interface KpmRegistrationFormProps {
@@ -59,14 +61,17 @@ interface KpmRegistrationFormProps {
   wilayahList?: WilayahKabKota[];
   itemOptions?: ItemBantuan[];
   pekerjaanOptions?: string[];
+  yearOptions?: string[];
   feedback?: { type: 'success' | 'error'; message: string } | null;
   onDismissFeedback?: () => void;
   preselectedProposal?: { namaProposal: string; tahun: string } | null;
   lockedProposalScope?: { namaProposal: string; tahun: string } | null;
   onClearPreselectedProposal?: () => void;
   onBack?: () => void;
-  onOpenAddProposal: () => void;
+  onOpenAddProposal: (selectedYear?: string) => void;
   onCreatePengelola: (profile: PengelolaProfile) => void;
+  onAddPekerjaan?: (job: string) => void;
+  onAddYear?: (year: string) => void;
   onSave: (values: KpmFormValues, editingId?: string) => Promise<boolean> | boolean | void;
   onQuickSyncKpmDocuments?: (kpmId: string, nextDocuments: KpmDocuments) => Promise<void> | void;
   onCancelEdit: () => void;
@@ -83,6 +88,7 @@ export function KpmRegistrationForm({
   wilayahList = INITIAL_WILAYAH_LIST,
   itemOptions,
   pekerjaanOptions,
+  yearOptions,
   feedback,
   onDismissFeedback,
   preselectedProposal,
@@ -91,6 +97,8 @@ export function KpmRegistrationForm({
   onBack,
   onOpenAddProposal,
   onCreatePengelola,
+  onAddPekerjaan,
+  onAddYear,
   onSave,
   onQuickSyncKpmDocuments,
   onCancelEdit,
@@ -109,11 +117,46 @@ export function KpmRegistrationForm({
     return INITIAL_FORM_VALUES;
   });
   const [errors, setErrors] = useState<FormErrors>({});
+  const [isTahunModalOpen, setIsTahunModalOpen] = useState(false);
+  const [isProposalModalOpen, setIsProposalModalOpen] = useState(false);
+  const [isPekerjaanModalOpen, setIsPekerjaanModalOpen] = useState(false);
+  const [isItemModalOpen, setIsItemModalOpen] = useState(false);
   const [isPengelolaModalOpen, setIsPengelolaModalOpen] = useState(false);
+  const [isDtsenModalOpen, setIsDtsenModalOpen] = useState(false);
+  const [extraYears, setExtraYears] = useState<string[]>([]);
+  const [extraPekerjaan, setExtraPekerjaan] = useState<string[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const resolvedPekerjaanOptions =
-    pekerjaanOptions && pekerjaanOptions.length > 0 ? pekerjaanOptions : PEKERJAAN_OPTIONS;
+  const resolvedYearOptions = useMemo(() => {
+    const set = new Set<string>(TAHUN_OPTIONS);
+    (yearOptions || []).forEach((y) => {
+      if (y) set.add(y);
+    });
+    proposals.forEach((p) => {
+      if (p.tahun) set.add(p.tahun);
+    });
+    (itemOptions || []).forEach((i) => {
+      if (i.tahun) set.add(i.tahun);
+    });
+    extraYears.forEach((y) => {
+      if (y) set.add(y);
+    });
+    if (values.tahun) set.add(values.tahun);
+    return Array.from(set).sort((a, b) => b.localeCompare(a));
+  }, [yearOptions, proposals, itemOptions, extraYears, values.tahun]);
+
+  const resolvedPekerjaanOptions = useMemo(() => {
+    const base =
+      pekerjaanOptions && pekerjaanOptions.length > 0 ? pekerjaanOptions : PEKERJAAN_OPTIONS;
+    const map = new Map<string, string>();
+    for (const opt of [...base, ...extraPekerjaan]) {
+      const clean = opt.trim();
+      if (!clean) continue;
+      const key = clean.toLowerCase();
+      if (!map.has(key)) map.set(key, clean);
+    }
+    return Array.from(map.values()).sort((a, b) => a.localeCompare(b, 'id'));
+  }, [pekerjaanOptions, extraPekerjaan]);
   const resolvedItemOptions: ItemBantuan[] = useMemo(() => {
     const base = getItemsForYear(itemOptions || [], values.tahun || '2026');
     if (editingRecord && values.item && !base.some((b) => b.code === values.item)) {
@@ -191,12 +234,23 @@ export function KpmRegistrationForm({
   }, [preselectedProposal, editingRecord, lockedProposalScope, onClearPreselectedProposal, wilayahList]);
 
   const proposalMenuItems = useMemo(() => {
-    const map = new Map<string, { name: string; locked: boolean }>();
+    const map = new Map<
+      string,
+      { name: string; locked: boolean; tipe?: string; jumlahKpm?: number; kecamatanGroup: string }
+    >();
     for (const prop of proposals) {
       if (values.tahun && prop.tahun !== values.tahun) continue;
       map.set(prop.namaProposal, {
         name: prop.namaProposal,
         locked: prop.status === 'locked',
+        tipe: prop.tipe,
+        jumlahKpm: prop.jumlahKpm,
+        kecamatanGroup: resolveProposalKecamatanCategory(
+          prop.namaProposal,
+          proposals,
+          prop.tahun,
+          wilayahList
+        ),
       });
     }
     if ((editingRecord || isProposalScopeLocked) && values.proposal && !map.has(values.proposal)) {
@@ -204,10 +258,25 @@ export function KpmRegistrationForm({
       map.set(values.proposal, {
         name: values.proposal,
         locked: legacy?.status === 'locked',
+        tipe: legacy?.tipe,
+        jumlahKpm: legacy?.jumlahKpm,
+        kecamatanGroup: resolveProposalKecamatanCategory(
+          values.proposal,
+          proposals,
+          values.tahun,
+          wilayahList
+        ),
       });
     }
-    return Array.from(map.values());
-  }, [proposals, values.tahun, values.proposal, editingRecord, isProposalScopeLocked]);
+    return Array.from(map.values()).sort((a, b) => {
+      const groupCmp = sortKecamatanCategoryNames(a.kecamatanGroup, b.kecamatanGroup);
+      if (groupCmp !== 0) return groupCmp;
+      const isKecA = isKecamatanProposal(a.name);
+      const isKecB = isKecamatanProposal(b.name);
+      if (isKecA !== isKecB) return isKecA ? -1 : 1;
+      return a.name.localeCompare(b.name, 'id');
+    });
+  }, [proposals, values.tahun, values.proposal, editingRecord, isProposalScopeLocked, wilayahList]);
 
   const duplicateKkMatch = useMemo(() => {
     if (!isValidNik16(values.nikKk)) return null;
@@ -429,14 +498,7 @@ export function KpmRegistrationForm({
     if (!values.dtsen) nextErrors.dtsen = 'Pilih status DTSEN.';
     if (!values.validasi) nextErrors.validasi = 'Pilih status validasi berkas.';
 
-    // Kategori 04: Wajib semua
-    if (!values.documents.ktp) {
-      nextErrors.docKtp = 'Foto dokumen KTP wajib diunggah.';
-    }
-    if (!values.documents.kk) {
-      nextErrors.docKk = 'Foto dokumen Kartu Keluarga (KK) wajib diunggah.';
-    }
-
+    // Kategori 04: Foto KTP & KK opsional sementara agar data KPM yang sudah diunggah tetap dapat diperbarui & disimpan
     return nextErrors;
   };
 
@@ -593,67 +655,60 @@ export function KpmRegistrationForm({
 
             <div className="mt-4 space-y-4">
               <div id="field-tahun">
-                <label htmlFor="input-tahun" className="block text-xs font-semibold text-slate-700">
+                <span className="block text-xs font-semibold text-slate-700">
                   Tahun Anggaran <span className="text-rose-600">*</span>
-                </label>
-                <PlaceholderSelect
-                  placeholder="Pilih Tahun"
+                </span>
+                <button
+                  type="button"
                   id="input-tahun"
                   disabled={editingProposalLocked || isProposalScopeLocked}
-                  value={values.tahun}
-                  onChange={handleYearChange}
-                  className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-700 ${
+                  onClick={() => setIsTahunModalOpen(true)}
+                  className={`mt-1.5 flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border bg-white px-3.5 text-left text-sm transition-colors hover:bg-slate-50 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-700 ${
                     errors.tahun ? 'border-rose-400' : 'border-slate-300'
                   }`}
                 >
-                  {TAHUN_OPTIONS.map((yr) => (
-                    <option key={yr} value={yr}>
-                      {yr}
-                    </option>
-                  ))}
-                </PlaceholderSelect>
+                  <span
+                    className={`truncate ${
+                      values.tahun ? 'font-medium text-slate-900' : 'text-slate-400'
+                    }`}
+                  >
+                    {values.tahun || 'Pilih Tahun'}
+                  </span>
+                  <ChevronDown className="h-4 w-4 text-slate-500 shrink-0" />
+                </button>
                 {errors.tahun && <p className="mt-1 text-xs text-rose-600">{errors.tahun}</p>}
               </div>
 
               <div id="field-proposal">
-                <label htmlFor="input-proposal" className="block text-xs font-semibold text-slate-700">
+                <span className="block text-xs font-semibold text-slate-700">
                   Proposal <span className="text-rose-600">*</span>
-                </label>
-                <PlaceholderSelect
-                  placeholder="Pilih Kelurahan / Kecamatan"
+                </span>
+                <button
+                  type="button"
                   id="input-proposal"
                   disabled={editingProposalLocked || isProposalScopeLocked}
-                  value={values.proposal}
-                  onChange={(v) => handleProposalChange(v)}
-                  className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-700 ${
+                  onClick={() => setIsProposalModalOpen(true)}
+                  className={`mt-1.5 flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border bg-white px-3.5 text-left text-sm transition-colors hover:bg-slate-50 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-700 ${
                     errors.proposal ? 'border-rose-400' : 'border-slate-300'
                   }`}
                 >
-                  {proposalMenuItems.map((item) => (
-                    <option key={item.name} value={item.name} disabled={item.locked}>
-                      {item.locked ? `${item.name} (Terkunci)` : item.name}
-                    </option>
-                  ))}
-                </PlaceholderSelect>
+                  <span
+                    className={`truncate ${
+                      values.proposal ? 'font-medium text-slate-900' : 'text-slate-400'
+                    }`}
+                  >
+                    {values.proposal || 'Pilih Kelurahan / Kecamatan'}
+                  </span>
+                  <ChevronDown className="h-4 w-4 text-slate-500 shrink-0" />
+                </button>
 
-                {isProposalScopeLocked ? (
+                {isProposalScopeLocked && (
                   <p className="mt-1.5 flex items-center gap-1.5 text-[11px] font-medium text-teal-800">
                     <Lock className="h-3.5 w-3.5 shrink-0" />
                     <span>
                       Tahun dan proposal dikunci otomatis. Ubah nanti melalui menu Edit Data KPM jika perlu.
                     </span>
                   </p>
-                ) : (
-                  <div className="mt-1.5">
-                    <button
-                      type="button"
-                      onClick={onOpenAddProposal}
-                      className="inline-flex min-h-[36px] items-center gap-1.5 text-xs font-semibold text-teal-700 hover:text-teal-800 active:opacity-80"
-                    >
-                      <Plus className="h-3.5 w-3.5 shrink-0" />
-                      <span>Tambah proposal baru</span>
-                    </button>
-                  </div>
                 )}
 
                 {errors.proposal && <p className="mt-0.5 text-xs text-rose-600">{errors.proposal}</p>}
@@ -892,24 +947,26 @@ export function KpmRegistrationForm({
                 </div>
 
                 <div id="field-pekerjaan" className="col-span-2">
-                  <label htmlFor="input-pekerjaan" className="block text-xs font-semibold text-slate-700">
+                  <span className="block text-xs font-semibold text-slate-700">
                     Pekerjaan <span className="text-rose-600">*</span>
-                  </label>
-                  <PlaceholderSelect
-                    placeholder="Pilih Pekerjaan"
+                  </span>
+                  <button
+                    type="button"
                     id="input-pekerjaan"
-                    value={values.pekerjaan}
-                    onChange={(v) => updateField('pekerjaan', v)}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                    onClick={() => setIsPekerjaanModalOpen(true)}
+                    className={`mt-1.5 flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border bg-white px-3.5 text-left text-sm transition-colors hover:bg-slate-50 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
                       errors.pekerjaan ? 'border-rose-400' : 'border-slate-300'
                     }`}
                   >
-                    {resolvedPekerjaanOptions.map((opt) => (
-                      <option key={opt} value={opt}>
-                        {opt}
-                      </option>
-                    ))}
-                  </PlaceholderSelect>
+                    <span
+                      className={`truncate ${
+                        values.pekerjaan ? 'font-medium text-slate-900' : 'text-slate-400'
+                      }`}
+                    >
+                      {values.pekerjaan || 'Pilih Pekerjaan'}
+                    </span>
+                    <ChevronDown className="h-4 w-4 text-slate-500 shrink-0" />
+                  </button>
                   {errors.pekerjaan && <p className="mt-1 text-xs text-rose-600">{errors.pekerjaan}</p>}
                 </div>
 
@@ -947,31 +1004,40 @@ export function KpmRegistrationForm({
 
               <div className="mt-4 space-y-4">
                 <div id="field-item">
-                  <label htmlFor="input-item" className="block text-xs font-semibold text-slate-700">
+                  <span className="block text-xs font-semibold text-slate-700">
                     Item Bantuan <span className="text-rose-600">*</span>
-                  </label>
-                  <PlaceholderSelect
-                    placeholder={
-                      resolvedItemOptions.length === 0
-                        ? `Belum ada item tahun ${values.tahun || 'ini'}`
-                        : 'Pilih Item'
-                    }
+                  </span>
+                  <button
+                    type="button"
                     id="input-item"
-                    value={values.item}
-                    onChange={(v) => updateField('item', v)}
                     disabled={resolvedItemOptions.length === 0}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 font-mono text-sm font-medium transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-50 ${
+                    onClick={() => setIsItemModalOpen(true)}
+                    className={`mt-1.5 flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border bg-white px-3.5 text-left text-sm transition-colors hover:bg-slate-50 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-50 ${
                       errors.item ? 'border-rose-400' : 'border-slate-300'
                     }`}
                   >
-                    {resolvedItemOptions.map((item) => (
-                      <option key={item.code} value={item.code}>
-                        {item.name && item.name !== item.code
-                          ? `${item.code} — ${item.name}`
-                          : item.code}
-                      </option>
-                    ))}
-                  </PlaceholderSelect>
+                    {(() => {
+                      const matchedItem = resolvedItemOptions.find((i) => i.code === values.item);
+                      const label = matchedItem
+                        ? matchedItem.name && matchedItem.name !== matchedItem.code
+                          ? `${matchedItem.code} — ${matchedItem.name}`
+                          : matchedItem.code
+                        : values.item || '';
+                      return (
+                        <span
+                          className={`truncate ${
+                            label ? 'font-mono font-medium text-slate-900' : 'text-slate-400'
+                          }`}
+                        >
+                          {label ||
+                            (resolvedItemOptions.length === 0
+                              ? `Belum ada item tahun ${values.tahun || 'ini'}`
+                              : 'Pilih Item')}
+                        </span>
+                      );
+                    })()}
+                    <ChevronDown className="h-4 w-4 text-slate-500 shrink-0" />
+                  </button>
                   {resolvedItemOptions.length === 0 && (
                     <p className="mt-1.5 text-[11px] text-amber-700">
                       Master item untuk tahun {values.tahun || '2026'} masih kosong. Tambahkan paket melalui Kelola Item &amp; Sub-Item.
@@ -1026,24 +1092,32 @@ export function KpmRegistrationForm({
                 </div>
 
                 <div id="field-dtsen">
-                  <label htmlFor="input-dtsen" className="block text-xs font-semibold text-slate-700">
+                  <span className="block text-xs font-semibold text-slate-700">
                     DTSEN <span className="text-rose-600">*</span>
-                  </label>
-                  <PlaceholderSelect
-                    placeholder="Pilih Status DTSEN"
+                  </span>
+                  <button
+                    type="button"
                     id="input-dtsen"
-                    value={values.dtsen}
-                    onChange={(v) => handleDtsenChange(v)}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                    onClick={() => setIsDtsenModalOpen(true)}
+                    className={`mt-1.5 flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border bg-white px-3.5 text-left text-sm transition-colors hover:bg-slate-50 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
                       errors.dtsen ? 'border-rose-400' : 'border-slate-300'
                     }`}
                   >
-                    {DTSEN_OPTION_ITEMS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </PlaceholderSelect>
+                    {(() => {
+                      const matched = DTSEN_OPTION_ITEMS.find((d) => d.value === values.dtsen);
+                      const label = matched?.label || values.dtsen || '';
+                      return (
+                        <span
+                          className={`truncate ${
+                            label ? 'font-medium text-slate-900' : 'text-slate-400'
+                          }`}
+                        >
+                          {label || 'Pilih Status DTSEN'}
+                        </span>
+                      );
+                    })()}
+                    <ChevronDown className="h-4 w-4 text-slate-500 shrink-0" />
+                  </button>
                   {errors.dtsen && <p className="mt-1 text-xs text-rose-600">{errors.dtsen}</p>}
                 </div>
 
@@ -1148,16 +1222,15 @@ export function KpmRegistrationForm({
               04. Dokumen KTP & KK
             </h2>
             <p className="mt-0.5 text-xs text-slate-500">
-              Wajib unggah langsung foto KTP dan Kartu Keluarga (single foto per kolom).
+              Unggah foto KTP dan Kartu Keluarga jika tersedia (opsional sementara).
             </p>
 
             <div className="mt-4 space-y-5">
               <DocumentUploadCard
                 id="upload-ktp"
                 label="Foto KTP"
-                helperText="Foto e-KTP asli dengan NIK terlihat jelas"
+                helperText="Foto e-KTP asli dengan NIK terlihat jelas (opsional)"
                 variant="ktp"
-                required
                 value={values.documents.ktp}
                 error={errors.docKtp}
                 onChange={(file) => updateSingleDocument('ktp', file)}
@@ -1168,9 +1241,8 @@ export function KpmRegistrationForm({
                 <DocumentUploadCard
                   id="upload-kk"
                   label="Foto Kartu Keluarga (KK)"
-                  helperText="Foto seluruh halaman Kartu Keluarga"
+                  helperText="Foto seluruh halaman Kartu Keluarga (opsional)"
                   variant="kk"
-                  required
                   value={values.documents.kk}
                   error={errors.docKk}
                   onChange={(file) => updateSingleDocument('kk', file)}
@@ -1291,6 +1363,154 @@ export function KpmRegistrationForm({
         </div>
         )}
       </form>
+
+      {/* Pop-up Pilihan Tahun Anggaran (Search + Tambah Tahun Baru) */}
+      <SelectionPickerModal
+        isOpen={isTahunModalOpen}
+        title="Pilih Tahun Anggaran"
+        options={resolvedYearOptions.map(
+          (yr): SelectionPickerOption => ({
+            value: yr,
+            label: `Tahun ${yr}`,
+            subtitle: TAHUN_OPTIONS.includes(yr) ? 'Tahun standar operasional' : 'Tahun tambahan',
+          })
+        )}
+        selectedValue={values.tahun}
+        onClose={() => setIsTahunModalOpen(false)}
+        onSelect={handleYearChange}
+        searchable
+        searchInputMode="numeric"
+        searchPlaceholder="Cari tahun anggaran..."
+        showAddButton
+        addButtonLabel="Tambah Tahun Anggaran Baru"
+        inlineCreateConfig={{
+          title: 'Tambah Tahun Anggaran',
+          fieldLabel: 'Tahun Anggaran (4 Digit)',
+          placeholder: 'Contoh: 2028',
+          helperText: 'Aplikasi dapat digunakan jangka panjang untuk tahun mana saja.',
+          submitLabel: 'Simpan Tahun',
+          inputMode: 'numeric',
+          maxLength: 4,
+          normalizeInput: (raw) => sanitizeDigits(raw, 4),
+          validateInput: (val) => {
+            const num = Number(val);
+            if (!/^\d{4}$/.test(val) || num < 1990 || num > 2100) {
+              return 'Masukkan 4 digit tahun yang valid (1990–2100).';
+            }
+            return null;
+          },
+          onCreate: (yr) => {
+            if (!resolvedYearOptions.includes(yr)) {
+              setExtraYears((prev) => (prev.includes(yr) ? prev : [...prev, yr]));
+              onAddYear?.(yr);
+            }
+          },
+        }}
+      />
+
+      {/* Pop-up Pilihan Proposal (Search + Tombol + Hijau + Kategori per Kecamatan) */}
+      <SelectionPickerModal
+        isOpen={isProposalModalOpen}
+        title="Pilih Proposal"
+        options={proposalMenuItems.map(
+          (item): SelectionPickerOption => ({
+            value: item.name,
+            label: item.name,
+            group: item.kecamatanGroup,
+            subtitle: item.tipe
+              ? `${item.tipe} · Target ${item.jumlahKpm ?? 66} KPM`
+              : undefined,
+            disabled: item.locked,
+            disabledBadge: 'Terkunci',
+          })
+        )}
+        selectedValue={values.proposal}
+        onClose={() => setIsProposalModalOpen(false)}
+        onSelect={(v) => handleProposalChange(v)}
+        searchable
+        searchPlaceholder="Cari proposal, kelurahan, atau kecamatan..."
+        emptyMessage={`Belum ada proposal untuk tahun ${values.tahun || 'ini'}. Tekan tombol + di kanan atas untuk membuat baru.`}
+        showAddButton={!isProposalScopeLocked && !editingProposalLocked}
+        addButtonLabel="Tambah Proposal Baru"
+        onExternalAdd={() => onOpenAddProposal(values.tahun)}
+      />
+
+      {/* Pop-up Pilihan Pekerjaan (Search + Tombol + Hijau) */}
+      <SelectionPickerModal
+        isOpen={isPekerjaanModalOpen}
+        title="Pilih Pekerjaan"
+        options={resolvedPekerjaanOptions.map(
+          (job): SelectionPickerOption => ({
+            value: job,
+            label: job,
+          })
+        )}
+        selectedValue={values.pekerjaan}
+        onClose={() => setIsPekerjaanModalOpen(false)}
+        onSelect={(v) => {
+          const canonical =
+            resolvedPekerjaanOptions.find((p) => p.toLowerCase() === v.toLowerCase()) || v;
+          updateField('pekerjaan', canonical);
+        }}
+        searchable
+        searchPlaceholder="Cari pekerjaan..."
+        showAddButton
+        addButtonLabel="Tambah Pekerjaan Baru"
+        inlineCreateConfig={{
+          title: 'Tambah Pekerjaan Baru',
+          fieldLabel: 'Nama Pekerjaan',
+          placeholder: 'Contoh: Penjahit Rumahan',
+          helperText: 'Huruf awal setiap kata otomatis kapital.',
+          submitLabel: 'Simpan Pekerjaan',
+          normalizeInput: (raw) => capitalizeWords(raw),
+          validateInput: (val) =>
+            val.trim().length < 2 ? 'Nama pekerjaan minimal 2 huruf.' : null,
+          onCreate: (job) => {
+            const clean = capitalizeWords(job.trim()).replace(/\s+/g, ' ');
+            const exists = resolvedPekerjaanOptions.some(
+              (p) => p.trim().toLowerCase() === clean.toLowerCase()
+            );
+            if (!exists) {
+              setExtraPekerjaan((prev) => [...prev, clean]);
+              onAddPekerjaan?.(clean);
+            }
+          },
+        }}
+      />
+
+      {/* Pop-up Pilihan Item Bantuan (Daftar Item Saja, Tanpa Search & +) */}
+      <SelectionPickerModal
+        isOpen={isItemModalOpen}
+        title="Pilih Item Bantuan"
+        options={resolvedItemOptions.map(
+          (item): SelectionPickerOption => ({
+            value: item.code,
+            codeBadge: item.code,
+            label: item.name && item.name !== item.code ? item.name : item.code,
+            subtitle:
+              item.subItems.length > 0 ? `Sub-item: ${item.subItems.join(', ')}` : undefined,
+          })
+        )}
+        selectedValue={values.item}
+        onClose={() => setIsItemModalOpen(false)}
+        onSelect={(v) => updateField('item', v)}
+        emptyMessage={`Belum ada item untuk tahun ${values.tahun || 'ini'}.`}
+      />
+
+      {/* Pop-up Pilihan DTSEN (Daftar Item Saja, Tanpa Search & +) */}
+      <SelectionPickerModal
+        isOpen={isDtsenModalOpen}
+        title="Pilih Status DTSEN"
+        options={DTSEN_OPTION_ITEMS.map(
+          (opt): SelectionPickerOption => ({
+            value: opt.value,
+            label: opt.label,
+          })
+        )}
+        selectedValue={values.dtsen}
+        onClose={() => setIsDtsenModalOpen(false)}
+        onSelect={(v) => handleDtsenChange(v)}
+      />
 
       {/* Searchable Pengelola Selector & Add New Pengelola Modal */}
       <PengelolaSelectorModal

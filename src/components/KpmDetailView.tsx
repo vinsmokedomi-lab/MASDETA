@@ -7,6 +7,8 @@ import {
   ChevronRight,
   Clock,
   CreditCard,
+  Download,
+  ExternalLink,
   FileText,
   History,
   Loader2,
@@ -52,6 +54,8 @@ import {
   resolveProposalDomicile,
   uploadImageDocumentToDrive,
 } from '../utils/imageProcessor';
+import { exportSingleKpmToPdf } from '../utils/pdfExporter';
+import { openCekBansosWithNik } from '../services/cekBansos';
 
 interface KpmDetailViewProps {
   record: KpmRecord;
@@ -123,6 +127,10 @@ export function KpmDetailView({
   const [shareRecipientId, setShareRecipientId] = useState<string>('');
   const [shareMessage, setShareMessage] = useState<string>('');
   const [sharingChat, setSharingChat] = useState(false);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+  const [pdfNotice, setPdfNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(
+    null
+  );
   const [docBusySlot, setDocBusySlot] = useState<string | null>(null);
   const [docError, setDocError] = useState<string | null>(null);
   const [pendingUploadTarget, setPendingUploadTarget] = useState<{
@@ -136,6 +144,27 @@ export function KpmDetailView({
     doc: KpmDocumentFile;
   } | null>(null);
   const detailFileInputRef = useRef<HTMLInputElement>(null);
+  const [cekBansosStatus, setCekBansosStatus] = useState<string | null>(null);
+
+  const handleCheckNikAtKemensos = async () => {
+    try {
+      const result = await openCekBansosWithNik(record.nikKtp);
+      setCekBansosStatus(
+        result.openedInNativeWebView
+          ? `Membuka Cek Bansos Kemensos dengan NIK ${result.nik} terisi otomatis.`
+          : `NIK ${result.nik} disalin otomatis. Tempel di kolom NIK Cek Bansos lalu isi captcha.`
+      );
+      window.setTimeout(() => {
+        setCekBansosStatus((prev) =>
+          prev && prev.includes(result.nik) ? null : prev
+        );
+      }, 6000);
+    } catch (err) {
+      setCekBansosStatus(
+        err instanceof Error ? err.message : 'Gagal membuka situs Cek Bansos.'
+      );
+    }
+  };
 
   const matchingProposal = useMemo(
     () =>
@@ -435,6 +464,10 @@ export function KpmDetailView({
       itemName,
       proposal: record.proposal,
       kontak: record.kontak,
+      dtsen: record.dtsen,
+      kelurahan: displayKelurahan,
+      kecamatan: displayKecamatan,
+      pengelola: record.pengelola,
       validasi: record.validasi,
       fotoDataUrl: heroPhotoDoc ? getDocumentDirectUrl(heroPhotoDoc) : undefined,
       fotoThumbnailUrl: heroPhotoDoc ? getDocumentThumbnailUrl(heroPhotoDoc) : undefined,
@@ -442,6 +475,33 @@ export function KpmDetailView({
     await onShareToChat(shareRecipientId, card, shareMessage.trim());
     setSharingChat(false);
     setIsShareModalOpen(false);
+  };
+
+  const handleDownloadKpmPdf = async () => {
+    if (isDownloadingPdf) return;
+    setPdfNotice(null);
+    setIsDownloadingPdf(true);
+    try {
+      const res = await exportSingleKpmToPdf({
+        record,
+        proposals,
+        items,
+        wilayahList,
+      });
+      setPdfNotice({
+        type: 'success',
+        message: res.openedNative
+          ? `PDF "${res.savedFileName}" berhasil dibuat dan dibuka.`
+          : `PDF "${res.savedFileName}" berhasil diunduh.`,
+      });
+    } catch (err) {
+      setPdfNotice({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Gagal membuat file PDF data KPM.',
+      });
+    } finally {
+      setIsDownloadingPdf(false);
+    }
   };
 
   return (
@@ -579,14 +639,53 @@ export function KpmDetailView({
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={handleOpenShareModal}
-                className="inline-flex min-h-[40px] w-full items-center justify-center gap-2 rounded-xl border border-teal-200 bg-teal-50/70 px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100"
-              >
-                <Share2 className="h-3.5 w-3.5 shrink-0" />
-                <span>Bagikan Kartu KPM ke Chat</span>
-              </button>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  disabled={isDownloadingPdf}
+                  onClick={() => void handleDownloadKpmPdf()}
+                  className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:opacity-60"
+                >
+                  {isDownloadingPdf ? (
+                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                  ) : (
+                    <Download className="h-3.5 w-3.5 shrink-0" />
+                  )}
+                  <span className="truncate">
+                    {isDownloadingPdf ? 'Membuat PDF...' : 'Unduh PDF'}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleOpenShareModal}
+                  className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50/70 px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100"
+                >
+                  <Share2 className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">Bagikan Chat</span>
+                </button>
+              </div>
+
+              {pdfNotice && (
+                <div
+                  role="status"
+                  className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-xs ${
+                    pdfNotice.type === 'success'
+                      ? 'border-teal-200 bg-teal-50 text-teal-900'
+                      : 'border-rose-200 bg-rose-50 text-rose-900'
+                  }`}
+                >
+                  <span className="font-medium leading-snug">{pdfNotice.message}</span>
+                  <button
+                    type="button"
+                    onClick={() => setPdfNotice(null)}
+                    className="shrink-0 rounded p-0.5 text-current/70 hover:text-current"
+                    aria-label="Tutup notifikasi"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </section>
@@ -838,11 +937,32 @@ export function KpmDetailView({
             <h3 className="text-sm font-bold text-slate-900">Identitas & Domisili</h3>
           </div>
           <dl className="divide-y divide-slate-100 text-sm">
-            <div className="flex items-center justify-between gap-3 px-4 py-3">
-              <dt className="text-xs text-slate-500 shrink-0">NIK KTP</dt>
-              <dd className="text-right text-xs font-medium text-slate-900 tabular-nums">
-                {formatNikDisplay(record.nikKtp)}
-              </dd>
+            <div className="px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <dt className="text-xs text-slate-500 shrink-0">NIK KTP</dt>
+                <dd className="text-right">
+                  {record.nikKtp && record.nikKtp.replace(/\D/g, '').length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleCheckNikAtKemensos()}
+                      title="Cek NIK di cekbansos.kemensos.go.id"
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-teal-50 px-2 py-1 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100 active:bg-teal-200 tabular-nums"
+                    >
+                      <span>{formatNikDisplay(record.nikKtp)}</span>
+                      <ExternalLink className="h-3.5 w-3.5 shrink-0 text-teal-700" />
+                    </button>
+                  ) : (
+                    <span className="text-xs font-medium text-slate-900 tabular-nums">
+                      {formatNikDisplay(record.nikKtp)}
+                    </span>
+                  )}
+                </dd>
+              </div>
+              {cekBansosStatus && (
+                <p className="mt-1.5 text-right text-[11px] font-medium text-teal-700">
+                  {cekBansosStatus}
+                </p>
+              )}
             </div>
             <div className="flex items-center justify-between gap-3 px-4 py-3">
               <dt className="text-xs text-slate-500 shrink-0">Nomor KK</dt>
@@ -1351,7 +1471,7 @@ export function KpmDetailView({
 
             {chatRecipients.length === 0 ? (
               <p className="py-6 text-center text-xs text-slate-500">
-                Belum ada akun Admin atau SuperAdmin aktif lainnya untuk diajak chat.
+                Tidak ada kontak ditemukan.
               </p>
             ) : (
               <div className="mt-4 space-y-3">

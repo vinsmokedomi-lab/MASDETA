@@ -1,13 +1,29 @@
 import { useMemo, useState } from 'react';
-import { AlertTriangle, ChevronRight, Lock, Search, Trash2, Unlock } from 'lucide-react';
-import { PROPOSAL_TIPE_OPTIONS, TAHUN_OPTIONS } from '../data/kpmOptions';
-import { KpmRecord, ProposalRecord, ProposalTipe } from '../types/kpm';
+import {
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+  Lock,
+  MapPin,
+  Search,
+  Trash2,
+  Unlock,
+} from 'lucide-react';
+import { INITIAL_WILAYAH_LIST, PROPOSAL_TIPE_OPTIONS, TAHUN_OPTIONS } from '../data/kpmOptions';
+import { KpmRecord, ProposalRecord, ProposalTipe, WilayahKabKota } from '../types/kpm';
+import {
+  resolveProposalKecamatanCategory,
+  sortKecamatanCategoryNames,
+  sortProposalsWithinKecamatan,
+} from '../utils/imageProcessor';
 import { FilterSelect, SegmentedTabs } from './FormControls';
 import { SwipeAction, SwipeableRow } from './SwipeableRow';
 
 interface ProposalListViewProps {
   proposals: ProposalRecord[];
   records: KpmRecord[];
+  wilayahList?: WilayahKabKota[];
+  yearOptions?: string[];
   selectedYear: string;
   onChangeYear: (year: string) => void;
   canUpdate?: boolean;
@@ -20,6 +36,8 @@ interface ProposalListViewProps {
 export function ProposalListView({
   proposals,
   records,
+  wilayahList = INITIAL_WILAYAH_LIST,
+  yearOptions: extraYearOptions,
   selectedYear,
   onChangeYear,
   canUpdate = true,
@@ -31,6 +49,7 @@ export function ProposalListView({
   const [query, setQuery] = useState('');
   const [tipeFilter, setTipeFilter] = useState<'all' | ProposalTipe>('all');
   const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
+  const [collapsedKecamatans, setCollapsedKecamatans] = useState<Record<string, boolean>>({});
   const [pendingAction, setPendingAction] = useState<{
     type: 'lock' | 'delete';
     proposal: ProposalRecord;
@@ -39,11 +58,14 @@ export function ProposalListView({
 
   const yearOptions = useMemo(() => {
     const set = new Set<string>(TAHUN_OPTIONS);
+    (extraYearOptions || []).forEach((y) => {
+      if (y) set.add(y);
+    });
     proposals.forEach((p) => {
       if (p.tahun) set.add(p.tahun);
     });
     return Array.from(set).sort((a, b) => b.localeCompare(a));
-  }, [proposals]);
+  }, [extraYearOptions, proposals]);
 
   const yearScopedProposals = useMemo(() => {
     if (selectedYear === 'all') return proposals;
@@ -55,14 +77,48 @@ export function ProposalListView({
     return yearScopedProposals.filter((prop) => {
       if (tipeFilter !== 'all' && prop.tipe !== tipeFilter) return false;
       if (!q) return true;
+      const resolvedKec = resolveProposalKecamatanCategory(
+        prop.namaProposal,
+        proposals,
+        prop.tahun,
+        wilayahList
+      ).toLowerCase();
       return (
         prop.namaProposal.toLowerCase().includes(q) ||
         prop.tipe.toLowerCase().includes(q) ||
+        resolvedKec.includes(q) ||
         (prop.kecamatan && prop.kecamatan.toLowerCase().includes(q)) ||
         (prop.kelurahan && prop.kelurahan.toLowerCase().includes(q))
       );
     });
-  }, [yearScopedProposals, tipeFilter, query]);
+  }, [yearScopedProposals, tipeFilter, query, proposals, wilayahList]);
+
+  const groupedByKecamatan = useMemo(() => {
+    const groups = new Map<string, ProposalRecord[]>();
+    for (const prop of filteredProposals) {
+      const category = resolveProposalKecamatanCategory(
+        prop.namaProposal,
+        proposals,
+        prop.tahun,
+        wilayahList
+      );
+      const list = groups.get(category);
+      if (list) {
+        list.push(prop);
+      } else {
+        groups.set(category, [prop]);
+      }
+    }
+
+    return Array.from(groups.entries())
+      .sort(([a], [b]) => sortKecamatanCategoryNames(a, b))
+      .map(([kecamatan, items]) => ({
+        kecamatan,
+        proposals: sortProposalsWithinKecamatan(items, (item) => item.namaProposal),
+      }));
+  }, [filteredProposals, proposals, wilayahList]);
+
+  const isSearching = query.trim().length > 0;
 
   return (
     <div className="min-h-screen pb-24">
@@ -81,7 +137,7 @@ export function ProposalListView({
                 type="search"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Cari proposal atau wilayah..."
+                placeholder="Cari proposal, kecamatan, atau kelurahan..."
                 className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pr-3 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
               />
             </div>
@@ -110,7 +166,7 @@ export function ProposalListView({
           />
         </div>
 
-        {/* Proposal List */}
+        {/* Proposal List Categorized by Kecamatan */}
         {filteredProposals.length === 0 ? (
           <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
             <p className="text-sm font-semibold text-slate-900">Tidak ada proposal ditemukan</p>
@@ -119,95 +175,140 @@ export function ProposalListView({
             </p>
           </div>
         ) : (
-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
-            {filteredProposals.map((prop) => {
-              const matchingRecords = records.filter(
-                (r) =>
-                  r.proposal === prop.namaProposal &&
-                  (selectedYear === 'all' ? r.tahun === prop.tahun : r.tahun === selectedYear)
-              );
-              const isLocked = prop.status === 'locked';
-
-              const swipeActions: SwipeAction[] = [];
-              if (canUpdate) {
-                swipeActions.push({
-                  key: 'lock',
-                  label: isLocked ? 'Buka' : 'Kunci',
-                  icon: isLocked ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />,
-                  tone: isLocked ? 'amber' : 'neutral',
-                  onClick: () =>
-                    setPendingAction({
-                      type: 'lock',
-                      proposal: prop,
-                      kpmCount: matchingRecords.length,
-                    }),
-                });
-              }
-              if (canDelete) {
-                swipeActions.push({
-                  key: 'delete',
-                  label: 'Hapus',
-                  icon: <Trash2 className="h-4 w-4" />,
-                  tone: 'danger',
-                  onClick: () =>
-                    setPendingAction({
-                      type: 'delete',
-                      proposal: prop,
-                      kpmCount: matchingRecords.length,
-                    }),
-                });
-              }
-
+          <div className="space-y-3.5">
+            {groupedByKecamatan.map((group) => {
+              const isCollapsed = !isSearching && Boolean(collapsedKecamatans[group.kecamatan]);
               return (
-                <SwipeableRow
-                  key={prop.id}
-                  id={prop.id}
-                  isOpen={openSwipeId === prop.id}
-                  onOpen={setOpenSwipeId}
-                  onClose={() => setOpenSwipeId(null)}
-                  actions={swipeActions}
-                >
+                <section key={group.kecamatan} className="space-y-1.5">
                   <button
                     type="button"
-                    onClick={() => onOpenProposalDetail(prop.id)}
-                    className="flex min-h-[66px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
+                    onClick={() =>
+                      setCollapsedKecamatans((prev) => ({
+                        ...prev,
+                        [group.kecamatan]: !prev[group.kecamatan],
+                      }))
+                    }
+                    aria-expanded={!isCollapsed}
+                    className="flex min-h-[36px] w-full items-center justify-between gap-2 rounded-xl px-1.5 py-1 text-left transition-colors hover:bg-slate-100/80"
                   >
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-slate-900">
-                        {prop.namaProposal}
-                      </p>
-                      <div className="mt-0.5 flex items-center text-xs text-slate-500 tabular-nums">
-                        <span className="truncate">
-                          {matchingRecords.length}/{prop.jumlahKpm ?? 66} · {prop.tipe} ·{' '}
-                          {prop.tahun}
-                        </span>
-                        <span
-                          className={`ml-1.5 inline-flex shrink-0 items-center ${
-                            isLocked ? 'text-rose-600' : 'text-slate-400'
-                          }`}
-                          title={isLocked ? 'Proposal Terkunci' : 'Proposal Terbuka'}
-                        >
-                          {isLocked ? (
-                            <Lock className="h-3.5 w-3.5" />
-                          ) : (
-                            <Unlock className="h-3.5 w-3.5" />
-                          )}
-                        </span>
-                      </div>
-                      <p
-                        className={`mt-0.5 text-xs font-medium ${
-                          prop.checklist.dinas ? 'text-teal-700' : 'text-slate-400'
-                        }`}
-                      >
-                        {prop.checklist.dinas
-                          ? 'Sudah diantar ke Dinas'
-                          : 'Belum diantar ke Dinas'}
-                      </p>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-teal-700 border border-teal-200/70">
+                        <MapPin className="h-3.5 w-3.5" />
+                      </span>
+                      <h2 className="truncate text-xs font-bold tracking-wide text-slate-800">
+                        {group.kecamatan}
+                      </h2>
                     </div>
 
-                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <span className="rounded-md border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-600 tabular-nums">
+                        {group.proposals.length} Proposal
+                      </span>
+                      {!isSearching && (
+                        <ChevronDown
+                          className={`h-4 w-4 text-slate-400 transition-transform ${
+                            isCollapsed ? '-rotate-90' : ''
+                          }`}
+                        />
+                      )}
+                    </div>
                   </button>
-                </SwipeableRow>
+
+                  {!isCollapsed && (
+                    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+                      {group.proposals.map((prop) => {
+                        const matchingRecords = records.filter(
+                          (r) =>
+                            r.proposal === prop.namaProposal &&
+                            (selectedYear === 'all' ? r.tahun === prop.tahun : r.tahun === selectedYear)
+                        );
+                        const isLocked = prop.status === 'locked';
+
+                        const swipeActions: SwipeAction[] = [];
+                        if (canUpdate) {
+                          swipeActions.push({
+                            key: 'lock',
+                            label: isLocked ? 'Buka' : 'Kunci',
+                            icon: isLocked ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />,
+                            tone: isLocked ? 'amber' : 'neutral',
+                            onClick: () =>
+                              setPendingAction({
+                                type: 'lock',
+                                proposal: prop,
+                                kpmCount: matchingRecords.length,
+                              }),
+                          });
+                        }
+                        if (canDelete) {
+                          swipeActions.push({
+                            key: 'delete',
+                            label: 'Hapus',
+                            icon: <Trash2 className="h-4 w-4" />,
+                            tone: 'danger',
+                            onClick: () =>
+                              setPendingAction({
+                                type: 'delete',
+                                proposal: prop,
+                                kpmCount: matchingRecords.length,
+                              }),
+                          });
+                        }
+
+                        return (
+                          <SwipeableRow
+                            key={prop.id}
+                            id={prop.id}
+                            isOpen={openSwipeId === prop.id}
+                            onOpen={setOpenSwipeId}
+                            onClose={() => setOpenSwipeId(null)}
+                            actions={swipeActions}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => onOpenProposalDetail(prop.id)}
+                              className="flex min-h-[66px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm font-medium text-slate-900">
+                                  {prop.namaProposal}
+                                </p>
+                                <div className="mt-0.5 flex items-center text-xs text-slate-500 tabular-nums">
+                                  <span className="truncate">
+                                    {matchingRecords.length}/{prop.jumlahKpm ?? 66} · {prop.tipe} ·{' '}
+                                    {prop.tahun}
+                                  </span>
+                                  <span
+                                    className={`ml-1.5 inline-flex shrink-0 items-center ${
+                                      isLocked ? 'text-rose-600' : 'text-slate-400'
+                                    }`}
+                                    title={isLocked ? 'Proposal Terkunci' : 'Proposal Terbuka'}
+                                  >
+                                    {isLocked ? (
+                                      <Lock className="h-3.5 w-3.5" />
+                                    ) : (
+                                      <Unlock className="h-3.5 w-3.5" />
+                                    )}
+                                  </span>
+                                </div>
+                                <p
+                                  className={`mt-0.5 text-xs font-medium ${
+                                    prop.checklist.dinas ? 'text-teal-700' : 'text-slate-400'
+                                  }`}
+                                >
+                                  {prop.checklist.dinas
+                                    ? 'Sudah diantar ke Dinas'
+                                    : 'Belum diantar ke Dinas'}
+                                </p>
+                              </div>
+
+                              <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                            </button>
+                          </SwipeableRow>
+                        );
+                      })}
+                    </div>
+                  )}
+                </section>
               );
             })}
           </div>

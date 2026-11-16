@@ -36,6 +36,25 @@ function formatChatTime(iso: string): string {
   }
 }
 
+function formatRelativeActiveTime(iso?: string, status?: InternalUser['presenceStatus']): string {
+  if (!iso) {
+    return status === 'online' ? 'Baru saja' : 'Belum tercatat';
+  }
+  const ts = new Date(iso).getTime();
+  if (!Number.isFinite(ts)) {
+    return status === 'online' ? 'Baru saja' : 'Belum tercatat';
+  }
+  const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (diffSec < 60) return 'Baru saja';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin} menit lalu`;
+  const diffHours = Math.floor(diffMin / 60);
+  if (diffHours < 24) return `${diffHours} jam lalu`;
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 30) return `${diffDays} hari lalu`;
+  return new Date(iso).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
+}
+
 export function ChatView({
   currentUser,
   users,
@@ -185,12 +204,18 @@ export function ChatView({
             threadMessages.map((msg) => {
               const isMine = msg.senderId === currentUser.id;
               const kpmCard = msg.sharedKpm;
-              const kpmStatusLabel =
+              const shortStatus =
                 kpmCard?.validasi === 'accepted'
                   ? 'Diterima'
                   : kpmCard?.validasi === 'rejected'
                     ? 'Ditolak'
                     : 'Menunggu';
+              const shortStatusColor =
+                kpmCard?.validasi === 'accepted'
+                  ? 'text-teal-700'
+                  : kpmCard?.validasi === 'rejected'
+                    ? 'text-rose-600'
+                    : 'text-amber-700';
 
               return (
                 <div
@@ -208,93 +233,41 @@ export function ChatView({
                       <button
                         type="button"
                         onClick={() => onOpenSharedKpm?.(kpmCard.kpmId)}
-                        className={`mb-2 block w-full overflow-hidden rounded-xl border text-left transition-colors ${
-                          isMine
-                            ? 'border-teal-500/50 bg-teal-800/70 text-white hover:bg-teal-800'
-                            : 'border-slate-200 bg-slate-50 text-slate-900 hover:bg-slate-100'
-                        }`}
+                        className="mb-2 flex w-full max-w-[270px] items-center gap-2.5 overflow-hidden rounded-xl border border-slate-200 bg-white p-2 text-left text-slate-900 transition-colors hover:bg-slate-50"
                       >
-                        <div className="flex items-center gap-2.5 p-2.5">
-                          <div
-                            className={`flex h-12 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border ${
-                              isMine
-                                ? 'border-teal-600 bg-teal-900/60 text-teal-100'
-                                : 'border-slate-200 bg-white text-slate-400'
-                            }`}
-                          >
-                            {kpmCard.fotoDataUrl ? (
-                              <DriveImage
-                                src={kpmCard.fotoDataUrl}
-                                thumbnailUrl={kpmCard.fotoThumbnailUrl}
-                                alt={kpmCard.nama}
-                                className="h-full w-full object-cover"
-                              />
-                            ) : (
-                              <User className="h-4 w-4" />
-                            )}
-                          </div>
-
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center justify-between gap-1.5">
-                              <span
-                                className={`truncate text-[10px] font-medium tabular-nums ${
-                                  isMine ? 'text-teal-200' : 'text-teal-700'
-                                }`}
-                              >
-                                {kpmCard.registerCode}
-                              </span>
-                              <span
-                                className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold ${
-                                  kpmCard.validasi === 'accepted'
-                                    ? isMine
-                                      ? 'bg-teal-600 text-white'
-                                      : 'bg-teal-50 text-teal-800'
-                                    : kpmCard.validasi === 'rejected'
-                                      ? isMine
-                                        ? 'bg-rose-500/80 text-white'
-                                        : 'bg-rose-50 text-rose-700'
-                                      : isMine
-                                        ? 'bg-amber-500/80 text-white'
-                                        : 'bg-amber-50 text-amber-800'
-                                }`}
-                              >
-                                {kpmStatusLabel}
-                              </span>
-                            </div>
-
-                            <p className="mt-0.5 truncate text-xs font-bold leading-snug">
-                              {kpmCard.nama}
-                            </p>
-                            <p
-                              className={`truncate text-[11px] ${
-                                isMine ? 'text-teal-100' : 'text-slate-600'
-                              }`}
-                            >
-                              {kpmCard.itemName || kpmCard.item} · {kpmCard.proposal} ({kpmCard.tahun})
-                            </p>
-                            {kpmCard.kontak && (
-                              <p
-                                className={`truncate text-[10px] tabular-nums ${
-                                  isMine ? 'text-teal-200' : 'text-slate-500'
-                                }`}
-                              >
-                                HP: {kpmCard.kontak}
-                              </p>
-                            )}
-                          </div>
+                        <div className="flex h-11 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-100 text-slate-400">
+                          {kpmCard.fotoDataUrl ? (
+                            <DriveImage
+                              src={kpmCard.fotoDataUrl}
+                              thumbnailUrl={kpmCard.fotoThumbnailUrl}
+                              alt={kpmCard.nama}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <User className="h-4 w-4" />
+                          )}
                         </div>
 
-                        <div
-                          className={`flex items-center justify-between border-t px-2.5 py-1.5 text-[10px] font-semibold ${
-                            isMine
-                              ? 'border-teal-600/60 bg-teal-900/30 text-teal-100'
-                              : 'border-slate-200 bg-white text-teal-700'
-                          }`}
-                        >
-                          <span>Kartu Data KPM</span>
-                          <span className="inline-flex items-center gap-0.5">
-                            Buka Detail <ChevronRight className="h-3 w-3" />
-                          </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-1.5">
+                            <p className="truncate text-xs font-bold leading-snug text-slate-900">
+                              {kpmCard.nama}
+                            </p>
+                            <span className={`shrink-0 text-[10px] font-bold ${shortStatusColor}`}>
+                              {shortStatus}
+                            </span>
+                          </div>
+                          <p className="truncate text-[11px] text-slate-600">
+                            {kpmCard.item} · {kpmCard.proposal}
+                          </p>
+                          <div className="mt-0.5 flex items-center justify-between gap-2 text-[10px]">
+                            <span className="truncate text-slate-400 tabular-nums">
+                              {kpmCard.registerCode}
+                            </span>
+                            <span className="inline-flex shrink-0 items-center gap-0.5 font-semibold text-teal-700">
+                              Detail <ChevronRight className="h-3 w-3" />
+                            </span>
+                          </div>
                         </div>
                       </button>
                     )}
@@ -368,7 +341,7 @@ export function ChatView({
         >
           <ArrowLeft className="h-5 w-5" />
         </button>
-        <h1 className="truncate text-base font-bold text-slate-900">Chat</h1>
+        <h1 className="truncate text-base font-bold text-slate-900">Obrolan</h1>
       </header>
 
       <div className="space-y-4 px-4 pt-4">
@@ -396,7 +369,7 @@ export function ChatView({
             type="search"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Cari Admin atau SuperAdmin..."
+            placeholder="Cari kontak..."
             className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pr-3.5 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
           />
         </div>
@@ -404,22 +377,35 @@ export function ChatView({
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
           {filteredPeers.length === 0 ? (
             <p className="px-4 py-8 text-center text-xs text-slate-500">
-              Tidak ada kontak Admin atau SuperAdmin ditemukan.
+              Tidak ada kontak ditemukan
             </p>
           ) : (
             filteredPeers.map((peer) => {
-              const peerMsgs = messages
-                .filter(
-                  (m) =>
-                    (m.senderId === currentUser.id && m.recipientId === peer.id) ||
-                    (m.senderId === peer.id && m.recipientId === currentUser.id)
-                )
-                .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-              const lastMsg = peerMsgs[0];
-              const unreadCount = peerMsgs.filter(
+              const unreadCount = messages.filter(
                 (m) => m.senderId === peer.id && m.recipientId === currentUser.id && !m.readAt
               ).length;
-              const presenceMeta = getPresenceMeta(peer.presenceStatus);
+              const statusShortLabel =
+                peer.presenceStatus === 'online'
+                  ? 'Online'
+                  : peer.presenceStatus === 'idle'
+                    ? 'Idle'
+                    : 'Offline';
+              const statusDotColor =
+                peer.presenceStatus === 'online'
+                  ? 'bg-emerald-500'
+                  : peer.presenceStatus === 'idle'
+                    ? 'bg-amber-500'
+                    : 'bg-slate-400';
+              const statusTextColor =
+                peer.presenceStatus === 'online'
+                  ? 'text-emerald-700'
+                  : peer.presenceStatus === 'idle'
+                    ? 'text-amber-700'
+                    : 'text-slate-500';
+              const relativeTimeLabel = formatRelativeActiveTime(
+                peer.lastActiveAt || peer.updatedAt,
+                peer.presenceStatus
+              );
 
               return (
                 <button
@@ -439,51 +425,38 @@ export function ChatView({
                     ) : (
                       <User className="h-5 w-5" />
                     )}
-                    <PresenceDot
-                      status={peer.presenceStatus}
-                      size="md"
-                      className="absolute -right-1 -bottom-1"
-                    />
+                    {unreadCount > 0 && (
+                      <span className="absolute -top-1.5 -right-1.5 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-teal-700 px-1 text-[10px] font-bold text-white ring-2 ring-white tabular-nums">
+                        {unreadCount > 99 ? '99+' : unreadCount}
+                      </span>
+                    )}
                   </div>
 
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex min-w-0 items-center gap-1.5">
-                        <p className="truncate text-sm font-bold text-slate-900">{peer.nama}</p>
-                        <span
-                          className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold ${
-                            peer.role === 'SuperAdmin'
-                              ? 'bg-slate-900 text-white'
-                              : 'bg-teal-50 text-teal-800'
-                          }`}
-                        >
-                          {peer.role}
-                        </span>
-                      </div>
-                      {lastMsg && (
-                        <span className="shrink-0 text-[10px] text-slate-400 tabular-nums">
-                          {formatChatTime(lastMsg.createdAt)}
-                        </span>
-                      )}
+                    <p className="truncate text-sm font-bold text-slate-900">{peer.nama}</p>
+                    <div className="mt-1">
+                      <span
+                        className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                          peer.role === 'SuperAdmin'
+                            ? 'bg-slate-900 text-white'
+                            : 'bg-teal-50 text-teal-800'
+                        }`}
+                      >
+                        {peer.role}
+                      </span>
                     </div>
+                  </div>
 
-                    <div className="mt-0.5 flex items-center justify-between gap-2">
-                      <p className="truncate text-xs text-slate-500">
-                        {lastMsg
-                          ? `${lastMsg.senderId === currentUser.id ? 'Anda: ' : ''}${
-                              lastMsg.text ||
-                              (lastMsg.sharedKpm
-                                ? `[Kartu KPM: ${lastMsg.sharedKpm.nama}]`
-                                : '')
-                            }`
-                          : presenceMeta.label}
-                      </p>
-                      {unreadCount > 0 && (
-                        <span className="flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-teal-700 px-1.5 text-[10px] font-bold text-white tabular-nums">
-                          {unreadCount}
-                        </span>
-                      )}
+                  <div className="shrink-0 text-right">
+                    <div className="inline-flex items-center justify-end gap-1.5">
+                      <span className={`h-2 w-2 shrink-0 rounded-full ${statusDotColor}`} />
+                      <span className={`text-xs font-semibold ${statusTextColor}`}>
+                        {statusShortLabel}
+                      </span>
                     </div>
+                    <p className="mt-0.5 text-[11px] text-slate-400 tabular-nums">
+                      {relativeTimeLabel}
+                    </p>
                   </div>
                 </button>
               );

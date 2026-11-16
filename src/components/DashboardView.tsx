@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
-  Archive,
   Banknote,
   Bell,
   CheckCircle2,
@@ -30,7 +29,6 @@ import {
   formatRupiah,
   formatUploadDateTime,
   getItemHierarchyRank,
-  isArchivedKpm,
   resolvePackageForKpm,
 } from '../utils/imageProcessor';
 import { DriveImage } from './DriveImage';
@@ -195,14 +193,11 @@ export function DashboardView({
     return { priorityCount, reviewCount, highCount, totalClassified, priorityPct };
   }, [filteredRecords]);
 
-  // Arsip & Dinas attention counts
+  // Dinas attention counts
   const attentionCounts = useMemo(() => {
-    const unreturnedArchive = filteredRecords.filter(
-      (r) => isArchivedKpm(r) && !r.berkasDikembalikan
-    ).length;
     const pendingDinas = filteredProposals.filter((p) => !p.checklist.dinas).length;
-    return { unreturnedArchive, pendingDinas };
-  }, [filteredRecords, filteredProposals]);
+    return { pendingDinas };
+  }, [filteredProposals]);
 
   // Detailed proposal breakdown
   const proposalSummaryList = useMemo(() => {
@@ -317,11 +312,6 @@ export function DashboardView({
 
   const yearDisplayLabel = selectedYear === 'all' ? 'Semua Tahun' : `Tahun ${selectedYear}`;
 
-  const ringRadius = 23;
-  const ringCircumference = 2 * Math.PI * ringRadius;
-  const ringOffset =
-    ringCircumference - (kpmStats.acceptanceRate / 100) * ringCircumference;
-
   const incompleteQuotaProposals = useMemo(
     () => proposalSummaryList.filter((p) => p.target > 0 && p.activeKpmCount < p.target),
     [proposalSummaryList]
@@ -339,7 +329,6 @@ export function DashboardView({
   const hasAttentionItems =
     pendingUsersCount > 0 ||
     duplicateNikCount > 0 ||
-    attentionCounts.unreturnedArchive > 0 ||
     attentionCounts.pendingDinas > 0 ||
     incompleteQuotaProposals.length > 0;
 
@@ -509,28 +498,6 @@ export function DashboardView({
                   </button>
                 )}
 
-                {attentionCounts.unreturnedArchive > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setOpenHeaderMenu('none');
-                      onOpenArsip?.();
-                    }}
-                    className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-slate-50"
-                  >
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-700">
-                      <Archive className="h-4 w-4" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold text-slate-900">
-                        {attentionCounts.unreturnedArchive} Berkas Arsip Belum Kembali
-                      </p>
-                      <p className="text-[11px] text-slate-500">Pantau pengembalian berkas fisik</p>
-                    </div>
-                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-                  </button>
-                )}
-
                 {attentionCounts.pendingDinas > 0 && (
                   <button
                     type="button"
@@ -556,7 +523,6 @@ export function DashboardView({
                 {unreadChatCount === 0 &&
                   pendingUsersCount === 0 &&
                   duplicateNikCount === 0 &&
-                  attentionCounts.unreturnedArchive === 0 &&
                   incompleteQuotaProposals.length === 0 &&
                   attentionCounts.pendingDinas === 0 && (
                     <div className="px-4 py-6 text-center text-xs text-slate-500">
@@ -596,7 +562,7 @@ export function DashboardView({
                 >
                   <span className="flex items-center gap-2.5">
                     <MessageSquare className="h-4 w-4 text-teal-700" />
-                    <span>Chat</span>
+                    <span>Obrolan</span>
                   </span>
                   {unreadChatCount > 0 && (
                     <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
@@ -624,15 +590,34 @@ export function DashboardView({
       <main className="space-y-5 px-4 pt-4">
         {/* 1. EXECUTIVE COMMAND HERO */}
         <section className="rounded-3xl bg-slate-900 p-5 text-white">
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-lg font-bold tracking-tight text-white leading-snug">
-                Halo, {currentUser.nama}
+          <div className="min-w-0">
+            <p className="break-words text-lg leading-snug font-bold tracking-tight text-white">
+              Halo, {currentUser.nama}
+            </p>
+            <p className="mt-0.5 text-xs font-medium text-slate-400">
+              {currentUser.role}
+            </p>
+          </div>
+
+          <div className="mt-4 flex items-end justify-between gap-3">
+            <button
+              type="button"
+              onClick={() => onOpenKpmList({ status: 'all' })}
+              className="min-w-0 flex-1 text-left transition-opacity hover:opacity-90"
+            >
+              <p className="text-xs font-medium text-slate-400">
+                Total KPM
               </p>
-              <p className="mt-0.5 text-xs font-medium text-slate-400">
-                {currentUser.role}
-              </p>
-            </div>
+              <div className="mt-1 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+                <span className="text-3xl font-bold tracking-tight tabular-nums">
+                  {kpmStats.total}
+                </span>
+                <span className="text-sm font-medium text-slate-400">/</span>
+                <span className="text-xs font-medium text-teal-300 tabular-nums">
+                  {kpmStats.accepted} Diterima
+                </span>
+              </div>
+            </button>
 
             <div className="relative inline-flex min-h-[44px] min-w-[104px] shrink-0 items-center rounded-xl border border-white/50 bg-white/15 transition-colors hover:border-white/75 hover:bg-white/20">
               <select
@@ -652,60 +637,6 @@ export function DashboardView({
               </select>
               <ChevronDown className="pointer-events-none absolute right-3 h-4 w-4 text-white" />
             </div>
-          </div>
-
-          <div className="mt-4 flex items-center justify-between gap-4">
-            <button
-              type="button"
-              onClick={() => onOpenKpmList({ status: 'all' })}
-              className="min-w-0 flex-1 text-left transition-opacity hover:opacity-90"
-            >
-              <p className="text-xs font-medium text-slate-400">
-                Total Usulan · {yearDisplayLabel}
-              </p>
-              <div className="mt-1 flex items-baseline gap-2.5">
-                <span className="text-3xl font-bold tracking-tight tabular-nums">
-                  {kpmStats.total}
-                </span>
-                <span className="text-xs font-medium text-teal-300 tabular-nums">
-                  {kpmStats.accepted} Diterima
-                </span>
-              </div>
-            </button>
-
-            {/* Circular Acceptance Ring */}
-            <button
-              type="button"
-              onClick={() => onOpenKpmList({ status: 'accepted' })}
-              aria-label={`Rasio diterima ${kpmStats.acceptanceRate}%`}
-              className="relative flex h-14 w-14 shrink-0 items-center justify-center transition-opacity hover:opacity-90"
-            >
-              <svg className="h-14 w-14 -rotate-90" viewBox="0 0 56 56">
-                <circle
-                  cx="28"
-                  cy="28"
-                  r={ringRadius}
-                  fill="none"
-                  stroke="rgba(255,255,255,0.12)"
-                  strokeWidth="5"
-                />
-                <circle
-                  cx="28"
-                  cy="28"
-                  r={ringRadius}
-                  fill="none"
-                  stroke="#2dd4bf"
-                  strokeWidth="5"
-                  strokeLinecap="round"
-                  strokeDasharray={ringCircumference}
-                  strokeDashoffset={ringOffset}
-                  className="transition-all duration-300"
-                />
-              </svg>
-              <span className="absolute text-xs font-bold text-white tabular-nums">
-                {kpmStats.acceptanceRate}%
-              </span>
-            </button>
           </div>
 
           {/* Acceptance Ratio Bar */}
@@ -860,24 +791,6 @@ export function DashboardView({
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-medium text-slate-900">
                       Terdeteksi {duplicateNikCount} Duplikasi NIK / KK
-                    </p>
-                  </div>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-                </button>
-              )}
-
-              {attentionCounts.unreturnedArchive > 0 && (
-                <button
-                  type="button"
-                  onClick={() => onOpenArsip?.()}
-                  className="flex min-h-[50px] w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-slate-50"
-                >
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
-                    <Archive className="h-4 w-4" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-medium text-slate-900">
-                      {attentionCounts.unreturnedArchive} Berkas Ditolak Belum Dikembalikan
                     </p>
                   </div>
                   <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />

@@ -40,6 +40,7 @@ const WILAYAH_STORAGE_KEY = 'masdeta_wilayah_v1';
 const INTERNAL_USERS_STORAGE_KEY = 'masdeta_internal_users_v1';
 const PROPOSAL_HISTORY_STORAGE_KEY = 'masdeta_proposal_history_v1';
 const KPM_AUDIT_STORAGE_KEY = 'masdeta_kpm_audit_v1';
+const CUSTOM_YEARS_STORAGE_KEY = 'masdeta_custom_years_v1';
 const CLEAN_SLATE_KEY = 'masdeta_clean_slate_v1';
 const MAX_DIMENSION = 1600;
 const JPEG_QUALITY = 0.82;
@@ -168,6 +169,62 @@ export function resolveProposalDomicile(
   }
 
   return { kabKota, kecamatan, kelurahan };
+}
+
+export function formatKecamatanCategoryLabel(rawKecamatan?: string): string {
+  const trimmed = (rawKecamatan || '').trim();
+  if (!trimmed) return 'Wilayah Lainnya';
+  const withoutPrefix = trimmed.replace(/^kecamatan\s+/i, '').trim();
+  if (!withoutPrefix) return 'Wilayah Lainnya';
+  return `Kecamatan ${capitalizeWords(withoutPrefix)}`;
+}
+
+export function resolveProposalKecamatanCategory(
+  proposalName: string,
+  proposals: ProposalRecord[],
+  tahun?: string,
+  wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST
+): string {
+  const domicile = resolveProposalDomicile(proposalName, proposals, tahun, wilayahList);
+  if (domicile.kecamatan) {
+    return formatKecamatanCategoryLabel(domicile.kecamatan);
+  }
+
+  const lower = proposalName.trim().toLowerCase();
+  const allKecamatans = wilayahList
+    .flatMap((w) => w.kecamatanList.map((k) => k.nama))
+    .sort((a, b) => b.length - a.length);
+  const directKec = allKecamatans.find((kec) => lower.includes(kec.toLowerCase()));
+  if (directKec) {
+    return formatKecamatanCategoryLabel(directKec);
+  }
+
+  const regexMatch = proposalName.match(/Kecamatan\s+([^,/-]+)/i);
+  if (regexMatch) {
+    return formatKecamatanCategoryLabel(regexMatch[1]);
+  }
+
+  return 'Wilayah Lainnya';
+}
+
+export function sortProposalsWithinKecamatan<T>(
+  items: T[],
+  getName: (item: T) => string
+): T[] {
+  return [...items].sort((a, b) => {
+    const nameA = getName(a);
+    const nameB = getName(b);
+    const isKecA = isKecamatanProposal(nameA);
+    const isKecB = isKecamatanProposal(nameB);
+    if (isKecA !== isKecB) return isKecA ? -1 : 1;
+    return nameA.localeCompare(nameB, 'id');
+  });
+}
+
+export function sortKecamatanCategoryNames(a: string, b: string): number {
+  if (a === 'Wilayah Lainnya' && b !== 'Wilayah Lainnya') return 1;
+  if (b === 'Wilayah Lainnya' && a !== 'Wilayah Lainnya') return -1;
+  return a.localeCompare(b, 'id');
 }
 
 export function buildCombinedProposalName({
@@ -1405,4 +1462,25 @@ export function diffKpmRecordChanges(
   return changes;
 }
 
+export function loadCustomYears(fallback: string[] = []): string[] {
+  try {
+    const raw = localStorage.getItem(CUSTOM_YEARS_STORAGE_KEY);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return fallback;
+    return parsed
+      .map((yr) => String(yr || '').trim())
+      .filter((yr) => /^\d{4}$/.test(yr));
+  } catch {
+    return fallback;
+  }
+}
 
+export function saveCustomYears(years: string[]): boolean {
+  try {
+    localStorage.setItem(CUSTOM_YEARS_STORAGE_KEY, JSON.stringify(years));
+    return true;
+  } catch {
+    return false;
+  }
+}

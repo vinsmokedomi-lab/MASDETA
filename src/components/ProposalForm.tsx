@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
   Check,
@@ -32,6 +32,7 @@ import { PlaceholderSelect } from './FormControls';
 interface ProposalFormProps {
   proposal: ProposalRecord;
   existingProposals?: ProposalRecord[];
+  yearOptions?: string[];
   feedback?: { type: 'success' | 'error'; message: string } | null;
   onDismissFeedback?: () => void;
   onBack: () => void;
@@ -162,6 +163,7 @@ function SwitchToggle({
 export function ProposalForm({
   proposal,
   existingProposals = [],
+  yearOptions,
   feedback,
   onDismissFeedback,
   onBack,
@@ -209,6 +211,18 @@ export function ProposalForm({
   }, [proposal]);
 
   const isPersistedLocked = proposal.status === 'locked';
+
+  const resolvedYearOptions = useMemo(() => {
+    const set = new Set<string>(TAHUN_OPTIONS);
+    (yearOptions || []).forEach((y) => {
+      if (y) set.add(y);
+    });
+    existingProposals.forEach((p) => {
+      if (p.tahun) set.add(p.tahun);
+    });
+    if (values.tahun) set.add(values.tahun);
+    return Array.from(set).sort((a, b) => b.localeCompare(a));
+  }, [yearOptions, existingProposals, values.tahun]);
 
   const updateChecklist = (key: ToggleRowConfig['key'], nextVal: boolean) => {
     if (key !== 'dinas' || isPersistedLocked) return;
@@ -392,7 +406,7 @@ export function ProposalForm({
                       errors.tahun ? 'border-rose-400' : 'border-slate-300'
                     }`}
                   >
-                    {TAHUN_OPTIONS.map((yr) => (
+                    {resolvedYearOptions.map((yr) => (
                       <option key={yr} value={yr}>
                         {yr}
                       </option>

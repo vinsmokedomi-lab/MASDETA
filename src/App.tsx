@@ -62,6 +62,7 @@ import {
   diffKpmRecordChanges,
   formatValidationLabel,
   generateRegisterCode,
+  loadCustomYears,
   loadInternalUsers,
   loadItemList,
   loadKpmAuditLogs,
@@ -75,6 +76,8 @@ import {
   recalculateProposalRegisterCodes,
   removeDocumentFromDrive,
   resolvePackageForKpm,
+  resolveProposalDomicile,
+  saveCustomYears,
   saveInternalUsers,
   saveItemList,
   saveKpmAuditLogs,
@@ -85,6 +88,8 @@ import {
   saveProposals,
   saveWilayahList,
 } from './utils/imageProcessor';
+import { loadIdbSnapshot, saveIdbValue } from './utils/indexedDbStorage';
+import { TAHUN_OPTIONS } from './data/kpmOptions';
 import { importProposalKpmFromCsv } from './utils/csvImporter';
 import { KpmRegistrationForm } from './components/KpmRegistrationForm';
 import { KpmDetailView } from './components/KpmDetailView';
@@ -94,6 +99,7 @@ import { ProposalForm } from './components/ProposalForm';
 import { ProposalDetailView } from './components/ProposalDetailView';
 import { DocumentLightbox } from './components/DocumentLightbox';
 import { OfflineIndicator } from './components/PWAInstallButton';
+import { useOnlineStatus } from './hooks/usePWAInstall';
 import { BottomNavBar, MainTab, QuickAddSheet } from './components/BottomNavBar';
 import { DashboardView } from './components/DashboardView';
 import { KpmListView } from './components/KpmListView';
@@ -108,7 +114,11 @@ import { ChatView } from './components/ChatView';
 import { UserProfileView } from './components/UserProfileView';
 import { AppUpdateModal } from './components/AppUpdateModal';
 import { PullToRefresh } from './components/PullToRefresh';
-import { AppUpdateInfo, checkForAppUpdate } from './services/appUpdater';
+import {
+  AppUpdateInfo,
+  checkForAppUpdate,
+  getCachedMandatoryUpdate,
+} from './services/appUpdater';
 import { APP_VERSION } from './config/appVersion';
 
 type SubView =
@@ -285,10 +295,13 @@ export default function App() {
   const [internalUsers, setInternalUsers] = useState<InternalUser[]>(() =>
     loadInternalUsers(INITIAL_INTERNAL_USERS)
   );
+  const [customYears, setCustomYears] = useState<string[]>(() => loadCustomYears([]));
+  const [idbHydrated, setIdbHydrated] = useState(false);
 
   const [editingKpmRecord, setEditingKpmRecord] = useState<KpmRecord | null>(null);
   const [activeKpmId, setActiveKpmId] = useState<string | null>(null);
   const [activeProposalId, setActiveProposalId] = useState<string | null>(null);
+  const [addProposalInitialYear, setAddProposalInitialYear] = useState<string | undefined>(undefined);
   const [pendingSelectedProposal, setPendingSelectedProposal] = useState<{
     namaProposal: string;
     tahun: string;
@@ -339,9 +352,20 @@ export default function App() {
   const [supabaseReady, setSupabaseReady] = useState<boolean>(false);
   const [supabaseSchemaMissing, setSupabaseSchemaMissing] = useState<boolean>(false);
   const [dismissedSchemaNotice, setDismissedSchemaNotice] = useState<boolean>(false);
-  const [appUpdateInfo, setAppUpdateInfo] = useState<AppUpdateInfo | null>(null);
-  const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
+  const [appUpdateInfo, setAppUpdateInfo] = useState<AppUpdateInfo | null>(() =>
+    getCachedMandatoryUpdate()
+  );
+  const [isUpdateModalOpen, setIsUpdateModalOpen] = useState<boolean>(() =>
+    Boolean(getCachedMandatoryUpdate())
+  );
   const [checkingAppUpdate, setCheckingAppUpdate] = useState(false);
+
+  const {
+    isOnline,
+    onlineVerified,
+    isChecking: checkingInternet,
+    checkConnection,
+  } = useOnlineStatus();
 
   const wsRef = useRef<WebSocket | null>(null);
   const subViewRef = useRef<SubView>(subView);
@@ -350,12 +374,27 @@ export default function App() {
   const sessionTokenRef = useRef<string | null>(sessionToken);
   const currentUserIdRef = useRef<string | null>(sessionUserId);
   const supabaseReadyRef = useRef<boolean>(supabaseReady);
+  const isOnlineRef = useRef<boolean>(isOnline);
   const lastLocalSyncAtRef = useRef<number>(0);
   const isManualRefreshingRef = useRef<boolean>(false);
+  const hasAppliedRemoteRef = useRef<boolean>(false);
+  const lastUpdateCheckAtRef = useRef<number>(0);
 
   useEffect(() => {
+    isOnlineRef.current = isOnline;
+  }, [isOnline]);
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) {
+      return;
+    }
+
     let cancelled = false;
-    const runStartupUpdateCheck = async () => {
+
+    const runBackgroundUpdateCheck = async (force = false) => {
+      const now = Date.now();
+      if (!force && now - lastUpdateCheckAtRef.current < 60_000) return;
+      lastUpdateCheckAtRef.current = now;
       try {
         const info = await checkForAppUpdate();
         if (!cancelled && info.hasUpdate) {
@@ -363,12 +402,28 @@ export default function App() {
           setIsUpdateModalOpen(true);
         }
       } catch {
-        // Abaikan error jaringan diam-diam saat pengecekan otomatis di latar
+        // Abaikan error jaringan diam-diam; versi lama tetap terkunci jika cache update wajib sudah tercatat
       }
     };
-    void runStartupUpdateCheck();
+
+    void runBackgroundUpdateCheck(true);
+
+    const handleOnline = () => {
+      void runBackgroundUpdateCheck(true);
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void runBackgroundUpdateCheck(false);
+      }
+    };
+
+    window.addEventListener('online', handleOnline);
+    document.addEventListener('visibilitychange', handleVisibility);
+
     return () => {
       cancelled = true;
+      window.removeEventListener('online', handleOnline);
+      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, []);
 
@@ -499,54 +554,133 @@ export default function App() {
     return dupes;
   }, [records, selectedYear]);
 
+  // Hydrate last known operational state from IndexedDB for reliable offline startup
   useEffect(() => {
-    const saved = saveKpmRecords(records);
-    if (!saved) {
+    let cancelled = false;
+    void loadIdbSnapshot()
+      .then((snapshot) => {
+        if (cancelled || hasAppliedRemoteRef.current) return;
+        if (snapshot.customYears && snapshot.customYears.length > 0) {
+          setCustomYears((prev) => Array.from(new Set([...prev, ...snapshot.customYears!])));
+        }
+        if (snapshot.proposals && (snapshot.proposals.length > 0 || latestDataRef.current.proposals.length === 0)) {
+          setProposals(snapshot.proposals);
+        }
+        if (snapshot.items && snapshot.items.length > 0) {
+          setItems(snapshot.items);
+        }
+        if (snapshot.pengelolaList && snapshot.pengelolaList.length > 0) {
+          setPengelolaList(snapshot.pengelolaList);
+        }
+        if (snapshot.pekerjaanList && snapshot.pekerjaanList.length > 0) {
+          setPekerjaanList(snapshot.pekerjaanList);
+        }
+        if (snapshot.wilayahList && snapshot.wilayahList.length > 0) {
+          setWilayahList(snapshot.wilayahList);
+        }
+        if (snapshot.proposalHistory && snapshot.proposalHistory.length > 0) {
+          setProposalHistory(snapshot.proposalHistory);
+        }
+        if (snapshot.kpmAuditLogs && snapshot.kpmAuditLogs.length > 0) {
+          setKpmAuditLogs(snapshot.kpmAuditLogs);
+        }
+        if (snapshot.records && (snapshot.records.length > 0 || latestDataRef.current.records.length === 0)) {
+          setRecords(snapshot.records);
+        }
+        if (snapshot.internalUsers && snapshot.internalUsers.length > 0) {
+          setInternalUsers(snapshot.internalUsers);
+        }
+        if (snapshot.directMessages && snapshot.directMessages.length > 0) {
+          setDirectMessages((prev) => (prev.length === 0 ? snapshot.directMessages! : prev));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIdbHydrated(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const savedLocal = saveKpmRecords(records);
+    if (idbHydrated) {
+      void saveIdbValue('records', records).then((savedIdb) => {
+        if (!savedLocal && !savedIdb) {
+          setFeedback({
+            type: 'error',
+            message: 'Penyimpanan lokal penuh. Hapus beberapa data lama untuk menyimpan berkas baru.',
+          });
+        }
+      });
+    } else if (!savedLocal && typeof window !== 'undefined' && !('indexedDB' in window)) {
       setFeedback({
         type: 'error',
         message: 'Penyimpanan lokal penuh. Hapus beberapa data lama untuk menyimpan berkas baru.',
       });
     }
-  }, [records]);
+  }, [records, idbHydrated]);
 
   useEffect(() => {
     savePengelolaList(pengelolaList);
-  }, [pengelolaList]);
+    if (idbHydrated) void saveIdbValue('pengelolaList', pengelolaList);
+  }, [pengelolaList, idbHydrated]);
 
   useEffect(() => {
-    const saved = saveProposals(proposals);
-    if (!saved) {
-      setFeedback({
-        type: 'error',
-        message:
-          'Penyimpanan lokal penuh saat menyimpan data proposal. Gunakan file berukuran lebih ringkas.',
+    const savedLocal = saveProposals(proposals);
+    if (idbHydrated) {
+      void saveIdbValue('proposals', proposals).then((savedIdb) => {
+        if (!savedLocal && !savedIdb) {
+          setFeedback({
+            type: 'error',
+            message:
+              'Penyimpanan lokal penuh saat menyimpan data proposal. Gunakan file berukuran lebih ringkas.',
+          });
+        }
       });
     }
-  }, [proposals]);
+  }, [proposals, idbHydrated]);
 
   useEffect(() => {
     saveProposalHistory(proposalHistory);
-  }, [proposalHistory]);
+    if (idbHydrated) void saveIdbValue('proposalHistory', proposalHistory);
+  }, [proposalHistory, idbHydrated]);
 
   useEffect(() => {
     saveKpmAuditLogs(kpmAuditLogs);
-  }, [kpmAuditLogs]);
+    if (idbHydrated) void saveIdbValue('kpmAuditLogs', kpmAuditLogs);
+  }, [kpmAuditLogs, idbHydrated]);
 
   useEffect(() => {
     saveItemList(items);
-  }, [items]);
+    if (idbHydrated) void saveIdbValue('items', items);
+  }, [items, idbHydrated]);
 
   useEffect(() => {
     savePekerjaanList(pekerjaanList);
-  }, [pekerjaanList]);
+    if (idbHydrated) void saveIdbValue('pekerjaanList', pekerjaanList);
+  }, [pekerjaanList, idbHydrated]);
 
   useEffect(() => {
     saveWilayahList(wilayahList);
-  }, [wilayahList]);
+    if (idbHydrated) void saveIdbValue('wilayahList', wilayahList);
+  }, [wilayahList, idbHydrated]);
 
   useEffect(() => {
     saveInternalUsers(internalUsers);
-  }, [internalUsers]);
+    if (idbHydrated) void saveIdbValue('internalUsers', internalUsers);
+  }, [internalUsers, idbHydrated]);
+
+  useEffect(() => {
+    saveCustomYears(customYears);
+    if (idbHydrated) void saveIdbValue('customYears', customYears);
+  }, [customYears, idbHydrated]);
+
+  useEffect(() => {
+    if (idbHydrated && directMessages.length > 0) {
+      void saveIdbValue('directMessages', directMessages);
+    }
+  }, [directMessages, idbHydrated]);
 
   useEffect(() => {
     if (!feedback) return;
@@ -589,6 +723,7 @@ export default function App() {
   );
 
   const applyRemoteOperationalState = useCallback((state: Partial<OperationalDataPayload>) => {
+    hasAppliedRemoteRef.current = true;
     const nextProposals = Array.isArray(state.proposals) ? state.proposals : latestDataRef.current.proposals;
     const nextItems = Array.isArray(state.items) ? state.items : latestDataRef.current.items;
     const nextWilayah = Array.isArray(state.wilayahList) ? state.wilayahList : latestDataRef.current.wilayahList;
@@ -724,6 +859,13 @@ export default function App() {
       patch: Partial<OperationalDataPayload>,
       requiredPermission: keyof UserPermissions
     ): Promise<boolean> => {
+      if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+        setFeedback({
+          type: 'error',
+          message: 'Aksi ditolak: Aplikasi MASDETA wajib terhubung ke internet aktif.',
+        });
+        return false;
+      }
       if (!sessionTokenRef.current && !supabaseReadyRef.current) return false;
       const merged: OperationalDataPayload = {
         ...latestDataRef.current,
@@ -1358,6 +1500,11 @@ export default function App() {
   // dan HANYA berfungsi melakukan navigasi kembali jika tidak ada BottomNav di layar.
   const handleAndroidBackRef = useRef<() => void>(() => {});
   handleAndroidBackRef.current = () => {
+    if (isUpdateModalOpen) {
+      // Aplikasi versi lama terkunci wajib update: tombol Back tidak boleh menutup popup
+      return;
+    }
+
     const bottomNavVisible =
       subView === 'none' && !(activeTab === 'menu' && menuSection !== 'root');
 
@@ -1368,11 +1515,6 @@ export default function App() {
 
     if (lightboxDoc) {
       setLightboxDoc(null);
-      return;
-    }
-
-    if (isUpdateModalOpen) {
-      setIsUpdateModalOpen(false);
       return;
     }
 
@@ -1745,11 +1887,16 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const openAddProposalForm = (fromTab: MainTab = activeTab, fromKpmForm = false) => {
+  const openAddProposalForm = (
+    fromTab: MainTab = activeTab,
+    fromKpmForm = false,
+    initialTahun?: string
+  ) => {
     if (!requirePermission('add', 'menambah proposal baru')) return;
     setFeedback(null);
     setReturnToTab(fromTab);
     setAddProposalFromKpmForm(fromKpmForm);
+    setAddProposalInitialYear(initialTahun);
     setSubView('add-proposal');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -2809,6 +2956,12 @@ export default function App() {
     email: string,
     password: string
   ): Promise<{ ok: boolean; error?: string }> => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      return {
+        ok: false,
+        error: 'Koneksi internet aktif wajib tersedia untuk masuk ke MASDETA.',
+      };
+    }
     if (supabaseReadyRef.current) {
       try {
         const res = await supabaseLogin(email, password);
@@ -2896,6 +3049,12 @@ export default function App() {
     fotoThumbnailUrl?: string;
     fotoFileId?: string;
   }): Promise<{ ok: boolean; error?: string; message?: string }> => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      return {
+        ok: false,
+        error: 'Koneksi internet aktif wajib tersedia untuk mendaftarkan akun.',
+      };
+    }
     if (supabaseReadyRef.current) {
       try {
         const res = await supabaseRegisterInternalUser({
@@ -3374,6 +3533,13 @@ export default function App() {
     sharedKpm?: SharedKpmCard
   ) => {
     if (!currentUser) return;
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      setFeedback({
+        type: 'error',
+        message: 'Koneksi internet aktif diperlukan untuk mengirim pesan.',
+      });
+      throw new Error('Offline');
+    }
 
     if (supabaseReadyRef.current) {
       const savedMsg = await supabaseSendDirectMessage({
@@ -3529,6 +3695,169 @@ export default function App() {
     });
   };
 
+  const handleTransferProposalKpms = async (
+    kpmIds: string[],
+    targetProposalId: string
+  ): Promise<boolean> => {
+    if (!requirePermission('update', 'memindahkan KPM antar proposal')) return false;
+
+    const targetProposal = proposals.find((p) => p.id === targetProposalId);
+    if (!targetProposal) {
+      setFeedback({
+        type: 'error',
+        message: 'Proposal tujuan transfer tidak ditemukan.',
+      });
+      return false;
+    }
+
+    if (targetProposal.status === 'locked') {
+      setFeedback({
+        type: 'error',
+        message: `Proposal tujuan "${targetProposal.namaProposal}" sedang Terkunci.`,
+      });
+      return false;
+    }
+
+    const selectedIdSet = new Set(kpmIds);
+    const eligibleTargets = records.filter((rec) => {
+      if (!selectedIdSet.has(rec.id)) return false;
+      if (
+        rec.proposal === targetProposal.namaProposal &&
+        rec.tahun === targetProposal.tahun
+      ) {
+        return false;
+      }
+      const sourceProposal =
+        proposals.find(
+          (p) => p.namaProposal === rec.proposal && p.tahun === rec.tahun
+        ) ?? proposals.find((p) => p.namaProposal === rec.proposal);
+      if (sourceProposal?.status === 'locked') {
+        return false;
+      }
+      return true;
+    });
+
+    if (eligibleTargets.length === 0) {
+      setFeedback({
+        type: 'error',
+        message:
+          'Tidak ada calon KPM yang dapat ditransfer (pastikan proposal asal dan tujuan berstatus Terbuka).',
+      });
+      return false;
+    }
+
+    const now = new Date().toISOString();
+    const eligibleIdSet = new Set(eligibleTargets.map((t) => t.id));
+    const targetDomicile = resolveProposalDomicile(
+      targetProposal.namaProposal,
+      proposals,
+      targetProposal.tahun,
+      wilayahList
+    );
+
+    const addedAuditLogs: KpmAuditLogEntry[] = [];
+    const addedHistoryEntries: ProposalKpmHistoryEntry[] = [];
+
+    eligibleTargets.forEach((prev, idx) => {
+      const changes: KpmAuditLogEntry['changes'] = [
+        {
+          field: 'Proposal',
+          before: prev.proposal,
+          after: targetProposal.namaProposal,
+        },
+      ];
+      if (prev.tahun !== targetProposal.tahun) {
+        changes.push({
+          field: 'Tahun',
+          before: prev.tahun,
+          after: targetProposal.tahun,
+        });
+      }
+
+      addedAuditLogs.push({
+        id: `audit-transfer-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+        kpmId: prev.id,
+        action: 'updated',
+        actorName: currentActor.nama,
+        actorEmail: currentActor.email,
+        timestamp: now,
+        proposal: targetProposal.namaProposal,
+        tahun: targetProposal.tahun,
+        changes,
+      });
+
+      addedHistoryEntries.push(
+        {
+          id: `hist-in-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+          tahun: targetProposal.tahun,
+          proposalName: targetProposal.namaProposal,
+          kpmId: prev.id,
+          kpmName: prev.nama,
+          registerCode: prev.registerCode,
+          action: 'moved_in',
+          fromProposal: prev.proposal,
+          toProposal: targetProposal.namaProposal,
+          actorName: currentActor.nama,
+          timestamp: now,
+        },
+        {
+          id: `hist-out-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+          tahun: prev.tahun,
+          proposalName: prev.proposal,
+          kpmId: prev.id,
+          kpmName: prev.nama,
+          registerCode: prev.registerCode,
+          action: 'moved_out',
+          fromProposal: prev.proposal,
+          toProposal: targetProposal.namaProposal,
+          actorName: currentActor.nama,
+          timestamp: now,
+        }
+      );
+    });
+
+    const mapped = records.map((rec) =>
+      eligibleIdSet.has(rec.id)
+        ? {
+            ...rec,
+            proposal: targetProposal.namaProposal,
+            tahun: targetProposal.tahun,
+            kecamatan: targetDomicile.kecamatan || rec.kecamatan,
+            kelurahan: targetDomicile.kelurahan || rec.kelurahan,
+            updatedAt: now,
+          }
+        : rec
+    );
+
+    const nextRecords = recalculateProposalRegisterCodes(
+      mapped,
+      proposals,
+      items,
+      wilayahList
+    );
+    const nextAuditLogs = [...addedAuditLogs, ...kpmAuditLogs];
+    const nextProposalHistory = [...addedHistoryEntries, ...proposalHistory];
+
+    const ok = await syncOperationalData(
+      {
+        records: nextRecords,
+        kpmAuditLogs: nextAuditLogs,
+        proposalHistory: nextProposalHistory,
+      },
+      'update'
+    );
+    if (!ok) return false;
+
+    setKpmAuditLogs(nextAuditLogs);
+    setProposalHistory(nextProposalHistory);
+    setRecords(nextRecords);
+    setFeedback({
+      type: 'success',
+      message: `${eligibleTargets.length} calon KPM berhasil ditransfer ke "${targetProposal.namaProposal}" (${targetProposal.tahun}).`,
+    });
+    return true;
+  };
+
   const handleToggleBerkasDikembalikan = (kpmId: string, nextValue: boolean) => {
     if (!requirePermission('update', 'mengubah status pengembalian berkas')) return;
     const target = records.find((r) => r.id === kpmId);
@@ -3642,7 +3971,62 @@ export default function App() {
     });
   };
 
+  const handleAddPekerjaanFromForm = (job: string) => {
+    if (!hasPermission('add') && !hasPermission('update')) {
+      requirePermission('add', 'menambah daftar pekerjaan');
+      return;
+    }
+    const clean = job.trim();
+    if (!clean) return;
+    if (pekerjaanList.some((p) => p.trim().toLowerCase() === clean.toLowerCase())) return;
+    const nextPekerjaan = [...pekerjaanList, clean];
+    setPekerjaanList(nextPekerjaan);
+    void syncOperationalData({ pekerjaanList: nextPekerjaan }, hasPermission('add') ? 'add' : 'update');
+  };
+
+  const handleAddCustomYear = (year: string) => {
+    const clean = year.trim();
+    if (!/^\d{4}$/.test(clean)) return;
+    setCustomYears((prev) => (prev.includes(clean) ? prev : [...prev, clean]));
+  };
+
+  const allKnownYears = useMemo(() => {
+    const set = new Set<string>(TAHUN_OPTIONS);
+    customYears.forEach((y) => {
+      if (y) set.add(y);
+    });
+    proposals.forEach((p) => {
+      if (p.tahun) set.add(p.tahun);
+    });
+    items.forEach((i) => {
+      if (i.tahun) set.add(i.tahun);
+    });
+    records.forEach((r) => {
+      if (r.tahun) set.add(r.tahun);
+    });
+    return Array.from(set).sort((a, b) => b.localeCompare(a));
+  }, [customYears, proposals, items, records]);
+
   const showBottomNav = subView === 'none' && !(activeTab === 'menu' && menuSection !== 'root');
+
+  if (!onlineVerified || (!currentUser && !isOnline)) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-100 p-4">
+        <div className="flex flex-col items-center gap-3 rounded-3xl border border-slate-200 bg-white px-8 py-6 shadow-xs">
+          <MasdetaLogo />
+          <p className="text-xs font-semibold text-slate-600">
+            Memeriksa koneksi &amp; sesi MASDETA...
+          </p>
+        </div>
+        <OfflineIndicator
+          isOnline={isOnline}
+          isChecking={checkingInternet}
+          onRetry={checkConnection}
+        />
+        <AppUpdateModal updateInfo={appUpdateInfo} open={isUpdateModalOpen} />
+      </div>
+    );
+  }
 
   if ((sessionToken || supabaseReady) && !authReady && !currentUser) {
     return (
@@ -3651,6 +4035,12 @@ export default function App() {
           <MasdetaLogo />
           <p className="text-xs font-semibold text-slate-600">Memuat sesi MASDETA...</p>
         </div>
+        <OfflineIndicator
+          isOnline={isOnline}
+          isChecking={checkingInternet}
+          onRetry={checkConnection}
+        />
+        <AppUpdateModal updateInfo={appUpdateInfo} open={isUpdateModalOpen} />
       </div>
     );
   }
@@ -3658,7 +4048,11 @@ export default function App() {
   if (!currentUser) {
     return (
       <div className="min-h-screen bg-slate-200/70 sm:py-3">
-        <OfflineIndicator />
+        <OfflineIndicator
+          isOnline={isOnline}
+          isChecking={checkingInternet}
+          onRetry={checkConnection}
+        />
         <div className="mx-auto min-h-screen w-full max-w-md overflow-x-hidden bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm">
           {supabaseSchemaMissing && !dismissedSchemaNotice && (
             <div className="mx-4 mt-3 flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
@@ -3684,11 +4078,7 @@ export default function App() {
             onLogin={handleLogin}
             onRegister={handleRegister}
           />
-          <AppUpdateModal
-            updateInfo={appUpdateInfo}
-            open={isUpdateModalOpen}
-            onDismiss={() => setIsUpdateModalOpen(false)}
-          />
+          <AppUpdateModal updateInfo={appUpdateInfo} open={isUpdateModalOpen} />
         </div>
       </div>
     );
@@ -3696,7 +4086,11 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-200/70 sm:py-3">
-      <OfflineIndicator />
+      <OfflineIndicator
+        isOnline={isOnline}
+        isChecking={checkingInternet}
+        onRetry={checkConnection}
+      />
 
       {supabaseSchemaMissing && !dismissedSchemaNotice && (
         <div className="mx-auto mb-2 w-full max-w-md px-3 sm:px-0">
@@ -3801,6 +4195,7 @@ export default function App() {
       <PullToRefresh
         onRefresh={handleManualRefresh}
         disabled={
+          !isOnline ||
           subView === 'kpm-form' ||
           subView === 'add-proposal' ||
           subView === 'edit-proposal' ||
@@ -3962,6 +4357,7 @@ export default function App() {
               proposals={proposals}
               itemOptions={items}
               pekerjaanOptions={pekerjaanList}
+              yearOptions={allKnownYears}
               wilayahList={wilayahList}
               feedback={feedback}
               onDismissFeedback={() => setFeedback(null)}
@@ -3984,8 +4380,10 @@ export default function App() {
                 }
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
-              onOpenAddProposal={() => openAddProposalForm('kpm', true)}
+              onOpenAddProposal={(selectedYr) => openAddProposalForm('kpm', true, selectedYr)}
               onCreatePengelola={handleCreatePengelola}
+              onAddPekerjaan={handleAddPekerjaanFromForm}
+              onAddYear={handleAddCustomYear}
               onSave={handleSaveKpm}
               onQuickSyncKpmDocuments={handleQuickSyncKpmDocuments}
               onCancelEdit={() => {
@@ -4011,6 +4409,8 @@ export default function App() {
           <AddProposalForm
             existingProposals={proposals}
             wilayahList={wilayahList}
+            yearOptions={allKnownYears}
+            initialTahun={addProposalInitialYear}
             onBack={() => {
               setFeedback(null);
               if (addProposalFromKpmForm) {
@@ -4029,6 +4429,7 @@ export default function App() {
         {subView === 'proposal-detail' && activeProposal && (
           <ProposalDetailView
             proposal={activeProposal}
+            allProposals={proposals}
             records={records}
             items={items}
             historyEntries={proposalHistory}
@@ -4058,6 +4459,7 @@ export default function App() {
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onAcceptAllKpm={handleAcceptAllInProposal}
+            onTransferKpm={handleTransferProposalKpms}
             onOpenFullHistory={() => {
               setSubView('proposal-history');
               window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -4085,6 +4487,7 @@ export default function App() {
           <ProposalForm
             proposal={activeProposal}
             existingProposals={proposals}
+            yearOptions={allKnownYears}
             feedback={feedback}
             onDismissFeedback={() => setFeedback(null)}
             onBack={() => {
@@ -4200,6 +4603,8 @@ export default function App() {
           <ProposalListView
             proposals={proposals}
             records={records}
+            wilayahList={wilayahList}
+            yearOptions={allKnownYears}
             selectedYear={selectedYear}
             onChangeYear={setSelectedYear}
             canUpdate={hasPermission('update')}
@@ -4330,12 +4735,8 @@ export default function App() {
         onClose={() => setLightboxDoc(null)}
       />
 
-      {/* In-App Android APK Auto-Updater Modal */}
-      <AppUpdateModal
-        updateInfo={appUpdateInfo}
-        open={isUpdateModalOpen}
-        onDismiss={() => setIsUpdateModalOpen(false)}
-      />
+      {/* In-App Android APK Auto-Updater Modal (Wajib Update, Tidak Bisa Ditutup) */}
+      <AppUpdateModal updateInfo={appUpdateInfo} open={isUpdateModalOpen} />
     </div>
   );
 }

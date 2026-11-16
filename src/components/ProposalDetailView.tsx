@@ -1,16 +1,20 @@
-import { useMemo, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDownLeft,
   ArrowLeft,
+  ArrowRightLeft,
   ArrowUpRight,
+  Check,
   CheckCircle2,
   ChevronRight,
   History,
   Lock,
   Pencil,
+  Search,
   Unlock,
   UserPlus,
   Users,
+  X,
 } from 'lucide-react';
 import {
   ItemBantuan,
@@ -27,6 +31,7 @@ import {
 
 interface ProposalDetailViewProps {
   proposal: ProposalRecord;
+  allProposals: ProposalRecord[];
   records: KpmRecord[];
   items: ItemBantuan[];
   historyEntries: ProposalKpmHistoryEntry[];
@@ -37,11 +42,13 @@ interface ProposalDetailViewProps {
   onAddKpmInProposal: (proposalName: string, tahun: string) => void;
   onViewKpmInProposal: (proposalName: string, tahun: string) => void;
   onAcceptAllKpm: (proposalName: string, tahun: string) => void;
+  onTransferKpm?: (kpmIds: string[], targetProposalId: string) => Promise<boolean> | boolean;
   onOpenFullHistory: () => void;
 }
 
 export function ProposalDetailView({
   proposal,
+  allProposals,
   records,
   items,
   historyEntries,
@@ -52,9 +59,52 @@ export function ProposalDetailView({
   onAddKpmInProposal,
   onViewKpmInProposal,
   onAcceptAllKpm,
+  onTransferKpm,
   onOpenFullHistory,
 }: ProposalDetailViewProps) {
   const [confirmAcceptAll, setConfirmAcceptAll] = useState(false);
+  const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
+  const [transferYear, setTransferYear] = useState<string>(proposal.tahun);
+  const [transferTargetId, setTransferTargetId] = useState<string>('');
+  const [transferKelurahanFilter, setTransferKelurahanFilter] = useState<string>('all');
+  const [transferQuery, setTransferQuery] = useState<string>('');
+  const [selectedTransferIds, setSelectedTransferIds] = useState<string[]>([]);
+  const [isTransferring, setIsTransferring] = useState(false);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const [titleFontPx, setTitleFontPx] = useState<number>(16);
+  const [allowTitleWrap, setAllowTitleWrap] = useState(false);
+
+  useLayoutEffect(() => {
+    const fitTitle = () => {
+      const el = titleRef.current;
+      if (!el) return;
+
+      const parentWidth = el.parentElement?.clientWidth ?? el.clientWidth;
+      if (parentWidth <= 0) return;
+
+      // Mulai dari ukuran normal 16px pada 1 baris, perkecil bertahap hingga 11.5px bila kepanjangan
+      el.style.whiteSpace = 'nowrap';
+      let currentSize = 16;
+      const minSize = 11.5;
+      el.style.fontSize = `${currentSize}px`;
+
+      while (el.scrollWidth > parentWidth && currentSize > minSize) {
+        currentSize = Math.max(minSize, Number((currentSize - 0.5).toFixed(1)));
+        el.style.fontSize = `${currentSize}px`;
+      }
+
+      const stillOverflows = el.scrollWidth > parentWidth;
+      if (stillOverflows) {
+        el.style.whiteSpace = 'normal';
+      }
+      setTitleFontPx(currentSize);
+      setAllowTitleWrap(stillOverflows);
+    };
+
+    fitTitle();
+    window.addEventListener('resize', fitTitle);
+    return () => window.removeEventListener('resize', fitTitle);
+  }, [proposal.namaProposal]);
   const proposalRecords = useMemo(
     () =>
       records.filter(
@@ -217,6 +267,113 @@ export function ProposalDetailView({
       .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   }, [historyEntries, proposal.namaProposal, proposal.tahun]);
 
+  // Transfer KPM helpers
+  const unlockedTargetProposals = useMemo(
+    () =>
+      allProposals.filter(
+        (p) => p.id !== proposal.id && p.status !== 'locked'
+      ),
+    [allProposals, proposal.id]
+  );
+
+  const transferYearOptions = useMemo(() => {
+    const years = Array.from(
+      new Set(unlockedTargetProposals.map((p) => p.tahun).filter(Boolean))
+    ).sort((a, b) => b.localeCompare(a));
+    return years;
+  }, [unlockedTargetProposals]);
+
+  const transferTargetOptions = useMemo(() => {
+    return unlockedTargetProposals
+      .filter((p) => !transferYear || p.tahun === transferYear)
+      .sort((a, b) => a.namaProposal.localeCompare(b.namaProposal, 'id'));
+  }, [unlockedTargetProposals, transferYear]);
+
+  const transferKelurahanOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const rec of proposalRecords) {
+      const kel = rec.kelurahan?.trim() || 'Belum ditentukan';
+      counts.set(kel, (counts.get(kel) ?? 0) + 1);
+    }
+    return Array.from(counts.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'id'));
+  }, [proposalRecords]);
+
+  const filteredTransferRecords = useMemo(() => {
+    const q = transferQuery.trim().toLowerCase();
+    return proposalRecords.filter((rec) => {
+      const kel = rec.kelurahan?.trim() || 'Belum ditentukan';
+      if (transferKelurahanFilter !== 'all' && kel !== transferKelurahanFilter) {
+        return false;
+      }
+      if (!q) return true;
+      return (
+        rec.nama.toLowerCase().includes(q) ||
+        rec.nikKtp.includes(q) ||
+        rec.alamat.toLowerCase().includes(q) ||
+        rec.item.toLowerCase().includes(q)
+      );
+    });
+  }, [proposalRecords, transferKelurahanFilter, transferQuery]);
+
+  const openTransferModal = () => {
+    const defaultYear = transferYearOptions.includes(proposal.tahun)
+      ? proposal.tahun
+      : (transferYearOptions[0] ?? proposal.tahun);
+    const candidates = unlockedTargetProposals.filter((p) => p.tahun === defaultYear);
+    setTransferYear(defaultYear);
+    setTransferTargetId(candidates[0]?.id ?? '');
+    setTransferKelurahanFilter('all');
+    setTransferQuery('');
+    setSelectedTransferIds([]);
+    setIsTransferModalOpen(true);
+  };
+
+  const handleTransferYearChange = (nextYear: string) => {
+    setTransferYear(nextYear);
+    const candidates = unlockedTargetProposals
+      .filter((p) => p.tahun === nextYear)
+      .sort((a, b) => a.namaProposal.localeCompare(b.namaProposal, 'id'));
+    setTransferTargetId(candidates[0]?.id ?? '');
+  };
+
+  const toggleSelectTransferId = (id: string) => {
+    setSelectedTransferIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const allFilteredSelected =
+    filteredTransferRecords.length > 0 &&
+    filteredTransferRecords.every((r) => selectedTransferIds.includes(r.id));
+
+  const toggleSelectAllFiltered = () => {
+    const filteredIds = filteredTransferRecords.map((r) => r.id);
+    if (allFilteredSelected) {
+      const removeSet = new Set(filteredIds);
+      setSelectedTransferIds((prev) => prev.filter((id) => !removeSet.has(id)));
+    } else {
+      setSelectedTransferIds((prev) => Array.from(new Set([...prev, ...filteredIds])));
+    }
+  };
+
+  const handleConfirmTransfer = async () => {
+    if (!onTransferKpm || selectedTransferIds.length === 0 || !transferTargetId || isTransferring) {
+      return;
+    }
+    setIsTransferring(true);
+    try {
+      const ok = await onTransferKpm(selectedTransferIds, transferTargetId);
+      if (ok) {
+        setIsTransferModalOpen(false);
+        setSelectedTransferIds([]);
+      }
+    } finally {
+      setIsTransferring(false);
+    }
+  };
+
   // SVG Donut ring geometry
   const ringRadius = 42;
   const ringCircumference = 2 * Math.PI * ringRadius;
@@ -234,86 +391,96 @@ export function ProposalDetailView({
         >
           <ArrowLeft className="h-5 w-5" />
         </button>
-        <h1 className="truncate text-base font-bold text-slate-900">
-          {proposal.namaProposal} {proposal.tahun}
-        </h1>
+        <h1 className="truncate text-base font-bold text-slate-900">Proposal</h1>
       </header>
 
       <main className="space-y-4 px-4 pt-4">
         {/* Hero Overview Card */}
-        <section className="rounded-3xl bg-white p-5 border border-slate-200">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0 flex-1 space-y-1">
-              <p className="text-sm font-bold text-slate-900 tabular-nums">
+        <section className="rounded-3xl border border-slate-200 bg-white p-5">
+          <div className="space-y-2">
+            {/* Baris 1: Judul Proposal Penuh di Atas Container (font otomatis mengecil bila panjang) */}
+            <h2
+              ref={titleRef}
+              style={{ fontSize: `${titleFontPx}px` }}
+              className={`font-bold leading-snug tracking-tight text-slate-900 ${
+                allowTitleWrap ? 'whitespace-normal' : 'whitespace-nowrap'
+              }`}
+            >
+              {proposal.namaProposal}
+            </h2>
+
+            {/* Baris 2: Tipe & Tahun + Status Kunci */}
+            <div className="flex items-center justify-between gap-2 border-t border-slate-100 pt-2">
+              <p className="min-w-0 truncate text-xs font-semibold text-slate-700 tabular-nums whitespace-nowrap">
                 {proposal.tipe} · Tahun {proposal.tahun}
               </p>
-              <p className="text-xs text-slate-600">
-                Status Dinas:{' '}
+
+              <div
+                className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-lg px-2 py-1 text-[11px] font-semibold ${
+                  proposal.status === 'locked'
+                    ? 'bg-slate-900 text-white'
+                    : 'bg-teal-50 text-teal-800'
+                }`}
+              >
+                {proposal.status === 'locked' ? (
+                  <>
+                    <Lock className="h-3 w-3 shrink-0" />
+                    <span>Terkunci</span>
+                  </>
+                ) : (
+                  <>
+                    <Unlock className="h-3 w-3 shrink-0" />
+                    <span>Terbuka</span>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Baris 3 & 4: Status & Waktu Pembaruan (1 baris rapi) */}
+            <div className="space-y-1">
+              <p className="flex items-center gap-1 overflow-hidden whitespace-nowrap text-xs text-slate-600">
+                <span className="shrink-0">Status :</span>
                 <span
-                  className={
+                  className={`truncate ${
                     proposal.checklist.dinas
                       ? 'font-semibold text-teal-700'
                       : 'font-medium text-slate-700'
-                  }
+                  }`}
                 >
                   {proposal.checklist.dinas ? 'Sudah diantar ke Dinas' : 'Belum diantar ke Dinas'}
                 </span>
               </p>
-              <p className="text-xs text-slate-400 tabular-nums">
+              <p className="truncate whitespace-nowrap text-xs text-slate-400 tabular-nums">
                 Diperbarui {formatUploadDateTime(proposal.updatedAt)}
               </p>
-            </div>
-
-            <div
-              className={`inline-flex shrink-0 items-center gap-1 rounded-xl px-2.5 py-1.5 text-xs font-semibold ${
-                proposal.status === 'locked'
-                  ? 'bg-slate-900 text-white'
-                  : 'bg-teal-50 text-teal-800'
-              }`}
-            >
-              {proposal.status === 'locked' ? (
-                <>
-                  <Lock className="h-3.5 w-3.5" />
-                  <span>Terkunci</span>
-                </>
-              ) : (
-                <>
-                  <Unlock className="h-3.5 w-3.5" />
-                  <span>Terbuka</span>
-                </>
-              )}
             </div>
           </div>
 
           <div className="mt-4 grid grid-cols-3 divide-x divide-slate-100 border-t border-b border-slate-100 py-3.5">
-            <div className="flex flex-col items-center justify-start px-2 text-center">
-              <div className="flex min-h-[28px] items-center justify-center">
-                <p className="text-[11px] font-medium leading-tight text-slate-500">Total</p>
-              </div>
-              <p className="mt-1.5 text-lg font-bold leading-none text-slate-900 tabular-nums">
+            <div className="flex flex-col items-center justify-center px-1.5 text-center">
+              <p className="whitespace-nowrap text-[11px] font-medium leading-tight text-slate-500">
+                Total
+              </p>
+              <p className="mt-1.5 whitespace-nowrap text-lg font-bold leading-none text-slate-900 tabular-nums">
                 {kpmCounts.total}{' '}
                 <span className="text-xs font-medium text-slate-400">
                   / {proposal.jumlahKpm ?? 66}
                 </span>
               </p>
             </div>
-            <div className="flex flex-col items-center justify-start px-2 text-center">
-              <div className="flex min-h-[28px] items-center justify-center">
-                <p className="text-[11px] font-medium leading-tight text-slate-500">Diterima</p>
-              </div>
-              <p className="mt-1.5 text-lg font-bold leading-none text-teal-700 tabular-nums">
+            <div className="flex flex-col items-center justify-center px-1.5 text-center">
+              <p className="whitespace-nowrap text-[11px] font-medium leading-tight text-slate-500">
+                Diterima
+              </p>
+              <p className="mt-1.5 whitespace-nowrap text-lg font-bold leading-none text-teal-700 tabular-nums">
                 {kpmCounts.accepted}
               </p>
             </div>
-            <div className="flex flex-col items-center justify-start px-2 text-center">
-              <div className="flex min-h-[28px] items-center justify-center">
-                <p className="text-[11px] font-medium leading-tight text-slate-500">
-                  Menunggu /
-                  <br />
-                  Ditolak
-                </p>
-              </div>
-              <p className="mt-1.5 text-lg font-bold leading-none text-slate-700 tabular-nums">
+            <div className="flex flex-col items-center justify-center px-1.5 text-center">
+              <p className="whitespace-nowrap text-[11px] font-medium leading-tight text-slate-500">
+                Menunggu / Ditolak
+              </p>
+              <p className="mt-1.5 whitespace-nowrap text-lg font-bold leading-none text-slate-700 tabular-nums">
                 {kpmCounts.pending + kpmCounts.rejected}
               </p>
             </div>
@@ -342,17 +509,18 @@ export function ProposalDetailView({
           </div>
 
           {kpmCounts.total === 0 ? (
-            <div className="mt-4">
-              <button
-                type="button"
-                disabled={proposal.status === 'locked' || !canAdd}
-                onClick={() => onAddKpmInProposal(proposal.namaProposal, proposal.tahun)}
-                className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 whitespace-nowrap"
-              >
-                <UserPlus className="h-4 w-4" />
-                <span>Tambah Calon KPM</span>
-              </button>
-            </div>
+            proposal.status !== 'locked' && canAdd ? (
+              <div className="mt-4">
+                <button
+                  type="button"
+                  onClick={() => onAddKpmInProposal(proposal.namaProposal, proposal.tahun)}
+                  className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white transition-colors hover:bg-teal-800 whitespace-nowrap"
+                >
+                  <UserPlus className="h-4 w-4" />
+                  <span>Tambah Calon KPM</span>
+                </button>
+              </div>
+            ) : null
           ) : (
             <div className="mt-4 space-y-2">
               <button
@@ -363,6 +531,17 @@ export function ProposalDetailView({
                 <Users className="h-4 w-4" />
                 <span>Lihat Daftar Calon KPM ({kpmCounts.total})</span>
               </button>
+
+              {proposal.status !== 'locked' && canUpdate && onTransferKpm && (
+                <button
+                  type="button"
+                  onClick={openTransferModal}
+                  className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+                >
+                  <ArrowRightLeft className="h-4 w-4 text-teal-700" />
+                  <span>Transfer KPM ke Proposal Lain</span>
+                </button>
+              )}
 
               {kpmCounts.pending + kpmCounts.rejected > 0 && proposal.status !== 'locked' && canUpdate && (
                 !confirmAcceptAll ? (
@@ -750,6 +929,226 @@ export function ProposalDetailView({
           >
             <Pencil className="h-5 w-5" />
           </button>
+        </div>
+      )}
+
+      {/* Modal Transfer KPM Antar Proposal / Tahun */}
+      {isTransferModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="transfer-kpm-modal-title"
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-[2px] sm:items-center sm:p-4"
+          onClick={() => !isTransferring && setIsTransferModalOpen(false)}
+        >
+          <div
+            className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-t-3xl border border-slate-200 bg-white shadow-2xl sm:rounded-3xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+              <div className="min-w-0">
+                <h2 id="transfer-kpm-modal-title" className="text-base font-bold text-slate-900">
+                  Transfer KPM Proposal
+                </h2>
+                <p className="mt-0.5 truncate text-xs text-slate-500">
+                  Dari: {proposal.namaProposal} ({proposal.tahun})
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={isTransferring}
+                onClick={() => setIsTransferModalOpen(false)}
+                aria-label="Tutup"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+              {/* Target Tahun & Proposal */}
+              <div className="space-y-2.5 rounded-2xl border border-slate-200 bg-slate-50/70 p-3.5">
+                <p className="text-xs font-bold text-slate-800">1. Pilih Tujuan Transfer</p>
+                {transferYearOptions.length === 0 ? (
+                  <p className="text-xs text-amber-700">
+                    Belum ada proposal lain yang berstatus Terbuka untuk menjadi tujuan transfer.
+                  </p>
+                ) : (
+                  <div className="space-y-2.5">
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                        Tahun Tujuan
+                      </label>
+                      <select
+                        value={transferYear}
+                        onChange={(e) => handleTransferYearChange(e.target.value)}
+                        className="min-h-[42px] w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 focus:border-teal-700 focus:outline-none"
+                      >
+                        {transferYearOptions.map((yr) => (
+                          <option key={yr} value={yr}>
+                            Tahun {yr}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                        Proposal Tujuan (Terbuka)
+                      </label>
+                      <select
+                        value={transferTargetId}
+                        onChange={(e) => setTransferTargetId(e.target.value)}
+                        className="min-h-[42px] w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 focus:border-teal-700 focus:outline-none"
+                      >
+                        {transferTargetOptions.map((tp) => {
+                          const existingCount = records.filter(
+                            (r) => r.proposal === tp.namaProposal && r.tahun === tp.tahun
+                          ).length;
+                          return (
+                            <option key={tp.id} value={tp.id}>
+                              {tp.namaProposal} ({existingCount}/{tp.jumlahKpm ?? 66} KPM)
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Filter & Select KPM */}
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-bold text-slate-800">
+                    2. Pilih KPM yang Dipindahkan ({selectedTransferIds.length} dipilih)
+                  </p>
+                  {filteredTransferRecords.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={toggleSelectAllFiltered}
+                      className="text-xs font-bold text-teal-700 hover:underline"
+                    >
+                      {allFilteredSelected ? 'Batalkan Semua' : `Pilih Semua (${filteredTransferRecords.length})`}
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="search"
+                      value={transferQuery}
+                      onChange={(e) => setTransferQuery(e.target.value)}
+                      placeholder="Cari nama / NIK..."
+                      className="min-h-[40px] w-full rounded-xl border border-slate-200 bg-white pr-3 pl-9 text-xs text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none"
+                    />
+                  </div>
+
+                  <select
+                    aria-label="Filter kelurahan domisili"
+                    value={transferKelurahanFilter}
+                    onChange={(e) => setTransferKelurahanFilter(e.target.value)}
+                    className="min-h-[40px] w-full rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none"
+                  >
+                    <option value="all">
+                      Semua Kelurahan ({proposalRecords.length})
+                    </option>
+                    {transferKelurahanOptions.map((kel) => (
+                      <option key={kel.name} value={kel.name}>
+                        {kel.name} ({kel.count})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="max-h-60 overflow-y-auto rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+                  {filteredTransferRecords.length === 0 ? (
+                    <p className="px-4 py-6 text-center text-xs text-slate-400">
+                      Tidak ada KPM yang sesuai filter.
+                    </p>
+                  ) : (
+                    filteredTransferRecords.map((rec) => {
+                      const checked = selectedTransferIds.includes(rec.id);
+                      const kelName = rec.kelurahan?.trim() || 'Belum ditentukan';
+                      return (
+                        <button
+                          key={rec.id}
+                          type="button"
+                          onClick={() => toggleSelectTransferId(rec.id)}
+                          className={`flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors ${
+                            checked ? 'bg-teal-50/70' : 'hover:bg-slate-50'
+                          }`}
+                        >
+                          <span
+                            className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-colors ${
+                              checked
+                                ? 'border-teal-700 bg-teal-700 text-white'
+                                : 'border-slate-300 bg-white'
+                            }`}
+                          >
+                            {checked && <Check className="h-3.5 w-3.5" />}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-xs font-semibold text-slate-900">
+                              {rec.nama}
+                            </p>
+                            <p className="mt-0.5 truncate text-[11px] text-slate-500">
+                              {kelName} · {rec.item}
+                            </p>
+                          </div>
+                          <span
+                            className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                              rec.validasi === 'accepted'
+                                ? 'bg-teal-50 text-teal-700'
+                                : rec.validasi === 'rejected'
+                                  ? 'bg-rose-50 text-rose-700'
+                                  : 'bg-amber-50 text-amber-700'
+                            }`}
+                          >
+                            {rec.validasi === 'accepted'
+                              ? 'Diterima'
+                              : rec.validasi === 'rejected'
+                                ? 'Ditolak'
+                                : 'Menunggu'}
+                          </span>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center gap-2.5 border-t border-slate-100 bg-white px-5 py-3.5">
+              <button
+                type="button"
+                disabled={isTransferring}
+                onClick={() => setIsTransferModalOpen(false)}
+                className="min-h-[44px] flex-1 rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={
+                  isTransferring ||
+                  selectedTransferIds.length === 0 ||
+                  !transferTargetId
+                }
+                onClick={() => void handleConfirmTransfer()}
+                className="min-h-[44px] flex-1 rounded-xl bg-teal-700 px-4 text-xs font-bold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
+              >
+                {isTransferring
+                  ? 'Memindahkan...'
+                  : `Transfer (${selectedTransferIds.length} KPM)`}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -5,6 +5,7 @@ import { APP_VERSION, GITHUB_REPO } from '../config/appVersion';
 
 const UPDATE_APK_FILENAME = 'masdeta-update.apk';
 const APK_MIME_TYPE = 'application/vnd.android.package-archive';
+const REQUIRED_UPDATE_CACHE_KEY = 'masdeta_required_update_info_v1';
 
 export interface GitHubReleaseAsset {
   name: string;
@@ -111,7 +112,7 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
 
   const hasNewerTag = compareSemver(latestVersion, APP_VERSION) > 0;
 
-  return {
+  const result: AppUpdateInfo = {
     hasUpdate: hasNewerTag && Boolean(apkAsset?.browser_download_url),
     currentVersion: APP_VERSION,
     latestVersion,
@@ -124,6 +125,46 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
     apkSizeBytes: typeof apkAsset?.size === 'number' ? apkAsset.size : null,
     publishedAt: release.published_at ?? null,
   };
+
+  persistMandatoryUpdate(result);
+  return result;
+}
+
+export function getCachedMandatoryUpdate(): AppUpdateInfo | null {
+  if (typeof window === 'undefined' || !Capacitor.isNativePlatform()) return null;
+  try {
+    const raw = window.localStorage.getItem(REQUIRED_UPDATE_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as AppUpdateInfo;
+    if (!parsed || !parsed.latestVersion || !parsed.apkDownloadUrl) {
+      window.localStorage.removeItem(REQUIRED_UPDATE_CACHE_KEY);
+      return null;
+    }
+    if (compareSemver(parsed.latestVersion, APP_VERSION) <= 0) {
+      window.localStorage.removeItem(REQUIRED_UPDATE_CACHE_KEY);
+      return null;
+    }
+    return {
+      ...parsed,
+      currentVersion: APP_VERSION,
+      hasUpdate: true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function persistMandatoryUpdate(info: AppUpdateInfo | null): void {
+  if (typeof window === 'undefined' || !Capacitor.isNativePlatform()) return;
+  try {
+    if (info && info.hasUpdate && info.apkDownloadUrl) {
+      window.localStorage.setItem(REQUIRED_UPDATE_CACHE_KEY, JSON.stringify(info));
+    } else if (info && compareSemver(info.latestVersion, APP_VERSION) <= 0) {
+      window.localStorage.removeItem(REQUIRED_UPDATE_CACHE_KEY);
+    }
+  } catch {
+    // Abaikan jika penyimpanan lokal dibatasi
+  }
 }
 
 export async function openCachedUpdateApk(): Promise<void> {

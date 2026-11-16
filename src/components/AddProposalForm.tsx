@@ -22,6 +22,8 @@ import { PlaceholderSelect } from './FormControls';
 interface AddProposalFormProps {
   existingProposals: ProposalRecord[];
   wilayahList?: WilayahKabKota[];
+  yearOptions?: string[];
+  initialTahun?: string;
   onBack: () => void;
   onSaveNewProposal: (values: ProposalFormValues) => void;
 }
@@ -33,10 +35,24 @@ type AddProposalErrors = Partial<
 export function AddProposalForm({
   existingProposals,
   wilayahList = INITIAL_WILAYAH_LIST,
+  yearOptions,
+  initialTahun,
   onBack,
   onSaveNewProposal,
 }: AddProposalFormProps) {
-  const [tahun, setTahun] = useState('2026');
+  const resolvedYearOptions = useMemo(() => {
+    const set = new Set<string>(TAHUN_OPTIONS);
+    (yearOptions || []).forEach((y) => {
+      if (y) set.add(y);
+    });
+    existingProposals.forEach((p) => {
+      if (p.tahun) set.add(p.tahun);
+    });
+    if (initialTahun) set.add(initialTahun);
+    return Array.from(set).sort((a, b) => b.localeCompare(a));
+  }, [yearOptions, existingProposals, initialTahun]);
+
+  const [tahun, setTahun] = useState(initialTahun || '2026');
   const [tipe, setTipe] = useState<ProposalTipe | ''>('');
   const [kabKota, setKabKota] = useState(() => wilayahList[0]?.nama || 'Kota Pontianak');
   const [kecamatan, setKecamatan] = useState('');
@@ -178,7 +194,7 @@ export function AddProposalForm({
                   errors.tahun ? 'border-rose-400' : 'border-slate-300'
                 }`}
               >
-                {TAHUN_OPTIONS.map((yr) => (
+                {resolvedYearOptions.map((yr) => (
                   <option key={yr} value={yr}>
                     {yr}
                   </option>

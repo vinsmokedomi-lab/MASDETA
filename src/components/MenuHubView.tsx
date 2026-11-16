@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Archive,
@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Clock,
   CopyCheck,
   Download,
   Edit3,
@@ -30,7 +31,6 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Trash2,
-  Upload,
   User,
   UserCheck,
   UserPlus,
@@ -40,6 +40,7 @@ import {
 import { DriveImage } from './DriveImage';
 import { FilterSelect, SegmentedTabs } from './FormControls';
 import { ItemManagerView } from './ItemManagerView';
+import { MenuDownloadView } from './MenuDownloadView';
 import { AddPengelolaModal } from './PengelolaSelectorModal';
 import { PresenceDot, getPresenceMeta } from './PresenceDot';
 import { SwipeAction, SwipeableRow } from './SwipeableRow';
@@ -60,7 +61,6 @@ import {
 } from '../types/kpm';
 import {
   capitalizeWords,
-  exportKpmRecordsToCsv,
   formatNikDisplay,
   formatRupiah,
   formatWhatsAppUrl,
@@ -82,6 +82,7 @@ export type MenuSection =
   | 'dtsen'
   | 'pengelola'
   | 'pekerjaan'
+  | 'download'
   | 'laporan';
 
 export type AdminDataActionType =
@@ -224,10 +225,6 @@ export function MenuHubView({
   // Master Pekerjaan modal state
   const [isAddPekerjaanOpen, setIsAddPekerjaanOpen] = useState(false);
   const [newPekerjaan, setNewPekerjaan] = useState('');
-  const [csvImportStatus, setCsvImportStatus] = useState<{
-    type: 'success' | 'error';
-    message: string;
-  } | null>(null);
   const [pekerjaanError, setPekerjaanError] = useState<string | null>(null);
 
   // Master Wilayah state
@@ -326,13 +323,17 @@ export function MenuHubView({
       setSuperAdminPwdError(null);
       setShowSuperAdminPwd(false);
     }
+    if (activeSection !== 'dtsen') {
+      setDtsenDrill(null);
+    }
   }, [activeSection]);
+
+  const [dtsenDrill, setDtsenDrill] = useState<string | null>(null);
 
   // Arsip Berkas KPM filters
   const [arsipQuery, setArsipQuery] = useState('');
   const [arsipYearFilter, setArsipYearFilter] = useState<string>('all');
   const [arsipProposalFilter, setArsipProposalFilter] = useState<string>('all');
-  const [arsipReturnFilter, setArsipReturnFilter] = useState<'all' | 'pending_return' | 'returned'>('all');
   const [showArsipExtraFilters, setShowArsipExtraFilters] = useState(false);
 
   // Pengelola Lapangan search, filter & sorting
@@ -666,7 +667,7 @@ export function MenuHubView({
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-semibold text-slate-900">Chat</p>
+                    <p className="text-sm font-semibold text-slate-900">Obrolan</p>
                     {unreadChatCount > 0 && (
                       <span className="flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
                         {unreadChatCount}
@@ -747,7 +748,7 @@ export function MenuHubView({
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-slate-900">Arsip Berkas Ditolak</p>
                   <p className="mt-0.5 truncate text-xs text-slate-500">
-                    Pengembalian berkas KPM ditolak
+                    Daftar berkas KPM berstatus ditolak
                   </p>
                 </div>
                 <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -772,16 +773,38 @@ export function MenuHubView({
 
               <button
                 type="button"
+                onClick={() => onChangeSection('download')}
+                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+              >
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                  <Download className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-slate-900">Download</p>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    Unduh PDF F4 &amp; ekspor Excel (.xlsx)
+                  </p>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+              </button>
+
+              <button
+                type="button"
                 onClick={() => onChangeSection('laporan')}
                 className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
               >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
                   <FileSpreadsheet className="h-5 w-5" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">Laporan &amp; Ekspor CSV</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-semibold text-slate-900">Laporan</p>
+                    <span className="rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800">
+                      Coming Soon
+                    </span>
+                  </div>
                   <p className="mt-0.5 truncate text-xs text-slate-500">
-                    Unduh data KPM dan proposal
+                    Laporan &amp; rekapitulasi analitik berkala
                   </p>
                 </div>
                 <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -2263,14 +2286,9 @@ export function MenuHubView({
       return true;
     });
 
-    const returnedCount = scopedArsip.filter((r) => Boolean(r.berkasDikembalikan)).length;
-    const unreturnedCount = scopedArsip.length - returnedCount;
-
     const q = arsipQuery.trim().toLowerCase();
     const visibleArsip = scopedArsip
       .filter((rec) => {
-        if (arsipReturnFilter === 'pending_return' && rec.berkasDikembalikan) return false;
-        if (arsipReturnFilter === 'returned' && !rec.berkasDikembalikan) return false;
         if (!q) return true;
         return (
           rec.nama.toLowerCase().includes(q) ||
@@ -2282,8 +2300,6 @@ export function MenuHubView({
         );
       })
       .sort((a, b) => {
-        const retCmp = Number(Boolean(a.berkasDikembalikan)) - Number(Boolean(b.berkasDikembalikan));
-        if (retCmp !== 0) return retCmp;
         return (
           a.proposal.localeCompare(b.proposal, 'id') ||
           getAbsenSeq(a.registerCode) - getAbsenSeq(b.registerCode) ||
@@ -2299,10 +2315,10 @@ export function MenuHubView({
         {renderSubHeader('Arsip Berkas Ditolak', () => onChangeSection('root'))}
 
         <div className="space-y-4 px-4 pt-4">
-          {/* Header & Filter konsisten dengan KpmListView (tanpa card pembungkus tab) */}
+          {/* Header & Filter konsisten dengan KpmListView */}
           <div className="space-y-2">
             <p className="px-0.5 text-xs text-slate-500">
-              Berkas KPM berstatus ditolak untuk pengembalian fisik.
+              Daftar berkas calon KPM yang berstatus ditolak.
             </p>
 
             <div className="flex items-center gap-2">
@@ -2368,16 +2384,6 @@ export function MenuHubView({
               </div>
             )}
 
-            {/* Segmented Tabs Terpisah */}
-            <SegmentedTabs<'all' | 'pending_return' | 'returned'>
-              value={arsipReturnFilter}
-              onChange={setArsipReturnFilter}
-              tabs={[
-                { key: 'all', label: 'Semua', count: scopedArsip.length },
-                { key: 'pending_return', label: 'Belum Kembali', count: unreturnedCount },
-                { key: 'returned', label: 'Sudah Kembali', count: returnedCount },
-              ]}
-            />
           </div>
 
           {visibleArsip.length === 0 ? (
@@ -2414,14 +2420,13 @@ export function MenuHubView({
                 const metaLine = [kelurahanName, rec.pengelola?.trim()]
                   .filter(Boolean)
                   .join(' · ');
-                const waUrl = formatWhatsAppUrl(rec.kontak);
 
                 return (
                   <div key={rec.id} className="bg-white">
                     <button
                       type="button"
                       onClick={() => onSelectKpm?.(rec)}
-                      className="flex w-full items-stretch gap-2.5 px-3.5 pt-2.5 pb-2 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
+                      className="flex w-full items-stretch gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
                     >
                       <div className="flex w-5 shrink-0 items-center justify-center">
                         <span className="font-mono text-[11px] font-bold text-slate-500 tabular-nums">
@@ -2472,43 +2477,6 @@ export function MenuHubView({
                         )}
                       </div>
                     </button>
-
-                    <div className="flex items-center justify-between gap-2 px-3.5 pb-2.5 pl-[82px]">
-                      <div className="min-w-0">
-                        {waUrl && rec.kontak ? (
-                          <a
-                            href={waUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex h-7 items-center gap-1 rounded-lg bg-emerald-50 px-2 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100"
-                          >
-                            <MessageCircle className="h-3 w-3 shrink-0" />
-                            <span className="truncate">{rec.kontak}</span>
-                          </a>
-                        ) : (
-                          <span className="text-[11px] text-slate-400">Tanpa No. HP</span>
-                        )}
-                      </div>
-
-                      {onToggleBerkasDikembalikan && canUpdate && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onToggleBerkasDikembalikan(rec.id, !rec.berkasDikembalikan)
-                          }
-                          className={`inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2.5 text-[11px] font-semibold transition-colors ${
-                            rec.berkasDikembalikan
-                              ? 'bg-teal-700 text-white hover:bg-teal-800'
-                              : 'border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
-                          }`}
-                        >
-                          <CheckCircle2 className="h-3 w-3 shrink-0" />
-                          <span>
-                            {rec.berkasDikembalikan ? 'Sudah Kembali' : 'Tandai Kembali'}
-                          </span>
-                        </button>
-                      )}
-                    </div>
                   </div>
                 );
               })}
@@ -2563,6 +2531,36 @@ export function MenuHubView({
 
   // 6. SEBARAN DTSEN
   if (activeSection === 'dtsen') {
+    const getDtsenDisplayLabel = (val: string) =>
+      val === 'Data Tidak Ditemukan' || val === 'Belum Ada Desil'
+        ? val
+        : `Desil ${val}`;
+
+    if (dtsenDrill) {
+      const drillLabel = getDtsenDisplayLabel(dtsenDrill);
+      const drillRecords = records.filter(
+        (r) => (r.dtsen || 'Belum Ada Desil') === dtsenDrill
+      );
+
+      return (
+        <div className="min-h-screen pb-24">
+          {renderSubHeader(drillLabel, () => setDtsenDrill(null))}
+          <div className="px-4 pt-4">
+            <CorrespondentKpmListPanel
+              key={dtsenDrill}
+              records={drillRecords}
+              items={items}
+              proposals={proposals}
+              wilayahList={wilayahList}
+              emptyTitle={`Belum ada KPM di kategori ${drillLabel}`}
+              emptySubtitle={`Tidak ada data calon KPM dengan status klasifikasi ${drillLabel}.`}
+              onSelectRecord={onSelectKpm}
+            />
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="min-h-screen pb-24">
         {renderSubHeader('Klasifikasi DTSEN', () => onChangeSection('root'))}
@@ -2574,16 +2572,27 @@ export function MenuHubView({
                 : row.value === '5'
                   ? 'bg-amber-600'
                   : 'bg-slate-400';
+              const rowTitle = getDtsenDisplayLabel(row.value);
               return (
-                <div key={row.value} className="flex items-center justify-between gap-3 px-4 py-3">
-                  <div className="flex items-center gap-2.5">
+                <button
+                  key={row.value}
+                  type="button"
+                  onClick={() => setDtsenDrill(row.value)}
+                  className="flex min-h-[48px] w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
+                >
+                  <div className="flex min-w-0 items-center gap-2.5">
                     <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${dotClass}`} />
-                    <span className="text-xs font-normal text-slate-800">Desil {row.value}</span>
+                    <span className="truncate text-xs font-medium text-slate-800">
+                      {rowTitle}
+                    </span>
                   </div>
-                  <span className="text-sm font-medium text-slate-900 tabular-nums shrink-0">
-                    {row.count}
-                  </span>
-                </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className="text-sm font-medium text-slate-900 tabular-nums">
+                      {row.count}
+                    </span>
+                    <ChevronRight className="h-4 w-4 text-slate-400" />
+                  </div>
+                </button>
               );
             })}
           </div>
@@ -3579,130 +3588,48 @@ export function MenuHubView({
     );
   }
 
-  // 8. LAPORAN & DOWNLOAD CSV
-  const handleCsvFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file || !onImportCsv) return;
-    try {
-      const text = await file.text();
-      const summary = onImportCsv(text, file.name);
-      if (summary.error && summary.importedRecords === 0) {
-        setCsvImportStatus({ type: 'error', message: summary.error });
-      } else {
-        const parts = [`${summary.importedRecords} calon KPM berhasil diimpor`];
-        if (summary.importedProposals > 0) {
-          parts.push(`${summary.importedProposals} proposal baru dibuat`);
-        }
-        if (summary.addedPengelola > 0) {
-          parts.push(`${summary.addedPengelola} pengelola ditambahkan`);
-        }
-        if (summary.skipped > 0) {
-          parts.push(`${summary.skipped} data duplikat dilewati`);
-        }
-        setCsvImportStatus({ type: 'success', message: `${parts.join(', ')}.` });
-      }
-    } catch {
-      setCsvImportStatus({
-        type: 'error',
-        message: 'Gagal membaca file CSV. Pastikan format file valid (.csv).',
-      });
-    }
-  };
+  // 8. DOWNLOAD DATA (PDF F4 & EXCEL)
+  if (activeSection === 'download') {
+    return (
+      <MenuDownloadView
+        records={records}
+        proposals={proposals}
+        items={items}
+        wilayahList={wilayahList}
+        pengelolaList={pengelolaList}
+        onBack={() => onChangeSection('root')}
+      />
+    );
+  }
 
+  // 9. LAPORAN (COMING SOON)
   return (
     <div className="min-h-screen pb-24">
-      {renderSubHeader('Laporan & Download Data', () => onChangeSection('root'))}
-      <div className="space-y-4 px-4 pt-4">
-        {onImportCsv && canAdd && (
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
-            <h2 className="text-sm font-bold text-slate-900">Import Data Proposal (.CSV)</h2>
-            <p className="text-xs text-slate-500">
-              Unggah file CSV daftar penerima proposal (pemisah titik koma atau koma) untuk
-              mengimpor proposal, pengelola, dan seluruh calon KPM secara otomatis.
-            </p>
-            <label className="inline-flex min-h-[44px] w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-teal-200 bg-teal-50 px-4 text-sm font-semibold text-teal-800 hover:bg-teal-100/70">
-              <Upload className="h-4 w-4" />
-              <span>Pilih File CSV Proposal</span>
-              <input
-                type="file"
-                accept=".csv,text/csv"
-                onChange={handleCsvFileChange}
-                className="sr-only"
-              />
-            </label>
-            {csvImportStatus && (
-              <div
-                role="status"
-                className={`flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs ${
-                  csvImportStatus.type === 'success'
-                    ? 'border-teal-200 bg-teal-50 text-teal-900'
-                    : 'border-rose-200 bg-rose-50 text-rose-900'
-                }`}
-              >
-                {csvImportStatus.type === 'success' ? (
-                  <Check className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
-                ) : (
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
-                )}
-                <p className="font-medium leading-snug">{csvImportStatus.message}</p>
-              </div>
-            )}
+      {renderSubHeader('Laporan', () => onChangeSection('root'))}
+      <div className="space-y-4 px-4 pt-6">
+        <div className="rounded-3xl border border-slate-200 bg-white px-5 py-10 text-center shadow-xs">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-amber-200 bg-amber-50 text-amber-700">
+            <Clock className="h-7 w-7" />
           </div>
-        )}
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
-          <h2 className="text-sm font-bold text-slate-900">Ekspor Data Calon KPM (.CSV)</h2>
-          <p className="text-xs text-slate-500">
-            Unduh seluruh daftar calon KPM beserta NIK, item, DTSEN, validasi, dan biaya
-            administrasi ke file Excel / CSV.
+          <span className="mt-4 inline-flex items-center rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider text-amber-800">
+            Coming Soon
+          </span>
+          <h2 className="mt-3 text-base font-bold text-slate-900">
+            Fitur Laporan Segera Hadir
+          </h2>
+          <p className="mx-auto mt-1.5 max-w-xs text-xs leading-relaxed text-slate-500">
+            Modul penyusunan laporan berkala, grafik ringkasan, dan rekapitulasi resmi sedang dalam
+            tahap pengembangan.
           </p>
-          <div className="grid grid-cols-1 gap-2.5 pt-1">
-            <button
-              type="button"
-              onClick={() => exportKpmRecordsToCsv(records, 'masdeta-semua-kpm.csv', items)}
-              className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white hover:bg-teal-800"
-            >
-              <Download className="h-4 w-4" />
-              <span>Download Semua KPM ({records.length})</span>
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                exportKpmRecordsToCsv(
-                  records.filter((r) => r.validasi === 'accepted'),
-                  'masdeta-kpm-diterima.csv',
-                  items
-                )
-              }
-              className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
-            >
-              <Download className="h-4 w-4" />
-              <span>
-                Download KPM Diterima ({records.filter((r) => r.validasi === 'accepted').length})
-              </span>
-            </button>
-          </div>
-        </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-4">
-          <h2 className="text-sm font-bold text-slate-900">Rekap Proposal per Tahun</h2>
-          <div className="mt-3 divide-y divide-slate-100">
-            {Array.from(new Set(proposals.map((p) => p.tahun)))
-              .sort((a, b) => b.localeCompare(a))
-              .map((tahun) => {
-                const propCount = proposals.filter((p) => p.tahun === tahun).length;
-                const kpmCount = records.filter((r) => r.tahun === tahun).length;
-                return (
-                  <div key={tahun} className="flex items-center justify-between py-2.5 text-sm">
-                    <span className="font-normal text-slate-900 tabular-nums">
-                      Tahun {tahun} ({propCount} Proposal)
-                    </span>
-                    <span className="font-medium text-teal-700 tabular-nums">{kpmCount}</span>
-                  </div>
-                );
-              })}
-          </div>
+          <button
+            type="button"
+            onClick={() => onChangeSection('download')}
+            className="mt-5 inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl bg-teal-700 px-5 text-sm font-semibold text-white transition-colors hover:bg-teal-800"
+          >
+            <Download className="h-4 w-4" />
+            <span>Buka Menu Download PDF</span>
+          </button>
         </div>
       </div>
     </div>

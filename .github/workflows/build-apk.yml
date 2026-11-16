@@ -67,13 +67,345 @@ jobs:
             npx cap add android
           fi
 
+      - name: Install CekBansos Native Android Plugin
+        run: |
+          JAVA_DIR="android/app/src/main/java/com/masdeta/app"
+          mkdir -p "$JAVA_DIR"
+          cat << 'EOF' > "$JAVA_DIR/CekBansosPlugin.java"
+          package com.masdeta.app;
+
+          import android.app.Dialog;
+          import android.content.ClipData;
+          import android.content.ClipboardManager;
+          import android.content.Context;
+          import android.graphics.Color;
+          import android.graphics.Typeface;
+          import android.text.TextUtils;
+          import android.util.TypedValue;
+          import android.view.Gravity;
+          import android.view.ViewGroup;
+          import android.webkit.CookieManager;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.ProgressBar;
+          import android.widget.TextView;
+          import android.widget.Toast;
+          import com.getcapacitor.Plugin;
+          import com.getcapacitor.PluginCall;
+          import com.getcapacitor.PluginMethod;
+          import com.getcapacitor.annotation.CapacitorPlugin;
+          import org.json.JSONObject;
+
+          @CapacitorPlugin(name = "CekBansos")
+          public class CekBansosPlugin extends Plugin {
+            private static final String TARGET_URL = "https://cekbansos.kemensos.go.id/";
+
+            @PluginMethod
+            public void open(PluginCall call) {
+              String rawNik = call.getString("nik", "");
+              final String nik = rawNik != null ? rawNik.replaceAll("[^0-9]", "") : "";
+              if (nik.isEmpty()) {
+                call.reject("NIK KTP tidak valid");
+                return;
+              }
+
+              getActivity().runOnUiThread(() -> {
+                Context ctx = getActivity();
+                ClipboardManager clipboard = (ClipboardManager) ctx.getSystemService(Context.CLIPBOARD_SERVICE);
+                if (clipboard != null) {
+                  clipboard.setPrimaryClip(ClipData.newPlainText("NIK KTP", nik));
+                }
+
+                final Dialog dialog = new Dialog(ctx, android.R.style.Theme_DeviceDefault_Light_NoActionBar_Fullscreen);
+
+                LinearLayout root = new LinearLayout(ctx);
+                root.setOrientation(LinearLayout.VERTICAL);
+                root.setBackgroundColor(Color.WHITE);
+                root.setLayoutParams(new ViewGroup.LayoutParams(
+                  ViewGroup.LayoutParams.MATCH_PARENT,
+                  ViewGroup.LayoutParams.MATCH_PARENT
+                ));
+
+                LinearLayout topBar = new LinearLayout(ctx);
+                topBar.setOrientation(LinearLayout.HORIZONTAL);
+                topBar.setGravity(Gravity.CENTER_VERTICAL);
+                topBar.setBackgroundColor(Color.parseColor("#0F766E"));
+                int padH = dp(ctx, 14);
+                int padV = dp(ctx, 10);
+                topBar.setPadding(padH, padV, padH, padV);
+
+                LinearLayout titleCol = new LinearLayout(ctx);
+                titleCol.setOrientation(LinearLayout.VERTICAL);
+                LinearLayout.LayoutParams titleColParams = new LinearLayout.LayoutParams(
+                  0,
+                  ViewGroup.LayoutParams.WRAP_CONTENT,
+                  1.0f
+                );
+                titleCol.setLayoutParams(titleColParams);
+
+                TextView titleTv = new TextView(ctx);
+                titleTv.setText("Cek Bansos Kemensos");
+                titleTv.setTextColor(Color.WHITE);
+                titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+                titleTv.setTypeface(Typeface.DEFAULT_BOLD);
+                titleTv.setSingleLine(true);
+                titleTv.setEllipsize(TextUtils.TruncateAt.END);
+
+                TextView nikTv = new TextView(ctx);
+                nikTv.setText("NIK: " + nik);
+                nikTv.setTextColor(Color.parseColor("#CCFBF1"));
+                nikTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+                nikTv.setSingleLine(true);
+
+                titleCol.addView(titleTv);
+                titleCol.addView(nikTv);
+
+                Button copyBtn = new Button(ctx);
+                copyBtn.setText("Salin");
+                copyBtn.setTextColor(Color.WHITE);
+                copyBtn.setBackgroundColor(Color.parseColor("#115E59"));
+                copyBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+                copyBtn.setPadding(dp(ctx, 10), dp(ctx, 4), dp(ctx, 10), dp(ctx, 4));
+                LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(
+                  ViewGroup.LayoutParams.WRAP_CONTENT,
+                  dp(ctx, 36)
+                );
+                copyParams.setMarginEnd(dp(ctx, 8));
+                copyBtn.setLayoutParams(copyParams);
+                copyBtn.setOnClickListener(v -> {
+                  ClipboardManager cm = (ClipboardManager) ctx.getSystemService(Context.CLIPBOARD_SERVICE);
+                  if (cm != null) {
+                    cm.setPrimaryClip(ClipData.newPlainText("NIK KTP", nik));
+                    Toast.makeText(ctx, "NIK disalin ke clipboard", Toast.LENGTH_SHORT).show();
+                  }
+                });
+
+                Button closeBtn = new Button(ctx);
+                closeBtn.setText("Tutup");
+                closeBtn.setTextColor(Color.parseColor("#0F172A"));
+                closeBtn.setBackgroundColor(Color.WHITE);
+                closeBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+                closeBtn.setPadding(dp(ctx, 12), dp(ctx, 4), dp(ctx, 12), dp(ctx, 4));
+                closeBtn.setLayoutParams(new LinearLayout.LayoutParams(
+                  ViewGroup.LayoutParams.WRAP_CONTENT,
+                  dp(ctx, 36)
+                ));
+                closeBtn.setOnClickListener(v -> dialog.dismiss());
+
+                topBar.addView(titleCol);
+                topBar.addView(copyBtn);
+                topBar.addView(closeBtn);
+
+                final ProgressBar progressBar = new ProgressBar(ctx, null, android.R.attr.progressBarStyleHorizontal);
+                progressBar.setMax(100);
+                progressBar.setLayoutParams(new LinearLayout.LayoutParams(
+                  ViewGroup.LayoutParams.MATCH_PARENT,
+                  dp(ctx, 3)
+                ));
+
+                final WebView webView = new WebView(ctx);
+                webView.setLayoutParams(new LinearLayout.LayoutParams(
+                  ViewGroup.LayoutParams.MATCH_PARENT,
+                  0,
+                  1.0f
+                ));
+
+                WebSettings settings = webView.getSettings();
+                settings.setJavaScriptEnabled(true);
+                settings.setDomStorageEnabled(true);
+                settings.setDatabaseEnabled(true);
+                settings.setSupportZoom(true);
+                settings.setBuiltInZoomControls(true);
+                settings.setDisplayZoomControls(false);
+
+                CookieManager cookieManager = CookieManager.getInstance();
+                cookieManager.setAcceptCookie(true);
+                cookieManager.setAcceptThirdPartyCookies(webView, true);
+
+                webView.setWebChromeClient(new WebChromeClient() {
+                  @Override
+                  public void onProgressChanged(WebView view, int newProgress) {
+                    progressBar.setProgress(newProgress);
+                    progressBar.setVisibility(newProgress < 100 ? ProgressBar.VISIBLE : ProgressBar.GONE);
+                  }
+                });
+
+                webView.setWebViewClient(new WebViewClient() {
+                  @Override
+                  public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                    return false;
+                  }
+
+                  @Override
+                  public void onPageFinished(WebView view, String url) {
+                    super.onPageFinished(view, url);
+                    String quotedNik = JSONObject.quote(nik);
+                    String script =
+                      "(function(){" +
+                      "var nik=" + quotedNik + ";" +
+                      "function setReactVal(el,val){" +
+                      "  try{" +
+                      "    var desc=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value');" +
+                      "    if(desc&&desc.set){desc.set.call(el,val);}else{el.value=val;}" +
+                      "    el.dispatchEvent(new Event('input',{bubbles:true}));" +
+                      "    el.dispatchEvent(new Event('change',{bubbles:true}));" +
+                      "  }catch(e){el.value=val;}" +
+                      "}" +
+                      "function tryFill(){" +
+                      "  var inputs=Array.prototype.slice.call(document.querySelectorAll('input'));" +
+                      "  var nikInput=inputs.find(function(el){" +
+                      "    var hay=((el.placeholder||'')+' '+(el.name||'')+' '+(el.id||'')+' '+(el.getAttribute('aria-label')||'')).toLowerCase();" +
+                      "    return hay.indexOf('nik')!==-1||hay.indexOf('16 digit')!==-1||el.maxLength===16;" +
+                      "  });" +
+                      "  if(!nikInput){" +
+                      "    nikInput=inputs.find(function(el){" +
+                      "      var t=(el.type||'text').toLowerCase();" +
+                      "      if(t==='hidden'||t==='submit'||t==='button'||t==='checkbox'||t==='radio')return false;" +
+                      "      var hay=((el.placeholder||'')+' '+(el.name||'')+' '+(el.id||'')).toLowerCase();" +
+                      "      return hay.indexOf('captcha')===-1&&hay.indexOf('kode')===-1&&hay.indexOf('huruf')===-1;" +
+                      "    });" +
+                      "  }" +
+                      "  if(nikInput&&nikInput.value!==nik){" +
+                      "    setReactVal(nikInput,nik);" +
+                      "    var captchaInput=inputs.find(function(el){" +
+                      "      var hay=((el.placeholder||'')+' '+(el.name||'')+' '+(el.id||'')).toLowerCase();" +
+                      "      return el!==nikInput&&(hay.indexOf('captcha')!==-1||hay.indexOf('kode')!==-1||hay.indexOf('huruf')!==-1);" +
+                      "    });" +
+                      "    if(captchaInput){try{captchaInput.focus();}catch(e){}}" +
+                      "    return true;" +
+                      "  }" +
+                      "  return false;" +
+                      "}" +
+                      "var tries=0;" +
+                      "var timer=setInterval(function(){" +
+                      "  tries++;" +
+                      "  if(tryFill()||tries>=25){clearInterval(timer);}" +
+                      "},300);" +
+                      "tryFill();" +
+                      "})();";
+                    view.evaluateJavascript(script, null);
+                  }
+                });
+
+                root.addView(topBar);
+                root.addView(progressBar);
+                root.addView(webView);
+                dialog.setContentView(root);
+                dialog.setOnDismissListener(d -> {
+                  webView.stopLoading();
+                  webView.destroy();
+                });
+                dialog.show();
+                webView.loadUrl(TARGET_URL);
+              });
+
+              call.resolve();
+            }
+
+            private int dp(Context ctx, int dpVal) {
+              return (int) TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_DIP,
+                dpVal,
+                ctx.getResources().getDisplayMetrics()
+              );
+            }
+          }
+          EOF
+
+          MAIN_ACT="$JAVA_DIR/MainActivity.java"
+          node -e '
+            const fs = require("fs");
+            const path = process.argv[1];
+            let src = fs.readFileSync(path, "utf8");
+            if (!src.includes("CekBansosPlugin.class")) {
+              if (!src.includes("import android.os.Bundle;")) {
+                src = src.replace("import com.getcapacitor.BridgeActivity;", "import android.os.Bundle;\nimport com.getcapacitor.BridgeActivity;");
+              }
+              if (src.includes("onCreate(")) {
+                src = src.replace(/super\.onCreate\([^)]*\);/, (m) => `registerPlugin(CekBansosPlugin.class);\n    ${m}`);
+              } else {
+                src = src.replace(
+                  /public class MainActivity extends BridgeActivity\s*\{\s*\}/,
+                  `public class MainActivity extends BridgeActivity {\n  @Override\n  public void onCreate(Bundle savedInstanceState) {\n    registerPlugin(CekBansosPlugin.class);\n    super.onCreate(savedInstanceState);\n  }\n}`
+                );
+              }
+              fs.writeFileSync(path, src);
+            }
+          ' "$MAIN_ACT"
+
       - name: Generate MASDETA Launcher Icons
         run: |
-          SVG_PATH="public/masdeta-icon.svg"
-          if [ ! -f "$SVG_PATH" ]; then
-            printf '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#0F766E"/><path d="M128 368V144h44l84 128 84-128h44v224h-44V222l-84 126-84-126v146h-44z" fill="#FFFFFF"/></svg>\n' > /tmp/masdeta-fallback.svg
-            SVG_PATH="/tmp/masdeta-fallback.svg"
-          fi
+          # OG MasdetaLogo paths centered inside Android Adaptive Icon 72dp/108dp safe zone (scale = 512 * 2/3 / 36 = 9.481481)
+          cat << 'EOF' > /tmp/masdeta-adaptive-fg.svg
+          <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+            <g transform="translate(85.3333, 87.7037) scale(9.481481)">
+              <path
+                d="M9 24.5V12.5C9 11.6716 9.67157 11 10.5 11H12.05C12.5672 11 13.0478 11.2663 13.3219 11.7049L18 19.1899L22.6781 11.7049C22.9522 11.2663 23.4328 11 23.95 11H25.5C26.3284 11 27 11.6716 27 12.5V24.5"
+                stroke="#FFFFFF"
+                stroke-width="2.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <path
+                d="M14.5 24.5L18 19.5L21.5 24.5"
+                stroke="#99F6E4"
+                stroke-width="2.2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </g>
+          </svg>
+          EOF
+
+          # Legacy full-bleed square & round icons for older Android launchers / APK installer previews
+          cat << 'EOF' > /tmp/masdeta-legacy-square.svg
+          <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+            <rect width="512" height="512" fill="#0F766E" />
+            <g transform="translate(0, 3.5556) scale(14.222222)">
+              <path
+                d="M9 24.5V12.5C9 11.6716 9.67157 11 10.5 11H12.05C12.5672 11 13.0478 11.2663 13.3219 11.7049L18 19.1899L22.6781 11.7049C22.9522 11.2663 23.4328 11 23.95 11H25.5C26.3284 11 27 11.6716 27 12.5V24.5"
+                stroke="#FFFFFF"
+                stroke-width="2.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <path
+                d="M14.5 24.5L18 19.5L21.5 24.5"
+                stroke="#99F6E4"
+                stroke-width="2.2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </g>
+          </svg>
+          EOF
+
+          cat << 'EOF' > /tmp/masdeta-legacy-round.svg
+          <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+            <circle cx="256" cy="256" r="256" fill="#0F766E" />
+            <g transform="translate(0, 3.5556) scale(14.222222)">
+              <path
+                d="M9 24.5V12.5C9 11.6716 9.67157 11 10.5 11H12.05C12.5672 11 13.0478 11.2663 13.3219 11.7049L18 19.1899L22.6781 11.7049C22.9522 11.2663 23.4328 11 23.95 11H25.5C26.3284 11 27 11.6716 27 12.5V24.5"
+                stroke="#FFFFFF"
+                stroke-width="2.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <path
+                d="M14.5 24.5L18 19.5L21.5 24.5"
+                stroke="#99F6E4"
+                stroke-width="2.2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </g>
+          </svg>
+          EOF
 
           for PAIR in "mdpi:48:108" "hdpi:72:162" "xhdpi:96:216" "xxhdpi:144:324" "xxxhdpi:192:432"; do
             DENSITY="${PAIR%%:*}"
@@ -82,13 +414,17 @@ jobs:
             FGSZ="${REST#*:}"
             RES_DIR="android/app/src/main/res/mipmap-${DENSITY}"
             mkdir -p "$RES_DIR"
-            rsvg-convert -w "$SZ" -h "$SZ" "$SVG_PATH" -o "$RES_DIR/ic_launcher.png"
-            rsvg-convert -w "$SZ" -h "$SZ" "$SVG_PATH" -o "$RES_DIR/ic_launcher_round.png"
-            rsvg-convert -w "$FGSZ" -h "$FGSZ" "$SVG_PATH" -o "$RES_DIR/ic_launcher_foreground.png"
+            rsvg-convert -w "$SZ" -h "$SZ" /tmp/masdeta-legacy-square.svg -o "$RES_DIR/ic_launcher.png"
+            rsvg-convert -w "$SZ" -h "$SZ" /tmp/masdeta-legacy-round.svg -o "$RES_DIR/ic_launcher_round.png"
+            rsvg-convert -w "$FGSZ" -h "$FGSZ" /tmp/masdeta-adaptive-fg.svg -o "$RES_DIR/ic_launcher_foreground.png"
           done
 
           mkdir -p android/app/src/main/res/values
           printf '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <color name="ic_launcher_background">#0F766E</color>\n</resources>\n' > android/app/src/main/res/values/ic_launcher_background.xml
+
+          mkdir -p android/app/src/main/res/mipmap-anydpi-v26
+          printf '<?xml version="1.0" encoding="utf-8"?>\n<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n    <background android:drawable="@color/ic_launcher_background"/>\n    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>\n</adaptive-icon>\n' > android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+          printf '<?xml version="1.0" encoding="utf-8"?>\n<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n    <background android:drawable="@color/ic_launcher_background"/>\n    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>\n</adaptive-icon>\n' > android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
 
       - name: Configure Deterministic Keystore, Permissions & Gradle Signing
         env:
