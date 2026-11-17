@@ -1081,7 +1081,8 @@ export function ProposalDetailView({
               <p className="text-teal-900 font-medium">
                 {formatScheduleDateTimeForCoupon(
                   matchedSchedule.targetDate,
-                  matchedSchedule.targetTime
+                  matchedSchedule.targetTime,
+                  matchedSchedule.targetDay
                 )}
               </p>
               {matchedSchedule.location && (

@@ -257,7 +257,8 @@ export function MenuDownloadView({
         jadwal:
           formatScheduleDateTimeForCoupon(
             matchedProposalSchedule.targetDate,
-            matchedProposalSchedule.targetTime
+            matchedProposalSchedule.targetTime,
+            matchedProposalSchedule.targetDay
           ) || baseCoupon.jadwal,
         lokasi: (matchedProposalSchedule.location || '').trim() || baseCoupon.lokasi,
         footerText: baseCoupon.footerText || DEFAULT_COUPON_CONFIG.footerText,

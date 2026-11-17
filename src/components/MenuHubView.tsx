@@ -56,7 +56,12 @@ import { fetchGithubReleasesChangelog } from '../services/appUpdater';
 import { CorrespondentKpmListPanel } from './CorrespondentKpmListPanel';
 import { StandaloneKpmView } from './StandaloneKpmView';
 import { DTSEN_OPTION_ITEMS, TAHUN_OPTIONS } from '../data/kpmOptions';
-import { exportSchedulesToPdf } from '../utils/pdfExporter';
+import {
+  SPTJM_DAY_OPTIONS,
+  exportSchedulesToPdf,
+  formatScheduleIndonesianDate,
+  getSptjmAutoDayFromIso,
+} from '../utils/pdfExporter';
 import {
   BastTemplateConfig,
   CouponPrintConfig,
@@ -74,6 +79,8 @@ import {
   ProposalRecord,
   ProposalSlotMap,
   ReportTemplateConfig,
+  SCHEDULE_CATEGORY_LABELS,
+  SCHEDULE_CATEGORY_OPTIONS,
   ScheduleCategory,
   ScheduleEventItem,
   SptjmTemplateConfig,
@@ -200,6 +207,7 @@ interface MenuHubViewProps {
   onAddSchedule?: (payload: {
     title: string;
     category: ScheduleCategory;
+    targetDay?: string;
     targetDate: string;
     targetTime?: string;
     tahun?: string;
@@ -212,6 +220,7 @@ interface MenuHubViewProps {
     payload: {
       title: string;
       category: ScheduleCategory;
+      targetDay?: string;
       targetDate: string;
       targetTime?: string;
       tahun?: string;
@@ -730,8 +739,8 @@ export function MenuHubView({
 
   // Jadwal & Target Proposal form state
   const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
-  const [scheduleTitle, setScheduleTitle] = useState('');
   const [scheduleCategory, setScheduleCategory] = useState<ScheduleCategory>('distribusi');
+  const [scheduleDay, setScheduleDay] = useState<string>('');
   const [scheduleDate, setScheduleDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [scheduleTime, setScheduleTime] = useState('');
   const [scheduleYear, setScheduleYear] = useState(() =>
@@ -5126,12 +5135,8 @@ export function MenuHubView({
   // 10. JADWAL & TARGET PROPOSAL
   if (activeSection === 'jadwal') {
     const todayStr = new Date().toISOString().slice(0, 10);
-    const catLabelMap: Record<ScheduleCategory, string> = {
-      survey: 'Survey Lapangan',
-      dinas: 'Antar ke Dinas',
-      distribusi: 'Penyaluran / Distribusi',
-      lainnya: 'Agenda Lainnya',
-    };
+    const catLabelMap = SCHEDULE_CATEGORY_LABELS;
+    const autoDayLabel = getSptjmAutoDayFromIso(scheduleDate);
 
     const scheduleYearOptions = Array.from(
       new Set([
@@ -5156,7 +5161,7 @@ export function MenuHubView({
 
     const resetScheduleForm = () => {
       setEditingScheduleId(null);
-      setScheduleTitle('');
+      setScheduleDay('');
       setScheduleTime('');
       setScheduleProposal('');
       setScheduleLocation('');
@@ -5165,8 +5170,8 @@ export function MenuHubView({
 
     const handleStartEditSchedule = (ev: ScheduleEventItem) => {
       setEditingScheduleId(ev.id);
-      setScheduleTitle(ev.title);
       setScheduleCategory(ev.category);
+      setScheduleDay(ev.targetDay || '');
       setScheduleDate(ev.targetDate);
       setScheduleTime(ev.targetTime || '');
       if (ev.tahun) setScheduleYear(ev.tahun);
@@ -5180,10 +5185,12 @@ export function MenuHubView({
 
     const handleSubmitSchedule = (e: FormEvent) => {
       e.preventDefault();
-      if (!scheduleTitle.trim() || !scheduleDate) return;
+      if (!scheduleDate) return;
+      const resolvedTitle = catLabelMap[scheduleCategory] || 'Agenda Lainnya';
       const payload = {
-        title: scheduleTitle.trim(),
+        title: resolvedTitle,
         category: scheduleCategory,
+        targetDay: scheduleDay.trim() || undefined,
         targetDate: scheduleDate,
         targetTime: scheduleTime.trim() || undefined,
         tahun: scheduleYear || undefined,
@@ -5259,32 +5266,40 @@ export function MenuHubView({
                   </button>
                 )}
               </div>
+
               <div>
                 <label className="block text-xs font-semibold text-slate-700">
-                  Judul Agenda / Target
+                  Kategori (Judul Agenda)
                 </label>
-                <input
-                  type="text"
-                  required
-                  value={scheduleTitle}
-                  onChange={(e) => setScheduleTitle(e.target.value)}
-                  placeholder="Contoh: Penyaluran Bantuan Kel. Sungai Beliung"
-                  className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 px-3 text-sm text-slate-900 focus:border-teal-700 focus:outline-none"
-                />
+                <select
+                  value={scheduleCategory}
+                  onChange={(e) => setScheduleCategory(e.target.value as ScheduleCategory)}
+                  className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none"
+                >
+                  {SCHEDULE_CATEGORY_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700">Kategori</label>
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Pilih Hari
+                  </label>
                   <select
-                    value={scheduleCategory}
-                    onChange={(e) => setScheduleCategory(e.target.value as ScheduleCategory)}
+                    value={scheduleDay}
+                    onChange={(e) => setScheduleDay(e.target.value)}
                     className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none"
                   >
-                    <option value="survey">Survey Lapangan</option>
-                    <option value="dinas">Antar ke Dinas</option>
-                    <option value="distribusi">Penyaluran / Distribusi</option>
-                    <option value="lainnya">Agenda Lainnya</option>
+                    <option value="">Otomatis ({autoDayLabel})</option>
+                    {SPTJM_DAY_OPTIONS.map((dayName) => (
+                      <option key={dayName} value={dayName}>
+                        {dayName}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
@@ -5440,6 +5455,18 @@ export function MenuHubView({
               ) : (
                 sortedSchedules.map((ev) => {
                   const isOverdue = !ev.completed && ev.targetDate < todayStr;
+                  const categoryTitle = catLabelMap[ev.category] || ev.title || 'Agenda Lainnya';
+                  const trimmedEvTitle = (ev.title || '').trim();
+                  const legacyNoteTitle =
+                    trimmedEvTitle &&
+                    trimmedEvTitle.toLowerCase() !== categoryTitle.toLowerCase()
+                      ? trimmedEvTitle
+                      : '';
+                  const subtitleParts = [legacyNoteTitle, ev.proposalName, ev.notes].filter(Boolean);
+                  const formattedScheduleDate = formatScheduleIndonesianDate(
+                    ev.targetDate,
+                    ev.targetDay
+                  );
                   return (
                     <div key={ev.id} className="flex items-start gap-3 px-4 py-3">
                       {onToggleSchedule && (
@@ -5463,13 +5490,13 @@ export function MenuHubView({
                             <span
                               className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
                                 ev.completed
-                                  ? 'bg-slate-100 text-slate-500'
+                                  ? 'bg-emerald-50 text-emerald-700'
                                   : isOverdue
                                     ? 'bg-rose-50 text-rose-700'
                                     : 'bg-teal-50 text-teal-800'
                               }`}
                             >
-                              {catLabelMap[ev.category]}
+                              {ev.completed ? 'Selesai' : isOverdue ? 'Terlambat' : 'Terjadwal'}
                             </span>
                             {ev.tahun && (
                               <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 tabular-nums">
@@ -5486,7 +5513,7 @@ export function MenuHubView({
                                   : 'text-slate-700'
                             }`}
                           >
-                            {ev.targetDate}
+                            {formattedScheduleDate}
                             {ev.targetTime ? ` · ${ev.targetTime}` : ''}
                           </span>
                         </div>
@@ -5495,11 +5522,11 @@ export function MenuHubView({
                             ev.completed ? 'line-through text-slate-400' : 'text-slate-900'
                           }`}
                         >
-                          {ev.title}
+                          {categoryTitle}
                         </p>
-                        {(ev.proposalName || ev.notes) && (
+                        {subtitleParts.length > 0 && (
                           <p className="mt-0.5 text-xs text-slate-500">
-                            {[ev.proposalName, ev.notes].filter(Boolean).join(' · ')}
+                            {subtitleParts.join(' · ')}
                           </p>
                         )}
                         {ev.location && (

@@ -89,6 +89,7 @@ import {
   ProposalRecord,
   ProposalSlotMap,
   ReportTemplateConfig,
+  SCHEDULE_CATEGORY_LABELS,
   ScheduleCategory,
   ScheduleEventItem,
   SharedKpmCard,
@@ -6170,6 +6171,7 @@ export default function App() {
   const handleAddSchedule = (payload: {
     title: string;
     category: ScheduleCategory;
+    targetDay?: string;
     targetDate: string;
     targetTime?: string;
     tahun?: string;
@@ -6177,10 +6179,13 @@ export default function App() {
     location?: string;
     notes?: string;
   }) => {
+    const resolvedTitle =
+      payload.title.trim() || SCHEDULE_CATEGORY_LABELS[payload.category] || 'Agenda Lainnya';
     const newItem: ScheduleEventItem = {
       id: `sch-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-      title: payload.title,
+      title: resolvedTitle,
       category: payload.category,
+      targetDay: payload.targetDay?.trim() || undefined,
       targetDate: payload.targetDate,
       targetTime: payload.targetTime?.trim() || undefined,
       tahun: payload.tahun?.trim() || selectedYear,
@@ -6200,7 +6205,7 @@ export default function App() {
     void saveAppStateSlice('masdeta_schedules_v1', next);
     setFeedback({
       type: 'success',
-      message: `Agenda "${payload.title}" berhasil ditambahkan ke jadwal.`,
+      message: `Agenda "${resolvedTitle}" berhasil ditambahkan ke jadwal.`,
     });
   };
 
@@ -6209,6 +6214,7 @@ export default function App() {
     payload: {
       title: string;
       category: ScheduleCategory;
+      targetDay?: string;
       targetDate: string;
       targetTime?: string;
       tahun?: string;
@@ -6217,13 +6223,16 @@ export default function App() {
       notes?: string;
     }
   ) => {
+    const resolvedTitle =
+      payload.title.trim() || SCHEDULE_CATEGORY_LABELS[payload.category] || 'Agenda Lainnya';
     const next = schedules
       .map((s) =>
         s.id === id
           ? {
               ...s,
-              title: payload.title,
+              title: resolvedTitle,
               category: payload.category,
+              targetDay: payload.targetDay?.trim() || undefined,
               targetDate: payload.targetDate,
               targetTime: payload.targetTime?.trim() || undefined,
               tahun: payload.tahun?.trim() || s.tahun,
@@ -6242,7 +6251,7 @@ export default function App() {
     void saveAppStateSlice('masdeta_schedules_v1', next);
     setFeedback({
       type: 'success',
-      message: `Agenda "${payload.title}" berhasil diperbarui.`,
+      message: `Agenda "${resolvedTitle}" berhasil diperbarui.`,
     });
   };
 

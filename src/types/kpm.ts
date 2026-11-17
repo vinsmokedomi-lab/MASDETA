@@ -317,12 +317,43 @@ export interface TrashRecordItem {
   attachedKpms?: KpmRecord[];
 }
 
-export type ScheduleCategory = 'survey' | 'dinas' | 'distribusi' | 'lainnya';
+export type ScheduleCategory =
+  | 'survey'
+  | 'verifikasi'
+  | 'dinas'
+  | 'pemberkasan'
+  | 'distribusi'
+  | 'monitoring'
+  | 'koordinasi'
+  | 'lainnya';
+
+export const SCHEDULE_CATEGORY_OPTIONS: { value: ScheduleCategory; label: string }[] = [
+  { value: 'survey', label: 'Survey Lapangan' },
+  { value: 'verifikasi', label: 'Verifikasi & Validasi Berkas' },
+  { value: 'dinas', label: 'Antar ke Dinas' },
+  { value: 'pemberkasan', label: 'Pemberkasan BAST & SPTJM' },
+  { value: 'distribusi', label: 'Penyaluran Bantuan' },
+  { value: 'monitoring', label: 'Monitoring & Evaluasi' },
+  { value: 'koordinasi', label: 'Rapat / Koordinasi Dinas' },
+  { value: 'lainnya', label: 'Agenda Lainnya' },
+];
+
+export const SCHEDULE_CATEGORY_LABELS: Record<ScheduleCategory, string> = {
+  survey: 'Survey Lapangan',
+  verifikasi: 'Verifikasi & Validasi Berkas',
+  dinas: 'Antar ke Dinas',
+  pemberkasan: 'Pemberkasan BAST & SPTJM',
+  distribusi: 'Penyaluran Bantuan',
+  monitoring: 'Monitoring & Evaluasi',
+  koordinasi: 'Rapat / Koordinasi Dinas',
+  lainnya: 'Agenda Lainnya',
+};
 
 export interface ScheduleEventItem {
   id: string;
   title: string;
   category: ScheduleCategory;
+  targetDay?: string; // Senin, Selasa, Rabu, Kamis, Jum'at, Sabtu, Minggu
   targetDate: string; // YYYY-MM-DD
   targetTime?: string; // HH:mm
   tahun: string;

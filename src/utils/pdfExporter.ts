@@ -18,6 +18,7 @@ import {
   ProposalRecord,
   ProposalSlotMap,
   ReportTemplateConfig,
+  SCHEDULE_CATEGORY_LABELS,
   ScheduleEventItem,
   SptjmTemplateConfig,
   WilayahKabKota,
@@ -441,6 +442,26 @@ export function formatIndonesianDayShortDate(isoDate?: string): string {
   return `${dayName} ${formatIndonesianDDMonthYYYY(isoDate)}`;
 }
 
+export function formatScheduleIndonesianDate(targetDate?: string, targetDay?: string): string {
+  const raw = (targetDate || '').trim();
+  const manualDay = (targetDay || '').trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (m) {
+    const dayName = manualDay || getSptjmAutoDayFromIso(raw);
+    return `${dayName}, ${m[3]}-${m[2]}-${m[1]}`;
+  }
+  if (!raw) return manualDay || '-';
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) {
+    const dd = String(parsed.getDate()).padStart(2, '0');
+    const mm = String(parsed.getMonth() + 1).padStart(2, '0');
+    const yyyy = parsed.getFullYear();
+    const dayName = manualDay || (parsed.getDay() === 5 ? "Jum'at" : INDONESIAN_WEEKDAYS[parsed.getDay()] || 'Senin');
+    return `${dayName}, ${dd}-${mm}-${yyyy}`;
+  }
+  return manualDay ? `${manualDay}, ${raw}` : raw;
+}
+
 export function formatBastProposalLocation(
   record: Pick<KpmRecord, 'kabKota' | 'kecamatan' | 'kelurahan' | 'proposal' | 'proposalId' | 'tahun'>,
   proposals: ProposalRecord[],
@@ -504,13 +525,18 @@ export function isKecamatanScopedProposalForCoupon(
   return false;
 }
 
-export function formatScheduleDateTimeForCoupon(targetDate: string, targetTime?: string): string {
+export function formatScheduleDateTimeForCoupon(
+  targetDate: string,
+  targetTime?: string,
+  targetDay?: string
+): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec((targetDate || '').trim());
   let dateLabel = (targetDate || '').trim();
   if (m) {
     const dt = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
     if (!Number.isNaN(dt.getTime())) {
-      const dayName = INDONESIAN_WEEKDAYS[dt.getDay()] || 'Senin';
+      const autoDay = dt.getDay() === 5 ? "Jum'at" : INDONESIAN_WEEKDAYS[dt.getDay()] || 'Senin';
+      const dayName = (targetDay || '').trim() || autoDay;
       const monthName = INDONESIAN_MONTHS[dt.getMonth()] || 'Januari';
       dateLabel = `${dayName}, ${dt.getDate()} ${monthName} ${dt.getFullYear()}`;
     }
@@ -583,7 +609,8 @@ export function resolveCouponScheduleForRecord(
 
   const autoJadwal = formatScheduleDateTimeForCoupon(
     matchedSchedule.targetDate,
-    matchedSchedule.targetTime
+    matchedSchedule.targetTime,
+    matchedSchedule.targetDay
   );
   const autoLokasi = (matchedSchedule.location || '').trim();
 
@@ -3880,12 +3907,7 @@ export async function exportSchedulesToPdf({
   fileName,
   reportTemplate,
 }: ExportSchedulesPdfOptions): Promise<{ savedFileName: string; openedNative: boolean; count: number }> {
-  const catLabelMap: Record<import('../types/kpm').ScheduleCategory, string> = {
-    survey: 'Survey Lapangan',
-    dinas: 'Antar ke Dinas',
-    distribusi: 'Penyaluran / Distribusi',
-    lainnya: 'Agenda Lainnya',
-  };
+  const catLabelMap = SCHEDULE_CATEGORY_LABELS;
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const sorted = [...schedules].sort((a, b) => {
@@ -4001,18 +4023,25 @@ export async function exportSchedulesToPdf({
       : sorted.map((ev, idx) => {
           const isOverdue = !ev.completed && ev.targetDate < todayStr;
           const statusText = ev.completed ? 'Selesai' : isOverdue ? 'Terlambat' : 'Terjadwal';
-          const dateTimeStr = ev.targetTime ? `${ev.targetDate}\nPukul ${ev.targetTime}` : ev.targetDate;
+          const formattedDate = formatScheduleIndonesianDate(ev.targetDate, ev.targetDay);
+          const dateTimeStr = ev.targetTime ? `${formattedDate}\nPukul ${ev.targetTime}` : formattedDate;
+          const categoryLabel = catLabelMap[ev.category] || ev.category;
+          const trimmedTitle = (ev.title || '').trim();
+          const legacyTitle =
+            trimmedTitle && trimmedTitle.toLowerCase() !== categoryLabel.toLowerCase()
+              ? trimmedTitle
+              : '';
           const agendaDesc = [
-            ev.title,
+            legacyTitle,
             ev.location ? `Lokasi: ${ev.location}` : '',
             ev.notes ? `Catatan: ${ev.notes}` : '',
           ]
             .filter(Boolean)
-            .join('\n');
+            .join('\n') || '-';
           return [
             String(idx + 1).padStart(2, '0'),
             dateTimeStr,
-            catLabelMap[ev.category] || ev.category,
+            categoryLabel,
             ev.tahun || '-',
             ev.proposalName?.trim() || 'Umum / Tanpa Proposal',
             agendaDesc,
@@ -4029,7 +4058,7 @@ export async function exportSchedulesToPdf({
       left: F4_PDF_MARGINS.left,
     },
     tableWidth: PRINTABLE_WIDTH_MM,
-    head: [['NO', 'TANGGAL & JAM', 'KATEGORI', 'TAHUN', 'PROPOSAL', 'AGENDA & CATATAN', 'STATUS']],
+    head: [['NO', 'HARI, TANGGAL & JAM', 'KATEGORI / JUDUL', 'TAHUN', 'PROPOSAL', 'LOKASI & CATATAN', 'STATUS']],
     body: tableBody,
     theme: 'grid',
     showHead: 'everyPage',
@@ -4052,12 +4081,12 @@ export async function exportSchedulesToPdf({
     },
     columnStyles: {
       0: { cellWidth: 10, halign: 'center' },
-      1: { cellWidth: 27, halign: 'center' },
-      2: { cellWidth: 28, halign: 'left' },
-      3: { cellWidth: 15, halign: 'center' },
-      4: { cellWidth: 38, halign: 'left' },
-      5: { cellWidth: PRINTABLE_WIDTH_MM - 138, halign: 'left' },
-      6: { cellWidth: 20, halign: 'center', fontStyle: 'bold' },
+      1: { cellWidth: 33, halign: 'center' },
+      2: { cellWidth: 30, halign: 'left', fontStyle: 'bold' },
+      3: { cellWidth: 14, halign: 'center' },
+      4: { cellWidth: 36, halign: 'left' },
+      5: { cellWidth: PRINTABLE_WIDTH_MM - 142, halign: 'left' },
+      6: { cellWidth: 19, halign: 'center', fontStyle: 'bold' },
     },
   });
 

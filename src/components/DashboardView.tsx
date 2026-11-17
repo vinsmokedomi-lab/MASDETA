@@ -29,6 +29,7 @@ import {
   ItemBantuan,
   KpmRecord,
   ProposalRecord,
+  SCHEDULE_CATEGORY_LABELS,
   ScheduleEventItem,
   ValidationStatus,
 } from '../types/kpm';
@@ -39,6 +40,7 @@ import {
   getItemHierarchyRank,
   resolvePackageForKpm,
 } from '../utils/imageProcessor';
+import { formatScheduleIndonesianDate } from '../utils/pdfExporter';
 import { useIsDesktopWeb } from '../utils/platform';
 import { DriveImage } from './DriveImage';
 import { PresenceDot } from './PresenceDot';
@@ -1314,12 +1316,16 @@ export function DashboardView({
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-xs font-semibold text-slate-900">
                       {urgentSchedules.length === 1
-                        ? urgentSchedules[0].title
+                        ? SCHEDULE_CATEGORY_LABELS[urgentSchedules[0].category] ||
+                          urgentSchedules[0].title
                         : 'Jadwal Kegiatan Mendekati Tenggat'}
                     </p>
                     <p className="mt-0.5 truncate text-[11px] text-slate-500 tabular-nums">
                       {urgentSchedules.length === 1
-                        ? `Tenggat ${urgentSchedules[0].targetDate}`
+                        ? `Tenggat ${formatScheduleIndonesianDate(
+                            urgentSchedules[0].targetDate,
+                            urgentSchedules[0].targetDay
+                          )}`
                         : 'Agenda operasional dalam 3 hari ke depan'}
                     </p>
                   </div>
