@@ -327,6 +327,8 @@ export interface ScheduleEventItem {
   targetTime?: string; // HH:mm
   tahun: string;
   proposalName?: string;
+  location?: string;
+  footerNote?: string;
   notes?: string;
   completed: boolean;
   completedAt?: string;
@@ -352,6 +354,8 @@ export type ProposalSlotMap = Record<string, ProposalSlotState>;
 
 export type SlotRemovalMode = 'vacate' | 'collapse';
 
+export const DEFAULT_KOP_LOGO_URL = '/assets/logo-dinsos-kalbar.png';
+
 export interface ReportTemplateConfig {
   enabled: boolean;
   orgHeaderLine1: string;
@@ -361,16 +365,74 @@ export interface ReportTemplateConfig {
   signatoryTitle: string;
   signatoryName: string;
   signatoryNip: string;
+  kopLogoDataUrl?: string;
 }
 
 export const DEFAULT_REPORT_TEMPLATE: ReportTemplateConfig = {
   enabled: false,
-  orgHeaderLine1: 'PEMERINTAH KOTA PONTIANAK',
+  orgHeaderLine1: 'PEMERINTAH PROVINSI KALIMANTAN BARAT',
   orgHeaderLine2: 'DINAS SOSIAL · PROGRAM BANTUAN KPM MASDETA',
-  orgAddress: 'Jl.Sultan Abdurrahman, Pontianak, Kalimantan Barat',
+  orgAddress: 'Jalan Sutan Syahrir Nomor 3 Pontianak, Kalimantan Barat 78116',
   city: 'Pontianak',
   signatoryTitle: 'Koordinator / Penanggung Jawab',
   signatoryName: '',
   signatoryNip: '',
+  kopLogoDataUrl: DEFAULT_KOP_LOGO_URL,
 };
+
+export interface CouponPrintConfig {
+  jadwal: string;
+  lokasi: string;
+  footerText: string;
+}
+
+export const DEFAULT_COUPON_CONFIG: CouponPrintConfig = {
+  jadwal: '',
+  lokasi: '',
+  footerText: 'Wajib membawa Kupon dan KTP asli saat pembagian.',
+};
+
+export interface BastTemplateConfig {
+  orgHeaderLine1: string;
+  orgHeaderLine2: string;
+  orgAddress1: string;
+  orgAddress2: string;
+  orgAddress3: string;
+  kopLogoDataUrl?: string;
+  nomorBast: string;
+  tanggalSerahTerimaIso: string;
+  tanggalSerahTerimaCustomText?: string;
+  nomorSk: string;
+  nomorPesanan: string;
+  tanggalPemesanan: string;
+  pejabatNama: string;
+  pejabatJabatan: string;
+  pejabatPangkat: string;
+  pejabatNip: string;
+  nilaiNominalText: string;
+}
+
+export const DEFAULT_BAST_TEMPLATE: BastTemplateConfig = {
+  orgHeaderLine1: 'PEMERINTAH PROVINSI KALIMANTAN BARAT',
+  orgHeaderLine2: 'DINAS SOSIAL',
+  orgAddress1: 'Jalan Sutan Syahrir Nomor 3 Pontianak, Kalimantan Barat 78116',
+  orgAddress2: 'Telepon (0561) 732523 - 732524',
+  orgAddress3: 'Laman www.dinsos.kalbarprov.go.id Pos-el dinsos@kalbarprov.go.id',
+  kopLogoDataUrl: DEFAULT_KOP_LOGO_URL,
+  nomorBast: '400.9.14.5 / ................... / DINSOS',
+  tanggalSerahTerimaIso: '',
+  tanggalSerahTerimaCustomText: '',
+  nomorSk: '300.3.3/56/DINSOS tanggal 1 juli 2025',
+  nomorPesanan: 'EP-01K6M49TRC1H4TS8M7FRPN4C99',
+  tanggalPemesanan: '03 Oktober 2025',
+  pejabatNama: 'Drs. RAMINUDDIN, M.Si',
+  pejabatJabatan: 'Kepala Dinas Sosial Provinsi Kalimantan Barat',
+  pejabatPangkat: 'Pembina Utama Muda / (IV/c)',
+  pejabatNip: 'NIP. 19770830 199603 1 001',
+  nilaiNominalText: '. . . . . . . . . . . . . . . . . . . . . . . . . . .',
+};
+
+export type ProposalBastMap = Record<string, Partial<BastTemplateConfig>>;
+
+
 

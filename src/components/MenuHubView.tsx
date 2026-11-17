@@ -60,6 +60,9 @@ import { StandaloneKpmView } from './StandaloneKpmView';
 import { DTSEN_OPTION_ITEMS, TAHUN_OPTIONS } from '../data/kpmOptions';
 import { exportSchedulesToPdf } from '../utils/pdfExporter';
 import {
+  BastTemplateConfig,
+  CouponPrintConfig,
+  DEFAULT_COUPON_CONFIG,
   InternalUser,
   InternalUserRole,
   InternalUserStatus,
@@ -68,8 +71,10 @@ import {
   KpmDocumentFile,
   KpmRecord,
   PengelolaProfile,
+  ProposalBastMap,
   ProposalKpmHistoryEntry,
   ProposalRecord,
+  ProposalSlotMap,
   ReportTemplateConfig,
   ScheduleCategory,
   ScheduleEventItem,
@@ -211,15 +216,41 @@ interface MenuHubViewProps {
     targetTime?: string;
     tahun?: string;
     proposalName?: string;
+    location?: string;
+    footerNote?: string;
     notes?: string;
   }) => void;
+  onUpdateSchedule?: (
+    id: string,
+    payload: {
+      title: string;
+      category: ScheduleCategory;
+      targetDate: string;
+      targetTime?: string;
+      tahun?: string;
+      proposalName?: string;
+      location?: string;
+      footerNote?: string;
+      notes?: string;
+    }
+  ) => void;
   onToggleSchedule?: (id: string) => void;
   onDeleteSchedule?: (id: string) => void;
   trashBin?: TrashRecordItem[];
   onRestoreTrashItem?: (trashId: string) => void;
   onPermanentDeleteTrashItem?: (trashId: string) => void;
+  proposalSlotMap?: ProposalSlotMap;
   reportTemplate?: ReportTemplateConfig;
   onSaveReportTemplate?: (next: ReportTemplateConfig) => void;
+  couponConfig?: CouponPrintConfig;
+  onSaveCouponConfig?: (next: CouponPrintConfig) => void;
+  bastTemplate?: BastTemplateConfig;
+  onSaveBastTemplate?: (next: BastTemplateConfig) => void;
+  proposalBastMap?: ProposalBastMap;
+  onSaveProposalBastConfig?: (
+    proposalId: string,
+    config: Partial<BastTemplateConfig> | null
+  ) => void;
   onOpenCreateStandaloneDatabaseKpm?: () => void;
   onBulkRecoverToDatabase?: (kpmIds: string[]) => Promise<void> | void;
   onBulkRejectToArsip?: (kpmIds: string[]) => Promise<void> | void;
@@ -286,13 +317,21 @@ export function MenuHubView({
   onPreviewDocument,
   schedules = [],
   onAddSchedule,
+  onUpdateSchedule,
   onToggleSchedule,
   onDeleteSchedule,
   trashBin = [],
   onRestoreTrashItem,
   onPermanentDeleteTrashItem,
+  proposalSlotMap = {},
   reportTemplate,
   onSaveReportTemplate,
+  couponConfig,
+  onSaveCouponConfig,
+  bastTemplate,
+  onSaveBastTemplate,
+  proposalBastMap = {},
+  onSaveProposalBastConfig,
   onOpenCreateStandaloneDatabaseKpm,
   onBulkRecoverToDatabase,
   onBulkRejectToArsip,
@@ -704,6 +743,7 @@ export function MenuHubView({
   const [matrixFilter, setMatrixFilter] = useState<'all' | 'incomplete'>('incomplete');
 
   // Jadwal & Target Proposal form state
+  const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
   const [scheduleTitle, setScheduleTitle] = useState('');
   const [scheduleCategory, setScheduleCategory] = useState<ScheduleCategory>('distribusi');
   const [scheduleDate, setScheduleDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -714,6 +754,8 @@ export function MenuHubView({
       : new Date().getFullYear().toString()
   );
   const [scheduleProposal, setScheduleProposal] = useState('');
+  const [scheduleLocation, setScheduleLocation] = useState('');
+  const [scheduleFooterNote, setScheduleFooterNote] = useState('');
   const [scheduleNotes, setScheduleNotes] = useState('');
   const [exportingSchedulePdf, setExportingSchedulePdf] = useState(false);
   const [schedulePdfError, setSchedulePdfError] = useState<string | null>(null);
@@ -5141,22 +5183,54 @@ export function MenuHubView({
       return (a.targetTime || '99:99').localeCompare(b.targetTime || '99:99');
     });
 
+    const resetScheduleForm = () => {
+      setEditingScheduleId(null);
+      setScheduleTitle('');
+      setScheduleTime('');
+      setScheduleProposal('');
+      setScheduleLocation('');
+      setScheduleFooterNote('');
+      setScheduleNotes('');
+    };
+
+    const handleStartEditSchedule = (ev: ScheduleEventItem) => {
+      setEditingScheduleId(ev.id);
+      setScheduleTitle(ev.title);
+      setScheduleCategory(ev.category);
+      setScheduleDate(ev.targetDate);
+      setScheduleTime(ev.targetTime || '');
+      if (ev.tahun) setScheduleYear(ev.tahun);
+      setScheduleProposal(ev.proposalName || '');
+      setScheduleLocation(ev.location || '');
+      setScheduleFooterNote(ev.footerNote || '');
+      setScheduleNotes(ev.notes || '');
+      if (typeof window !== 'undefined') {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    };
+
     const handleSubmitSchedule = (e: FormEvent) => {
       e.preventDefault();
-      if (!scheduleTitle.trim() || !scheduleDate || !onAddSchedule) return;
-      onAddSchedule({
+      if (!scheduleTitle.trim() || !scheduleDate) return;
+      const payload = {
         title: scheduleTitle.trim(),
         category: scheduleCategory,
         targetDate: scheduleDate,
         targetTime: scheduleTime.trim() || undefined,
         tahun: scheduleYear || undefined,
         proposalName: scheduleProposal.trim() || undefined,
+        location: scheduleLocation.trim() || undefined,
+        footerNote: scheduleFooterNote.trim() || undefined,
         notes: scheduleNotes.trim() || undefined,
-      });
-      setScheduleTitle('');
-      setScheduleTime('');
-      setScheduleProposal('');
-      setScheduleNotes('');
+      };
+      if (editingScheduleId && onUpdateSchedule) {
+        onUpdateSchedule(editingScheduleId, payload);
+        resetScheduleForm();
+        return;
+      }
+      if (!onAddSchedule) return;
+      onAddSchedule(payload);
+      resetScheduleForm();
     };
 
     const handleExportSchedulePdf = async () => {
@@ -5183,23 +5257,40 @@ export function MenuHubView({
         {renderSubHeader(
           'Jadwal & Target Proposal',
           () => onChangeSection('root'),
-          onAddSchedule && canAdd ? 'md:max-w-[1440px]' : 'md:max-w-5xl'
+          (onAddSchedule || onUpdateSchedule) && (canAdd || canUpdate)
+            ? 'md:max-w-[1440px]'
+            : 'md:max-w-5xl'
         )}
         <div
           className={`space-y-4 px-4 pt-4 ${
             !isNativeApp
-              ? `md:mx-auto ${onAddSchedule && canAdd ? 'md:max-w-[1440px] md:grid md:grid-cols-12 md:items-start md:gap-6 md:space-y-0' : 'md:max-w-5xl'} md:px-6 md:pt-6`
+              ? `md:mx-auto ${(onAddSchedule || onUpdateSchedule) && (canAdd || canUpdate) ? 'md:max-w-[1440px] md:grid md:grid-cols-12 md:items-start md:gap-6 md:space-y-0' : 'md:max-w-5xl'} md:px-6 md:pt-6`
               : ''
           }`}
         >
-          {onAddSchedule && canAdd && (
+          {((editingScheduleId && onUpdateSchedule && canUpdate) ||
+            (onAddSchedule && canAdd)) && (
             <form
               onSubmit={handleSubmitSchedule}
               className={`rounded-2xl border border-slate-200 bg-white p-4 space-y-3 ${
                 !isNativeApp ? 'md:col-span-5' : ''
               }`}
             >
-              <h2 className="text-sm font-bold text-slate-900">Tambah Agenda Baru</h2>
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-sm font-bold text-slate-900">
+                  {editingScheduleId ? 'Edit Agenda Jadwal' : 'Tambah Agenda Baru'}
+                </h2>
+                {editingScheduleId && (
+                  <button
+                    type="button"
+                    onClick={resetScheduleForm}
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-100"
+                  >
+                    <X className="h-3 w-3" />
+                    <span>Batal Edit</span>
+                  </button>
+                )}
+              </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-700">
                   Judul Agenda / Target
@@ -5209,7 +5300,7 @@ export function MenuHubView({
                   required
                   value={scheduleTitle}
                   onChange={(e) => setScheduleTitle(e.target.value)}
-                  placeholder="Contoh: Antar Proposal Kel. Sungai Beliung ke Dinas"
+                  placeholder="Contoh: Penyaluran Bantuan Kel. Sungai Beliung"
                   className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 px-3 text-sm text-slate-900 focus:border-teal-700 focus:outline-none"
                 />
               </div>
@@ -5303,7 +5394,33 @@ export function MenuHubView({
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700">
-                  Catatan Singkat (opsional)
+                  Lokasi Penyaluran (otomatis ke Kupon)
+                </label>
+                <input
+                  type="text"
+                  value={scheduleLocation}
+                  onChange={(e) => setScheduleLocation(e.target.value)}
+                  placeholder="Contoh: Aula Kantor Camat Pontianak Barat"
+                  className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Catatan Kaki Kupon (opsional)
+                </label>
+                <input
+                  type="text"
+                  value={scheduleFooterNote}
+                  onChange={(e) => setScheduleFooterNote(e.target.value)}
+                  placeholder={DEFAULT_COUPON_CONFIG.footerText}
+                  className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Catatan Singkat Internal (opsional)
                 </label>
                 <input
                   type="text"
@@ -5318,15 +5435,17 @@ export function MenuHubView({
                 type="submit"
                 className="inline-flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white hover:bg-teal-800"
               >
-                <Plus className="h-4 w-4" />
-                <span>Simpan Jadwal</span>
+                {editingScheduleId ? <Check className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+                <span>{editingScheduleId ? 'Simpan Perubahan Jadwal' : 'Simpan Jadwal'}</span>
               </button>
             </form>
           )}
 
           <div
             className={`overflow-hidden rounded-2xl border border-slate-200 bg-white ${
-              !isNativeApp && onAddSchedule && canAdd ? 'md:col-span-7' : ''
+              !isNativeApp && ((onAddSchedule && canAdd) || (editingScheduleId && onUpdateSchedule && canUpdate))
+                ? 'md:col-span-7'
+                : ''
             }`}
           >
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50/70 px-4 py-3">
@@ -5335,7 +5454,7 @@ export function MenuHubView({
                   Daftar Agenda ({sortedSchedules.length})
                 </h2>
                 <p className="text-[11px] text-slate-500">
-                  Jadwal kegiatan &amp; tenggat proposal
+                  Jadwal, lokasi penyaluran &amp; catatan kaki otomatis terhubung ke Cetak Kupon
                 </p>
               </div>
               <button
@@ -5428,18 +5547,46 @@ export function MenuHubView({
                             {[ev.proposalName, ev.notes].filter(Boolean).join(' · ')}
                           </p>
                         )}
+                        {(ev.location || ev.footerNote) && (
+                          <div className="mt-1 space-y-0.5 text-[11px] text-slate-600">
+                            {ev.location && (
+                              <p className="flex items-center gap-1">
+                                <MapPin className="h-3 w-3 shrink-0 text-teal-700" />
+                                <span className="truncate">{ev.location}</span>
+                              </p>
+                            )}
+                            {ev.footerNote && (
+                              <p className="text-slate-500">
+                                Catatan Kaki Kupon: {ev.footerNote}
+                              </p>
+                            )}
+                          </div>
+                        )}
                       </div>
 
-                      {onDeleteSchedule && canDelete && (
-                        <button
-                          type="button"
-                          onClick={() => onDeleteSchedule(ev.id)}
-                          aria-label="Hapus jadwal"
-                          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      )}
+                      <div className="flex shrink-0 items-center gap-1">
+                        {onUpdateSchedule && canUpdate && (
+                          <button
+                            type="button"
+                            onClick={() => handleStartEditSchedule(ev)}
+                            aria-label="Edit jadwal"
+                            title="Edit Jadwal & Lokasi"
+                            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-teal-50 hover:text-teal-700"
+                          >
+                            <Edit3 className="h-4 w-4" />
+                          </button>
+                        )}
+                        {onDeleteSchedule && canDelete && (
+                          <button
+                            type="button"
+                            onClick={() => onDeleteSchedule(ev.id)}
+                            aria-label="Hapus jadwal"
+                            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   );
                 })
@@ -5575,7 +5722,7 @@ export function MenuHubView({
     );
   }
 
-  // 12. DOWNLOAD DATA (PDF F4 & EXCEL)
+  // 12. DOWNLOAD DATA (PDF F4, KUPON, BAST & EXCEL)
   if (activeSection === 'download') {
     return (
       <MenuDownloadView
@@ -5584,8 +5731,16 @@ export function MenuHubView({
         items={items}
         wilayahList={wilayahList}
         pengelolaList={pengelolaList}
+        proposalSlotMap={proposalSlotMap}
+        schedules={schedules}
         reportTemplate={reportTemplate}
         onSaveReportTemplate={onSaveReportTemplate}
+        couponConfig={couponConfig}
+        onSaveCouponConfig={onSaveCouponConfig}
+        bastTemplate={bastTemplate}
+        onSaveBastTemplate={onSaveBastTemplate}
+        proposalBastMap={proposalBastMap}
+        onSaveProposalBastConfig={onSaveProposalBastConfig}
         onBack={() => onChangeSection('root')}
       />
     );

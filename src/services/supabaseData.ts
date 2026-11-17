@@ -3542,3 +3542,249 @@ export async function saveAppStateSlice<T>(stateKey: string, payload: T): Promis
   }
 }
 
+export interface PublicKpmContext {
+  record: KpmRecord;
+  proposals: ProposalRecord[];
+  items: ItemBantuan[];
+  wilayahList: WilayahKabKota[];
+}
+
+export async function fetchPublicKpmContextFromSupabase(
+  kpmIdOrCode: string
+): Promise<PublicKpmContext | null> {
+  if (!isSupabaseConfigured) return null;
+  const clean = kpmIdOrCode.trim();
+  if (!clean) return null;
+
+  try {
+    let kpmRow: Record<string, unknown> | null = null;
+    const byIdRes = await supabase
+      .from('kpm_records')
+      .select('*')
+      .eq('id', clean)
+      .maybeSingle();
+
+    if (!byIdRes.error && byIdRes.data) {
+      kpmRow = byIdRes.data as Record<string, unknown>;
+    } else {
+      const byCodeRes = await supabase
+        .from('kpm_records')
+        .select('*')
+        .ilike('register_code', clean)
+        .limit(1);
+      if (!byCodeRes.error && byCodeRes.data && byCodeRes.data.length > 0) {
+        kpmRow = byCodeRes.data[0] as Record<string, unknown>;
+      }
+    }
+
+    if (!kpmRow) return null;
+    const kpmId = String(kpmRow.id);
+
+    const [
+      docsRes,
+      deliveriesRes,
+      proposalsRes,
+      itemsRes,
+      subItemsRes,
+      kabRes,
+      kecRes,
+      kelRes,
+    ] = await Promise.all([
+      supabase
+        .from('kpm_documents')
+        .select('*')
+        .eq('kpm_id', kpmId)
+        .order('sort_order', { ascending: true })
+        .order('id', { ascending: true }),
+      supabase.from('kpm_sub_item_deliveries').select('*').eq('kpm_id', kpmId),
+      supabase.from('proposals').select('*').order('created_at', { ascending: false }),
+      supabase.from('item_bantuan').select('*').order('sort_order', { ascending: true }),
+      supabase.from('item_sub_items').select('*').order('sort_order', { ascending: true }),
+      supabase.from('wilayah_kabkota').select('*').order('sort_order', { ascending: true }),
+      supabase.from('wilayah_kecamatan').select('*').order('sort_order', { ascending: true }),
+      supabase.from('wilayah_kelurahan').select('*').order('sort_order', { ascending: true }),
+    ]);
+
+    const kelByKec = new Map<string, string[]>();
+    for (const kel of kelRes.data || []) {
+      const kecId = String(kel.kecamatan_id);
+      const arr = kelByKec.get(kecId) || [];
+      arr.push(String(kel.nama));
+      kelByKec.set(kecId, arr);
+    }
+    const kecByKab = new Map<string, WilayahKabKota['kecamatanList']>();
+    for (const kec of kecRes.data || []) {
+      const kabId = String(kec.kabkota_id);
+      const arr = kecByKab.get(kabId) || [];
+      arr.push({
+        id: String(kec.id),
+        nama: String(kec.nama),
+        kelurahanList: kelByKec.get(String(kec.id)) || [],
+      });
+      kecByKab.set(kabId, arr);
+    }
+    const wilayahList: WilayahKabKota[] = (kabRes.data || []).map((kab) => ({
+      id: String(kab.id),
+      nama: String(kab.nama),
+      kecamatanList: kecByKab.get(String(kab.id)) || [],
+    }));
+
+    const subByItem = new Map<string, string[]>();
+    for (const sub of subItemsRes.data || []) {
+      const itemId = String(sub.item_id);
+      const arr = subByItem.get(itemId) || [];
+      arr.push(String(sub.sub_item_name));
+      subByItem.set(itemId, arr);
+    }
+    const items: ItemBantuan[] = (itemsRes.data || []).map((it) => ({
+      id: String(it.id),
+      tahun: String(it.tahun),
+      code: String(it.code),
+      name: String(it.name),
+      subItems: subByItem.get(String(it.id)) || [],
+    }));
+
+    const proposals: ProposalRecord[] = (proposalsRes.data || [])
+      .filter((p) => {
+        const tipeRaw = String(p.tipe || '').trim();
+        return tipeRaw === 'Murni' || tipeRaw === 'Perubahan';
+      })
+      .map((p) => ({
+        id: String(p.id),
+        tahun: String(p.tahun),
+        tipe: String(p.tipe) === 'Perubahan' ? 'Perubahan' : 'Murni',
+        kabKota: String(p.kab_kota || ''),
+        kecamatan: String(p.kecamatan || ''),
+        kelurahan: String(p.kelurahan || ''),
+        jalan: String(p.jalan || ''),
+        namaProposal: String(p.nama_proposal || ''),
+        jumlahKpm: Number(p.jumlah_kpm ?? 66),
+        status: (p.status as ProposalRecord['status']) || 'unlocked',
+        checklist: {
+          docx: false,
+          dinas: false,
+          rab: false,
+          rt: false,
+          rw: false,
+          lurah: false,
+          camat: false,
+        },
+        catatan: String(p.catatan || ''),
+        documents: {},
+        createdAt: String(p.created_at || new Date().toISOString()),
+        updatedAt: String(p.updated_at || new Date().toISOString()),
+      }));
+
+    const bag: KpmDocuments = { rumah: [], lainnya: [] };
+    for (const row of docsRes.data || []) {
+      const cat = String(row.doc_category);
+      const doc = buildDocFileFromRow(row as Record<string, unknown>);
+      if (!doc) continue;
+      if (cat === 'ktp' || cat === 'kk' || cat === 'penerima' || cat === 'survey') {
+        bag[cat] = doc;
+      } else if (cat === 'rumah') {
+        bag.rumah.push(doc);
+      } else if (cat === 'lainnya') {
+        bag.lainnya.push(doc);
+      }
+    }
+
+    const documents: KpmDocuments = {
+      ktp:
+        bag.ktp ||
+        buildDocFileFromUrlFallback(
+          kpmRow.foto_ktp_url as string | null,
+          kpmRow.foto_ktp_thumb_url as string | null,
+          `${kpmId}-ktp`,
+          'Foto KTP'
+        ),
+      kk:
+        bag.kk ||
+        buildDocFileFromUrlFallback(
+          kpmRow.foto_kk_url as string | null,
+          kpmRow.foto_kk_thumb_url as string | null,
+          `${kpmId}-kk`,
+          'Foto KK'
+        ),
+      penerima:
+        bag.penerima ||
+        buildDocFileFromUrlFallback(
+          kpmRow.foto_penerima_url as string | null,
+          kpmRow.foto_penerima_thumb_url as string | null,
+          `${kpmId}-penerima`,
+          'Foto Penerima'
+        ),
+      survey:
+        bag.survey ||
+        buildDocFileFromUrlFallback(
+          kpmRow.foto_survey_url as string | null,
+          kpmRow.foto_survey_thumb_url as string | null,
+          `${kpmId}-survey`,
+          'Foto Survey'
+        ),
+      rumah: bag.rumah,
+      lainnya: bag.lainnya,
+    };
+
+    const subItemDeliveries: Record<string, SubItemDeliveryState> = {};
+    for (const row of deliveriesRes.data || []) {
+      subItemDeliveries[String(row.sub_item_name)] = {
+        delivered: Boolean(row.delivered),
+        updatedAt: row.updated_at ? String(row.updated_at) : undefined,
+        updatedBy: row.updated_by ? String(row.updated_by) : undefined,
+      };
+    }
+
+    const rawValidasi = (kpmRow.validasi as KpmRecord['validasi']) || 'pending';
+    const rawPropId = kpmRow.proposal_id ? String(kpmRow.proposal_id) : null;
+    const rawPropName = kpmRow.proposal ? String(kpmRow.proposal).trim() : '';
+    const isDetached = rawValidasi !== 'accepted';
+    const matchedProp = !isDetached
+      ? (rawPropId ? proposals.find((p) => p.id === rawPropId) : undefined) ??
+        proposals.find((p) => p.namaProposal === rawPropName && p.tahun === String(kpmRow.tahun || '')) ??
+        proposals.find((p) => p.namaProposal === rawPropName)
+      : undefined;
+
+    const record: KpmRecord = {
+      id: kpmId,
+      registerCode: String(kpmRow.register_code || ''),
+      tahun: kpmRow.tahun ? String(kpmRow.tahun).trim() : '',
+      proposalId: isDetached ? null : matchedProp?.id ?? rawPropId,
+      proposal: isDetached ? '' : matchedProp?.namaProposal ?? rawPropName,
+      kabKota: matchedProp?.kabKota || '',
+      kecamatan: String(kpmRow.kecamatan || '') || matchedProp?.kecamatan || '',
+      kelurahan: String(kpmRow.kelurahan || '') || matchedProp?.kelurahan || '',
+      item: String(kpmRow.item || ''),
+      nama: String(kpmRow.nama || ''),
+      alamat: String(kpmRow.alamat || ''),
+      rt: String(kpmRow.rt || ''),
+      rw: String(kpmRow.rw || ''),
+      nikKk: String(kpmRow.nik_kk || ''),
+      nikKtp: String(kpmRow.nik_ktp || ''),
+      dtsen: String(kpmRow.dtsen || ''),
+      validasi: rawValidasi,
+      kontak: String(kpmRow.kontak || ''),
+      pekerjaan: String(kpmRow.pekerjaan || ''),
+      pengelola: String(kpmRow.pengelola || ''),
+      catatan: String(kpmRow.catatan || ''),
+      payment: Number(kpmRow.payment || 0),
+      documents,
+      subItemDeliveries,
+      berkasDikembalikan: Boolean(kpmRow.berkas_dikembalikan),
+      berkasDikembalikanAt: kpmRow.berkas_dikembalikan_at
+        ? String(kpmRow.berkas_dikembalikan_at)
+        : undefined,
+      berkasDikembalikanBy: kpmRow.berkas_dikembalikan_by
+        ? String(kpmRow.berkas_dikembalikan_by)
+        : undefined,
+      createdAt: String(kpmRow.created_at || new Date().toISOString()),
+      updatedAt: String(kpmRow.updated_at || new Date().toISOString()),
+    };
+
+    return { record, proposals, items, wilayahList };
+  } catch {
+    return null;
+  }
+}
+
+

@@ -4,6 +4,7 @@ import {
   Archive,
   ArrowLeft,
   Camera,
+  Check,
   CheckCircle2,
   ChevronRight,
   Clock,
@@ -11,6 +12,7 @@ import {
   Database,
   Download,
   ExternalLink,
+  FileCheck2,
   FileText,
   History,
   Loader2,
@@ -25,6 +27,7 @@ import {
   Send,
   Share2,
   ShieldCheck,
+  Ticket,
   Trash2,
   Upload,
   User,
@@ -39,15 +42,21 @@ import { SignaturePadModal } from './SignaturePadModal';
 import { SlotHandlingConfirmModal } from './SlotHandlingConfirmModal';
 import { DTSEN_OPTION_ITEMS, INITIAL_WILAYAH_LIST } from '../data/kpmOptions';
 import {
+  BastTemplateConfig,
+  CouponPrintConfig,
+  DEFAULT_BAST_TEMPLATE,
+  DEFAULT_COUPON_CONFIG,
   InternalUser,
   ItemBantuan,
   KpmAuditLogEntry,
   KpmDocumentFile,
   KpmDocuments,
   KpmRecord,
+  ProposalBastMap,
   ProposalRecord,
   ProposalSlotMap,
   ReportTemplateConfig,
+  ScheduleEventItem,
   SharedKpmCard,
   SingleDocumentKey,
   SlotRemovalMode,
@@ -59,6 +68,7 @@ import {
   formatRupiah,
   formatUploadDateTime,
   formatWhatsAppUrl,
+  getAbsenSeq,
   getDocumentDirectUrl,
   getDocumentThumbnailUrl,
   getKpmSlotNumberInProposal,
@@ -69,7 +79,15 @@ import {
   resolvePackageForKpm,
   uploadImageDocumentToDrive,
 } from '../utils/imageProcessor';
-import { exportKpmBastToPdf, exportSingleKpmToPdf } from '../utils/pdfExporter';
+import {
+  exportKpmBastToPdf,
+  exportKuponPdf,
+  exportSingleKpmToPdf,
+  formatBastProposalLocation,
+  formatIndonesianDateWords,
+  resolveCouponScheduleForRecord,
+  resolveEffectiveBastConfig,
+} from '../utils/pdfExporter';
 import { openCekBansosWithNik } from '../services/cekBansos';
 import { isNativeAppPlatform, useIsDesktopWeb } from '../utils/platform';
 
@@ -116,6 +134,16 @@ interface KpmDetailViewProps {
     auditChange: { field: string; before: string; after: string }
   ) => Promise<void> | void;
   reportTemplate?: ReportTemplateConfig;
+  schedules?: ScheduleEventItem[];
+  couponConfig?: CouponPrintConfig;
+  onSaveCouponConfig?: (next: CouponPrintConfig) => void;
+  bastTemplate?: BastTemplateConfig;
+  onSaveBastTemplate?: (next: BastTemplateConfig) => void;
+  proposalBastMap?: ProposalBastMap;
+  onSaveProposalBastConfig?: (
+    proposalId: string,
+    config: Partial<BastTemplateConfig> | null
+  ) => void;
   onSaveBast?: (
     kpmId: string,
     file: File,
@@ -151,6 +179,13 @@ export function KpmDetailView({
   onPreviewDocument,
   onUpdateKpmDocuments,
   reportTemplate,
+  schedules = [],
+  couponConfig,
+  onSaveCouponConfig,
+  bastTemplate,
+  onSaveBastTemplate,
+  proposalBastMap = {},
+  onSaveProposalBastConfig,
   onSaveBast,
   feedback,
   onDismissFeedback,
@@ -163,7 +198,19 @@ export function KpmDetailView({
   const [shareMessage, setShareMessage] = useState<string>('');
   const [sharingChat, setSharingChat] = useState(false);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+  const [isDownloadingKuponPdf, setIsDownloadingKuponPdf] = useState(false);
   const [isDownloadingBastPdf, setIsDownloadingBastPdf] = useState(false);
+  const [isKuponModalOpen, setIsKuponModalOpen] = useState(false);
+  const [couponDraft, setCouponDraft] = useState<CouponPrintConfig>(
+    () => couponConfig ?? DEFAULT_COUPON_CONFIG
+  );
+  const [matchedKuponScheduleTitle, setMatchedKuponScheduleTitle] = useState<string | null>(null);
+  const [saveCouponDefault, setSaveCouponDefault] = useState(true);
+  const [isBastModalOpen, setIsBastModalOpen] = useState(false);
+  const [bastDraft, setBastDraft] = useState<BastTemplateConfig>(
+    () => bastTemplate ?? DEFAULT_BAST_TEMPLATE
+  );
+  const [saveBastDefault, setSaveBastDefault] = useState(true);
   const [isQrCardOpen, setIsQrCardOpen] = useState(false);
   const [isSignatureOpen, setIsSignatureOpen] = useState(false);
   const [isProposalPickerOpen, setIsProposalPickerOpen] = useState(false);
@@ -595,18 +642,89 @@ export function KpmDetailView({
     }
   };
 
+  const handleOpenSingleKuponModal = () => {
+    const fallback = couponConfig ?? DEFAULT_COUPON_CONFIG;
+    const resolved = resolveCouponScheduleForRecord(record, schedules, proposals, fallback);
+    setCouponDraft({
+      jadwal: resolved.jadwal,
+      lokasi: resolved.lokasi,
+      footerText: resolved.footerText,
+    });
+    setMatchedKuponScheduleTitle(resolved.matchedSchedule?.title || null);
+    setSaveCouponDefault(!resolved.matchedSchedule);
+    setIsKuponModalOpen(true);
+  };
+
+  const handleDownloadSingleKuponPdf = async () => {
+    if (isDownloadingKuponPdf) return;
+    setPdfNotice(null);
+    setIsDownloadingKuponPdf(true);
+    try {
+      if (saveCouponDefault && onSaveCouponConfig) {
+        onSaveCouponConfig(couponDraft);
+      }
+      const res = await exportKuponPdf({
+        records: [record],
+        allRecords,
+        proposals,
+        items,
+        wilayahList,
+        proposalSlotMap,
+        schedules,
+        couponConfig: couponDraft,
+        resolvePerProposalSchedule: false,
+        mode: 'single',
+      });
+      setIsKuponModalOpen(false);
+      setPdfNotice({
+        type: 'success',
+        message: res.openedNative
+          ? `Kupon "${res.savedFileName}" berhasil dibuat dan dibuka.`
+          : `Kupon "${res.savedFileName}" berhasil diunduh.`,
+      });
+    } catch (err) {
+      setPdfNotice({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Gagal mencetak PDF Kupon.',
+      });
+    } finally {
+      setIsDownloadingKuponPdf(false);
+    }
+  };
+
+  const handleOpenBastModal = () => {
+    setBastDraft(
+      resolveEffectiveBastConfig(bastTemplate, proposalBastMap, matchingProposal?.id, reportTemplate)
+    );
+    setSaveBastDefault(true);
+    setIsBastModalOpen(true);
+  };
+
   const handleDownloadBastPdf = async () => {
     if (isDownloadingBastPdf) return;
     setPdfNotice(null);
     setIsDownloadingBastPdf(true);
     try {
+      if (saveBastDefault) {
+        if (matchingProposal && onSaveProposalBastConfig) {
+          onSaveProposalBastConfig(matchingProposal.id, bastDraft);
+        } else if (onSaveBastTemplate) {
+          onSaveBastTemplate(bastDraft);
+        }
+      }
       const res = await exportKpmBastToPdf({
         record,
+        allRecords,
         proposals,
         items,
         wilayahList,
+        proposalSlotMap,
         reportTemplate,
+        bastConfig: bastDraft,
+        proposalBastMap,
+        useProposalBastMap: false,
       });
+      setIsBastModalOpen(false);
       setPdfNotice({
         type: 'success',
         message: res.openedNative
@@ -772,7 +890,7 @@ export function KpmDetailView({
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <button
                   type="button"
                   disabled={isDownloadingPdf}
@@ -787,6 +905,20 @@ export function KpmDetailView({
                   <span className="truncate">
                     {isDownloadingPdf ? 'Membuat...' : 'PDF'}
                   </span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isDownloadingKuponPdf}
+                  onClick={handleOpenSingleKuponModal}
+                  className="inline-flex min-h-[42px] items-center justify-center gap-1 rounded-xl border border-teal-200 bg-teal-50/70 px-2 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100 disabled:opacity-60"
+                >
+                  {isDownloadingKuponPdf ? (
+                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                  ) : (
+                    <Ticket className="h-3.5 w-3.5 shrink-0" />
+                  )}
+                  <span className="truncate">Kupon</span>
                 </button>
 
                 <button
@@ -1137,7 +1269,7 @@ export function KpmDetailView({
               <button
                 type="button"
                 disabled={isDownloadingBastPdf}
-                onClick={() => void handleDownloadBastPdf()}
+                onClick={handleOpenBastModal}
                 className={`inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50/70 px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100 disabled:opacity-60 ${
                   onSaveBast ? '' : 'col-span-2'
                 }`}
@@ -1145,7 +1277,7 @@ export function KpmDetailView({
                 {isDownloadingBastPdf ? (
                   <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
                 ) : (
-                  <Download className="h-3.5 w-3.5 shrink-0" />
+                  <FileCheck2 className="h-3.5 w-3.5 shrink-0" />
                 )}
                 <span className="truncate">
                   {isDownloadingBastPdf ? 'Mencetak...' : 'Cetak BAST PDF'}
@@ -2013,6 +2145,307 @@ export function KpmDetailView({
           onUpdateStatus(record.id, 'accepted', targetProp.id);
         }}
       />
+
+      {/* Single Coupon Print Modal (88 x 54 mm on F4) */}
+      {isKuponModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-xs sm:items-center sm:p-4"
+          onClick={() => !isDownloadingKuponPdf && setIsKuponModalOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Cetak Kupon Satuan KPM"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-t-3xl border border-slate-200 bg-white p-5 shadow-2xl sm:rounded-3xl space-y-3.5"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                  <Ticket className="h-4.5 w-4.5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Cetak Kupon Satuan (88 × 54 mm)</h3>
+                  <p className="text-[11px] text-slate-500">
+                    {record.nama} · No. Kupon{' '}
+                    {String(
+                      currentSlotNumber || (getAbsenSeq(record.registerCode) < 999999 ? getAbsenSeq(record.registerCode) : 1)
+                    ).padStart(2, '0')}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsKuponModalOpen(false)}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100"
+              >
+                <X className="h-4.5 w-4.5" />
+              </button>
+            </div>
+
+            {matchedKuponScheduleTitle && (
+              <div className="rounded-xl border border-teal-200 bg-teal-50/70 px-3 py-2 text-[11px] font-medium text-teal-900">
+                Terisi otomatis dari jadwal proposal <strong>{record.proposal}</strong> ({matchedKuponScheduleTitle}).
+              </div>
+            )}
+
+            <div className="space-y-2.5">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600">
+                  Jadwal Pembagian
+                </label>
+                <input
+                  type="text"
+                  value={couponDraft.jadwal}
+                  onChange={(e) => setCouponDraft((prev) => ({ ...prev, jadwal: e.target.value }))}
+                  className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600">
+                  Lokasi Penyaluran
+                </label>
+                <input
+                  type="text"
+                  value={couponDraft.lokasi}
+                  onChange={(e) => setCouponDraft((prev) => ({ ...prev, lokasi: e.target.value }))}
+                  className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600">
+                  Catatan Kaki Kupon
+                </label>
+                <input
+                  type="text"
+                  value={couponDraft.footerText}
+                  onChange={(e) =>
+                    setCouponDraft((prev) => ({ ...prev, footerText: e.target.value }))
+                  }
+                  className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            {onSaveCouponConfig && (
+              <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={saveCouponDefault}
+                  onChange={(e) => setSaveCouponDefault(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-600"
+                />
+                <span>Simpan jadwal &amp; lokasi ini sebagai pengaturan default</span>
+              </label>
+            )}
+
+            <button
+              type="button"
+              disabled={isDownloadingKuponPdf}
+              onClick={() => void handleDownloadSingleKuponPdf()}
+              className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-60"
+            >
+              {isDownloadingKuponPdf ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              <span>{isDownloadingKuponPdf ? 'Menyiapkan Kupon...' : 'Download Kupon PDF F4'}</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Single BAST Print Modal */}
+      {isBastModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-xs sm:items-center sm:p-4"
+          onClick={() => !isDownloadingBastPdf && setIsBastModalOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Cetak BAST Resmi KPM"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-t-3xl border border-slate-200 bg-white p-5 shadow-2xl sm:rounded-3xl space-y-3.5"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                  <FileCheck2 className="h-4.5 w-4.5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Cetak BAST PDF F4</h3>
+                  <p className="text-[11px] text-slate-500">
+                    {record.nama} · No. Bantuan{' '}
+                    {String(
+                      currentSlotNumber || (getAbsenSeq(record.registerCode) < 999999 ? getAbsenSeq(record.registerCode) : 1)
+                    ).padStart(2, '0')}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsBastModalOpen(false)}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100"
+              >
+                <X className="h-4.5 w-4.5" />
+              </button>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-700 space-y-0.5">
+              <p>
+                <strong>Lokasi BAST:</strong>{' '}
+                {formatBastProposalLocation(record, proposals, wilayahList)}
+              </p>
+              <p>
+                <strong>Tanggal Terbilang:</strong>{' '}
+                {bastDraft.tanggalSerahTerimaCustomText?.trim() ||
+                  formatIndonesianDateWords(
+                    bastDraft.tanggalSerahTerimaIso || new Date().toISOString().slice(0, 10)
+                  )}
+              </p>
+            </div>
+
+            <div className="space-y-2.5">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600">Nomor BAST</label>
+                <input
+                  type="text"
+                  value={bastDraft.nomorBast}
+                  onChange={(e) => setBastDraft((prev) => ({ ...prev, nomorBast: e.target.value }))}
+                  className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                />
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600">
+                    Tanggal Serah Terima
+                  </label>
+                  <input
+                    type="date"
+                    value={bastDraft.tanggalSerahTerimaIso}
+                    onChange={(e) =>
+                      setBastDraft((prev) => ({ ...prev, tanggalSerahTerimaIso: e.target.value }))
+                    }
+                    className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600">
+                    Nilai Nominal (Opsional)
+                  </label>
+                  <input
+                    type="text"
+                    value={bastDraft.nilaiNominalText}
+                    onChange={(e) =>
+                      setBastDraft((prev) => ({ ...prev, nilaiNominalText: e.target.value }))
+                    }
+                    className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600">
+                  Nomor SK &amp; Tanggal SK
+                </label>
+                <input
+                  type="text"
+                  value={bastDraft.nomorSk}
+                  onChange={(e) => setBastDraft((prev) => ({ ...prev, nomorSk: e.target.value }))}
+                  className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                />
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600">
+                    Nomor Pesanan (SP)
+                  </label>
+                  <input
+                    type="text"
+                    value={bastDraft.nomorPesanan}
+                    onChange={(e) =>
+                      setBastDraft((prev) => ({ ...prev, nomorPesanan: e.target.value }))
+                    }
+                    className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600">
+                    Tanggal Pemesanan
+                  </label>
+                  <input
+                    type="text"
+                    value={bastDraft.tanggalPemesanan}
+                    onChange={(e) =>
+                      setBastDraft((prev) => ({ ...prev, tanggalPemesanan: e.target.value }))
+                    }
+                    className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600">
+                    Nama Pejabat Dinas
+                  </label>
+                  <input
+                    type="text"
+                    value={bastDraft.pejabatNama}
+                    onChange={(e) =>
+                      setBastDraft((prev) => ({ ...prev, pejabatNama: e.target.value }))
+                    }
+                    className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600">
+                    Jabatan + OPD + Provinsi
+                  </label>
+                  <input
+                    type="text"
+                    value={bastDraft.pejabatJabatan}
+                    onChange={(e) =>
+                      setBastDraft((prev) => ({ ...prev, pejabatJabatan: e.target.value }))
+                    }
+                    className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {(matchingProposal && onSaveProposalBastConfig) || onSaveBastTemplate ? (
+              <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={saveBastDefault}
+                  onChange={(e) => setSaveBastDefault(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-600"
+                />
+                <span>
+                  {matchingProposal && onSaveProposalBastConfig
+                    ? `Simpan perubahan ini untuk Proposal "${matchingProposal.namaProposal}"`
+                    : 'Simpan perubahan ini sebagai template BAST default'}
+                </span>
+              </label>
+            ) : null}
+
+            <button
+              type="button"
+              disabled={isDownloadingBastPdf}
+              onClick={() => void handleDownloadBastPdf()}
+              className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-60"
+            >
+              {isDownloadingBastPdf ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Check className="h-4 w-4" />
+              )}
+              <span>{isDownloadingBastPdf ? 'Menyiapkan BAST PDF...' : 'Download BAST PDF F4'}</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 2-Step Confirmation Modal when detaching KPM from an active proposal */}
       <SlotHandlingConfirmModal

@@ -63,6 +63,10 @@ import {
 } from './data/kpmOptions';
 import {
   AppNotificationItem,
+  BastTemplateConfig,
+  CouponPrintConfig,
+  DEFAULT_BAST_TEMPLATE,
+  DEFAULT_COUPON_CONFIG,
   DEFAULT_REPORT_TEMPLATE,
   DirectChatMessage,
   InternalUser,
@@ -76,6 +80,7 @@ import {
   KpmFormValues,
   KpmRecord,
   PengelolaProfile,
+  ProposalBastMap,
   ProposalChecklist,
   ProposalDocuments,
   ProposalFormValues,
@@ -166,6 +171,7 @@ import { App as CapacitorApp } from '@capacitor/app';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { ChatView } from './components/ChatView';
 import { UserProfileView } from './components/UserProfileView';
+import { PublicKpmProfileView } from './components/PublicKpmProfileView';
 import { AppUpdateModal } from './components/AppUpdateModal';
 import { PullToRefresh } from './components/PullToRefresh';
 import {
@@ -566,6 +572,19 @@ export default function App() {
   const [schedules, setSchedules] = useState<ScheduleEventItem[]>([]);
   const [trashBin, setTrashBin] = useState<TrashRecordItem[]>([]);
   const [reportTemplate, setReportTemplate] = useState<ReportTemplateConfig>(DEFAULT_REPORT_TEMPLATE);
+  const [couponConfig, setCouponConfig] = useState<CouponPrintConfig>(DEFAULT_COUPON_CONFIG);
+  const [bastTemplate, setBastTemplate] = useState<BastTemplateConfig>(DEFAULT_BAST_TEMPLATE);
+  const [proposalBastMap, setProposalBastMap] = useState<ProposalBastMap>({});
+  const [publicKpmToken, setPublicKpmToken] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const val = params.get('kpm') || params.get('kpmQr');
+      return val && val.trim() ? val.trim() : null;
+    } catch {
+      return null;
+    }
+  });
   const [kpmBastMap, setKpmBastMap] = useState<Record<string, KpmBastInfo>>({});
   const [proposalSlotMap, setProposalSlotMap] = useState<ProposalSlotMap>({});
   const [targetKpmFormSlot, setTargetKpmFormSlot] = useState<{
@@ -1408,10 +1427,13 @@ export default function App() {
         fetchedSchedules,
         fetchedTrash,
         fetchedTemplate,
+        fetchedCouponConfig,
+        fetchedBastTemplate,
         fetchedBastMap,
         fetchedWatermarks,
         fetchedAliases,
         fetchedSlotMap,
+        fetchedProposalBastMap,
       ] = await Promise.all([
         fetchAppStateSlice<ScheduleEventItem[]>('masdeta_schedules_v1', []),
         fetchAppStateSlice<TrashRecordItem[]>('masdeta_trash_bin_v1', []),
@@ -1419,10 +1441,19 @@ export default function App() {
           'masdeta_report_template_v1',
           DEFAULT_REPORT_TEMPLATE
         ),
+        fetchAppStateSlice<CouponPrintConfig>(
+          'masdeta_coupon_config_v1',
+          DEFAULT_COUPON_CONFIG
+        ),
+        fetchAppStateSlice<BastTemplateConfig>(
+          'masdeta_bast_template_v1',
+          DEFAULT_BAST_TEMPLATE
+        ),
         fetchAppStateSlice<Record<string, KpmBastInfo>>('masdeta_kpm_bast_v1', {}),
         fetchChatDeliveryWatermarks(),
         fetchAppStateSlice<Record<string, Record<string, string>>>('masdeta_user_aliases_v1', {}),
         fetchAppStateSlice<ProposalSlotMap>('masdeta_proposal_slots_v1', {}),
+        fetchAppStateSlice<ProposalBastMap>('masdeta_proposal_bast_v1', {}),
       ]);
 
       const nowMs = Date.now();
@@ -1476,8 +1507,25 @@ export default function App() {
           ? { ...DEFAULT_REPORT_TEMPLATE, ...fetchedTemplate }
           : DEFAULT_REPORT_TEMPLATE
       );
+      setCouponConfig(
+        fetchedCouponConfig && typeof fetchedCouponConfig === 'object'
+          ? { ...DEFAULT_COUPON_CONFIG, ...fetchedCouponConfig }
+          : DEFAULT_COUPON_CONFIG
+      );
+      setBastTemplate(
+        fetchedBastTemplate && typeof fetchedBastTemplate === 'object'
+          ? { ...DEFAULT_BAST_TEMPLATE, ...fetchedBastTemplate }
+          : DEFAULT_BAST_TEMPLATE
+      );
       setKpmBastMap(safeBastMap);
       setProposalSlotMap(safeSlotMap);
+      setProposalBastMap(
+        fetchedProposalBastMap &&
+          typeof fetchedProposalBastMap === 'object' &&
+          !Array.isArray(fetchedProposalBastMap)
+          ? fetchedProposalBastMap
+          : {}
+      );
       if (fetchedWatermarks && typeof fetchedWatermarks === 'object') {
         setChatDeliveryWatermarks(fetchedWatermarks);
       }
@@ -6240,6 +6288,8 @@ export default function App() {
     targetTime?: string;
     tahun?: string;
     proposalName?: string;
+    location?: string;
+    footerNote?: string;
     notes?: string;
   }) => {
     const newItem: ScheduleEventItem = {
@@ -6250,6 +6300,8 @@ export default function App() {
       targetTime: payload.targetTime?.trim() || undefined,
       tahun: payload.tahun?.trim() || selectedYear,
       proposalName: payload.proposalName,
+      location: payload.location?.trim() || undefined,
+      footerNote: payload.footerNote?.trim() || undefined,
       notes: payload.notes,
       completed: false,
       createdBy: currentActor.nama,
@@ -6265,6 +6317,50 @@ export default function App() {
     setFeedback({
       type: 'success',
       message: `Agenda "${payload.title}" berhasil ditambahkan ke jadwal.`,
+    });
+  };
+
+  const handleUpdateSchedule = (
+    id: string,
+    payload: {
+      title: string;
+      category: ScheduleCategory;
+      targetDate: string;
+      targetTime?: string;
+      tahun?: string;
+      proposalName?: string;
+      location?: string;
+      footerNote?: string;
+      notes?: string;
+    }
+  ) => {
+    const next = schedules
+      .map((s) =>
+        s.id === id
+          ? {
+              ...s,
+              title: payload.title,
+              category: payload.category,
+              targetDate: payload.targetDate,
+              targetTime: payload.targetTime?.trim() || undefined,
+              tahun: payload.tahun?.trim() || s.tahun,
+              proposalName: payload.proposalName,
+              location: payload.location?.trim() || undefined,
+              footerNote: payload.footerNote?.trim() || undefined,
+              notes: payload.notes,
+            }
+          : s
+      )
+      .sort((a, b) => {
+        const dateCmp = a.targetDate.localeCompare(b.targetDate);
+        if (dateCmp !== 0) return dateCmp;
+        return (a.targetTime || '99:99').localeCompare(b.targetTime || '99:99');
+      });
+    setSchedules(next);
+    void saveAppStateSlice('masdeta_schedules_v1', next);
+    setFeedback({
+      type: 'success',
+      message: `Agenda "${payload.title}" berhasil diperbarui.`,
     });
   };
 
@@ -6295,6 +6391,47 @@ export default function App() {
     setFeedback({
       type: 'success',
       message: 'Template Kop Surat & penandatangan resmi berhasil disimpan.',
+    });
+  };
+
+  const handleSaveCouponConfig = (next: CouponPrintConfig) => {
+    setCouponConfig(next);
+    void saveAppStateSlice('masdeta_coupon_config_v1', next);
+    setFeedback({
+      type: 'success',
+      message: 'Pengaturan cetak kupon pembagian berhasil disimpan.',
+    });
+  };
+
+  const handleSaveBastTemplate = (next: BastTemplateConfig) => {
+    setBastTemplate(next);
+    void saveAppStateSlice('masdeta_bast_template_v1', next);
+    setFeedback({
+      type: 'success',
+      message: 'Template BAST resmi Dinas Sosial berhasil disimpan.',
+    });
+  };
+
+  const handleSaveProposalBastConfig = (
+    proposalId: string,
+    config: Partial<BastTemplateConfig> | null
+  ) => {
+    const next: ProposalBastMap = { ...proposalBastMap };
+    if (config === null) {
+      delete next[proposalId];
+    } else {
+      next[proposalId] = config;
+    }
+    setProposalBastMap(next);
+    void saveAppStateSlice('masdeta_proposal_bast_v1', next);
+    const propLabel =
+      proposals.find((p) => p.id === proposalId)?.namaProposal || 'proposal';
+    setFeedback({
+      type: 'success',
+      message:
+        config === null
+          ? `Pengaturan BAST ${propLabel} dikembalikan ke template default.`
+          : `Pengaturan info BAST khusus "${propLabel}" berhasil disimpan.`,
     });
   };
 
@@ -8715,6 +8852,27 @@ export default function App() {
     );
   }
 
+  if (publicKpmToken) {
+    return (
+      <PublicKpmProfileView
+        kpmToken={publicKpmToken}
+        inMemoryRecords={records}
+        inMemoryProposals={proposals}
+        inMemoryItems={items}
+        inMemoryWilayah={wilayahList}
+        onOpenMainApp={() => {
+          setPublicKpmToken(null);
+          if (typeof window !== 'undefined') {
+            const url = new URL(window.location.href);
+            url.searchParams.delete('kpm');
+            url.searchParams.delete('kpmQr');
+            window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+          }
+        }}
+      />
+    );
+  }
+
   if (!currentUser) {
     return (
       <div className={isNativeApp ? 'min-h-screen bg-slate-200/70 sm:py-3' : 'min-h-screen bg-slate-100'}>
@@ -9199,6 +9357,13 @@ export default function App() {
             onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
             onUpdateKpmDocuments={handleUpdateKpmDocuments}
             reportTemplate={reportTemplate}
+            schedules={schedules}
+            couponConfig={couponConfig}
+            onSaveCouponConfig={handleSaveCouponConfig}
+            bastTemplate={bastTemplate}
+            onSaveBastTemplate={handleSaveBastTemplate}
+            proposalBastMap={proposalBastMap}
+            onSaveProposalBastConfig={handleSaveProposalBastConfig}
             onSaveBast={handleSaveKpmBast}
           />
         )}
@@ -9349,6 +9514,11 @@ export default function App() {
               items={items}
               historyEntries={proposalHistory}
               proposalSlotMap={proposalSlotMap}
+              schedules={schedules}
+              reportTemplate={reportTemplate}
+              bastTemplate={bastTemplate}
+              proposalBastMap={proposalBastMap}
+              onSaveProposalBastConfig={handleSaveProposalBastConfig}
               canAdd={hasPermission('add')}
               canUpdate={hasPermission('update')}
               onBack={() => {
@@ -9737,13 +9907,21 @@ export default function App() {
             onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
             schedules={schedules}
             onAddSchedule={handleAddSchedule}
+            onUpdateSchedule={handleUpdateSchedule}
             onToggleSchedule={handleToggleSchedule}
             onDeleteSchedule={handleDeleteSchedule}
             trashBin={trashBin}
             onRestoreTrashItem={handleRestoreTrashItem}
             onPermanentDeleteTrashItem={handlePermanentDeleteTrashItem}
+            proposalSlotMap={proposalSlotMap}
             reportTemplate={reportTemplate}
             onSaveReportTemplate={handleSaveReportTemplate}
+            couponConfig={couponConfig}
+            onSaveCouponConfig={handleSaveCouponConfig}
+            bastTemplate={bastTemplate}
+            onSaveBastTemplate={handleSaveBastTemplate}
+            proposalBastMap={proposalBastMap}
+            onSaveProposalBastConfig={handleSaveProposalBastConfig}
             onOpenCreateStandaloneDatabaseKpm={() =>
               openKpmForm(null, 'menu', false, false, null, 'pending')
             }

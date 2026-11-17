@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Camera, Download, QrCode, Search, StopCircle, X } from 'lucide-react';
 import QRCode from 'qrcode';
 import { KpmRecord } from '../types/kpm';
+import { buildKpmQrUrl } from '../utils/pdfExporter';
 
 interface QrScannerLookupModalProps {
   isOpen: boolean;
@@ -49,8 +50,26 @@ export const QrScannerLookupModal: React.FC<QrScannerLookupModalProps> = ({
 
   const handleRawScanText = (rawText: string) => {
     const clean = rawText.trim();
+    let extracted = clean;
     const prefixMatch = clean.match(/^MASDETA:(?:KPM|BAST):(.+)$/i);
-    const token = (prefixMatch ? prefixMatch[1] : clean).trim().toLowerCase();
+    if (prefixMatch) {
+      extracted = prefixMatch[1].trim();
+    } else if (/^https?:\/\//i.test(clean) || clean.includes('?')) {
+      try {
+        const parsedUrl = new URL(clean, window.location.origin);
+        const paramToken =
+          parsedUrl.searchParams.get('kpm') || parsedUrl.searchParams.get('kpmQr');
+        if (paramToken) {
+          extracted = paramToken.trim();
+        }
+      } catch {
+        const qpMatch = clean.match(/[?&](?:kpm|kpmQr)=([^&#]+)/i);
+        if (qpMatch) {
+          extracted = decodeURIComponent(qpMatch[1]).trim();
+        }
+      }
+    }
+    const token = extracted.toLowerCase();
     const matched = records.find(
       (r) =>
         (r.registerCode || '').toLowerCase() === token ||
@@ -62,7 +81,7 @@ export const QrScannerLookupModal: React.FC<QrScannerLookupModalProps> = ({
       onSelectRecord(matched);
       onClose();
     } else {
-      setQuery(prefixMatch ? prefixMatch[1] : clean);
+      setQuery(extracted);
       stopCamera();
     }
   };
@@ -273,7 +292,7 @@ export const KpmQrCardModal: React.FC<KpmQrCardModalProps> = ({ isOpen, record, 
 
   useEffect(() => {
     if (!isOpen || !record) return;
-    QRCode.toDataURL(`MASDETA:KPM:${record.registerCode || record.id}`, {
+    QRCode.toDataURL(buildKpmQrUrl(record), {
       width: 360,
       margin: 2,
       color: { dark: '#0F172A', light: '#FFFFFF' },

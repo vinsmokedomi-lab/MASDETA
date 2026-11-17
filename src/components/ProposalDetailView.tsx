@@ -5,18 +5,23 @@ import {
   ArrowLeft,
   ArrowRightLeft,
   ArrowUpRight,
+  CalendarClock,
   Camera,
   Check,
   CheckCircle2,
   ChevronRight,
   Download,
+  FileCheck2,
   FileSpreadsheet,
   FileText,
   History,
   Loader2,
   Lock,
+  MapPin,
   Pencil,
+  RotateCcw,
   Search,
+  SlidersHorizontal,
   Trash2,
   Unlock,
   Upload,
@@ -25,14 +30,18 @@ import {
   X,
 } from 'lucide-react';
 import {
+  BastTemplateConfig,
   ItemBantuan,
   KpmDocumentFile,
   KpmRecord,
+  ProposalBastMap,
   ProposalChecklist,
   ProposalDocuments,
   ProposalKpmHistoryEntry,
   ProposalRecord,
   ProposalSlotMap,
+  ReportTemplateConfig,
+  ScheduleEventItem,
 } from '../types/kpm';
 import {
   computeSubItemRecap,
@@ -44,6 +53,14 @@ import {
   resolveProposalSlotStateForGroup,
   uploadProposalDocumentToDrive,
 } from '../utils/imageProcessor';
+import {
+  exportKpmBastBulkToPdf,
+  formatBastProposalLocation,
+  formatIndonesianDateWords,
+  formatScheduleDateTimeForCoupon,
+  resolveEffectiveBastConfig,
+  resolveScheduleForProposal,
+} from '../utils/pdfExporter';
 import { DriveImage } from './DriveImage';
 import { isNativeAppPlatform, useIsDesktopWeb } from '../utils/platform';
 
@@ -53,6 +70,14 @@ interface ProposalDetailViewProps {
   records: KpmRecord[];
   items: ItemBantuan[];
   proposalSlotMap?: ProposalSlotMap;
+  schedules?: ScheduleEventItem[];
+  reportTemplate?: ReportTemplateConfig;
+  bastTemplate?: BastTemplateConfig;
+  proposalBastMap?: ProposalBastMap;
+  onSaveProposalBastConfig?: (
+    proposalId: string,
+    config: Partial<BastTemplateConfig> | null
+  ) => void;
   historyEntries: ProposalKpmHistoryEntry[];
   canAdd?: boolean;
   canUpdate?: boolean;
@@ -77,6 +102,11 @@ export function ProposalDetailView({
   records,
   items,
   proposalSlotMap = {},
+  schedules = [],
+  reportTemplate,
+  bastTemplate,
+  proposalBastMap = {},
+  onSaveProposalBastConfig,
   historyEntries,
   canAdd = true,
   canUpdate = true,
@@ -115,6 +145,102 @@ export function ProposalDetailView({
   const titleRef = useRef<HTMLHeadingElement>(null);
   const [titleFontPx, setTitleFontPx] = useState<number>(16);
   const [allowTitleWrap, setAllowTitleWrap] = useState(false);
+
+  const effectiveBastConfig = useMemo(
+    () => resolveEffectiveBastConfig(bastTemplate, proposalBastMap, proposal.id, reportTemplate),
+    [bastTemplate, proposalBastMap, proposal.id, reportTemplate]
+  );
+  const hasCustomProposalBast = Boolean(proposalBastMap && proposalBastMap[proposal.id]);
+  const matchedSchedule = useMemo(
+    () => resolveScheduleForProposal(proposal.namaProposal, proposal.tahun, schedules),
+    [proposal.namaProposal, proposal.tahun, schedules]
+  );
+  const proposalBastLocationLabel = useMemo(
+    () =>
+      formatBastProposalLocation(
+        {
+          kabKota: proposal.kabKota || '',
+          kecamatan: proposal.kecamatan || '',
+          kelurahan: proposal.kelurahan || '',
+          proposal: proposal.namaProposal,
+          proposalId: proposal.id,
+          tahun: proposal.tahun,
+        },
+        allProposals
+      ),
+    [proposal, allProposals]
+  );
+
+  const [isBastModalOpen, setIsBastModalOpen] = useState(false);
+  const [bastDraft, setBastDraft] = useState<BastTemplateConfig>(effectiveBastConfig);
+  const [bastBusy, setBastBusy] = useState(false);
+  const [bastFeedback, setBastFeedback] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
+
+  const openProposalBastModal = () => {
+    setBastDraft(effectiveBastConfig);
+    setBastFeedback(null);
+    setIsBastModalOpen(true);
+  };
+
+  const handleSaveProposalBastOnly = () => {
+    if (!onSaveProposalBastConfig) return;
+    onSaveProposalBastConfig(proposal.id, bastDraft);
+    setIsBastModalOpen(false);
+  };
+
+  const handleResetProposalBastToDefault = () => {
+    if (!onSaveProposalBastConfig) return;
+    onSaveProposalBastConfig(proposal.id, null);
+    const defaultResolved = resolveEffectiveBastConfig(
+      bastTemplate,
+      {},
+      proposal.id,
+      reportTemplate
+    );
+    setBastDraft(defaultResolved);
+    setBastFeedback({
+      type: 'success',
+      text: 'Pengaturan BAST proposal dikembalikan ke template default global.',
+    });
+  };
+
+  const handleExportProposalBast = async (configOverride?: BastTemplateConfig) => {
+    if (proposalRecords.length === 0 || bastBusy) return;
+    setBastBusy(true);
+    setBastFeedback(null);
+    try {
+      const cfg = configOverride || effectiveBastConfig;
+      const mergedMap: ProposalBastMap = {
+        ...proposalBastMap,
+        [proposal.id]: cfg,
+      };
+      const result = await exportKpmBastBulkToPdf({
+        records: proposalRecords,
+        allRecords: records,
+        proposals: allProposals,
+        items,
+        proposalSlotMap,
+        reportTemplate,
+        bastConfig: cfg,
+        proposalBastMap: mergedMap,
+        fileName: `BAST_${proposal.tahun}_${proposal.namaProposal}`,
+      });
+      setBastFeedback({
+        type: 'success',
+        text: `PDF BAST proposal (${result.count} KPM) disimpan: ${result.savedFileName}`,
+      });
+    } catch (err) {
+      setBastFeedback({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Gagal membuat PDF BAST proposal.',
+      });
+    } finally {
+      setBastBusy(false);
+    }
+  };
 
   useLayoutEffect(() => {
     const fitTitle = () => {
@@ -839,6 +965,127 @@ export function ProposalDetailView({
               </div>
             </div>
           )}
+        </section>
+
+        {/* Pengaturan BAST & Jadwal Penyaluran Proposal */}
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <h2 className="text-sm font-bold text-slate-900">Info Surat BAST &amp; Jadwal</h2>
+                <span
+                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                    hasCustomProposalBast
+                      ? 'bg-teal-50 text-teal-700 border border-teal-200'
+                      : 'bg-slate-100 text-slate-600'
+                  }`}
+                >
+                  {hasCustomProposalBast ? 'Khusus Proposal Ini' : 'Default Global'}
+                </span>
+              </div>
+              <p className="mt-0.5 text-xs text-slate-500">
+                Penomoran BAST, SK, SP &amp; pejabat penandatangan khusus untuk proposal ini.
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 space-y-1.5 text-xs">
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-slate-500 shrink-0">Nomor BAST</span>
+              <span className="text-right font-semibold text-slate-800 break-all">
+                {effectiveBastConfig.nomorBast || '-'}
+              </span>
+            </div>
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-slate-500 shrink-0">Nomor SK</span>
+              <span className="text-right font-medium text-slate-700 break-words">
+                {effectiveBastConfig.nomorSk || '-'}
+              </span>
+            </div>
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-slate-500 shrink-0">Nomor SP</span>
+              <span className="text-right font-medium text-slate-700 break-all">
+                {effectiveBastConfig.nomorPesanan || '-'}
+              </span>
+            </div>
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-slate-500 shrink-0">Tgl Serah Terima</span>
+              <span className="text-right font-medium text-slate-700">
+                {(effectiveBastConfig.tanggalSerahTerimaCustomText || '').trim() ||
+                  formatIndonesianDateWords(effectiveBastConfig.tanggalSerahTerimaIso)}
+              </span>
+            </div>
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-slate-500 shrink-0">Lokasi Teks BAST</span>
+              <span className="text-right font-medium text-slate-700">
+                {proposalBastLocationLabel}
+              </span>
+            </div>
+          </div>
+
+          {matchedSchedule && (
+            <div className="rounded-xl border border-teal-200 bg-teal-50/70 p-3 space-y-1 text-xs">
+              <div className="flex items-center gap-1.5 font-semibold text-teal-800">
+                <CalendarClock className="h-3.5 w-3.5 shrink-0" />
+                <span>Jadwal Penyaluran Kupon Terhubung</span>
+              </div>
+              <p className="text-teal-900 font-medium">
+                {formatScheduleDateTimeForCoupon(
+                  matchedSchedule.targetDate,
+                  matchedSchedule.targetTime
+                )}
+              </p>
+              {matchedSchedule.location && (
+                <p className="flex items-center gap-1 text-teal-800">
+                  <MapPin className="h-3.5 w-3.5 shrink-0" />
+                  <span>{matchedSchedule.location}</span>
+                </p>
+              )}
+              {(matchedSchedule.footerNote || matchedSchedule.notes) && (
+                <p className="text-[11px] text-teal-700">
+                  Catatan: {matchedSchedule.footerNote || matchedSchedule.notes}
+                </p>
+              )}
+            </div>
+          )}
+
+          {bastFeedback && (
+            <p
+              className={`rounded-xl px-3 py-2 text-xs font-medium ${
+                bastFeedback.type === 'success'
+                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                  : 'bg-rose-50 text-rose-700 border border-rose-200'
+              }`}
+            >
+              {bastFeedback.text}
+            </p>
+          )}
+
+          <div className="flex flex-wrap gap-2">
+            {onSaveProposalBastConfig && canUpdate && (
+              <button
+                type="button"
+                onClick={openProposalBastModal}
+                className="inline-flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5 text-teal-700" />
+                <span>Setting BAST Proposal</span>
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={proposalRecords.length === 0 || bastBusy}
+              onClick={() => void handleExportProposalBast()}
+              className="inline-flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
+            >
+              {bastBusy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <FileCheck2 className="h-3.5 w-3.5" />
+              )}
+              <span>Cetak BAST ({kpmCounts.accepted} KPM)</span>
+            </button>
+          </div>
         </section>
     </>
   );
@@ -1673,6 +1920,265 @@ export function ProposalDetailView({
                 )}
                 <span>{docBusySlot ? 'Menghapus...' : 'Ya, Hapus Berkas'}</span>
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Setting Info Dinamis BAST Khusus Proposal */}
+      {isBastModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-0 sm:items-center sm:p-4 backdrop-blur-xs"
+          onClick={() => !bastBusy && setIsBastModalOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Setting Info BAST Proposal"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-t-3xl border border-slate-200 bg-white shadow-2xl sm:rounded-3xl"
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                  <FileCheck2 className="h-4.5 w-4.5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Setting Info BAST Proposal</h3>
+                  <p className="text-[11px] text-slate-500">
+                    {proposal.namaProposal} · Tahun {proposal.tahun}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsBastModalOpen(false)}
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
+              <div className="rounded-xl border border-teal-100 bg-teal-50/70 px-3 py-2 text-[11px] text-teal-800">
+                Pengaturan ini disimpan khusus untuk proposal{' '}
+                <strong>{proposal.namaProposal}</strong> dan otomatis dipakai saat mencetak BAST
+                satuan maupun BAST massal.
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">
+                  1. Nomor BAST
+                </label>
+                <input
+                  type="text"
+                  value={bastDraft.nomorBast}
+                  onChange={(e) => setBastDraft((prev) => ({ ...prev, nomorBast: e.target.value }))}
+                  placeholder="400.9.14.5 / ................... / DINSOS"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none focus:border-teal-600"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">
+                    2. Tanggal Serah Terima
+                  </label>
+                  <input
+                    type="date"
+                    value={bastDraft.tanggalSerahTerimaIso}
+                    onChange={(e) =>
+                      setBastDraft((prev) => ({
+                        ...prev,
+                        tanggalSerahTerimaIso: e.target.value,
+                      }))
+                    }
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none focus:border-teal-600"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">
+                    Override Teks Tanggal (Opsional)
+                  </label>
+                  <input
+                    type="text"
+                    value={bastDraft.tanggalSerahTerimaCustomText || ''}
+                    onChange={(e) =>
+                      setBastDraft((prev) => ({
+                        ...prev,
+                        tanggalSerahTerimaCustomText: e.target.value,
+                      }))
+                    }
+                    placeholder="Kosongkan untuk otomatis"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none focus:border-teal-600"
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+                <p>
+                  <strong className="text-slate-700">Pratinjau Tanggal:</strong>{' '}
+                  {(bastDraft.tanggalSerahTerimaCustomText || '').trim() ||
+                    formatIndonesianDateWords(bastDraft.tanggalSerahTerimaIso)}
+                </p>
+                <p className="mt-0.5">
+                  <strong className="text-slate-700">Lokasi BAST:</strong>{' '}
+                  {proposalBastLocationLabel}
+                </p>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">
+                  3. Nomor SK &amp; Tanggal SK
+                </label>
+                <input
+                  type="text"
+                  value={bastDraft.nomorSk}
+                  onChange={(e) => setBastDraft((prev) => ({ ...prev, nomorSk: e.target.value }))}
+                  placeholder="300.3.3/56/DINSOS tanggal 1 juli 2025"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none focus:border-teal-600"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">
+                    4. Nomor Pesanan (SP)
+                  </label>
+                  <input
+                    type="text"
+                    value={bastDraft.nomorPesanan}
+                    onChange={(e) =>
+                      setBastDraft((prev) => ({ ...prev, nomorPesanan: e.target.value }))
+                    }
+                    placeholder="EP-01K6M49TRC1H4TS8M7FRPN4C99"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none focus:border-teal-600"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">
+                    5. Tanggal Pemesanan
+                  </label>
+                  <input
+                    type="text"
+                    value={bastDraft.tanggalPemesanan}
+                    onChange={(e) =>
+                      setBastDraft((prev) => ({ ...prev, tanggalPemesanan: e.target.value }))
+                    }
+                    placeholder="03 Oktober 2025"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none focus:border-teal-600"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">
+                    6. Nama Pejabat Dinas
+                  </label>
+                  <input
+                    type="text"
+                    value={bastDraft.pejabatNama}
+                    onChange={(e) =>
+                      setBastDraft((prev) => ({ ...prev, pejabatNama: e.target.value }))
+                    }
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none focus:border-teal-600"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">
+                    7. Jabatan + OPD + Provinsi
+                  </label>
+                  <input
+                    type="text"
+                    value={bastDraft.pejabatJabatan}
+                    onChange={(e) =>
+                      setBastDraft((prev) => ({ ...prev, pejabatJabatan: e.target.value }))
+                    }
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none focus:border-teal-600"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">
+                    Pangkat / Golongan
+                  </label>
+                  <input
+                    type="text"
+                    value={bastDraft.pejabatPangkat}
+                    onChange={(e) =>
+                      setBastDraft((prev) => ({ ...prev, pejabatPangkat: e.target.value }))
+                    }
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none focus:border-teal-600"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-slate-700">
+                    NIP Pejabat
+                  </label>
+                  <input
+                    type="text"
+                    value={bastDraft.pejabatNip}
+                    onChange={(e) =>
+                      setBastDraft((prev) => ({ ...prev, pejabatNip: e.target.value }))
+                    }
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none focus:border-teal-600"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">
+                  Nilai Nominal BAST
+                </label>
+                <input
+                  type="text"
+                  value={bastDraft.nilaiNominalText}
+                  onChange={(e) =>
+                    setBastDraft((prev) => ({ ...prev, nilaiNominalText: e.target.value }))
+                  }
+                  placeholder=". . . . . . . . . . . . . . . . . . . . . . . . . . ."
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none focus:border-teal-600"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 bg-slate-50 px-5 py-3.5">
+              {hasCustomProposalBast && onSaveProposalBastConfig && (
+                <button
+                  type="button"
+                  onClick={handleResetProposalBastToDefault}
+                  className="inline-flex min-h-[40px] items-center justify-center gap-1 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  <span>Reset Default</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={handleSaveProposalBastOnly}
+                className="inline-flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-xl border border-teal-600 bg-white px-3 text-xs font-semibold text-teal-700 hover:bg-teal-50"
+              >
+                <Check className="h-3.5 w-3.5" />
+                <span>Simpan Info BAST</span>
+              </button>
+              {proposalRecords.length > 0 && (
+                <button
+                  type="button"
+                  disabled={bastBusy}
+                  onClick={() => {
+                    onSaveProposalBastConfig?.(proposal.id, bastDraft);
+                    setIsBastModalOpen(false);
+                    void handleExportProposalBast(bastDraft);
+                  }}
+                  className="inline-flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  <span>Simpan &amp; Cetak ({proposalRecords.length})</span>
+                </button>
+              )}
             </div>
           </div>
         </div>

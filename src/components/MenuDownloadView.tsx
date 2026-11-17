@@ -1,22 +1,34 @@
-import { useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
   Check,
   ChevronDown,
+  FileCheck2,
   FileSpreadsheet,
   FileText,
+  ImagePlus,
   Loader2,
   Printer,
+  QrCode,
+  Ticket,
 } from 'lucide-react';
 import { TAHUN_OPTIONS } from '../data/kpmOptions';
 import {
+  BastTemplateConfig,
+  CouponPrintConfig,
+  DEFAULT_BAST_TEMPLATE,
+  DEFAULT_COUPON_CONFIG,
+  DEFAULT_KOP_LOGO_URL,
   DEFAULT_REPORT_TEMPLATE,
   ItemBantuan,
   KpmRecord,
   PengelolaProfile,
+  ProposalBastMap,
   ProposalRecord,
+  ProposalSlotMap,
   ReportTemplateConfig,
+  ScheduleEventItem,
   WilayahKabKota,
 } from '../types/kpm';
 import {
@@ -32,10 +44,20 @@ import {
   MAX_PDF_TOTAL_COLUMNS,
   PDF_COLUMN_DEFINITIONS,
   PdfColumnKey,
+  exportKpmBastBulkToPdf,
   exportKpmTableToPdf,
+  exportKuponPdf,
+  formatIndonesianDateWords,
+  formatScheduleDateTimeForCoupon,
+  isKecamatanScopedProposalForCoupon,
+  resolveCouponScheduleForRecord,
+  resolveEffectiveBastConfig,
+  resolveScheduleForProposal,
 } from '../utils/pdfExporter';
 import { SelectionPickerModal, SelectionPickerOption } from './SelectionPickerModal';
 import { useIsDesktopWeb } from '../utils/platform';
+
+type DownloadPrintMode = 'kpm' | 'kupon' | 'bast';
 
 interface MenuDownloadViewProps {
   records: KpmRecord[];
@@ -43,9 +65,55 @@ interface MenuDownloadViewProps {
   items: ItemBantuan[];
   wilayahList: WilayahKabKota[];
   pengelolaList: PengelolaProfile[];
+  proposalSlotMap?: ProposalSlotMap;
+  schedules?: ScheduleEventItem[];
   reportTemplate?: ReportTemplateConfig;
   onSaveReportTemplate?: (next: ReportTemplateConfig) => void;
+  couponConfig?: CouponPrintConfig;
+  onSaveCouponConfig?: (next: CouponPrintConfig) => void;
+  bastTemplate?: BastTemplateConfig;
+  onSaveBastTemplate?: (next: BastTemplateConfig) => void;
+  proposalBastMap?: ProposalBastMap;
+  onSaveProposalBastConfig?: (
+    proposalId: string,
+    config: Partial<BastTemplateConfig> | null
+  ) => void;
   onBack: () => void;
+}
+
+async function compressKopLogoFile(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Gagal membaca file gambar kop.'));
+    reader.onload = () => {
+      const src = typeof reader.result === 'string' ? reader.result : '';
+      if (!src) {
+        reject(new Error('File gambar tidak valid.'));
+        return;
+      }
+      const img = new Image();
+      img.onerror = () => reject(new Error('Format gambar kop tidak didukung.'));
+      img.onload = () => {
+        const maxDim = 220;
+        const scale = Math.min(1, maxDim / Math.max(img.naturalWidth || maxDim, img.naturalHeight || maxDim));
+        const w = Math.max(1, Math.round((img.naturalWidth || maxDim) * scale));
+        const h = Math.max(1, Math.round((img.naturalHeight || maxDim) * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(src);
+          return;
+        }
+        ctx.clearRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/png'));
+      };
+      img.src = src;
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 export function MenuDownloadView({
@@ -54,12 +122,23 @@ export function MenuDownloadView({
   items,
   wilayahList,
   pengelolaList,
+  proposalSlotMap = {},
+  schedules = [],
   reportTemplate,
   onSaveReportTemplate,
+  couponConfig,
+  onSaveCouponConfig,
+  bastTemplate,
+  onSaveBastTemplate,
+  proposalBastMap = {},
+  onSaveProposalBastConfig,
   onBack,
 }: MenuDownloadViewProps) {
   const isDesktopWeb = useIsDesktopWeb();
   const isNativeApp = !isDesktopWeb;
+  const kopLogoInputRef = useRef<HTMLInputElement | null>(null);
+  const reportKopLogoInputRef = useRef<HTMLInputElement | null>(null);
+
   const yearOptions = useMemo(() => {
     const set = new Set<string>(TAHUN_OPTIONS);
     proposals.forEach((p) => {
@@ -71,6 +150,7 @@ export function MenuDownloadView({
     return Array.from(set).sort((a, b) => b.localeCompare(a));
   }, [proposals, records]);
 
+  const [printMode, setPrintMode] = useState<DownloadPrintMode>('kpm');
   const [selectedTahun, setSelectedTahun] = useState<string>(() => yearOptions[0] || '2026');
   const [selectedProposal, setSelectedProposal] = useState<string>('all');
   const [selectedPengelola, setSelectedPengelola] = useState<string>('all');
@@ -84,9 +164,20 @@ export function MenuDownloadView({
   const [isPengelolaModalOpen, setIsPengelolaModalOpen] = useState(false);
 
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  const [isGeneratingKupon, setIsGeneratingKupon] = useState(false);
+  const [isGeneratingBast, setIsGeneratingBast] = useState(false);
   const [isGeneratingExcel, setIsGeneratingExcel] = useState(false);
   const [limitNotice, setLimitNotice] = useState(false);
+
   const [pdfFeedback, setPdfFeedback] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
+  const [kuponFeedback, setKuponFeedback] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
+  const [bastFeedback, setBastFeedback] = useState<{
     type: 'success' | 'error';
     message: string;
   } | null>(null);
@@ -94,22 +185,87 @@ export function MenuDownloadView({
     type: 'success' | 'error';
     message: string;
   } | null>(null);
+
   const [showTemplateEditor, setShowTemplateEditor] = useState(false);
   const [templateDraft, setTemplateDraft] = useState<ReportTemplateConfig>(
     () => reportTemplate ?? DEFAULT_REPORT_TEMPLATE
   );
   const [templateSavedNotice, setTemplateSavedNotice] = useState(false);
 
+  const [couponDraft, setCouponDraft] = useState<CouponPrintConfig>(
+    () => couponConfig ?? DEFAULT_COUPON_CONFIG
+  );
+  const [couponManualOverride, setCouponManualOverride] = useState(false);
+  const [couponSavedNotice, setCouponSavedNotice] = useState(false);
+
+  const [bastDraft, setBastDraft] = useState<BastTemplateConfig>(
+    () => bastTemplate ?? DEFAULT_BAST_TEMPLATE
+  );
+  const [bastSavedNotice, setBastSavedNotice] = useState(false);
+  const [bastSavedLabel, setBastSavedLabel] = useState<string>(
+    'Template BAST berhasil disimpan sebagai default.'
+  );
+  const [showBastKopEditor, setShowBastKopEditor] = useState(false);
+
   useEffect(() => {
-    if (reportTemplate) {
-      setTemplateDraft(reportTemplate);
-    }
+    if (reportTemplate) setTemplateDraft(reportTemplate);
   }, [reportTemplate]);
 
   const yearScopedProposals = useMemo(() => {
     if (selectedTahun === 'all') return proposals;
     return proposals.filter((p) => p.tahun === selectedTahun);
   }, [proposals, selectedTahun]);
+
+  const selectedProposalObj = useMemo(() => {
+    if (selectedProposal === 'all') return undefined;
+    return (
+      yearScopedProposals.find((p) => p.namaProposal === selectedProposal) ??
+      proposals.find((p) => p.namaProposal === selectedProposal)
+    );
+  }, [selectedProposal, yearScopedProposals, proposals]);
+
+  const matchedProposalSchedule = useMemo(() => {
+    if (selectedProposal === 'all') return undefined;
+    const yr =
+      selectedTahun !== 'all'
+        ? selectedTahun
+        : selectedProposalObj?.tahun;
+    return resolveScheduleForProposal(selectedProposal, yr, schedules);
+  }, [selectedProposal, selectedTahun, selectedProposalObj, schedules]);
+
+  useEffect(() => {
+    const baseCoupon = couponConfig ?? DEFAULT_COUPON_CONFIG;
+    if (selectedProposal !== 'all' && matchedProposalSchedule) {
+      setCouponDraft({
+        jadwal:
+          formatScheduleDateTimeForCoupon(
+            matchedProposalSchedule.targetDate,
+            matchedProposalSchedule.targetTime
+          ) || baseCoupon.jadwal,
+        lokasi: (matchedProposalSchedule.location || '').trim() || baseCoupon.lokasi,
+        footerText:
+          (matchedProposalSchedule.footerNote || '').trim() ||
+          (matchedProposalSchedule.notes || '').trim() ||
+          baseCoupon.footerText ||
+          DEFAULT_COUPON_CONFIG.footerText,
+      });
+      setCouponManualOverride(false);
+      return;
+    }
+    setCouponDraft(baseCoupon);
+    setCouponManualOverride(false);
+  }, [selectedProposal, matchedProposalSchedule, couponConfig]);
+
+  useEffect(() => {
+    setBastDraft(
+      resolveEffectiveBastConfig(
+        bastTemplate,
+        proposalBastMap,
+        selectedProposalObj?.id,
+        reportTemplate
+      )
+    );
+  }, [bastTemplate, proposalBastMap, selectedProposalObj?.id, reportTemplate]);
 
   const availableProposalItems = useMemo(() => {
     const map = new Map<string, { name: string; kecamatanGroup: string; tipe?: string }>();
@@ -170,6 +326,62 @@ export function MenuDownloadView({
     );
   }, [recordsBeforePengelola, selectedPengelola]);
 
+  // Kupon hanya mencetak KPM Diterima yang terikat ke proposal aktif (jumlah kupon = jumlah KPM per proposal)
+  const eligibleKuponRecords = useMemo(
+    () =>
+      filteredRecords.filter(
+        (rec) => rec.validasi === 'accepted' && Boolean((rec.proposal || '').trim())
+      ),
+    [filteredRecords]
+  );
+
+  // BAST dapat dicetak untuk KPM Diterima (atau semua bila difilter proposal spesifik)
+  const eligibleBastRecords = useMemo(() => {
+    const accepted = filteredRecords.filter((rec) => rec.validasi === 'accepted');
+    return accepted.length > 0 ? accepted : filteredRecords;
+  }, [filteredRecords]);
+
+  const previewKuponSample = eligibleKuponRecords[0] || filteredRecords[0] || null;
+  const previewKuponShowKelurahan = previewKuponSample
+    ? isKecamatanScopedProposalForCoupon(previewKuponSample, proposals)
+    : selectedProposal !== 'all' &&
+      isKecamatanScopedProposalForCoupon(
+        { proposal: selectedProposal, tahun: selectedTahun === 'all' ? '' : selectedTahun },
+        proposals
+      );
+
+  const previewKuponConfig = useMemo(() => {
+    if (
+      previewKuponSample &&
+      schedules.length > 0 &&
+      (selectedProposal === 'all' || !couponManualOverride)
+    ) {
+      return resolveCouponScheduleForRecord(
+        previewKuponSample,
+        schedules,
+        proposals,
+        couponDraft
+      );
+    }
+    return couponDraft;
+  }, [previewKuponSample, schedules, proposals, selectedProposal, couponManualOverride, couponDraft]);
+
+  const scheduledKuponCount = useMemo(() => {
+    if (schedules.length === 0) return 0;
+    return eligibleKuponRecords.filter((rec) =>
+      Boolean(resolveCouponScheduleForRecord(rec, schedules, proposals, couponDraft).matchedSchedule)
+    ).length;
+  }, [eligibleKuponRecords, schedules, proposals, couponDraft]);
+
+  const bastDatePreviewText = useMemo(() => {
+    if (bastDraft.tanggalSerahTerimaCustomText?.trim()) {
+      return bastDraft.tanggalSerahTerimaCustomText.trim();
+    }
+    return formatIndonesianDateWords(
+      bastDraft.tanggalSerahTerimaIso?.trim() || new Date().toISOString().slice(0, 10)
+    );
+  }, [bastDraft.tanggalSerahTerimaCustomText, bastDraft.tanggalSerahTerimaIso]);
+
   const maxAddonCount = MAX_PDF_TOTAL_COLUMNS - MANDATORY_PDF_COLUMN_KEYS.length; // 6 add-on
 
   const activeColumns = useMemo(() => {
@@ -204,6 +416,8 @@ export function MenuDownloadView({
     setSelectedProposal('all');
     setSelectedPengelola('all');
     setPdfFeedback(null);
+    setKuponFeedback(null);
+    setBastFeedback(null);
     setExcelFeedback(null);
   };
 
@@ -211,10 +425,12 @@ export function MenuDownloadView({
     setSelectedProposal(nextProp);
     setSelectedPengelola('all');
     setPdfFeedback(null);
+    setKuponFeedback(null);
+    setBastFeedback(null);
     setExcelFeedback(null);
   };
 
-  const buildScopeTitleAndFileName = () => {
+  const buildScopeTitleAndFileName = (prefix?: string) => {
     const yearSuffix = selectedTahun === 'all' ? 'Semua Tahun' : selectedTahun;
     const baseScope =
       selectedProposal !== 'all' ? selectedProposal : 'Daftar Calon KPM MASDETA';
@@ -227,9 +443,9 @@ export function MenuDownloadView({
     }
     subParts.push(`Total: ${filteredRecords.length} KPM`);
 
-    const fileBase = `${selectedTahun === 'all' ? 'Semua_Tahun' : selectedTahun}_${baseScope}${
-      selectedPengelola !== 'all' ? `_${selectedPengelola}` : ''
-    }`;
+    const fileBase = `${prefix ? `${prefix}_` : ''}${
+      selectedTahun === 'all' ? 'Semua_Tahun' : selectedTahun
+    }_${baseScope}${selectedPengelola !== 'all' ? `_${selectedPengelola}` : ''}`;
 
     return {
       title,
@@ -272,6 +488,78 @@ export function MenuDownloadView({
     }
   };
 
+  const handleDownloadKuponPdf = async () => {
+    if (eligibleKuponRecords.length === 0 || isGeneratingKupon) return;
+    setKuponFeedback(null);
+    setIsGeneratingKupon(true);
+    try {
+      const { fileName } = buildScopeTitleAndFileName('Kupon');
+      const res = await exportKuponPdf({
+        records: eligibleKuponRecords,
+        allRecords: records,
+        proposals,
+        items,
+        wilayahList,
+        proposalSlotMap,
+        schedules,
+        couponConfig: couponDraft,
+        resolvePerProposalSchedule: selectedProposal === 'all' || !couponManualOverride,
+        mode: 'bulk',
+        fileName,
+      });
+      setKuponFeedback({
+        type: 'success',
+        message: res.openedNative
+          ? `Kupon "${res.savedFileName}" (${res.count} kupon) berhasil dibuat dan dibuka.`
+          : `Kupon "${res.savedFileName}" (${res.count} kupon) berhasil diunduh.`,
+      });
+    } catch (err) {
+      setKuponFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Gagal membuat file PDF Kupon.',
+      });
+    } finally {
+      setIsGeneratingKupon(false);
+    }
+  };
+
+  const handleDownloadBastBulkPdf = async () => {
+    if (eligibleBastRecords.length === 0 || isGeneratingBast) return;
+    setBastFeedback(null);
+    setIsGeneratingBast(true);
+    try {
+      const { fileName } = buildScopeTitleAndFileName('BAST');
+      const effectiveBulkMap: ProposalBastMap = selectedProposalObj
+        ? { ...proposalBastMap, [selectedProposalObj.id]: bastDraft }
+        : proposalBastMap;
+      const res = await exportKpmBastBulkToPdf({
+        records: eligibleBastRecords,
+        allRecords: records,
+        proposals,
+        items,
+        wilayahList,
+        proposalSlotMap,
+        reportTemplate: templateDraft,
+        bastConfig: bastDraft,
+        proposalBastMap: effectiveBulkMap,
+        fileName,
+      });
+      setBastFeedback({
+        type: 'success',
+        message: res.openedNative
+          ? `BAST "${res.savedFileName}" (${res.count} halaman KPM) berhasil dibuat dan dibuka.`
+          : `BAST "${res.savedFileName}" (${res.count} halaman KPM) berhasil diunduh.`,
+      });
+    } catch (err) {
+      setBastFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Gagal membuat file PDF BAST.',
+      });
+    } finally {
+      setIsGeneratingBast(false);
+    }
+  };
+
   const handleDownloadExcel = async () => {
     if (filteredRecords.length === 0 || isGeneratingExcel) return;
     setExcelFeedback(null);
@@ -302,20 +590,43 @@ export function MenuDownloadView({
     }
   };
 
+  const handleKopLogoUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const compressed = await compressKopLogoFile(file);
+      setBastSavedNotice(false);
+      setTemplateSavedNotice(false);
+      setBastDraft((prev) => ({ ...prev, kopLogoDataUrl: compressed }));
+      setTemplateDraft((prev) => ({ ...prev, kopLogoDataUrl: compressed }));
+    } catch (err) {
+      setBastFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Gagal memproses gambar logo kop.',
+      });
+    }
+  };
+
+  const activeKopLogoSrc =
+    (templateDraft.kopLogoDataUrl || '').trim() ||
+    (bastDraft.kopLogoDataUrl || '').trim() ||
+    DEFAULT_KOP_LOGO_URL;
+
   return (
     <div className="min-h-screen pb-24">
       {isNativeApp && (
-      <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
-        <button
-          type="button"
-          onClick={onBack}
-          className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
-          aria-label="Kembali ke Menu"
-        >
-          <ArrowLeft className="h-5 w-5" />
-        </button>
-        <h1 className="truncate text-base font-bold text-slate-900">Download Data</h1>
-      </header>
+        <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
+          <button
+            type="button"
+            onClick={onBack}
+            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
+            aria-label="Kembali ke Menu"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </button>
+          <h1 className="truncate text-base font-bold text-slate-900">Download Data</h1>
+        </header>
       )}
 
       <div
@@ -342,438 +653,1156 @@ export function MenuDownloadView({
           </div>
         )}
 
-        {/* Card 1: Filter Cetak PDF (Tahun, Pengelola, Proposal) */}
-        <section
-          className={`rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2.5 ${
-            !isNativeApp ? 'md:col-span-5 md:col-start-1 md:p-4' : ''
-          }`}
-        >
-          <h2 className="text-sm font-bold text-slate-900">Filter Cetak PDF</h2>
+        {/* Kolom Kiri (Desktop) / Atas (Mobile): Filter, Excel & Kop Umum */}
+        <div className={`space-y-3.5 ${!isNativeApp ? 'md:col-span-5 md:col-start-1' : ''}`}>
+          {/* Card 1: Filter Cetak (Tahun, Pengelola, Proposal) */}
+          <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2.5 md:p-4">
+            <h2 className="text-sm font-bold text-slate-900">Filter Cetak Dokumen</h2>
 
-          {/* Baris 1: Tahun + Pengelola */}
-          <div className="grid grid-cols-[108px_1fr] gap-2">
-            <div>
-              <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                Tahun
-              </span>
-              <button
-                type="button"
-                onClick={() => setIsTahunModalOpen(true)}
-                className="mt-1 flex min-h-[42px] w-full items-center justify-between gap-1.5 rounded-xl border border-slate-300 bg-white px-3 text-left text-xs font-medium text-slate-900 hover:bg-slate-50"
-              >
-                <span className="truncate">
-                  {selectedTahun === 'all' ? 'Semua' : selectedTahun}
+            <div className="grid grid-cols-[108px_1fr] gap-2">
+              <div>
+                <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                  Tahun
                 </span>
-                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" />
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setIsTahunModalOpen(true)}
+                  className="mt-1 flex min-h-[42px] w-full items-center justify-between gap-1.5 rounded-xl border border-slate-300 bg-white px-3 text-left text-xs font-medium text-slate-900 hover:bg-slate-50"
+                >
+                  <span className="truncate">
+                    {selectedTahun === 'all' ? 'Semua' : selectedTahun}
+                  </span>
+                  <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+                </button>
+              </div>
+
+              <div className="min-w-0">
+                <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                  Pengelola
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsPengelolaModalOpen(true)}
+                  className="mt-1 flex min-h-[42px] w-full items-center justify-between gap-1.5 rounded-xl border border-slate-300 bg-white px-3 text-left text-xs font-medium text-slate-900 hover:bg-slate-50"
+                >
+                  <span className="truncate">
+                    {selectedPengelola === 'all' ? 'Semua Pengelola' : selectedPengelola}
+                  </span>
+                  <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+                </button>
+              </div>
             </div>
 
             <div className="min-w-0">
               <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                Pengelola
+                Proposal
               </span>
               <button
                 type="button"
-                onClick={() => setIsPengelolaModalOpen(true)}
-                className="mt-1 flex min-h-[42px] w-full items-center justify-between gap-1.5 rounded-xl border border-slate-300 bg-white px-3 text-left text-xs font-medium text-slate-900 hover:bg-slate-50"
+                onClick={() => setIsProposalModalOpen(true)}
+                className="mt-1 flex min-h-[42px] w-full items-center justify-between gap-2 rounded-xl border border-slate-300 bg-white px-3 text-left text-xs font-medium text-slate-900 hover:bg-slate-50"
               >
                 <span className="truncate">
-                  {selectedPengelola === 'all' ? 'Semua Pengelola' : selectedPengelola}
+                  {selectedProposal === 'all' ? 'Semua Proposal' : selectedProposal}
                 </span>
                 <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" />
               </button>
             </div>
-          </div>
+          </section>
 
-          {/* Baris 2: Proposal penuh agar nama kecamatan/kelurahan terbaca utuh */}
-          <div className="min-w-0">
-            <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-              Proposal
-            </span>
-            <button
-              type="button"
-              onClick={() => setIsProposalModalOpen(true)}
-              className="mt-1 flex min-h-[42px] w-full items-center justify-between gap-2 rounded-xl border border-slate-300 bg-white px-3 text-left text-xs font-medium text-slate-900 hover:bg-slate-50"
-            >
-              <span className="truncate">
-                {selectedProposal === 'all' ? 'Semua Proposal' : selectedProposal}
-              </span>
-              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" />
-            </button>
-          </div>
-        </section>
-
-        {/* Card 2: Pilih Kolom Add-On PDF (Wajib: NO, ITEM, NAMA, ALAMAT | Maks 10 Kolom Total) */}
-        <section
-          className={`rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2.5 ${
-            !isNativeApp ? 'md:col-span-7 md:col-start-6 md:row-span-3 md:p-5' : ''
-          }`}
-        >
-          <div className="flex items-center justify-between gap-2">
-            <h2 className="text-sm font-bold text-slate-900">Pilih Kolom Tabel PDF</h2>
-            <span
-              className={`shrink-0 text-[11px] font-semibold tabular-nums ${
-                isAtColumnLimit ? 'text-amber-700' : 'text-slate-500'
-              }`}
-            >
-              {totalColumnCount}/{MAX_PDF_TOTAL_COLUMNS} Kolom
-            </span>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            {ADDON_PDF_COLUMN_DEFINITIONS.map((col) => {
-              const checked = selectedAddonColumns.includes(col.key);
-              const blockedByLimit = !checked && isAtColumnLimit;
-              return (
-                <button
-                  key={col.key}
-                  type="button"
-                  role="checkbox"
-                  aria-checked={checked}
-                  onClick={() => toggleAddonColumn(col.key)}
-                  className={`flex min-h-[42px] items-center gap-2.5 rounded-xl border px-3 py-2 text-left transition-colors ${
-                    checked
-                      ? 'border-teal-700/50 bg-teal-50/70 text-slate-900'
-                      : blockedByLimit
-                        ? 'border-slate-200 bg-slate-50 text-slate-400'
-                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                  }`}
-                >
-                  <span
-                    className={`flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-md border transition-colors ${
-                      checked
-                        ? 'border-teal-700 bg-teal-700 text-white'
-                        : blockedByLimit
-                          ? 'border-slate-200 bg-slate-100'
-                          : 'border-slate-300 bg-white'
+          {/* Card 2: Pilihan Jenis Cetak */}
+          <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2 md:p-4">
+            <h2 className="text-sm font-bold text-slate-900">Pilih Jenis Cetak PDF F4</h2>
+            <div className="grid grid-cols-3 gap-1.5 rounded-xl bg-slate-100 p-1">
+              {(
+                [
+                  { id: 'kpm', label: 'Print KPM', Icon: Printer },
+                  { id: 'kupon', label: 'Print Kupon', Icon: Ticket },
+                  { id: 'bast', label: 'BAST', Icon: FileCheck2 },
+                ] as const
+              ).map(({ id, label, Icon }) => {
+                const active = printMode === id;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setPrintMode(id)}
+                    className={`flex min-h-[40px] items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-semibold transition-all ${
+                      active
+                        ? 'bg-teal-700 text-white shadow-xs'
+                        : 'text-slate-600 hover:bg-white/70 hover:text-slate-900'
                     }`}
                   >
-                    {checked && <Check className="h-3 w-3" />}
+                    <Icon className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate">{label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          {/* Card 3: Ekspor Excel (.xlsx) */}
+          <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2.5 md:p-4">
+            <div className="flex items-center gap-2">
+              <FileSpreadsheet className="h-4 w-4 text-teal-700" />
+              <h2 className="text-sm font-bold text-slate-900">Ekspor Excel (.xlsx)</h2>
+            </div>
+
+            {excelFeedback && (
+              <div
+                role="status"
+                className={`flex items-start gap-2 rounded-xl border px-3 py-2 text-xs ${
+                  excelFeedback.type === 'success'
+                    ? 'border-teal-200 bg-teal-50 text-teal-900'
+                    : 'border-rose-200 bg-rose-50 text-rose-900'
+                }`}
+              >
+                {excelFeedback.type === 'success' ? (
+                  <Check className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+                ) : (
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+                )}
+                <p className="font-medium leading-snug">{excelFeedback.message}</p>
+              </div>
+            )}
+
+            <button
+              type="button"
+              disabled={filteredRecords.length === 0 || isGeneratingExcel}
+              onClick={() => void handleDownloadExcel()}
+              className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl border border-teal-200 bg-teal-50/70 px-4 text-sm font-semibold text-teal-800 transition-colors hover:bg-teal-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+            >
+              {isGeneratingExcel ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Menyiapkan Excel...</span>
+                </>
+              ) : (
+                <>
+                  <FileSpreadsheet className="h-4 w-4" />
+                  <span>Download Excel (.xlsx) ({filteredRecords.length} KPM)</span>
+                </>
+              )}
+            </button>
+          </section>
+
+          {/* Card 4: Template Kop Surat & Penandatangan Resmi (untuk Print KPM & Excel) */}
+          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+            <button
+              type="button"
+              onClick={() => setShowTemplateEditor((prev) => !prev)}
+              className="flex min-h-[52px] w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+            >
+              <div className="flex min-w-0 items-center gap-2.5">
+                <FileText className="h-4 w-4 shrink-0 text-teal-700" />
+                <div className="min-w-0">
+                  <p className="text-sm font-bold text-slate-900">
+                    Template Kop &amp; Penandatangan Laporan
+                  </p>
+                  <p className="truncate text-[11px] text-slate-500">
+                    {templateDraft.enabled
+                      ? `${templateDraft.orgHeaderLine2} · Aktif pada Tabel PDF & Excel`
+                      : 'Nonaktif · Ketuk untuk mengaktifkan kop laporan'}
+                  </p>
+                </div>
+              </div>
+              <ChevronDown
+                className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${
+                  showTemplateEditor ? 'rotate-180' : ''
+                }`}
+              />
+            </button>
+
+            {showTemplateEditor && (
+              <div className="space-y-3 border-t border-slate-100 px-4 py-3.5">
+                <label className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold text-slate-800">
+                  <span>Sertakan Kop Surat &amp; Blok Tanda Tangan</span>
+                  <input
+                    type="checkbox"
+                    checked={templateDraft.enabled}
+                    onChange={(e) => {
+                      setTemplateSavedNotice(false);
+                      setTemplateDraft((prev) => ({ ...prev, enabled: e.target.checked }));
+                    }}
+                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-600"
+                  />
+                </label>
+
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2">
+                  <p className="text-[11px] font-semibold text-slate-700">
+                    Logo Kop Surat Instansi (dipakai di Kop Laporan &amp; BAST)
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <input
+                      ref={reportKopLogoInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => void handleKopLogoUpload(e)}
+                    />
+                    <img
+                      src={activeKopLogoSrc}
+                      alt="Logo Kop Instansi"
+                      className="h-13 w-11 shrink-0 rounded-lg border border-slate-200 bg-white p-0.5 object-contain"
+                    />
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => reportKopLogoInputRef.current?.click()}
+                        className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        <ImagePlus className="h-3.5 w-3.5" />
+                        <span>Upload / Ganti Logo</span>
+                      </button>
+                      {activeKopLogoSrc !== DEFAULT_KOP_LOGO_URL && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTemplateSavedNotice(false);
+                            setBastSavedNotice(false);
+                            setTemplateDraft((prev) => ({
+                              ...prev,
+                              kopLogoDataUrl: DEFAULT_KOP_LOGO_URL,
+                            }));
+                            setBastDraft((prev) => ({
+                              ...prev,
+                              kopLogoDataUrl: DEFAULT_KOP_LOGO_URL,
+                            }));
+                          }}
+                          className="inline-flex min-h-[36px] items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-semibold text-teal-800 hover:bg-teal-100"
+                        >
+                          <span>Logo Default Kalbar</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2.5">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600">
+                      Baris Atas Kop Instansi
+                    </label>
+                    <input
+                      type="text"
+                      value={templateDraft.orgHeaderLine1}
+                      onChange={(e) => {
+                        setTemplateSavedNotice(false);
+                        setTemplateDraft((prev) => ({ ...prev, orgHeaderLine1: e.target.value }));
+                      }}
+                      placeholder="Contoh: PEMERINTAH PROVINSI KALIMANTAN BARAT"
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600">
+                      Nama Dinas / Unit Pengelola
+                    </label>
+                    <input
+                      type="text"
+                      value={templateDraft.orgHeaderLine2}
+                      onChange={(e) => {
+                        setTemplateSavedNotice(false);
+                        setTemplateDraft((prev) => ({ ...prev, orgHeaderLine2: e.target.value }));
+                      }}
+                      placeholder="Contoh: DINAS SOSIAL / TIM KOORDINASI MASDETA"
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600">
+                      Alamat / Kontak Sekretariat
+                    </label>
+                    <input
+                      type="text"
+                      value={templateDraft.orgAddress}
+                      onChange={(e) => {
+                        setTemplateSavedNotice(false);
+                        setTemplateDraft((prev) => ({ ...prev, orgAddress: e.target.value }));
+                      }}
+                      placeholder="Alamat sekretariat"
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600">
+                        Kota Penandatanganan
+                      </label>
+                      <input
+                        type="text"
+                        value={templateDraft.city}
+                        onChange={(e) => {
+                          setTemplateSavedNotice(false);
+                          setTemplateDraft((prev) => ({ ...prev, city: e.target.value }));
+                        }}
+                        placeholder="Pontianak"
+                        className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600">
+                        Jabatan Penandatangan
+                      </label>
+                      <input
+                        type="text"
+                        value={templateDraft.signatoryTitle}
+                        onChange={(e) => {
+                          setTemplateSavedNotice(false);
+                          setTemplateDraft((prev) => ({ ...prev, signatoryTitle: e.target.value }));
+                        }}
+                        placeholder="Koordinator Pelaksana"
+                        className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600">
+                        Nama Penandatangan
+                      </label>
+                      <input
+                        type="text"
+                        value={templateDraft.signatoryName}
+                        onChange={(e) => {
+                          setTemplateSavedNotice(false);
+                          setTemplateDraft((prev) => ({ ...prev, signatoryName: e.target.value }));
+                        }}
+                        placeholder="( ................................ )"
+                        className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600">
+                        NIP / NRP (Opsional)
+                      </label>
+                      <input
+                        type="text"
+                        value={templateDraft.signatoryNip || ''}
+                        onChange={(e) => {
+                          setTemplateSavedNotice(false);
+                          setTemplateDraft((prev) => ({ ...prev, signatoryNip: e.target.value }));
+                        }}
+                        placeholder="NIP. ..."
+                        className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {templateSavedNotice && (
+                  <p className="flex items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-medium text-teal-900">
+                    <Check className="h-3.5 w-3.5 shrink-0 text-teal-700" />
+                    <span>Template Kop &amp; Penandatangan berhasil disimpan.</span>
+                  </p>
+                )}
+
+                {onSaveReportTemplate && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSaveReportTemplate(templateDraft);
+                      if (
+                        onSaveBastTemplate &&
+                        templateDraft.kopLogoDataUrl &&
+                        templateDraft.kopLogoDataUrl !== bastTemplate?.kopLogoDataUrl
+                      ) {
+                        onSaveBastTemplate({
+                          ...(bastTemplate ?? DEFAULT_BAST_TEMPLATE),
+                          kopLogoDataUrl: templateDraft.kopLogoDataUrl,
+                        });
+                      }
+                      setTemplateSavedNotice(true);
+                    }}
+                    className="inline-flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-4 text-xs font-semibold text-white transition-colors hover:bg-slate-800"
+                  >
+                    <Check className="h-3.5 w-3.5" />
+                    <span>Simpan Template Laporan</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </section>
+        </div>
+
+        {/* Kolom Kanan (Desktop) / Bawah (Mobile): Panel sesuai Mode Cetak */}
+        <div className={`${!isNativeApp ? 'md:col-span-7 md:col-start-6' : ''}`}>
+          {/* MODE 1: PRINT KPM (TABEL DATA KPM) */}
+          {printMode === 'kpm' && (
+            <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2.5 md:p-5">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-sm font-bold text-slate-900">Pilih Kolom Tabel PDF</h2>
+                <span
+                  className={`shrink-0 text-[11px] font-semibold tabular-nums ${
+                    isAtColumnLimit ? 'text-amber-700' : 'text-slate-500'
+                  }`}
+                >
+                  {totalColumnCount}/{MAX_PDF_TOTAL_COLUMNS} Kolom
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                {ADDON_PDF_COLUMN_DEFINITIONS.map((col) => {
+                  const checked = selectedAddonColumns.includes(col.key);
+                  const blockedByLimit = !checked && isAtColumnLimit;
+                  return (
+                    <button
+                      key={col.key}
+                      type="button"
+                      role="checkbox"
+                      aria-checked={checked}
+                      onClick={() => toggleAddonColumn(col.key)}
+                      className={`flex min-h-[42px] items-center gap-2.5 rounded-xl border px-3 py-2 text-left transition-colors ${
+                        checked
+                          ? 'border-teal-700/50 bg-teal-50/70 text-slate-900'
+                          : blockedByLimit
+                            ? 'border-slate-200 bg-slate-50 text-slate-400'
+                            : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      <span
+                        className={`flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-md border transition-colors ${
+                          checked
+                            ? 'border-teal-700 bg-teal-700 text-white'
+                            : blockedByLimit
+                              ? 'border-slate-200 bg-slate-100'
+                              : 'border-slate-300 bg-white'
+                        }`}
+                      >
+                        {checked && <Check className="h-3 w-3" />}
+                      </span>
+                      <span className="truncate text-xs font-semibold">{col.uiLabel}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {limitNotice && (
+                <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-medium text-amber-900">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-700" />
+                  <span>
+                    Maksimal {MAX_PDF_TOTAL_COLUMNS} kolom agar tabel tetap rapi di kertas F4
+                    Portrait. Hapus salah satu centang terlebih dahulu.
                   </span>
-                  <span className="truncate text-xs font-semibold">{col.uiLabel}</span>
-                </button>
-              );
-            })}
-          </div>
-
-          {limitNotice && (
-            <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-medium text-amber-900">
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-700" />
-              <span>
-                Maksimal {MAX_PDF_TOTAL_COLUMNS} kolom agar tabel tetap rapi di kertas F4 Portrait.
-                Hapus salah satu centang terlebih dahulu.
-              </span>
-            </div>
-          )}
-
-          {/* Pratinjau Urutan Kolom Aktif */}
-          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-              Urutan Kolom PDF Aktif
-            </p>
-            <p className="mt-0.5 text-[11px] font-semibold leading-relaxed text-slate-800">
-              {activeColumns.map((c) => c.pdfHeader).join('  |  ')}
-            </p>
-          </div>
-
-          <button
-            type="button"
-            role="checkbox"
-            aria-checked={includeSummary}
-            onClick={() => setIncludeSummary((prev) => !prev)}
-            className="flex min-h-[42px] w-full items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left hover:bg-slate-50"
-          >
-            <span
-              className={`flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-md border transition-colors ${
-                includeSummary
-                  ? 'border-teal-700 bg-teal-700 text-white'
-                  : 'border-slate-300 bg-white'
-              }`}
-            >
-              {includeSummary && <Check className="h-3 w-3" />}
-            </span>
-            <span className="text-xs font-medium text-slate-700">
-              Sertakan ringkasan <strong>Daftar Item</strong> &amp; <strong>Pengelola</strong> di akhir PDF
-            </span>
-          </button>
-
-          {pdfFeedback && (
-            <div
-              role="status"
-              className={`flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs ${
-                pdfFeedback.type === 'success'
-                  ? 'border-teal-200 bg-teal-50 text-teal-900'
-                  : 'border-rose-200 bg-rose-50 text-rose-900'
-              }`}
-            >
-              {pdfFeedback.type === 'success' ? (
-                <Check className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
-              ) : (
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+                </div>
               )}
-              <p className="font-medium leading-snug">{pdfFeedback.message}</p>
-            </div>
-          )}
 
-          <button
-            type="button"
-            disabled={filteredRecords.length === 0 || isGeneratingPdf}
-            onClick={() => void handleDownloadPdf()}
-            className="inline-flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-teal-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
-          >
-            {isGeneratingPdf ? (
-              <>
-                <Loader2 className="h-4.5 w-4.5 animate-spin" />
-                <span>Menyiapkan PDF F4...</span>
-              </>
-            ) : (
-              <>
-                <Printer className="h-4.5 w-4.5" />
-                <span>Download PDF F4 ({filteredRecords.length} KPM)</span>
-              </>
-            )}
-          </button>
-
-          {/* Keterangan spesifikasi kertas F4 Portrait di bawah tombol Download PDF */}
-          <p className="text-center text-[11px] leading-relaxed text-slate-500">
-            Kertas F4 Portrait (216 × 310 mm) · Margin Kiri 1,5 cm · Atas, Kanan &amp; Bawah 1 cm
-          </p>
-        </section>
-
-        {/* Card 3: Ekspor Excel (.xlsx) Sesuai Filter */}
-        <section
-          className={`rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2.5 ${
-            !isNativeApp ? 'md:col-span-5 md:col-start-1 md:p-4' : ''
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            <FileSpreadsheet className="h-4 w-4 text-teal-700" />
-            <h2 className="text-sm font-bold text-slate-900">Ekspor Excel (.xlsx)</h2>
-          </div>
-
-          {excelFeedback && (
-            <div
-              role="status"
-              className={`flex items-start gap-2 rounded-xl border px-3 py-2 text-xs ${
-                excelFeedback.type === 'success'
-                  ? 'border-teal-200 bg-teal-50 text-teal-900'
-                  : 'border-rose-200 bg-rose-50 text-rose-900'
-              }`}
-            >
-              {excelFeedback.type === 'success' ? (
-                <Check className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
-              ) : (
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
-              )}
-              <p className="font-medium leading-snug">{excelFeedback.message}</p>
-            </div>
-          )}
-
-          <button
-            type="button"
-            disabled={filteredRecords.length === 0 || isGeneratingExcel}
-            onClick={() => void handleDownloadExcel()}
-            className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl border border-teal-200 bg-teal-50/70 px-4 text-sm font-semibold text-teal-800 transition-colors hover:bg-teal-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-          >
-            {isGeneratingExcel ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Menyiapkan Excel...</span>
-              </>
-            ) : (
-              <>
-                <FileSpreadsheet className="h-4 w-4" />
-                <span>Download Excel (.xlsx) ({filteredRecords.length} KPM)</span>
-              </>
-            )}
-          </button>
-        </section>
-
-        {/* Card 4: Template Kop Surat & Penandatangan Resmi */}
-        <section
-          className={`overflow-hidden rounded-2xl border border-slate-200 bg-white ${
-            !isNativeApp ? 'md:col-span-5 md:col-start-1' : ''
-          }`}
-        >
-          <button
-            type="button"
-            onClick={() => setShowTemplateEditor((prev) => !prev)}
-            className="flex min-h-[52px] w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-          >
-            <div className="flex min-w-0 items-center gap-2.5">
-              <FileText className="h-4 w-4 shrink-0 text-teal-700" />
-              <div className="min-w-0">
-                <p className="text-sm font-bold text-slate-900">
-                  Template Kop &amp; Penandatangan Resmi
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                  Urutan Kolom PDF Aktif
                 </p>
-                <p className="truncate text-[11px] text-slate-500">
-                  {templateDraft.enabled
-                    ? `${templateDraft.orgHeaderLine2} · Aktif pada PDF, Excel & BAST`
-                    : 'Nonaktif · Ketuk untuk mengaktifkan kop instansi'}
+                <p className="mt-0.5 text-[11px] font-semibold leading-relaxed text-slate-800">
+                  {activeColumns.map((c) => c.pdfHeader).join('  |  ')}
                 </p>
               </div>
-            </div>
-            <ChevronDown
-              className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${
-                showTemplateEditor ? 'rotate-180' : ''
-              }`}
-            />
-          </button>
 
-          {showTemplateEditor && (
-            <div className="space-y-3 border-t border-slate-100 px-4 py-3.5">
-              <label className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold text-slate-800">
-                <span>Sertakan Kop Surat &amp; Blok Tanda Tangan</span>
-                <input
-                  type="checkbox"
-                  checked={templateDraft.enabled}
-                  onChange={(e) => {
-                    setTemplateSavedNotice(false);
-                    setTemplateDraft((prev) => ({ ...prev, enabled: e.target.checked }));
-                  }}
-                  className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-600"
-                />
-              </label>
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={includeSummary}
+                onClick={() => setIncludeSummary((prev) => !prev)}
+                className="flex min-h-[42px] w-full items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left hover:bg-slate-50"
+              >
+                <span
+                  className={`flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-md border transition-colors ${
+                    includeSummary
+                      ? 'border-teal-700 bg-teal-700 text-white'
+                      : 'border-slate-300 bg-white'
+                  }`}
+                >
+                  {includeSummary && <Check className="h-3 w-3" />}
+                </span>
+                <span className="text-xs font-medium text-slate-700">
+                  Sertakan ringkasan <strong>Daftar Item</strong> &amp; <strong>Pengelola</strong> di akhir PDF
+                </span>
+              </button>
+
+              {pdfFeedback && (
+                <div
+                  role="status"
+                  className={`flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs ${
+                    pdfFeedback.type === 'success'
+                      ? 'border-teal-200 bg-teal-50 text-teal-900'
+                      : 'border-rose-200 bg-rose-50 text-rose-900'
+                  }`}
+                >
+                  {pdfFeedback.type === 'success' ? (
+                    <Check className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+                  ) : (
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+                  )}
+                  <p className="font-medium leading-snug">{pdfFeedback.message}</p>
+                </div>
+              )}
+
+              <button
+                type="button"
+                disabled={filteredRecords.length === 0 || isGeneratingPdf}
+                onClick={() => void handleDownloadPdf()}
+                className="inline-flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-teal-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
+              >
+                {isGeneratingPdf ? (
+                  <>
+                    <Loader2 className="h-4.5 w-4.5 animate-spin" />
+                    <span>Menyiapkan PDF F4...</span>
+                  </>
+                ) : (
+                  <>
+                    <Printer className="h-4.5 w-4.5" />
+                    <span>Download PDF F4 ({filteredRecords.length} KPM)</span>
+                  </>
+                )}
+              </button>
+
+              <p className="text-center text-[11px] leading-relaxed text-slate-500">
+                Kertas F4 Portrait (216 × 310 mm) · Margin Kiri 2 cm · Kanan 1,5 cm · Atas &amp; Bawah 1 cm
+              </p>
+            </section>
+          )}
+
+          {/* MODE 2: PRINT KUPON (10 KUPON PER LEMBAR F4 + QR PROFIL LENGKAP) */}
+          {printMode === 'kupon' && (
+            <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-3.5 md:p-5">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900">
+                    Cetak Kupon Pembagian Massal (F4)
+                  </h2>
+                  <p className="mt-0.5 text-[11px] text-slate-500">
+                    Ukuran kartu 88 × 54 mm (10 kupon/halaman). Jumlah kupon sesuai jumlah KPM aktif per proposal.
+                  </p>
+                </div>
+                <span className="shrink-0 text-xs font-bold text-teal-700 tabular-nums">
+                  {eligibleKuponRecords.length} Kupon
+                </span>
+              </div>
+
+              {/* Pratinjau Kupon Mini */}
+              <div className="rounded-xl border border-slate-300 bg-white p-3.5 shadow-xs space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex flex-col items-center">
+                    <span className="text-[9px] font-medium text-slate-500">No. Kupon</span>
+                    <div className="mt-0.5 flex h-9 w-12 items-center justify-center rounded-lg border border-slate-900 text-base font-bold text-slate-900 tabular-nums">
+                      01
+                    </div>
+                  </div>
+                  <div className="text-center px-2">
+                    <p className="text-xs font-extrabold tracking-wide text-slate-900">
+                      KUPON PEMBAGIAN
+                    </p>
+                    <p className="text-xs font-extrabold tracking-wide text-slate-900">
+                      TAHUN {selectedTahun === 'all' ? '2026' : selectedTahun}
+                    </p>
+                  </div>
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-slate-50 text-slate-800">
+                    <QrCode className="h-7 w-7" />
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-slate-800 px-3 py-2 text-[11px] text-slate-800 space-y-0.5">
+                  <p className="truncate font-bold text-slate-900">
+                    Nama : {previewKuponSample?.nama?.toUpperCase() || 'CONTOH NAMA KPM'}
+                  </p>
+                  <p className="tabular-nums">
+                    NIK : {previewKuponSample?.nikKtp || '6171040000000001'}
+                  </p>
+                  <p className="truncate">
+                    Proposal :{' '}
+                    {previewKuponSample?.proposal ||
+                      (selectedProposal !== 'all' ? selectedProposal : 'Kecamatan Pontianak Barat')}
+                  </p>
+                  {previewKuponShowKelurahan && (
+                    <p className="truncate text-teal-800 font-semibold">
+                      Kelurahan : {previewKuponSample?.kelurahan || 'Sungai Jawi Dalam'}
+                    </p>
+                  )}
+                  <p className="truncate">Jadwal : {previewKuponConfig.jadwal || '-'}</p>
+                  <p className="truncate">Lokasi : {previewKuponConfig.lokasi || '-'}</p>
+                </div>
+
+                <p className="text-center text-[10px] font-bold text-slate-800">
+                  {previewKuponConfig.footerText || DEFAULT_COUPON_CONFIG.footerText}
+                </p>
+              </div>
+
+              {selectedProposal !== 'all' && matchedProposalSchedule ? (
+                <div className="rounded-xl border border-teal-200 bg-teal-50/70 px-3 py-2 text-[11px] leading-relaxed text-teal-900">
+                  Terisi otomatis dari jadwal proposal <strong>{selectedProposal}</strong>
+                  {couponManualOverride ? ' (telah disesuaikan manual di bawah).' : '.'}
+                </div>
+              ) : selectedProposal === 'all' && scheduledKuponCount > 0 ? (
+                <div className="rounded-xl border border-teal-200 bg-teal-50/70 px-3 py-2 text-[11px] leading-relaxed text-teal-900">
+                  <strong>{scheduledKuponCount} dari {eligibleKuponRecords.length} KPM</strong> akan otomatis mengisi Jadwal, Lokasi &amp; Catatan Kaki dari jadwal masing-masing proposal. Kolom di bawah menjadi cadangan bila proposal belum dijadwalkan.
+                </div>
+              ) : (
+                <div className="rounded-xl border border-teal-200 bg-teal-50/60 px-3 py-2 text-[11px] leading-relaxed text-teal-900">
+                  Jenis item bantuan disembunyikan dari tampilan kupon fisik. Saat KPM memindai <strong>QR Code</strong> di kupon, halaman profil lengkap KPM beserta rincian item bantuan akan terbuka.
+                </div>
+              )}
 
               <div className="space-y-2.5">
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600">
-                    Baris Atas Kop Instansi
+                    Jadwal Pembagian {selectedProposal === 'all' ? '(Cadangan / Default)' : ''}
                   </label>
                   <input
                     type="text"
-                    value={templateDraft.orgHeaderLine1}
+                    value={couponDraft.jadwal}
                     onChange={(e) => {
-                      setTemplateSavedNotice(false);
-                      setTemplateDraft((prev) => ({ ...prev, orgHeaderLine1: e.target.value }));
+                      setCouponSavedNotice(false);
+                      setCouponManualOverride(true);
+                      setCouponDraft((prev) => ({ ...prev, jadwal: e.target.value }));
                     }}
-                    placeholder="Contoh: PEMERINTAH KOTA PONTIANAK"
+                    placeholder="Contoh: Senin, 12 Oktober 2026 - Pukul : 08.00"
                     className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
                   />
                 </div>
 
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600">
-                    Nama Dinas / Unit Pengelola
+                    Lokasi Penyaluran {selectedProposal === 'all' ? '(Cadangan / Default)' : ''}
                   </label>
                   <input
                     type="text"
-                    value={templateDraft.orgHeaderLine2}
+                    value={couponDraft.lokasi}
                     onChange={(e) => {
-                      setTemplateSavedNotice(false);
-                      setTemplateDraft((prev) => ({ ...prev, orgHeaderLine2: e.target.value }));
+                      setCouponSavedNotice(false);
+                      setCouponManualOverride(true);
+                      setCouponDraft((prev) => ({ ...prev, lokasi: e.target.value }));
                     }}
-                    placeholder="Contoh: DINAS SOSIAL / TIM KOORDINASI MASDETA"
+                    placeholder="Contoh: Aula Kantor Camat Pontianak Barat"
                     className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
                   />
                 </div>
 
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600">
-                    Alamat / Kontak Sekretariat
+                    Catatan Kaki Kupon {selectedProposal === 'all' ? '(Cadangan / Default)' : ''}
                   </label>
                   <input
                     type="text"
-                    value={templateDraft.orgAddress}
+                    value={couponDraft.footerText}
                     onChange={(e) => {
-                      setTemplateSavedNotice(false);
-                      setTemplateDraft((prev) => ({ ...prev, orgAddress: e.target.value }));
+                      setCouponSavedNotice(false);
+                      setCouponManualOverride(true);
+                      setCouponDraft((prev) => ({ ...prev, footerText: e.target.value }));
                     }}
-                    placeholder="Alamat sekretariat"
+                    placeholder="Wajib membawa Kupon dan KTP asli saat pembagian."
                     className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
                   />
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600">
-                      Kota Penandatanganan
-                    </label>
-                    <input
-                      type="text"
-                      value={templateDraft.city}
-                      onChange={(e) => {
-                        setTemplateSavedNotice(false);
-                        setTemplateDraft((prev) => ({ ...prev, city: e.target.value }));
-                      }}
-                      placeholder="Pontianak"
-                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600">
-                      Jabatan Penandatangan
-                    </label>
-                    <input
-                      type="text"
-                      value={templateDraft.signatoryTitle}
-                      onChange={(e) => {
-                        setTemplateSavedNotice(false);
-                        setTemplateDraft((prev) => ({ ...prev, signatoryTitle: e.target.value }));
-                      }}
-                      placeholder="Koordinator Pelaksana"
-                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600">
-                      Nama Penandatangan
-                    </label>
-                    <input
-                      type="text"
-                      value={templateDraft.signatoryName}
-                      onChange={(e) => {
-                        setTemplateSavedNotice(false);
-                        setTemplateDraft((prev) => ({ ...prev, signatoryName: e.target.value }));
-                      }}
-                      placeholder="( ................................ )"
-                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600">
-                      NIP / NRP (Opsional)
-                    </label>
-                    <input
-                      type="text"
-                      value={templateDraft.signatoryNip || ''}
-                      onChange={(e) => {
-                        setTemplateSavedNotice(false);
-                        setTemplateDraft((prev) => ({ ...prev, signatoryNip: e.target.value }));
-                      }}
-                      placeholder="NIP. ..."
-                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                    />
-                  </div>
                 </div>
               </div>
 
-              {templateSavedNotice && (
+              {couponSavedNotice && (
                 <p className="flex items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-medium text-teal-900">
                   <Check className="h-3.5 w-3.5 shrink-0 text-teal-700" />
-                  <span>Template Kop &amp; Penandatangan berhasil disimpan.</span>
+                  <span>Pengaturan kupon berhasil disimpan sebagai default.</span>
                 </p>
               )}
 
-              {onSaveReportTemplate && (
+              {onSaveCouponConfig && (
                 <button
                   type="button"
                   onClick={() => {
-                    onSaveReportTemplate(templateDraft);
-                    setTemplateSavedNotice(true);
+                    onSaveCouponConfig(couponDraft);
+                    setCouponSavedNotice(true);
                   }}
-                  className="inline-flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-4 text-xs font-semibold text-white transition-colors hover:bg-slate-800"
+                  className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-slate-300 bg-slate-50 px-4 text-xs font-semibold text-slate-800 hover:bg-slate-100"
                 >
                   <Check className="h-3.5 w-3.5" />
-                  <span>Simpan Template</span>
+                  <span>Simpan Pengaturan Kupon Default</span>
                 </button>
               )}
-            </div>
+
+              {kuponFeedback && (
+                <div
+                  role="status"
+                  className={`flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs ${
+                    kuponFeedback.type === 'success'
+                      ? 'border-teal-200 bg-teal-50 text-teal-900'
+                      : 'border-rose-200 bg-rose-50 text-rose-900'
+                  }`}
+                >
+                  {kuponFeedback.type === 'success' ? (
+                    <Check className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+                  ) : (
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+                  )}
+                  <p className="font-medium leading-snug">{kuponFeedback.message}</p>
+                </div>
+              )}
+
+              <button
+                type="button"
+                disabled={eligibleKuponRecords.length === 0 || isGeneratingKupon}
+                onClick={() => void handleDownloadKuponPdf()}
+                className="inline-flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-teal-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
+              >
+                {isGeneratingKupon ? (
+                  <>
+                    <Loader2 className="h-4.5 w-4.5 animate-spin" />
+                    <span>Menyiapkan PDF Kupon F4...</span>
+                  </>
+                ) : (
+                  <>
+                    <Ticket className="h-4.5 w-4.5" />
+                    <span>Download Kupon PDF F4 ({eligibleKuponRecords.length} Kupon)</span>
+                  </>
+                )}
+              </button>
+
+              <p className="text-center text-[11px] leading-relaxed text-slate-500">
+                Kertas F4 Portrait (216 × 310 mm) · Margin Kiri 2 cm · Kanan 1,5 cm · Atas &amp; Bawah 1 cm · 10 Kupon / Halaman
+              </p>
+            </section>
           )}
-        </section>
+
+          {/* MODE 3: BAST ELEKTRONIK MASSAL (FORMAT RESMI DINAS SOSIAL PROV. KALBAR) */}
+          {printMode === 'bast' && (
+            <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-3.5 md:p-5">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900">
+                    Berita Acara Serah Terima Barang (BAST) Massal
+                  </h2>
+                  <p className="mt-0.5 text-[11px] text-slate-500">
+                    1 halaman F4 per KPM · Otomatis menyesuaikan Lokasi Proposal, Nomor Bantuan &amp; Rincian Sub-Item KPM.
+                  </p>
+                </div>
+                <span className="shrink-0 text-xs font-bold text-teal-700 tabular-nums">
+                  {eligibleBastRecords.length} KPM
+                </span>
+              </div>
+
+              {selectedProposalObj ? (
+                <div className="rounded-xl border border-teal-200 bg-teal-50/70 px-3 py-2 text-[11px] leading-relaxed text-teal-900">
+                  {proposalBastMap?.[selectedProposalObj.id]
+                    ? `Menampilkan pengaturan BAST khusus untuk proposal "${selectedProposalObj.namaProposal}".`
+                    : `Proposal "${selectedProposalObj.namaProposal}" saat ini menggunakan template BAST default (dapat disesuaikan per proposal di halaman Proposal atau di bawah ini).`}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-700">
+                  Cetak massal otomatis memakai pengaturan BAST masing-masing proposal (bila diatur di halaman Proposal) dan fallback ke template default di bawah.
+                </div>
+              )}
+
+              {/* Pengaturan Kop & Logo Dinas BAST */}
+              <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50/70">
+                <button
+                  type="button"
+                  onClick={() => setShowBastKopEditor((p) => !p)}
+                  className="flex min-h-[44px] w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs font-bold text-slate-800 hover:bg-slate-100"
+                >
+                  <span className="flex items-center gap-2">
+                    <img
+                      src={(bastDraft.kopLogoDataUrl || '').trim() || activeKopLogoSrc}
+                      alt="Logo BAST"
+                      className="h-6 w-5 object-contain"
+                    />
+                    <span>Kop Surat &amp; Logo Instansi BAST</span>
+                  </span>
+                  <ChevronDown
+                    className={`h-4 w-4 text-slate-500 transition-transform ${
+                      showBastKopEditor ? 'rotate-180' : ''
+                    }`}
+                  />
+                </button>
+                {showBastKopEditor && (
+                  <div className="space-y-2.5 border-t border-slate-200 bg-white p-3">
+                    <div className="flex items-center gap-3">
+                      <input
+                        ref={kopLogoInputRef}
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => void handleKopLogoUpload(e)}
+                      />
+                      <img
+                        src={(bastDraft.kopLogoDataUrl || '').trim() || activeKopLogoSrc}
+                        alt="Logo Kop BAST"
+                        className="h-12 w-10 shrink-0 rounded-lg border border-slate-200 object-contain bg-white p-0.5"
+                      />
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => kopLogoInputRef.current?.click()}
+                          className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          <ImagePlus className="h-3.5 w-3.5" />
+                          <span>Ganti Logo</span>
+                        </button>
+                        {((bastDraft.kopLogoDataUrl || '').trim() || activeKopLogoSrc) !==
+                          DEFAULT_KOP_LOGO_URL && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setBastSavedNotice(false);
+                              setBastDraft((prev) => ({
+                                ...prev,
+                                kopLogoDataUrl: DEFAULT_KOP_LOGO_URL,
+                              }));
+                            }}
+                            className="inline-flex min-h-[36px] items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-semibold text-teal-800 hover:bg-teal-100"
+                          >
+                            <span>Reset Logo Kalbar</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600">
+                          Baris Kop 1
+                        </label>
+                        <input
+                          type="text"
+                          value={bastDraft.orgHeaderLine1}
+                          onChange={(e) => {
+                            setBastSavedNotice(false);
+                            setBastDraft((prev) => ({ ...prev, orgHeaderLine1: e.target.value }));
+                          }}
+                          className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600">
+                          Baris Kop 2 (Dinas)
+                        </label>
+                        <input
+                          type="text"
+                          value={bastDraft.orgHeaderLine2}
+                          onChange={(e) => {
+                            setBastSavedNotice(false);
+                            setBastDraft((prev) => ({ ...prev, orgHeaderLine2: e.target.value }));
+                          }}
+                          className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600">
+                        Alamat Baris 1
+                      </label>
+                      <input
+                        type="text"
+                        value={bastDraft.orgAddress1}
+                        onChange={(e) => {
+                          setBastSavedNotice(false);
+                          setBastDraft((prev) => ({ ...prev, orgAddress1: e.target.value }));
+                        }}
+                        className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                      />
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600">
+                          Alamat Baris 2
+                        </label>
+                        <input
+                          type="text"
+                          value={bastDraft.orgAddress2}
+                          onChange={(e) => {
+                            setBastSavedNotice(false);
+                            setBastDraft((prev) => ({ ...prev, orgAddress2: e.target.value }));
+                          }}
+                          className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600">
+                          Alamat Baris 3
+                        </label>
+                        <input
+                          type="text"
+                          value={bastDraft.orgAddress3}
+                          onChange={(e) => {
+                            setBastSavedNotice(false);
+                            setBastDraft((prev) => ({ ...prev, orgAddress3: e.target.value }));
+                          }}
+                          className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Field Dinamis BAST (#1 - #12) */}
+              <div className="space-y-2.5">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600">
+                    1. Nomor BAST
+                  </label>
+                  <input
+                    type="text"
+                    value={bastDraft.nomorBast}
+                    onChange={(e) => {
+                      setBastSavedNotice(false);
+                      setBastDraft((prev) => ({ ...prev, nomorBast: e.target.value }));
+                    }}
+                    className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600">
+                      2. Tanggal Serah Terima (Otomatis Terbilang)
+                    </label>
+                    <input
+                      type="date"
+                      value={bastDraft.tanggalSerahTerimaIso}
+                      onChange={(e) => {
+                        setBastSavedNotice(false);
+                        setBastDraft((prev) => ({
+                          ...prev,
+                          tanggalSerahTerimaIso: e.target.value,
+                        }));
+                      }}
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600">
+                      Override Teks Tanggal (Opsional)
+                    </label>
+                    <input
+                      type="text"
+                      value={bastDraft.tanggalSerahTerimaCustomText || ''}
+                      onChange={(e) => {
+                        setBastSavedNotice(false);
+                        setBastDraft((prev) => ({
+                          ...prev,
+                          tanggalSerahTerimaCustomText: e.target.value,
+                        }));
+                      }}
+                      placeholder="Kosongkan untuk teks otomatis"
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
+                  <span className="font-semibold text-slate-900">Pratinjau Hari &amp; Tanggal:</span>{' '}
+                  {bastDatePreviewText}
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600">
+                    3. Nomor SK &amp; Tanggal SK
+                  </label>
+                  <input
+                    type="text"
+                    value={bastDraft.nomorSk}
+                    onChange={(e) => {
+                      setBastSavedNotice(false);
+                      setBastDraft((prev) => ({ ...prev, nomorSk: e.target.value }));
+                    }}
+                    className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600">
+                      4. Nomor Pesanan (SP)
+                    </label>
+                    <input
+                      type="text"
+                      value={bastDraft.nomorPesanan}
+                      onChange={(e) => {
+                        setBastSavedNotice(false);
+                        setBastDraft((prev) => ({ ...prev, nomorPesanan: e.target.value }));
+                      }}
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600">
+                      5. Tanggal Pemesanan
+                    </label>
+                    <input
+                      type="text"
+                      value={bastDraft.tanggalPemesanan}
+                      onChange={(e) => {
+                        setBastSavedNotice(false);
+                        setBastDraft((prev) => ({ ...prev, tanggalPemesanan: e.target.value }));
+                      }}
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600">
+                      6. Nama Pejabat Dinas (Pihak Pertama)
+                    </label>
+                    <input
+                      type="text"
+                      value={bastDraft.pejabatNama}
+                      onChange={(e) => {
+                        setBastSavedNotice(false);
+                        setBastDraft((prev) => ({ ...prev, pejabatNama: e.target.value }));
+                      }}
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600">
+                      7. Jabatan + OPD + Provinsi
+                    </label>
+                    <input
+                      type="text"
+                      value={bastDraft.pejabatJabatan}
+                      onChange={(e) => {
+                        setBastSavedNotice(false);
+                        setBastDraft((prev) => ({ ...prev, pejabatJabatan: e.target.value }));
+                      }}
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600">
+                      Pangkat / Golongan Pejabat
+                    </label>
+                    <input
+                      type="text"
+                      value={bastDraft.pejabatPangkat}
+                      onChange={(e) => {
+                        setBastSavedNotice(false);
+                        setBastDraft((prev) => ({ ...prev, pejabatPangkat: e.target.value }));
+                      }}
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600">
+                      NIP Pejabat
+                    </label>
+                    <input
+                      type="text"
+                      value={bastDraft.pejabatNip}
+                      onChange={(e) => {
+                        setBastSavedNotice(false);
+                        setBastDraft((prev) => ({ ...prev, pejabatNip: e.target.value }));
+                      }}
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600">
+                    Nilai Nominal BAST (Titik-titik untuk tulis tangan atau isi Rp ...)
+                  </label>
+                  <input
+                    type="text"
+                    value={bastDraft.nilaiNominalText}
+                    onChange={(e) => {
+                      setBastSavedNotice(false);
+                      setBastDraft((prev) => ({ ...prev, nilaiNominalText: e.target.value }));
+                    }}
+                    className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {bastSavedNotice && (
+                <p className="flex items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-medium text-teal-900">
+                  <Check className="h-3.5 w-3.5 shrink-0 text-teal-700" />
+                  <span>{bastSavedLabel}</span>
+                </p>
+              )}
+
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {selectedProposalObj && onSaveProposalBastConfig && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSaveProposalBastConfig(selectedProposalObj.id, bastDraft);
+                      setBastSavedLabel(
+                        `Pengaturan BAST khusus "${selectedProposalObj.namaProposal}" berhasil disimpan.`
+                      );
+                      setBastSavedNotice(true);
+                    }}
+                    className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-teal-700/40 bg-teal-50 px-3 text-xs font-semibold text-teal-900 hover:bg-teal-100"
+                  >
+                    <Check className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate">Simpan Khusus Proposal Ini</span>
+                  </button>
+                )}
+
+                {onSaveBastTemplate && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSaveBastTemplate(bastDraft);
+                      setBastSavedLabel('Template BAST berhasil disimpan sebagai default.');
+                      setBastSavedNotice(true);
+                    }}
+                    className={`inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-slate-300 bg-slate-50 px-3 text-xs font-semibold text-slate-800 hover:bg-slate-100 ${
+                      !(selectedProposalObj && onSaveProposalBastConfig) ? 'sm:col-span-2' : ''
+                    }`}
+                  >
+                    <Check className="h-3.5 w-3.5 shrink-0" />
+                    <span>Simpan Template BAST Default</span>
+                  </button>
+                )}
+              </div>
+
+              {bastFeedback && (
+                <div
+                  role="status"
+                  className={`flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs ${
+                    bastFeedback.type === 'success'
+                      ? 'border-teal-200 bg-teal-50 text-teal-900'
+                      : 'border-rose-200 bg-rose-50 text-rose-900'
+                  }`}
+                >
+                  {bastFeedback.type === 'success' ? (
+                    <Check className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+                  ) : (
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+                  )}
+                  <p className="font-medium leading-snug">{bastFeedback.message}</p>
+                </div>
+              )}
+
+              <button
+                type="button"
+                disabled={eligibleBastRecords.length === 0 || isGeneratingBast}
+                onClick={() => void handleDownloadBastBulkPdf()}
+                className="inline-flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-teal-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
+              >
+                {isGeneratingBast ? (
+                  <>
+                    <Loader2 className="h-4.5 w-4.5 animate-spin" />
+                    <span>Menyiapkan PDF BAST F4...</span>
+                  </>
+                ) : (
+                  <>
+                    <FileCheck2 className="h-4.5 w-4.5" />
+                    <span>Download BAST PDF F4 ({eligibleBastRecords.length} KPM)</span>
+                  </>
+                )}
+              </button>
+
+              <p className="text-center text-[11px] leading-relaxed text-slate-500">
+                Kertas F4 Portrait (216 × 310 mm) · Margin Kiri 2 cm · Kanan 1,5 cm · Atas &amp; Bawah 1 cm · 1 KPM / Halaman
+              </p>
+            </section>
+          )}
+        </div>
       </div>
 
       {/* Pop-up Pilihan Tahun */}
@@ -844,6 +1873,8 @@ export function MenuDownloadView({
         onSelect={(val) => {
           setSelectedPengelola(val);
           setPdfFeedback(null);
+          setKuponFeedback(null);
+          setBastFeedback(null);
           setExcelFeedback(null);
         }}
         searchable

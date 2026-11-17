@@ -1343,6 +1343,34 @@ async function startServer() {
     });
   }
 
+  // REST: Public read-only KPM profile lookup for QR code scans
+  app.get('/api/public/kpm/:id', (req: Request, res: Response) => {
+    const token = String(req.params.id || '').trim().toLowerCase();
+    if (!token) {
+      res.status(400).json({ error: 'Parameter KPM tidak valid.' });
+      return;
+    }
+    normalizeOperationalStateOnServer();
+    const rawRecs = Array.isArray(dataStore.records)
+      ? (dataStore.records as Array<Record<string, unknown>>)
+      : [];
+    const found = rawRecs.find((r) => {
+      const id = String(r?.id || '').trim().toLowerCase();
+      const reg = String(r?.registerCode || '').trim().toLowerCase();
+      return id === token || reg === token;
+    });
+    if (!found) {
+      res.status(404).json({ error: 'Data KPM tidak ditemukan.' });
+      return;
+    }
+    res.json({
+      record: found,
+      proposals: Array.isArray(dataStore.proposals) ? dataStore.proposals : [],
+      items: Array.isArray(dataStore.items) ? dataStore.items : [],
+      wilayahList: Array.isArray(dataStore.wilayahList) ? dataStore.wilayahList : [],
+    });
+  });
+
   // REST: Get full operational KPM/Proposal/Master data state
   app.get('/api/data/state', (req: Request, res: Response) => {
     const authUser = requireAuth(req, res);
