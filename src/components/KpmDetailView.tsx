@@ -228,7 +228,7 @@ export function KpmDetailView({
     : '';
 
   const standaloneContainerLabel =
-    record.validasi === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM';
+    record.validasi === 'rejected' ? 'Arsip Ditolak' : 'Database KPM';
   const displayTahun = record.tahun?.trim() || 'Tanpa Tahun';
 
   const isProposalLocked = !isStandalone && matchingProposal?.status === 'locked';
@@ -670,19 +670,24 @@ export function KpmDetailView({
                     </span>
                   </button>
                 ) : (
-                  <div className="flex w-full items-start gap-1 text-left text-xs font-medium leading-snug text-slate-600">
-                    {record.validasi === 'rejected' ? (
-                      <Archive className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-600" />
-                    ) : (
-                      <Database className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
-                    )}
-                    <span className="line-clamp-2">
-                      {standaloneContainerLabel}
-                      {displayKecamatan || displayKelurahan
-                        ? ` · ${[displayKecamatan, displayKelurahan].filter(Boolean).join(', ')}`
-                        : ' · Domisili belum diisi'}
-                    </span>
-                  </div>
+                  <>
+                    <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
+                      {record.validasi === 'rejected' ? (
+                        <Archive className="h-3.5 w-3.5 shrink-0 text-rose-600" />
+                      ) : (
+                        <Database className="h-3.5 w-3.5 shrink-0 text-amber-600" />
+                      )}
+                      <span className="truncate">{standaloneContainerLabel}</span>
+                    </div>
+                    <div className="flex items-start gap-1.5 text-xs leading-snug text-slate-600">
+                      <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-teal-700" />
+                      <span className="line-clamp-2 font-medium">
+                        {displayKecamatan || displayKelurahan
+                          ? [displayKecamatan, displayKelurahan].filter(Boolean).join(', ')
+                          : 'Domisili belum diisi'}
+                      </span>
+                    </div>
+                  </>
                 )}
 
                 <div className="flex items-center gap-1.5 text-xs text-slate-700">
@@ -853,7 +858,7 @@ export function KpmDetailView({
                       <p className="mt-1 truncate text-xs text-slate-600">
                         {dup.proposal
                           ? `${dup.proposal} (${dup.tahun || 'Tanpa Tahun'})`
-                          : `${dup.validasi === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM'}${dup.tahun ? ` (${dup.tahun})` : ''}`}{' '}
+                          : `${dup.validasi === 'rejected' ? 'Arsip Ditolak' : 'Database KPM'}${dup.tahun ? ` (${dup.tahun})` : ''}`}{' '}
                         · DTSEN: {dup.dtsen}
                       </p>
                       <p className="mt-0.5 truncate text-[11px] text-slate-500">

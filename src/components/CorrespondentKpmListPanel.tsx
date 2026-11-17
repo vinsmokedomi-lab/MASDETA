@@ -401,7 +401,7 @@ export function CorrespondentKpmListPanel({
             const containerTitle = rec.proposal?.trim()
               ? rec.proposal
               : rec.validasi === 'rejected'
-                ? 'Arsip Berkas Ditolak'
+                ? 'Arsip Ditolak'
                 : 'Database KPM';
             const metaLine = [dom.kecamatan, kelurahanName, rec.pengelola?.trim()]
               .filter(Boolean)

@@ -238,7 +238,7 @@ export function DesktopSidebar({
               <Database
                 className={`h-4 w-4 shrink-0 ${isDatabaseKpmActive ? 'text-teal-700' : 'text-slate-400'}`}
               />
-              <span className="flex-1 truncate">Database KPM</span>
+              <span className="flex-1 truncate">Database</span>
               <span className="rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-800 tabular-nums">
                 {databaseKpmCount}
               </span>
@@ -334,7 +334,7 @@ export function DesktopSidebar({
               <LayoutGrid
                 className={`h-4 w-4 shrink-0 ${isMenuActive ? 'text-teal-700' : 'text-slate-400'}`}
               />
-              <span className="flex-1 truncate">Menu &amp; Alat</span>
+              <span className="flex-1 truncate">Menu</span>
               {menuBadgeCount > 0 && (
                 <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
                   {menuBadgeCount > 99 ? '99+' : menuBadgeCount}

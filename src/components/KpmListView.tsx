@@ -140,7 +140,7 @@ export function KpmListView({
   };
 
   const getStandalonePlaceLabel = (rec: KpmRecord) =>
-    rec.validasi === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM';
+    rec.validasi === 'rejected' ? 'Arsip Ditolak' : 'Database KPM';
 
   const getCompactKelurahan = (rawKel: string) =>
     rawKel.replace(/^(kelurahan|kel\.?)\s+/i, '').trim();

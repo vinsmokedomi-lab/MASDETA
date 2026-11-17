@@ -759,7 +759,12 @@ export function StandaloneKpmView({
                     const absenLabel =
                       absenSeq < 999999 ? String(absenSeq).padStart(2, '0') : '--';
                     const isChecked = selectedIdSet.has(rec.id);
-                    const desilText = rec.dtsen?.trim() ? `D${rec.dtsen.trim()}` : '';
+                    const rawDtsen = rec.dtsen?.trim() || '';
+                    const desilText = rawDtsen
+                      ? /^\d/.test(rawDtsen)
+                        ? `D${rawDtsen.replace(/\s*-\s*/g, '-')}`
+                        : rawDtsen
+                      : '';
                     const kelShort = kelurahan
                       ? kelurahan.replace(/^(kelurahan|kel\.?)\s+/i, '').trim()
                       : '';

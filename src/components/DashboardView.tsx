@@ -1547,7 +1547,7 @@ export function DashboardView({
                         {rec.item?.trim() ? `${rec.item} · ` : ''}
                         {rec.proposal ||
                           (rec.validasi === 'rejected'
-                            ? 'Arsip Berkas Ditolak'
+                            ? 'Arsip Ditolak'
                             : 'Database KPM')}{' '}
                         ·{' '}
                         <span className="inline-flex items-center gap-0.5">
