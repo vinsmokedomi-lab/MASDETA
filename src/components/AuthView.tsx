@@ -1,6 +1,7 @@
 import { ChangeEvent, FormEvent, useState } from 'react';
 import {
   ArrowLeft,
+  AtSign,
   Camera,
   CheckCircle2,
   Eye,
@@ -27,38 +28,48 @@ const REMEMBER_LOGIN_KEY = 'masdeta_remember_login_v1';
 
 interface SavedLoginPrefs {
   remember: boolean;
-  email: string;
+  identifier: string;
 }
 
 function loadRememberedLogin(): SavedLoginPrefs {
   try {
     const raw = localStorage.getItem(REMEMBER_LOGIN_KEY);
-    if (!raw) return { remember: true, email: '' };
-    const parsed = JSON.parse(raw) as Partial<SavedLoginPrefs> & { password?: string };
+    if (!raw) return { remember: true, identifier: '' };
+    const parsed = JSON.parse(raw) as Partial<SavedLoginPrefs> & {
+      email?: string;
+      password?: string;
+    };
+    const savedIdentifier =
+      typeof parsed.identifier === 'string'
+        ? parsed.identifier
+        : typeof parsed.email === 'string'
+          ? parsed.email
+          : '';
     // Strip legacy plaintext password if previously stored
-    if (parsed.password) {
+    if (parsed.password || (typeof parsed.email === 'string' && !parsed.identifier)) {
       localStorage.setItem(
         REMEMBER_LOGIN_KEY,
         JSON.stringify({
           remember: parsed.remember !== false,
-          email: typeof parsed.email === 'string' ? parsed.email : '',
+          identifier: savedIdentifier,
         })
       );
     }
     return {
       remember: parsed.remember !== false,
-      email: typeof parsed.email === 'string' ? parsed.email : '',
+      identifier: savedIdentifier,
     };
   } catch {
-    return { remember: true, email: '' };
+    return { remember: true, identifier: '' };
   }
 }
 
 interface AuthViewProps {
   logo: React.ReactNode;
-  onLogin: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
+  onLogin: (identifier: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   onRegister: (payload: {
     nama: string;
+    username: string;
     email: string;
     kontak: string;
     password: string;
@@ -71,13 +82,14 @@ interface AuthViewProps {
 export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
   const initialSaved = loadRememberedLogin();
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
-  const [email, setEmail] = useState(initialSaved.email);
+  const [loginIdentifier, setLoginIdentifier] = useState(initialSaved.identifier);
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(initialSaved.remember);
   const [showPassword, setShowPassword] = useState(false);
 
   // Registration fields (tanpa kolom jabatan — jabatan diberikan oleh SuperAdmin)
   const [regNama, setRegNama] = useState('');
+  const [regUsername, setRegUsername] = useState('');
   const [regEmail, setRegEmail] = useState('');
   const [regKontak, setRegKontak] = useState('');
   const [regFotoDataUrl, setRegFotoDataUrl] = useState<string | undefined>(undefined);
@@ -88,7 +100,7 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
   const [regConfirm, setRegConfirm] = useState('');
 
   // Internal Forgot Password state (guidance only)
-  const [forgotEmail, setForgotEmail] = useState(initialSaved.email);
+  const [forgotIdentifier, setForgotIdentifier] = useState(initialSaved.identifier);
   const [forgotNotice, setForgotNotice] = useState<string | null>(null);
   const [registrationPopupMsg, setRegistrationPopupMsg] = useState<string | null>(null);
 
@@ -100,13 +112,13 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
     e.preventDefault();
     setError(null);
     setSuccessMsg(null);
-    if (!email.trim() || !password) {
-      setError('Email dan kata sandi wajib diisi.');
+    if (!loginIdentifier.trim() || !password) {
+      setError('Username atau email dan kata sandi wajib diisi.');
       return;
     }
 
     setSubmitting(true);
-    const result = await onLogin(email.trim(), password);
+    const result = await onLogin(loginIdentifier.trim(), password);
     setSubmitting(false);
 
     if (!result.ok) {
@@ -120,7 +132,7 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
           REMEMBER_LOGIN_KEY,
           JSON.stringify({
             remember: true,
-            email: email.trim(),
+            identifier: loginIdentifier.trim(),
           })
         );
       } else {
@@ -179,8 +191,17 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
     setError(null);
     setSuccessMsg(null);
 
-    if (!regNama.trim() || !regEmail.trim() || regPassword.length < 6) {
-      setError('Nama lengkap, email, dan kata sandi (minimal 6 karakter) wajib diisi.');
+    const cleanUsername = regUsername.trim().toLowerCase().replace(/^@+/, '');
+    if (!regNama.trim() || !cleanUsername || !regEmail.trim() || regPassword.length < 6) {
+      setError(
+        'Nama lengkap, username, email, dan kata sandi (minimal 6 karakter) wajib diisi.'
+      );
+      return;
+    }
+    if (!/^[a-z0-9._-]{3,30}$/.test(cleanUsername)) {
+      setError(
+        'Username harus 3–30 karakter dan hanya boleh huruf kecil, angka, titik (.), garis bawah (_), atau tanda hubung (-).'
+      );
       return;
     }
     if (regPassword !== regConfirm) {
@@ -191,6 +212,7 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
     setSubmitting(true);
     const result = await onRegister({
       nama: capitalizeWords(regNama.trim()),
+      username: cleanUsername,
       email: regEmail.trim().toLowerCase(),
       kontak: regKontak.trim(),
       password: regPassword,
@@ -210,6 +232,7 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
         'Registrasi akun Anda sudah berhasil dibuat dan saat ini menunggu persetujuan serta penetapan jabatan oleh SuperAdmin.'
     );
     setRegNama('');
+    setRegUsername('');
     setRegEmail('');
     setRegKontak('');
     setRegFotoDataUrl(undefined);
@@ -225,8 +248,8 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
     setSuccessMsg(null);
     setForgotNotice(null);
 
-    if (!forgotEmail.trim()) {
-      setError('Masukkan email akun Anda.');
+    if (!forgotIdentifier.trim()) {
+      setError('Masukkan username atau email akun Anda.');
       return;
     }
 
@@ -235,10 +258,11 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
 
     setSubmitting(true);
     try {
+      const lookupVal = forgotIdentifier.trim().toLowerCase();
       const res = await fetch('/api/auth/forgot-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: forgotEmail.trim().toLowerCase() }),
+        body: JSON.stringify({ email: lookupVal, identifier: lookupVal }),
       });
       const contentType = res.headers.get('content-type') || '';
       if (res.status === 404 || res.status === 405 || !contentType.includes('application/json')) {
@@ -264,19 +288,19 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
     <div
       className={`flex min-h-screen flex-col justify-between bg-slate-50 px-5 py-7 sm:min-h-[calc(100vh-1.5rem)] ${
         !isNativeApp
-          ? 'lg:min-h-screen lg:justify-center lg:bg-slate-100 lg:px-8 lg:py-10'
+          ? 'min-h-screen bg-slate-100 md:justify-center md:px-8 md:py-10'
           : ''
       }`}
     >
       <div
         className={
           !isNativeApp
-            ? 'mx-auto w-full lg:grid lg:max-w-5xl lg:grid-cols-12 lg:overflow-hidden lg:rounded-3xl lg:border lg:border-slate-200 lg:bg-white lg:shadow-sm'
+            ? 'mx-auto w-full md:grid md:max-w-5xl md:grid-cols-12 md:overflow-hidden md:rounded-3xl md:border md:border-slate-200 md:bg-white md:shadow-sm'
             : ''
         }
       >
         {!isNativeApp && (
-          <aside className="hidden lg:col-span-5 lg:flex lg:flex-col lg:justify-between lg:bg-slate-900 lg:p-10 lg:text-white">
+          <aside className="hidden md:col-span-5 md:flex md:flex-col md:justify-between md:bg-slate-900 md:p-8 lg:p-10 md:text-white">
             <div className="space-y-6">
               <div className="flex items-center gap-3.5">
                 <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-white p-2 shadow-sm [&>svg]:h-full [&>svg]:w-full">
@@ -321,11 +345,11 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
 
         <div
           className={`space-y-6 ${
-            !isNativeApp ? 'lg:col-span-7 lg:flex lg:flex-col lg:justify-center lg:p-10' : ''
+            !isNativeApp ? 'md:col-span-7 md:flex md:flex-col md:justify-center md:p-8 lg:p-10' : ''
           }`}
         >
           {/* Centered Brand Hero (mobile & native only) */}
-          <div className={`flex flex-col items-center pt-3 text-center ${!isNativeApp ? 'lg:hidden' : ''}`}>
+          <div className={`flex flex-col items-center pt-3 text-center ${!isNativeApp ? 'md:hidden' : ''}`}>
             <div className="flex h-20 w-20 items-center justify-center rounded-3xl border border-slate-200/80 bg-white shadow-sm [&>svg]:h-14 [&>svg]:w-14">
               {logo}
             </div>
@@ -356,23 +380,25 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
               <div className="text-center">
                 <h2 className="text-base font-bold text-slate-900">Masuk ke Aplikasi</h2>
                 <p className="mt-0.5 text-xs text-slate-500">
-                  Masukkan email dan kata sandi akun Anda.
+                  Masukkan username atau email dan kata sandi akun Anda.
                 </p>
               </div>
 
               <div>
-                <label htmlFor="login-email" className="block text-xs font-semibold text-slate-700">
-                  Email
+                <label htmlFor="login-identifier" className="block text-xs font-semibold text-slate-700">
+                  Username atau Email
                 </label>
                 <div className="relative mt-1.5">
-                  <Mail className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <User className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
                   <input
-                    id="login-email"
-                    type="email"
-                    autoComplete="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="nama@gmail.com"
+                    id="login-identifier"
+                    type="text"
+                    autoComplete="username"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    value={loginIdentifier}
+                    onChange={(e) => setLoginIdentifier(e.target.value)}
+                    placeholder="username atau nama@gmail.com"
                     className="min-h-[44px] w-full rounded-xl border border-slate-300 bg-white pr-3.5 pl-10 text-sm text-slate-900 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
                   />
                 </div>
@@ -418,7 +444,7 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
                   type="button"
                   onClick={() => {
                     setMode('forgot');
-                    setForgotEmail(email.trim());
+                    setForgotIdentifier(loginIdentifier.trim());
                     setForgotNotice(null);
                     setError(null);
                     setSuccessMsg(null);
@@ -475,24 +501,26 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
                 <div>
                   <h2 className="text-base font-bold text-slate-900">Lupa Password</h2>
                   <p className="mt-0.5 text-xs text-slate-500">
-                    Masukkan email terdaftar untuk melihat panduan reset kata sandi.
+                    Masukkan username atau email terdaftar untuk melihat panduan reset kata sandi.
                   </p>
                 </div>
               </div>
 
               <div>
-                <label htmlFor="forgot-email" className="block text-xs font-semibold text-slate-700">
-                  Email Akun
+                <label htmlFor="forgot-identifier" className="block text-xs font-semibold text-slate-700">
+                  Username atau Email Akun
                 </label>
                 <div className="relative mt-1.5">
-                  <Mail className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <User className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
                   <input
-                    id="forgot-email"
-                    type="email"
+                    id="forgot-identifier"
+                    type="text"
                     required
-                    value={forgotEmail}
-                    onChange={(e) => setForgotEmail(e.target.value)}
-                    placeholder="nama@gmail.com"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    value={forgotIdentifier}
+                    onChange={(e) => setForgotIdentifier(e.target.value)}
+                    placeholder="username atau nama@gmail.com"
                     className="min-h-[44px] w-full rounded-xl border border-slate-300 bg-white pr-3.5 pl-10 text-sm text-slate-900 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
                   />
                 </div>
@@ -627,6 +655,34 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
             </div>
 
             <div>
+              <label htmlFor="reg-username" className="block text-xs font-semibold text-slate-700">
+                Username <span className="text-rose-600">*</span>
+              </label>
+              <div className="relative mt-1">
+                <AtSign className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  id="reg-username"
+                  type="text"
+                  required
+                  minLength={3}
+                  maxLength={30}
+                  autoCapitalize="none"
+                  autoComplete="username"
+                  spellCheck={false}
+                  value={regUsername}
+                  onChange={(e) =>
+                    setRegUsername(e.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, ''))
+                  }
+                  placeholder="contoh: domi.lapangan"
+                  className="min-h-[44px] w-full rounded-xl border border-slate-300 bg-white pr-3.5 pl-10 text-sm focus:border-teal-700 focus:outline-none"
+                />
+              </div>
+              <p className="mt-1 text-[11px] leading-snug text-slate-500">
+                Username hanya dapat diisi sekali saat pendaftaran dan tidak dapat diubah setelahnya.
+              </p>
+            </div>
+
+            <div>
               <label className="block text-xs font-semibold text-slate-700">
                 Email <span className="text-rose-600">*</span>
               </label>
@@ -715,7 +771,7 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
         </div>
       </div>
 
-      <p className={`pt-6 text-center text-[11px] text-slate-400 ${!isNativeApp ? 'lg:hidden' : ''}`}>
+      <p className={`pt-6 text-center text-[11px] text-slate-400 ${!isNativeApp ? 'md:hidden' : ''}`}>
         MASDETA Operasional · Akses Terkendali SuperAdmin
       </p>
 

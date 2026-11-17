@@ -35,7 +35,7 @@ import {
   exportKpmTableToPdf,
 } from '../utils/pdfExporter';
 import { SelectionPickerModal, SelectionPickerOption } from './SelectionPickerModal';
-import { isNativeAppPlatform } from '../utils/platform';
+import { useIsDesktopWeb } from '../utils/platform';
 
 interface MenuDownloadViewProps {
   records: KpmRecord[];
@@ -58,7 +58,8 @@ export function MenuDownloadView({
   onSaveReportTemplate,
   onBack,
 }: MenuDownloadViewProps) {
-  const isNativeApp = isNativeAppPlatform();
+  const isDesktopWeb = useIsDesktopWeb();
+  const isNativeApp = !isDesktopWeb;
   const yearOptions = useMemo(() => {
     const set = new Set<string>(TAHUN_OPTIONS);
     proposals.forEach((p) => {
@@ -303,11 +304,8 @@ export function MenuDownloadView({
 
   return (
     <div className="min-h-screen pb-24">
-      <header
-        className={`sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md ${
-          !isNativeApp ? 'lg:px-6' : ''
-        }`}
-      >
+      {isNativeApp && (
+      <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
         <button
           type="button"
           onClick={onBack}
@@ -318,18 +316,36 @@ export function MenuDownloadView({
         </button>
         <h1 className="truncate text-base font-bold text-slate-900">Download Data</h1>
       </header>
+      )}
 
       <div
         className={`space-y-3.5 px-4 pt-3.5 ${
           !isNativeApp
-            ? 'lg:mx-auto lg:max-w-[1440px] lg:px-6 lg:pt-6 lg:grid lg:grid-cols-12 lg:items-start lg:gap-6 lg:space-y-0'
+            ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6 md:grid md:grid-cols-12 md:items-start md:gap-6 md:space-y-0'
             : ''
         }`}
       >
+        {!isNativeApp && (
+          <div className="flex items-center gap-3 md:col-span-12">
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+              aria-label="Kembali ke Menu"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              <span>Kembali</span>
+            </button>
+            <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
+              Download Data
+            </h1>
+          </div>
+        )}
+
         {/* Card 1: Filter Cetak PDF (Tahun, Pengelola, Proposal) */}
         <section
           className={`rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2.5 ${
-            !isNativeApp ? 'lg:col-span-5 lg:col-start-1 lg:p-4' : ''
+            !isNativeApp ? 'md:col-span-5 md:col-start-1 md:p-4' : ''
           }`}
         >
           <h2 className="text-sm font-bold text-slate-900">Filter Cetak PDF</h2>
@@ -390,7 +406,7 @@ export function MenuDownloadView({
         {/* Card 2: Pilih Kolom Add-On PDF (Wajib: NO, ITEM, NAMA, ALAMAT | Maks 10 Kolom Total) */}
         <section
           className={`rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2.5 ${
-            !isNativeApp ? 'lg:col-span-7 lg:col-start-6 lg:row-span-3 lg:p-5' : ''
+            !isNativeApp ? 'md:col-span-7 md:col-start-6 md:row-span-3 md:p-5' : ''
           }`}
         >
           <div className="flex items-center justify-between gap-2">
@@ -527,7 +543,7 @@ export function MenuDownloadView({
         {/* Card 3: Ekspor Excel (.xlsx) Sesuai Filter */}
         <section
           className={`rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2.5 ${
-            !isNativeApp ? 'lg:col-span-5 lg:col-start-1 lg:p-4' : ''
+            !isNativeApp ? 'md:col-span-5 md:col-start-1 md:p-4' : ''
           }`}
         >
           <div className="flex items-center gap-2">
@@ -576,7 +592,7 @@ export function MenuDownloadView({
         {/* Card 4: Template Kop Surat & Penandatangan Resmi */}
         <section
           className={`overflow-hidden rounded-2xl border border-slate-200 bg-white ${
-            !isNativeApp ? 'lg:col-span-5 lg:col-start-1' : ''
+            !isNativeApp ? 'md:col-span-5 md:col-start-1' : ''
           }`}
         >
           <button

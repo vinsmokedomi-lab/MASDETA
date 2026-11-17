@@ -23,6 +23,7 @@ interface UserPermissions {
 interface StoredUser {
   id: string;
   nama: string;
+  username?: string;
   email: string;
   jabatan: string;
   kontak: string;
@@ -93,7 +94,18 @@ interface OperationalDataStore {
   kpmAuditLogs: unknown[];
 }
 
-const PORT = 3000;
+function resolvePort(): number {
+  const portArgIdx = process.argv.indexOf('--port');
+  if (portArgIdx !== -1 && process.argv[portArgIdx + 1]) {
+    const parsed = Number(process.argv[portArgIdx + 1]);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  const envPort = Number(process.env.PORT);
+  if (Number.isFinite(envPort) && envPort > 0) return envPort;
+  return 3000;
+}
+
+const PORT = resolvePort();
 const DATA_DIR = path.resolve(process.cwd(), '.data');
 const DATA_FILE = path.join(DATA_DIR, 'masdeta-collab.json');
 const OPERATIONAL_DATA_FILE = path.join(DATA_DIR, 'masdeta-data.json');
@@ -120,6 +132,16 @@ function makeConversationKey(a: string, b: string): string {
 function sanitizeUser(user: StoredUser): PublicUser {
   const { passwordHash: _passwordHash, passwordPlain: _passwordPlain, ...rest } = user;
   return rest;
+}
+
+function normalizeUsernameInput(raw: unknown): string {
+  return String(raw || '')
+    .trim()
+    .toLowerCase();
+}
+
+function isValidUsernameFormat(username: string): boolean {
+  return /^[a-z0-9._-]{3,30}$/.test(username);
 }
 
 function sanitizeMediaUrlOrDataImage(raw: unknown): string | undefined {
@@ -424,16 +446,30 @@ async function startServer() {
 
   const app = express();
   app.use(express.json({ limit: '50mb' }));
+  app.get('/api/health', (_req, res) => {
+    res.json({ ok: true });
+  });
 
   const server = http.createServer(app);
   const wss = new WebSocketServer({ noServer: true });
 
+  server.on('error', (err) => {
+    console.error('HTTP server error:', err);
+  });
+
+  wss.on('error', (err) => {
+    console.error('WebSocket server error:', err);
+  });
+
   server.on('upgrade', (request, socket, head) => {
+    socket.on('error', () => {});
     const pathname = (request.url || '').split('?')[0];
     if (pathname === '/ws') {
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });
+    } else {
+      socket.destroy();
     }
   });
 
@@ -549,19 +585,25 @@ async function startServer() {
     return Boolean(user.permissions?.[action]);
   }
 
-  // REST: Login
+  // REST: Login (username atau email)
   app.post('/api/auth/login', (req: Request, res: Response) => {
-    const email = String(req.body?.email || '').trim().toLowerCase();
+    const identifier = String(req.body?.email || req.body?.identifier || '')
+      .trim()
+      .toLowerCase();
     const password = String(req.body?.password || '');
 
-    if (!email || !password) {
-      res.status(400).json({ error: 'Email dan kata sandi wajib diisi.' });
+    if (!identifier || !password) {
+      res.status(400).json({ error: 'Username atau email dan kata sandi wajib diisi.' });
       return;
     }
 
-    const user = store.users.find((u) => u.email.toLowerCase() === email);
+    const user = store.users.find(
+      (u) =>
+        u.email.toLowerCase() === identifier ||
+        (u.username && u.username.toLowerCase() === identifier)
+    );
     if (!user || !verifyPassword(password, user.passwordHash)) {
-      res.status(401).json({ error: 'Email atau kata sandi tidak sesuai.' });
+      res.status(401).json({ error: 'Username/email atau kata sandi tidak sesuai.' });
       return;
     }
 
@@ -636,6 +678,7 @@ async function startServer() {
   // REST: Register new account (pending SuperAdmin approval)
   app.post('/api/auth/register', (req: Request, res: Response) => {
     const nama = String(req.body?.nama || '').trim();
+    const username = normalizeUsernameInput(req.body?.username);
     const email = String(req.body?.email || '').trim().toLowerCase();
     const kontak = String(req.body?.kontak || '').trim();
     const password = String(req.body?.password || '');
@@ -646,9 +689,17 @@ async function startServer() {
         ? req.body.fotoFileId.trim()
         : undefined;
 
-    if (!nama || !email || password.length < 6) {
+    if (!nama || !username || !email || password.length < 6) {
       res.status(400).json({
-        error: 'Nama lengkap, email, dan kata sandi (minimal 6 karakter) wajib diisi.',
+        error: 'Nama lengkap, username, email, dan kata sandi (minimal 6 karakter) wajib diisi.',
+      });
+      return;
+    }
+
+    if (!isValidUsernameFormat(username)) {
+      res.status(400).json({
+        error:
+          'Username harus 3–30 karakter dan hanya boleh huruf kecil, angka, titik (.), garis bawah (_), atau tanda hubung (-).',
       });
       return;
     }
@@ -658,10 +709,22 @@ async function startServer() {
       return;
     }
 
+    if (
+      store.users.some(
+        (u) =>
+          (u.username && u.username.toLowerCase() === username) ||
+          u.email.toLowerCase() === username
+      )
+    ) {
+      res.status(409).json({ error: 'Username sudah digunakan oleh akun lain.' });
+      return;
+    }
+
     const now = new Date().toISOString();
     const created: StoredUser = {
       id: `usr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       nama,
+      username,
       email,
       jabatan: 'Menunggu Penetapan SuperAdmin',
       kontak,
@@ -694,13 +757,19 @@ async function startServer() {
 
   // REST: Safe forgot-password guidance (never leaks passwords)
   app.post('/api/auth/forgot-password', (req: Request, res: Response) => {
-    const email = String(req.body?.email || '').trim().toLowerCase();
-    if (!email) {
-      res.status(400).json({ error: 'Email wajib diisi.' });
+    const identifier = String(req.body?.email || req.body?.identifier || '')
+      .trim()
+      .toLowerCase();
+    if (!identifier) {
+      res.status(400).json({ error: 'Username atau email wajib diisi.' });
       return;
     }
 
-    const user = store.users.find((u) => u.email.toLowerCase() === email);
+    const user = store.users.find(
+      (u) =>
+        u.email.toLowerCase() === identifier ||
+        (u.username && u.username.toLowerCase() === identifier)
+    );
     res.json({
       exists: Boolean(user),
       message:
@@ -757,6 +826,7 @@ async function startServer() {
     }
 
     const nama = String(req.body?.nama || '').trim();
+    const usernameRaw = normalizeUsernameInput(req.body?.username);
     const email = String(req.body?.email || '').trim().toLowerCase();
     const kontak = String(req.body?.kontak || '').trim();
     const passwordRaw = String(req.body?.password || '').trim();
@@ -772,12 +842,30 @@ async function startServer() {
       res.status(400).json({ error: 'Nama lengkap dan email wajib diisi.' });
       return;
     }
+    if (usernameRaw && !isValidUsernameFormat(usernameRaw)) {
+      res.status(400).json({
+        error:
+          'Username harus 3–30 karakter dan hanya boleh huruf kecil, angka, titik (.), garis bawah (_), atau tanda hubung (-).',
+      });
+      return;
+    }
     if (password.length < 6) {
       res.status(400).json({ error: 'Kata sandi minimal 6 karakter.' });
       return;
     }
     if (store.users.some((u) => u.email.toLowerCase() === email)) {
       res.status(409).json({ error: 'Email sudah terdaftar di sistem.' });
+      return;
+    }
+    if (
+      usernameRaw &&
+      store.users.some(
+        (u) =>
+          (u.username && u.username.toLowerCase() === usernameRaw) ||
+          u.email.toLowerCase() === usernameRaw
+      )
+    ) {
+      res.status(409).json({ error: 'Username sudah digunakan oleh akun lain.' });
       return;
     }
 
@@ -797,6 +885,7 @@ async function startServer() {
     const created: StoredUser = {
       id: `usr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       nama,
+      ...(usernameRaw ? { username: usernameRaw } : {}),
       email,
       jabatan,
       kontak,
@@ -1617,6 +1706,10 @@ async function startServer() {
   wss.on('connection', (ws: WebSocket) => {
     let boundUserId: string | null = null;
 
+    ws.on('error', () => {
+      // Ignore client socket errors
+    });
+
     ws.on('message', (rawData) => {
       try {
         const parsed = JSON.parse(String(rawData)) as Record<string, unknown>;
@@ -1728,21 +1821,56 @@ async function startServer() {
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
+      plugins: [
+        {
+          name: 'masdeta-disable-vite-hmr-ws',
+          enforce: 'post',
+          transform(code, id) {
+            if (id.replace(/\\/g, '/').includes('vite/dist/client/client.mjs')) {
+              return {
+                code: code.replace(
+                  /const transport = normalizeModuleRunnerTransport\(\(\(\) => \{[\s\S]*?\}\)\(\)\);/,
+                  'const transport = normalizeModuleRunnerTransport({ async connect() {}, async disconnect() {}, send() {} });'
+                ),
+                map: null,
+              };
+            }
+          },
+        },
+      ],
       server: {
         middlewareMode: true,
         hmr: false,
-        ws: {
-          server,
-          path: '/__vite_hmr',
-        },
+        ws: false,
+        watch:
+          process.env.DISABLE_HMR === 'true'
+            ? null
+            : { ignored: ['**/.data/**', '**/dev-dist/**', '**/dist/**'] },
       },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
     const distDir = path.resolve(process.cwd(), 'dist');
-    app.use(express.static(distDir));
+    const noCachePaths = new Set([
+      '/index.html',
+      '/sw.js',
+      '/registerSW.js',
+      '/manifest.webmanifest',
+      '/release-version.json',
+    ]);
+    app.use(
+      express.static(distDir, {
+        setHeaders: (res, filePath) => {
+          const normalized = `/${path.relative(distDir, filePath).replace(/\\/g, '/')}`;
+          if (noCachePaths.has(normalized)) {
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+          }
+        },
+      })
+    );
     app.get('*', (_req, res) => {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.sendFile(path.join(distDir, 'index.html'));
     });
   }
@@ -1751,6 +1879,14 @@ async function startServer() {
     console.log(`MASDETA server listening on http://0.0.0.0:${PORT}`);
   });
 }
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught server exception:', err);
+});
 
 startServer().catch((err) => {
   console.error('Failed to start MASDETA server:', err);

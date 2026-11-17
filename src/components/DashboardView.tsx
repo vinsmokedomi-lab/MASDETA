@@ -39,7 +39,7 @@ import {
   getItemHierarchyRank,
   resolvePackageForKpm,
 } from '../utils/imageProcessor';
-import { isNativeAppPlatform } from '../utils/platform';
+import { useIsDesktopWeb } from '../utils/platform';
 import { DriveImage } from './DriveImage';
 import { PresenceDot } from './PresenceDot';
 
@@ -186,17 +186,26 @@ export function DashboardView({
     };
   }, [filteredRecords]);
 
-  // Item package delivery overview (per-KPM completed item package status)
+  // Item package delivery overview (per-KPM completed item package & sub-item unit status)
   const itemDeliveryOverview = useMemo(() => {
-    const recap = computeSubItemRecap(filteredRecords, items);
+    const acceptedRecords = filteredRecords.filter((r) => r.validasi === 'accepted');
+    const recap = computeSubItemRecap(acceptedRecords, items);
     const totalPackages = recap.kpmRows.length;
     const deliveredPackages = recap.kpmRows.filter((row) => row.debtStatus === 'complete').length;
+    const pendingPackages = Math.max(0, totalPackages - deliveredPackages);
     const pctDelivered =
       totalPackages > 0 ? Math.round((deliveredPackages / totalPackages) * 100) : 0;
+    const pctUnits =
+      recap.totalUnits > 0 ? Math.round((recap.totalDelivered / recap.totalUnits) * 100) : 0;
     return {
       totalPackages,
       deliveredPackages,
+      pendingPackages,
       pctDelivered,
+      totalDeliveredUnits: recap.totalDelivered,
+      totalUnits: recap.totalUnits,
+      totalPendingUnits: recap.totalPending,
+      pctUnits,
     };
   }, [filteredRecords, items]);
 
@@ -413,17 +422,19 @@ export function DashboardView({
       ? bellHasUnread
       : unreadChatCount > 0 || unreadAppNotifCount > 0;
 
-  const isNativeApp = isNativeAppPlatform();
+  const isDesktopWeb = useIsDesktopWeb();
+  const acceptedPct =
+    kpmStats.total > 0 ? Math.round((kpmStats.accepted / kpmStats.total) * 100) : 0;
 
   return (
-    <div className={`min-h-screen pb-24 ${!isNativeApp ? 'lg:pb-10' : ''}`}>
-      {/* Main Brand Top Bar */}
-      <header className={`sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md ${!isNativeApp ? 'lg:px-6' : ''}`}>
+    <div className={`min-h-screen pb-24 ${isDesktopWeb ? 'md:pb-12' : ''}`}>
+      {/* Main Brand Top Bar (Android View: APK & Phone Browser — Web View uses DesktopSidebar) */}
+      {!isDesktopWeb && (
+      <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md">
         <div className="flex min-w-0 items-center gap-2.5">
-          <div className={!isNativeApp ? 'lg:hidden' : ''}>{logo}</div>
+          <div>{logo}</div>
           <h1 className="text-base font-bold tracking-tight text-slate-900 whitespace-nowrap">
-            <span className={!isNativeApp ? 'lg:hidden' : ''}>MASDETA</span>
-            {!isNativeApp && <span className="hidden lg:inline">Beranda Operasional</span>}
+            MASDETA
           </h1>
         </div>
 
@@ -678,8 +689,50 @@ export function DashboardView({
           )}
         </div>
       </header>
+      )}
 
-      <main className={`space-y-5 px-4 pt-4 ${!isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:px-6 lg:pt-6' : ''}`}>
+      <main className={`space-y-5 px-4 pt-4 ${isDesktopWeb ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''}`}>
+        {isDesktopWeb && (
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
+                Halo, {currentUser.nama}
+              </h1>
+              <p className="mt-0.5 text-xs font-medium text-slate-500">
+                {currentUser.role} · Ringkasan Operasional {yearDisplayLabel}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label
+                htmlFor="dashboard-web-year"
+                className="text-xs font-semibold text-slate-500"
+              >
+                Tahun:
+              </label>
+              <div className="relative inline-flex min-h-[40px] min-w-[132px] items-center rounded-xl border border-slate-200 bg-white shadow-xs transition-colors hover:border-slate-300">
+                <select
+                  id="dashboard-web-year"
+                  aria-label="Pilih tahun anggaran"
+                  value={selectedYear}
+                  onChange={(e) => onChangeYear(e.target.value)}
+                  className="h-full min-h-[40px] w-full cursor-pointer appearance-none bg-transparent py-2 pr-9 pl-3.5 text-xs font-bold text-slate-800 focus:outline-none tabular-nums"
+                >
+                  {yearOptions.map((year) => (
+                    <option key={year} value={year} className="text-slate-900">
+                      {year}
+                    </option>
+                  ))}
+                  <option value="all" className="text-slate-900">
+                    Semua Tahun
+                  </option>
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-3 h-4 w-4 text-slate-500" />
+              </div>
+            </div>
+          </div>
+        )}
+
         {(!isOnline || offlineQueueCount > 0) && (
           <section className="flex items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs text-amber-950">
             <div className="flex min-w-0 items-center gap-2.5">
@@ -725,10 +778,204 @@ export function DashboardView({
           </div>
         ) : (
           <>
-        {/* 1 & 2. TOP COMMAND HERO + BENTO KPI ROW */}
-        <div className={!isNativeApp ? 'space-y-5 lg:grid lg:grid-cols-12 lg:items-stretch lg:gap-5 lg:space-y-0' : 'space-y-5'}>
+        {isDesktopWeb ? (
+          /* WEB VIEW TOP KPI BENTO ROW (3 Balanced Cards, Year Selector Extracted) */
+          <div className="grid grid-cols-12 items-stretch gap-5">
+            {/* 1. REDESIGNED HEADING SUMMARY CONTAINER */}
+            <section className="col-span-12 flex flex-col justify-between rounded-2xl bg-slate-900 p-5 text-white lg:col-span-4">
+              <div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                    Total Calon KPM
+                  </span>
+                  <span className="text-xs font-semibold text-teal-300 tabular-nums">
+                    {acceptedPct}% Terverifikasi
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => onOpenKpmList({ status: 'all' })}
+                  className="mt-2 flex items-baseline gap-2.5 text-left transition-opacity hover:opacity-90"
+                >
+                  <span className="text-4xl font-bold tracking-tight tabular-nums">
+                    {kpmStats.total}
+                  </span>
+                  <span className="text-xs font-medium text-slate-400">{yearDisplayLabel}</span>
+                </button>
+              </div>
+
+              <div className="mt-5 grid grid-cols-4 divide-x divide-slate-800 border-t border-slate-800 pt-3.5">
+                <button
+                  type="button"
+                  onClick={() => onOpenKpmList({ status: 'accepted' })}
+                  className="px-1.5 text-center transition-opacity hover:opacity-80"
+                >
+                  <p className="text-[11px] text-slate-400">Diterima</p>
+                  <p className="mt-0.5 text-lg font-bold text-teal-300 tabular-nums">
+                    {kpmStats.accepted}
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onOpenKpmList({ status: 'pending' })}
+                  className="px-1.5 text-center transition-opacity hover:opacity-80"
+                >
+                  <p className="text-[11px] text-slate-400">Menunggu</p>
+                  <p className="mt-0.5 text-lg font-bold text-amber-300 tabular-nums">
+                    {kpmStats.pending}
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onOpenKpmList({ status: 'rejected' })}
+                  className="px-1.5 text-center transition-opacity hover:opacity-80"
+                >
+                  <p className="text-[11px] text-slate-400">Ditolak</p>
+                  <p className="mt-0.5 text-lg font-bold text-rose-300 tabular-nums">
+                    {kpmStats.rejected}
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onOpenProposalList?.()}
+                  className="px-1.5 text-center transition-opacity hover:opacity-80"
+                >
+                  <p className="text-[11px] text-slate-400">Proposal</p>
+                  <p className="mt-0.5 text-lg font-bold text-white tabular-nums">
+                    {filteredProposals.length}
+                  </p>
+                </button>
+              </div>
+            </section>
+
+            {/* 2. DENSE PENYALURAN ITEM CARD */}
+            <button
+              type="button"
+              onClick={() => onOpenSubItemRecap?.()}
+              className="col-span-12 flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 text-left transition-colors hover:bg-slate-50/70 md:col-span-6 lg:col-span-4"
+            >
+              <div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                    Penyaluran Item
+                  </span>
+                  <Package className="h-4 w-4 shrink-0 text-teal-700" />
+                </div>
+
+                <div className="mt-2.5 flex items-baseline justify-between gap-2">
+                  <span className="text-2xl font-bold text-slate-900 tabular-nums">
+                    {itemDeliveryOverview.pctDelivered}%
+                  </span>
+                  <span className="text-xs font-medium text-slate-500 tabular-nums">
+                    {itemDeliveryOverview.deliveredPackages}/{itemDeliveryOverview.totalPackages} paket lengkap
+                  </span>
+                </div>
+
+                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className="h-full rounded-full bg-teal-700 transition-all duration-300"
+                    style={{ width: `${itemDeliveryOverview.pctDelivered}%` }}
+                  />
+                </div>
+              </div>
+
+              <div className="mt-4 divide-y divide-slate-100 border-t border-slate-100 pt-1 text-xs">
+                <div className="flex items-center justify-between py-1.5">
+                  <span className="text-slate-500">Unit Sub-Item Dibagikan</span>
+                  <span className="font-semibold text-teal-700 tabular-nums">
+                    {itemDeliveryOverview.totalDeliveredUnits}/{itemDeliveryOverview.totalUnits} ({itemDeliveryOverview.pctUnits}%)
+                  </span>
+                </div>
+                <div className="flex items-center justify-between py-1.5">
+                  <span className="text-slate-500">Paket Belum Lengkap</span>
+                  <span className="font-semibold text-amber-700 tabular-nums">
+                    {itemDeliveryOverview.pendingPackages} KPM
+                  </span>
+                </div>
+                <div className="flex items-center justify-between pt-1.5">
+                  <span className="text-slate-500">Unit Sub-Item Tersisa</span>
+                  <span className="font-semibold text-slate-900 tabular-nums">
+                    {itemDeliveryOverview.totalPendingUnits} Unit
+                  </span>
+                </div>
+              </div>
+            </button>
+
+            {/* 3. DENSE KELAYAKAN DTSEN CARD */}
+            <button
+              type="button"
+              onClick={() => onOpenDtsen?.()}
+              className="col-span-12 flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 text-left transition-colors hover:bg-slate-50/70 md:col-span-6 lg:col-span-4"
+            >
+              <div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                    Kelayakan DTSEN
+                  </span>
+                  <Layers className="h-4 w-4 shrink-0 text-teal-700" />
+                </div>
+
+                <div className="mt-2.5 flex items-baseline justify-between gap-2">
+                  <span className="text-2xl font-bold text-slate-900 tabular-nums">
+                    {dtsenStats.priorityCount}
+                  </span>
+                  <span className="text-xs font-medium text-slate-500 tabular-nums">
+                    Desil 1–4 Prioritas ({dtsenStats.priorityPct}%)
+                  </span>
+                </div>
+
+                <div className="mt-2 flex h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                  {dtsenStats.segments.map((seg) => (
+                    <div
+                      key={seg.key}
+                      title={`${seg.label}: ${seg.count} (${Math.round(seg.pct)}%)`}
+                      className={`h-full transition-all duration-300 ${seg.barClass}`}
+                      style={{
+                        width: `${seg.pct}%`,
+                        minWidth: seg.count > 0 ? '3px' : undefined,
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-4 divide-y divide-slate-100 border-t border-slate-100 pt-1 text-xs">
+                <div className="flex items-center justify-between py-1.5">
+                  <span className="flex items-center gap-2 text-slate-600">
+                    <span className="h-2 w-2 rounded-full bg-teal-700" />
+                    <span>Desil 1–4</span>
+                  </span>
+                  <span className="font-semibold text-slate-900 tabular-nums">
+                    {dtsenStats.priorityCount} KPM
+                  </span>
+                </div>
+                <div className="flex items-center justify-between py-1.5">
+                  <span className="flex items-center gap-2 text-slate-600">
+                    <span className="h-2 w-2 rounded-full bg-amber-500" />
+                    <span>Desil 5</span>
+                  </span>
+                  <span className="font-semibold text-amber-700 tabular-nums">
+                    {dtsenStats.reviewCount} KPM
+                  </span>
+                </div>
+                <div className="flex items-center justify-between pt-1.5">
+                  <span className="flex items-center gap-2 text-slate-600">
+                    <span className="h-2 w-2 rounded-full bg-rose-600" />
+                    <span>Desil 6–10 &amp; Lainnya</span>
+                  </span>
+                  <span className="font-semibold text-slate-900 tabular-nums">
+                    {dtsenStats.highCount + dtsenStats.notFoundCount + dtsenStats.unassignedCount} KPM
+                  </span>
+                </div>
+              </div>
+            </button>
+          </div>
+        ) : (
+        /* ANDROID VIEW (APK & Phone Browser): Compact Hero + 2-Col Bento */
+        <div className="space-y-5">
         {/* 1. EXECUTIVE COMMAND HERO */}
-        <section className={`rounded-3xl bg-[#29384D] p-5 text-white ${!isNativeApp ? 'lg:col-span-7 lg:flex lg:flex-col lg:justify-between' : ''}`}>
+        <section className="rounded-3xl bg-[#29384D] p-5 text-white">
           <div className="min-w-0">
             <p className="break-words text-lg leading-snug font-bold tracking-tight text-white">
               Halo, {currentUser.nama}
@@ -821,7 +1068,7 @@ export function DashboardView({
         </section>
 
         {/* 2. STATUS ITEM DIBAGIKAN & KELAYAKAN DTSEN (2-COLUMN BENTO) */}
-        <section className={`grid grid-cols-2 gap-3 ${!isNativeApp ? 'lg:col-span-5 lg:gap-4' : ''}`}>
+        <section className="grid grid-cols-2 gap-3">
           <button
             type="button"
             onClick={() => onOpenSubItemRecap?.()}
@@ -888,10 +1135,11 @@ export function DashboardView({
           </button>
         </section>
         </div>
+        )}
 
         {/* DESKTOP 2-COLUMN OPERATIONAL BODY */}
-        <div className={!isNativeApp ? 'space-y-5 lg:grid lg:grid-cols-12 lg:items-start lg:gap-5 lg:space-y-0' : 'space-y-5'}>
-        <div className={!isNativeApp ? 'space-y-5 lg:col-span-7' : 'space-y-5'}>
+        <div className={isDesktopWeb ? 'space-y-5 md:grid md:grid-cols-12 md:items-start md:gap-5 md:space-y-0' : 'space-y-5'}>
+        <div className={isDesktopWeb ? 'space-y-5 md:col-span-7' : 'space-y-5'}>
         {/* 3. PERLU TINDAKAN / PENGINGAT OPERASIONAL */}
         {hasAttentionItems && (
           <section>
@@ -1115,7 +1363,7 @@ export function DashboardView({
                   key={prop.id}
                   type="button"
                   onClick={() => onOpenProposalDetail(prop.id)}
-                  className="block w-full px-4 py-3.5 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
+                  className="flex min-h-[68px] w-full flex-col justify-center px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
                 >
                   <div className="min-w-0">
                     <div className="flex items-center justify-between gap-2">
@@ -1148,7 +1396,7 @@ export function DashboardView({
         </section>
         </div>
 
-        <div className={!isNativeApp ? 'space-y-5 lg:col-span-5' : 'space-y-5'}>
+        <div className={isDesktopWeb ? 'space-y-5 md:col-span-5' : 'space-y-5'}>
         {/* 5. DISTRIBUSI PAKET BANTUAN */}
         <section>
           <div className="mb-2 flex items-center justify-between px-0.5">
@@ -1159,7 +1407,7 @@ export function DashboardView({
                 onClick={onOpenSubItemRecap}
                 className="inline-flex items-center gap-0.5 text-xs font-semibold text-teal-700 hover:underline"
               >
-                <span>Rekap Sub-Item</span>
+                <span>Rekap Item</span>
                 <ChevronRight className="h-3.5 w-3.5" />
               </button>
             )}

@@ -28,7 +28,7 @@ import {
 import { DocumentUploadCard } from './DocumentUploadCard';
 import { ProposalDocumentUploadCard } from './ProposalDocumentUploadCard';
 import { PlaceholderSelect } from './FormControls';
-import { isNativeAppPlatform } from '../utils/platform';
+import { useIsDesktopWeb } from '../utils/platform';
 
 interface ProposalFormProps {
   proposal: ProposalRecord;
@@ -173,7 +173,8 @@ export function ProposalForm({
   onToggleProposalLock,
   onPreviewDocument,
 }: ProposalFormProps) {
-  const isNativeApp = isNativeAppPlatform();
+  const isDesktopWeb = useIsDesktopWeb();
+  const isNativeApp = !isDesktopWeb;
   const [values, setValues] = useState<ProposalFormValues>({
     tahun: proposal.tahun,
     tipe: proposal.tipe,
@@ -352,12 +353,9 @@ export function ProposalForm({
 
   return (
     <div className="min-h-screen pb-24">
-      {/* Native Mobile Sub-Screen Header (Back + Title Only) */}
-      <header
-        className={`sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md ${
-          !isNativeApp ? 'lg:px-6' : ''
-        }`}
-      >
+      {/* Native Mobile Sub-Screen Header (Native APK only) */}
+      {isNativeApp && (
+      <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
         <button
           type="button"
           onClick={onBack}
@@ -370,12 +368,30 @@ export function ProposalForm({
           Edit Proposal
         </h1>
       </header>
+      )}
 
       <div
         className={`space-y-4 px-4 pt-4 ${
-          !isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:px-6 lg:pt-6' : ''
+          !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''
         }`}
       >
+        {!isNativeApp && (
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+              aria-label="Kembali"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              <span>Kembali</span>
+            </button>
+            <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
+              Edit Proposal
+            </h1>
+          </div>
+        )}
+
         {/* Locked Proposal Guard Banner */}
         {isPersistedLocked && (
           <div
@@ -408,11 +424,11 @@ export function ProposalForm({
           noValidate
           className={
             !isNativeApp
-              ? 'space-y-4 lg:grid lg:grid-cols-12 lg:items-start lg:gap-6 lg:space-y-0'
+              ? 'space-y-4 md:grid md:grid-cols-12 md:items-start md:gap-6 md:space-y-0'
               : 'space-y-4'
           }
         >
-          <div className={!isNativeApp ? 'space-y-4 lg:col-span-6 lg:space-y-5' : 'space-y-4'}>
+          <div className={!isNativeApp ? 'space-y-4 md:col-span-6 md:space-y-5' : 'space-y-4'}>
           {/* 01. Identitas & Status Kunci Proposal */}
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
             <h2 className="text-sm font-bold text-slate-900">
@@ -639,7 +655,7 @@ export function ProposalForm({
           </section>
           </div>
 
-          <div className={!isNativeApp ? 'space-y-4 lg:col-span-6 lg:space-y-5' : 'space-y-4'}>
+          <div className={!isNativeApp ? 'space-y-4 md:col-span-6 md:space-y-5' : 'space-y-4'}>
           {/* 03. Berkas Dokumen Proposal & RAB */}
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
             <h2 className="text-sm font-bold text-slate-900">
@@ -765,12 +781,12 @@ export function ProposalForm({
           {/* Sticky Bottom Action Bar constrained to Mobile Screen */}
           <div
             className={`fixed bottom-0 left-1/2 z-30 w-full max-w-md -translate-x-1/2 border-t border-slate-200 bg-white/95 px-4 py-2.5 backdrop-blur-md ${
-              !isNativeApp ? 'lg:left-64 lg:right-0 lg:w-auto lg:max-w-none lg:translate-x-0 lg:px-6' : ''
+              !isNativeApp ? 'md:left-64 md:right-0 md:w-auto md:max-w-none md:translate-x-0 md:px-6' : ''
             }`}
           >
             <div
               className={`flex items-center gap-2.5 ${
-                !isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:justify-end' : ''
+                !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:justify-end' : ''
               }`}
             >
               <button
@@ -786,7 +802,7 @@ export function ProposalForm({
                 type="submit"
                 disabled={isPersistedLocked}
                 className={`inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-5 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 whitespace-nowrap ${
-                  !isNativeApp ? 'lg:flex-none lg:min-w-[200px]' : ''
+                  !isNativeApp ? 'md:flex-none md:min-w-[200px]' : ''
                 }`}
               >
                 {isPersistedLocked ? (

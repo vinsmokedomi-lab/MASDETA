@@ -28,8 +28,8 @@ export function BottomNavBar({
   return (
     <nav
       aria-label="Navigasi utama"
-      className={`fixed bottom-0 left-1/2 z-30 w-full max-w-md -translate-x-1/2 border-t border-slate-200 bg-white/95 backdrop-blur-md ${
-        !isNativeApp ? 'lg:hidden' : ''
+      className={`fixed bottom-0 left-1/2 z-30 w-full -translate-x-1/2 border-t border-slate-200 bg-white/95 backdrop-blur-md ${
+        !isNativeApp ? 'md:hidden' : 'max-w-md'
       }`}
     >
       <div className="grid h-16 grid-cols-5 items-center px-1">
@@ -143,7 +143,7 @@ export function QuickAddSheet({
   return (
     <div
       className={`fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 backdrop-blur-xs ${
-        !isNativeApp ? 'lg:items-center lg:p-4' : ''
+        !isNativeApp ? 'md:items-center md:p-4' : ''
       }`}
       onClick={onClose}
       role="dialog"
@@ -152,11 +152,11 @@ export function QuickAddSheet({
     >
       <div
         className={`w-full max-w-md rounded-t-3xl bg-white px-4 pt-3 pb-7 shadow-xl ${
-          !isNativeApp ? 'lg:rounded-3xl lg:pb-5' : ''
+          !isNativeApp ? 'md:rounded-3xl md:pb-5' : ''
         }`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className={`mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-300 ${!isNativeApp ? 'lg:hidden' : ''}`} />
+        <div className={`mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-300 ${!isNativeApp ? 'md:hidden' : ''}`} />
 
         <div className="flex items-center justify-between pb-3">
           <h2 className="text-base font-bold text-slate-900">Tambah Data Baru</h2>

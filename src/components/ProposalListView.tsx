@@ -26,7 +26,7 @@ import {
 } from '../utils/imageProcessor';
 import { FilterSelect, SegmentedTabs } from './FormControls';
 import { SwipeAction, SwipeableRow } from './SwipeableRow';
-import { isNativeAppPlatform } from '../utils/platform';
+import { useIsDesktopWeb } from '../utils/platform';
 
 interface ProposalListViewProps {
   proposals: ProposalRecord[];
@@ -161,19 +161,16 @@ export function ProposalListView({
     return records.filter((r) => keySet.has(`${r.tahun}::${r.proposal}`)).length;
   };
 
-  const isNativeApp = isNativeAppPlatform();
+  const isDesktopWeb = useIsDesktopWeb();
+  const isNativeApp = !isDesktopWeb;
 
   return (
-    <div className={`min-h-screen pb-24 ${!isNativeApp ? 'lg:pb-12' : ''}`}>
-      {/* Sticky Header */}
-      <header className={`sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md ${!isNativeApp ? 'lg:px-6' : ''}`}>
+    <div className={`min-h-screen pb-24 ${!isNativeApp ? 'md:pb-12' : ''}`}>
+      {/* Sticky Header (Native APK only) */}
+      {isNativeApp && (
+      <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md">
         <div className="flex min-w-0 items-center gap-2.5">
           <h1 className="truncate text-base font-bold text-slate-900">Daftar Proposal</h1>
-          {!isNativeApp && (
-            <span className="hidden lg:inline-flex items-center rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-700 tabular-nums">
-              {filteredProposals.length} Proposal
-            </span>
-          )}
         </div>
         {canUpdate && onBulkSetProposalLock && proposals.length > 0 && (
           <button
@@ -191,8 +188,36 @@ export function ProposalListView({
           </button>
         )}
       </header>
+      )}
 
-      <div className={`space-y-4 px-4 pt-4 ${!isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:px-6 lg:pt-6' : ''}`}>
+      <div className={`space-y-4 px-4 pt-4 ${!isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''}`}>
+        {!isNativeApp && (
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
+                Daftar Proposal
+              </h1>
+              <span className="inline-flex shrink-0 items-center rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700 tabular-nums">
+                {filteredProposals.length} Proposal
+              </span>
+            </div>
+            {canUpdate && onBulkSetProposalLock && proposals.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setOpenSwipeId(null);
+                  setSettingsScope(selectedYear === 'all' ? 'all' : 'current');
+                  setIsSettingsOpen(true);
+                }}
+                aria-label="Pengaturan Kunci Proposal"
+                className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 active:scale-[0.98]"
+              >
+                <Settings className="h-4 w-4" />
+                <span>Pengaturan Proposal</span>
+              </button>
+            )}
+          </div>
+        )}
         {/* Search + Tahun, lalu tab Tipe */}
         <div className="space-y-2">
           <div className="flex items-center gap-2">
@@ -282,7 +307,7 @@ export function ProposalListView({
                   {!isCollapsed && (
                     <>
                     {!isNativeApp && (
-                      <div className="hidden lg:grid lg:grid-cols-2 xl:grid-cols-3 lg:gap-3">
+                      <div className="hidden md:grid md:grid-cols-2 xl:grid-cols-3 md:gap-3">
                         {group.proposals.map((prop) => {
                           const matchingRecords = records.filter(
                             (r) =>
@@ -401,7 +426,7 @@ export function ProposalListView({
                       </div>
                     )}
 
-                    <div className={`overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100 ${!isNativeApp ? 'lg:hidden' : ''}`}>
+                    <div className={`overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100 ${!isNativeApp ? 'md:hidden' : ''}`}>
                       {group.proposals.map((prop) => {
                         const matchingRecords = records.filter(
                           (r) =>

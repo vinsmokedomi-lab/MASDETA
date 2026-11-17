@@ -53,6 +53,59 @@ const SUPABASE_PAGE_SIZE = 1000;
 
 const SAFE_INTERNAL_USER_COLUMNS =
   'id,nama,email,jabatan,kontak,role,status,perm_add,perm_update,perm_delete,presence_status,presence_manual,foto_url,foto_thumb_url,foto_file_id,last_active_at,registered_at,updated_at';
+const SAFE_INTERNAL_USER_COLUMNS_WITH_USERNAME =
+  'id,nama,username,email,jabatan,kontak,role,status,perm_add,perm_update,perm_delete,presence_status,presence_manual,foto_url,foto_thumb_url,foto_file_id,last_active_at,registered_at,updated_at';
+const USERNAMES_STATE_KEY = 'user_usernames_v1';
+
+function isMissingUsernameColumnError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const err = error as { code?: string; message?: string; details?: string; hint?: string };
+  const code = String(err.code || '');
+  const msg = `${err.message || ''} ${err.details || ''} ${err.hint || ''}`.toLowerCase();
+  return (
+    (code === '42703' || code === 'PGRST204' || msg.includes('does not exist') || msg.includes('could not find')) &&
+    msg.includes('username')
+  );
+}
+
+function normalizeUsername(raw?: string | null): string {
+  return String(raw || '')
+    .trim()
+    .toLowerCase();
+}
+
+function isValidUsername(username: string): boolean {
+  return /^[a-z0-9._-]{3,30}$/.test(username);
+}
+
+async function fetchFallbackUsernameMap(): Promise<Record<string, string>> {
+  try {
+    const raw = await fetchAppStateSlice<Record<string, unknown>>(USERNAMES_STATE_KEY, {});
+    if (!raw || typeof raw !== 'object') return {};
+    const out: Record<string, string> = {};
+    for (const [uid, uname] of Object.entries(raw)) {
+      const clean = normalizeUsername(typeof uname === 'string' ? uname : '');
+      if (uid && clean) out[uid] = clean;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+async function saveFallbackUsername(userId: string, username: string): Promise<void> {
+  const clean = normalizeUsername(username);
+  if (!userId || !clean) return;
+  try {
+    const current = await fetchFallbackUsernameMap();
+    await saveAppStateSlice(USERNAMES_STATE_KEY, {
+      ...current,
+      [userId]: clean,
+    });
+  } catch {
+    // Ignore fallback state failure
+  }
+}
 
 async function fetchAllPages<T = Record<string, unknown>>(
   fetchPage: (
@@ -205,9 +258,12 @@ export function mapSupabaseUserRow(row: Record<string, unknown>): InternalUser {
     (fotoUrl ? buildDriveFallbackThumbnailUrl(fotoFileId || fotoUrl) : null) ||
     undefined;
 
+  const cleanUsername = normalizeUsername(row.username as string | null);
+
   return {
     id: String(row.id),
     nama: String(row.nama || ''),
+    ...(cleanUsername ? { username: cleanUsername } : {}),
     email: String(row.email || '').toLowerCase(),
     jabatan: String(row.jabatan || 'Admin Lapangan'),
     kontak: String(row.kontak || ''),
@@ -2625,32 +2681,107 @@ export async function runAdminDataActionInSupabase(
 // AUTH, USERS & CHAT (SUPABASE)
 // ============================================================================
 export async function supabaseFetchInternalUsers(): Promise<InternalUser[]> {
-  const rows = await fetchAllPages((from, to) =>
-    supabase
-      .from('internal_users')
-      .select(SAFE_INTERNAL_USER_COLUMNS)
-      .order('registered_at', { ascending: true })
-      .order('id', { ascending: true })
-      .range(from, to)
-  );
-  return rows.map((r) => mapSupabaseUserRow(r as Record<string, unknown>));
+  try {
+    const rows = await fetchAllPages((from, to) =>
+      supabase
+        .from('internal_users')
+        .select(SAFE_INTERNAL_USER_COLUMNS_WITH_USERNAME)
+        .order('registered_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to)
+    );
+    const fallbackMap = await fetchFallbackUsernameMap();
+    return rows.map((r) => {
+      const mapped = mapSupabaseUserRow(r as Record<string, unknown>);
+      if (!mapped.username && fallbackMap[mapped.id]) {
+        return { ...mapped, username: fallbackMap[mapped.id] };
+      }
+      return mapped;
+    });
+  } catch (err) {
+    if (!isMissingUsernameColumnError(err)) throw err;
+    const [rows, fallbackMap] = await Promise.all([
+      fetchAllPages((from, to) =>
+        supabase
+          .from('internal_users')
+          .select(SAFE_INTERNAL_USER_COLUMNS)
+          .order('registered_at', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to)
+      ),
+      fetchFallbackUsernameMap(),
+    ]);
+    return rows.map((r) => {
+      const mapped = mapSupabaseUserRow(r as Record<string, unknown>);
+      return fallbackMap[mapped.id] ? { ...mapped, username: fallbackMap[mapped.id] } : mapped;
+    });
+  }
 }
 
 export async function supabaseLogin(
-  email: string,
+  identifierInput: string,
   password: string
 ): Promise<{ ok: boolean; user?: InternalUser; error?: string }> {
-  const normalizedEmail = email.trim().toLowerCase();
-  const { data, error } = await supabase
-    .from('internal_users')
-    .select(`${SAFE_INTERNAL_USER_COLUMNS},password_hash`)
-    .ilike('email', normalizedEmail)
-    .limit(1)
-    .maybeSingle();
+  const normalized = identifierInput.trim().toLowerCase();
+  if (!normalized || !password) {
+    return { ok: false, error: 'Username/email dan kata sandi wajib diisi.' };
+  }
 
-  if (error) throw error;
+  let useUsernameCol = true;
+  let data: Record<string, unknown> | null = null;
+
+  const findByColumn = async (
+    col: 'email' | 'username' | 'id',
+    val: string,
+    cols: string
+  ): Promise<Record<string, unknown> | null> => {
+    const q = supabase.from('internal_users').select(`${cols},password_hash`);
+    const res =
+      col === 'id'
+        ? await q.eq('id', val).limit(1).maybeSingle()
+        : await q.ilike(col, val).limit(1).maybeSingle();
+    if (res.error) throw res.error;
+    return (res.data as Record<string, unknown> | null) ?? null;
+  };
+
+  try {
+    data = await findByColumn(
+      'email',
+      normalized,
+      SAFE_INTERNAL_USER_COLUMNS_WITH_USERNAME
+    );
+    if (!data) {
+      data = await findByColumn(
+        'username',
+        normalized,
+        SAFE_INTERNAL_USER_COLUMNS_WITH_USERNAME
+      );
+    }
+  } catch (err) {
+    if (!isMissingUsernameColumnError(err)) throw err;
+    useUsernameCol = false;
+    data = await findByColumn('email', normalized, SAFE_INTERNAL_USER_COLUMNS);
+  }
+
   if (!data) {
-    return { ok: false, error: 'Email atau kata sandi salah.' };
+    const fallbackMap = await fetchFallbackUsernameMap();
+    const matchedUid = Object.entries(fallbackMap).find(
+      ([, uname]) => uname.toLowerCase() === normalized
+    )?.[0];
+    if (matchedUid) {
+      data = await findByColumn(
+        'id',
+        matchedUid,
+        useUsernameCol ? SAFE_INTERNAL_USER_COLUMNS_WITH_USERNAME : SAFE_INTERNAL_USER_COLUMNS
+      );
+      if (data && !data.username) {
+        data = { ...data, username: fallbackMap[matchedUid] };
+      }
+    }
+  }
+
+  if (!data) {
+    return { ok: false, error: 'Username/email atau kata sandi salah.' };
   }
 
   const validPwd = await verifyPasswordHashForSupabase(
@@ -2658,7 +2789,7 @@ export async function supabaseLogin(
     String(data.password_hash || '')
   );
   if (!validPwd) {
-    return { ok: false, error: 'Email atau kata sandi salah.' };
+    return { ok: false, error: 'Username/email atau kata sandi salah.' };
   }
 
   if (data.status === 'pending') {
@@ -2676,25 +2807,42 @@ export async function supabaseLogin(
 
   const nowIso = new Date().toISOString();
   const shouldSetOnline = !data.presence_manual;
-  const { data: updated, error: updErr } = await supabase
-    .from('internal_users')
-    .update({
-      presence_status: shouldSetOnline ? 'online' : data.presence_status,
-      last_active_at: nowIso,
-      updated_at: nowIso,
-    })
-    .eq('id', data.id)
-    .select(SAFE_INTERNAL_USER_COLUMNS)
-    .single();
+  const updatePayload = {
+    presence_status: shouldSetOnline ? 'online' : data.presence_status,
+    last_active_at: nowIso,
+    updated_at: nowIso,
+  };
+  const { data: updated, error: updErr } = useUsernameCol
+    ? await supabase
+        .from('internal_users')
+        .update(updatePayload)
+        .eq('id', data.id)
+        .select(SAFE_INTERNAL_USER_COLUMNS_WITH_USERNAME)
+        .single()
+    : await supabase
+        .from('internal_users')
+        .update(updatePayload)
+        .eq('id', data.id)
+        .select(SAFE_INTERNAL_USER_COLUMNS)
+        .single();
 
-  if (updErr) {
-    return { ok: true, user: mapSupabaseUserRow(data as Record<string, unknown>) };
+  if (updErr || !updated) {
+    const mapped = mapSupabaseUserRow(data);
+    if (!mapped.username && typeof data.username === 'string') {
+      mapped.username = normalizeUsername(data.username);
+    }
+    return { ok: true, user: mapped };
   }
-  return { ok: true, user: mapSupabaseUserRow(updated as Record<string, unknown>) };
+  const mappedUpdated = mapSupabaseUserRow(updated as Record<string, unknown>);
+  if (!mappedUpdated.username && typeof data.username === 'string') {
+    mappedUpdated.username = normalizeUsername(data.username);
+  }
+  return { ok: true, user: mappedUpdated };
 }
 
 export async function supabaseRegisterInternalUser(payload: {
   nama: string;
+  username: string;
   email: string;
   jabatan: string;
   kontak: string;
@@ -2704,14 +2852,53 @@ export async function supabaseRegisterInternalUser(payload: {
   fotoFileId?: string;
 }): Promise<{ ok: boolean; user?: InternalUser; error?: string }> {
   const normalizedEmail = payload.email.trim().toLowerCase();
-  const { data: existing, error: chkErr } = await supabase
+  const normalizedUsername = normalizeUsername(payload.username);
+
+  if (!normalizedUsername || !isValidUsername(normalizedUsername)) {
+    return {
+      ok: false,
+      error:
+        'Username harus 3–30 karakter dan hanya boleh huruf kecil, angka, titik (.), garis bawah (_), atau tanda hubung (-).',
+    };
+  }
+
+  const { data: existingEmail, error: chkEmailErr } = await supabase
     .from('internal_users')
     .select('id')
     .ilike('email', normalizedEmail)
     .limit(1);
-  if (chkErr) throw chkErr;
-  if (existing && existing.length > 0) {
+  if (chkEmailErr) throw chkEmailErr;
+  if (existingEmail && existingEmail.length > 0) {
     return { ok: false, error: 'Email tersebut sudah terdaftar di sistem MASDETA.' };
+  }
+
+  const { data: emailCollision, error: chkEmailUnameErr } = await supabase
+    .from('internal_users')
+    .select('id')
+    .ilike('email', normalizedUsername)
+    .limit(1);
+  if (chkEmailUnameErr) throw chkEmailUnameErr;
+  if (emailCollision && emailCollision.length > 0) {
+    return { ok: false, error: 'Username tersebut tidak tersedia.' };
+  }
+
+  try {
+    const { data: existingUname, error: chkUnameErr } = await supabase
+      .from('internal_users')
+      .select('id')
+      .ilike('username', normalizedUsername)
+      .limit(1);
+    if (chkUnameErr) throw chkUnameErr;
+    if (existingUname && existingUname.length > 0) {
+      return { ok: false, error: 'Username tersebut sudah digunakan oleh akun lain.' };
+    }
+  } catch (err) {
+    if (!isMissingUsernameColumnError(err)) throw err;
+  }
+
+  const fallbackMap = await fetchFallbackUsernameMap();
+  if (Object.values(fallbackMap).some((u) => u.toLowerCase() === normalizedUsername)) {
+    return { ok: false, error: 'Username tersebut sudah digunakan oleh akun lain.' };
   }
 
   const nowIso = new Date().toISOString();
@@ -2724,33 +2911,48 @@ export async function supabaseRegisterInternalUser(payload: {
       null
     : null;
 
+  const baseInsert = {
+    id: `usr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    nama: payload.nama.trim(),
+    email: normalizedEmail,
+    jabatan: payload.jabatan.trim() || 'Admin Lapangan',
+    kontak: payload.kontak.trim(),
+    role: 'Admin',
+    status: 'pending',
+    perm_add: true,
+    perm_update: true,
+    perm_delete: false,
+    presence_status: 'offline',
+    presence_manual: false,
+    foto_url: cleanFoto,
+    foto_thumb_url: cleanThumb,
+    foto_file_id: cleanFileId,
+    password_hash: passwordHash,
+    registered_at: nowIso,
+    updated_at: nowIso,
+  };
+
   const { data, error } = await supabase
     .from('internal_users')
-    .insert({
-      id: `usr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      nama: payload.nama.trim(),
-      email: normalizedEmail,
-      jabatan: payload.jabatan.trim() || 'Admin Lapangan',
-      kontak: payload.kontak.trim(),
-      role: 'Admin',
-      status: 'pending',
-      perm_add: true,
-      perm_update: true,
-      perm_delete: false,
-      presence_status: 'offline',
-      presence_manual: false,
-      foto_url: cleanFoto,
-      foto_thumb_url: cleanThumb,
-      foto_file_id: cleanFileId,
-      password_hash: passwordHash,
-      registered_at: nowIso,
-      updated_at: nowIso,
-    })
-    .select(SAFE_INTERNAL_USER_COLUMNS)
+    .insert({ ...baseInsert, username: normalizedUsername })
+    .select(SAFE_INTERNAL_USER_COLUMNS_WITH_USERNAME)
     .single();
 
   if (error) {
-    return { ok: false, error: error.message };
+    if (!isMissingUsernameColumnError(error)) {
+      return { ok: false, error: error.message };
+    }
+    const { data: fallbackData, error: fallbackErr } = await supabase
+      .from('internal_users')
+      .insert(baseInsert)
+      .select(SAFE_INTERNAL_USER_COLUMNS)
+      .single();
+    if (fallbackErr || !fallbackData) {
+      return { ok: false, error: fallbackErr?.message || 'Gagal mendaftar.' };
+    }
+    const createdUser = mapSupabaseUserRow(fallbackData as Record<string, unknown>);
+    await saveFallbackUsername(createdUser.id, normalizedUsername);
+    return { ok: true, user: { ...createdUser, username: normalizedUsername } };
   }
 
   return { ok: true, user: mapSupabaseUserRow(data as Record<string, unknown>) };
@@ -2758,6 +2960,7 @@ export async function supabaseRegisterInternalUser(payload: {
 
 export async function supabaseCreateInternalUserBySuperAdmin(payload: {
   nama: string;
+  username?: string;
   email: string;
   jabatan: string;
   kontak: string;
@@ -2765,6 +2968,16 @@ export async function supabaseCreateInternalUserBySuperAdmin(payload: {
   password?: string;
 }): Promise<{ ok: boolean; user?: InternalUser; error?: string }> {
   const normalizedEmail = payload.email.trim().toLowerCase();
+  const normalizedUsername = normalizeUsername(payload.username);
+
+  if (normalizedUsername && !isValidUsername(normalizedUsername)) {
+    return {
+      ok: false,
+      error:
+        'Username harus 3–30 karakter dan hanya boleh huruf kecil, angka, titik (.), garis bawah (_), atau tanda hubung (-).',
+    };
+  }
+
   const { data: existing, error: chkErr } = await supabase
     .from('internal_users')
     .select('id')
@@ -2773,6 +2986,26 @@ export async function supabaseCreateInternalUserBySuperAdmin(payload: {
   if (chkErr) throw chkErr;
   if (existing && existing.length > 0) {
     return { ok: false, error: 'Email tersebut sudah terdaftar.' };
+  }
+
+  if (normalizedUsername) {
+    try {
+      const { data: existingUname, error: chkUnameErr } = await supabase
+        .from('internal_users')
+        .select('id')
+        .ilike('username', normalizedUsername)
+        .limit(1);
+      if (chkUnameErr) throw chkUnameErr;
+      if (existingUname && existingUname.length > 0) {
+        return { ok: false, error: 'Username tersebut sudah digunakan oleh akun lain.' };
+      }
+    } catch (err) {
+      if (!isMissingUsernameColumnError(err)) throw err;
+    }
+    const fallbackMap = await fetchFallbackUsernameMap();
+    if (Object.values(fallbackMap).some((u) => u.toLowerCase() === normalizedUsername)) {
+      return { ok: false, error: 'Username tersebut sudah digunakan oleh akun lain.' };
+    }
   }
 
   const nowIso = new Date().toISOString();
@@ -2784,29 +3017,50 @@ export async function supabaseCreateInternalUserBySuperAdmin(payload: {
         ? { add: false, update: false, delete: false }
         : { add: true, update: true, delete: false };
 
+  const baseInsert: Record<string, unknown> = {
+    id: `usr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    nama: payload.nama.trim(),
+    email: normalizedEmail,
+    jabatan: payload.jabatan.trim() || payload.role,
+    kontak: payload.kontak.trim(),
+    role: payload.role,
+    status: 'active',
+    perm_add: perms.add,
+    perm_update: perms.update,
+    perm_delete: perms.delete,
+    presence_status: 'offline',
+    presence_manual: false,
+    password_hash: passwordHash,
+    registered_at: nowIso,
+    updated_at: nowIso,
+  };
+
   const { data, error } = await supabase
     .from('internal_users')
-    .insert({
-      id: `usr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      nama: payload.nama.trim(),
-      email: normalizedEmail,
-      jabatan: payload.jabatan.trim() || payload.role,
-      kontak: payload.kontak.trim(),
-      role: payload.role,
-      status: 'active',
-      perm_add: perms.add,
-      perm_update: perms.update,
-      perm_delete: perms.delete,
-      presence_status: 'offline',
-      presence_manual: false,
-      password_hash: passwordHash,
-      registered_at: nowIso,
-      updated_at: nowIso,
-    })
-    .select(SAFE_INTERNAL_USER_COLUMNS)
+    .insert(normalizedUsername ? { ...baseInsert, username: normalizedUsername } : baseInsert)
+    .select(SAFE_INTERNAL_USER_COLUMNS_WITH_USERNAME)
     .single();
 
-  if (error) return { ok: false, error: error.message };
+  if (error) {
+    if (!isMissingUsernameColumnError(error)) {
+      return { ok: false, error: error.message };
+    }
+    const { data: fallbackData, error: fallbackErr } = await supabase
+      .from('internal_users')
+      .insert(baseInsert)
+      .select(SAFE_INTERNAL_USER_COLUMNS)
+      .single();
+    if (fallbackErr || !fallbackData) {
+      return { ok: false, error: fallbackErr?.message || 'Gagal membuat user.' };
+    }
+    const createdUser = mapSupabaseUserRow(fallbackData as Record<string, unknown>);
+    if (normalizedUsername) {
+      await saveFallbackUsername(createdUser.id, normalizedUsername);
+      return { ok: true, user: { ...createdUser, username: normalizedUsername } };
+    }
+    return { ok: true, user: createdUser };
+  }
+
   return { ok: true, user: mapSupabaseUserRow(data as Record<string, unknown>) };
 }
 
@@ -2849,10 +3103,20 @@ export async function supabaseUpdateInternalUserProfile(
     .from('internal_users')
     .update(updateBody)
     .eq('id', userId)
-    .select(SAFE_INTERNAL_USER_COLUMNS)
+    .select(SAFE_INTERNAL_USER_COLUMNS_WITH_USERNAME)
     .single();
 
-  if (error) throw error;
+  if (error) {
+    if (!isMissingUsernameColumnError(error)) throw error;
+    const { data: fbData, error: fbErr } = await supabase
+      .from('internal_users')
+      .update(updateBody)
+      .eq('id', userId)
+      .select(SAFE_INTERNAL_USER_COLUMNS)
+      .single();
+    if (fbErr) throw fbErr;
+    return fbData ? mapSupabaseUserRow(fbData as Record<string, unknown>) : null;
+  }
   return data ? mapSupabaseUserRow(data as Record<string, unknown>) : null;
 }
 
@@ -2900,10 +3164,20 @@ export async function supabaseAdminControlInternalUser(
     .from('internal_users')
     .update(updateBody)
     .eq('id', userId)
-    .select(SAFE_INTERNAL_USER_COLUMNS)
+    .select(SAFE_INTERNAL_USER_COLUMNS_WITH_USERNAME)
     .single();
 
-  if (error) throw error;
+  if (error) {
+    if (!isMissingUsernameColumnError(error)) throw error;
+    const { data: fbData, error: fbErr } = await supabase
+      .from('internal_users')
+      .update(updateBody)
+      .eq('id', userId)
+      .select(SAFE_INTERNAL_USER_COLUMNS)
+      .single();
+    if (fbErr) throw fbErr;
+    return fbData ? mapSupabaseUserRow(fbData as Record<string, unknown>) : null;
+  }
   return data ? mapSupabaseUserRow(data as Record<string, unknown>) : null;
 }
 

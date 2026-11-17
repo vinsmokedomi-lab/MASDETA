@@ -1253,7 +1253,7 @@ export function KpmDetailView({
             </div>
           )}
 
-          <div className={`mt-3 grid grid-cols-2 gap-2.5 ${!isNativeApp ? 'lg:grid-cols-3' : ''}`}>
+          <div className={`mt-3 grid grid-cols-2 gap-2.5 ${!isNativeApp ? 'md:grid-cols-3' : ''}`}>
             {(
               [
                 { key: 'penerima', label: 'Foto Penerima', icon: User },
@@ -1535,12 +1535,9 @@ export function KpmDetailView({
 
   return (
     <div className="min-h-screen pb-24">
-      {/* Sub-Screen Header: tombol kembali + judul + aksi hapus aman di kanan atas */}
-      <header
-        className={`sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md ${
-          !isNativeApp ? 'lg:px-6' : ''
-        }`}
-      >
+      {/* Sub-Screen Header (Android View: APK & Phone Browser) */}
+      {!isDesktopWeb && (
+      <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
         <div className="flex min-w-0 items-center gap-1.5">
           <button
             type="button"
@@ -1566,9 +1563,40 @@ export function KpmDetailView({
           </button>
         )}
       </header>
+      )}
 
       {isDesktopWeb ? (
         <main className="mx-auto max-w-[1440px] space-y-5 px-6 pt-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <button
+                type="button"
+                onClick={onBack}
+                className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+                aria-label="Kembali ke daftar KPM"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                <span>Kembali</span>
+              </button>
+              <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
+                Detail Calon KPM
+              </h1>
+            </div>
+
+            {canDelete && (
+              <button
+                type="button"
+                disabled={isProposalLocked}
+                onClick={() => setConfirmDelete(true)}
+                className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                aria-label="Hapus Data KPM"
+                title={isProposalLocked ? 'Proposal Terkunci' : 'Hapus Data KPM'}
+              >
+                <Trash2 className="h-4 w-4" />
+                <span>Hapus Data</span>
+              </button>
+            )}
+          </div>
           {lockedBannerBlock}
           <div className="grid grid-cols-12 items-start gap-5">
             <div className="col-span-5 space-y-5">
@@ -1594,7 +1622,7 @@ export function KpmDetailView({
       {/* Persistent Bottom-Right Floating Pencil Edit KPM Button */}
       <div
         className={`pointer-events-none fixed bottom-6 left-1/2 z-30 flex w-full max-w-md -translate-x-1/2 justify-end px-4 ${
-          !isNativeApp ? 'lg:left-auto lg:right-6 lg:w-auto lg:max-w-none lg:translate-x-0 lg:px-0' : ''
+          !isNativeApp ? 'md:left-auto md:right-6 md:w-auto md:max-w-none md:translate-x-0 md:px-0' : ''
         }`}
       >
         <button

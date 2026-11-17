@@ -19,7 +19,7 @@ import { TAHUN_OPTIONS } from '../data/kpmOptions';
 import { ItemBantuan, KpmRecord } from '../types/kpm';
 import { capitalizeWords, getItemsForYear, normalizeSubItemKey } from '../utils/imageProcessor';
 import { FilterSelect } from './FormControls';
-import { isNativeAppPlatform } from '../utils/platform';
+import { useIsDesktopWeb } from '../utils/platform';
 
 interface ItemManagerViewProps {
   items: ItemBantuan[];
@@ -62,7 +62,8 @@ export function ItemManagerView({
   onUpdateItemSubItems,
   onCopyItemsFromYear,
 }: ItemManagerViewProps) {
-  const isNativeApp = isNativeAppPlatform();
+  const isDesktopWeb = useIsDesktopWeb();
+  const isNativeApp = !isDesktopWeb;
   const [selectedYear, setSelectedYear] = useState<string>('2026');
   const [expandedCode, setExpandedCode] = useState<string | null>(null);
   const [inlineSubItemInput, setInlineSubItemInput] = useState('');
@@ -385,11 +386,8 @@ export function ItemManagerView({
 
     return (
       <div className="min-h-screen pb-24">
-        <header
-          className={`sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md ${
-            !isNativeApp ? 'lg:px-6' : ''
-          }`}
-        >
+        {isNativeApp && (
+        <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
           <button
             type="button"
             onClick={() => setMode('list')}
@@ -402,14 +400,31 @@ export function ItemManagerView({
             {editingOriginalCode ? 'Edit Item Bantuan' : 'Tambah Item Bantuan'}
           </h1>
         </header>
+        )}
 
         <form
           onSubmit={handleFormSubmit}
           noValidate
           className={`space-y-4 px-4 pt-4 ${
-            !isNativeApp ? 'lg:mx-auto lg:max-w-4xl lg:px-6 lg:pt-6' : ''
+            !isNativeApp ? 'md:mx-auto md:max-w-4xl md:px-6 md:pt-6' : ''
           }`}
         >
+          {!isNativeApp && (
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setMode('list')}
+                className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+                aria-label="Kembali ke daftar item"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                <span>Kembali</span>
+              </button>
+              <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
+                {editingOriginalCode ? 'Edit Item Bantuan' : 'Tambah Item Bantuan'}
+              </h1>
+            </div>
+          )}
           <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-4">
             {/* 1. Tahun */}
             <div>
@@ -929,11 +944,8 @@ export function ItemManagerView({
   // RENDER MAIN LIST SCREEN (PILIH TAHUN + TOMBOL TAMBAH ITEM + DAFTAR ITEM)
   return (
     <div className="min-h-screen pb-24">
-      <header
-        className={`sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md ${
-          !isNativeApp ? 'lg:px-6' : ''
-        }`}
-      >
+      {isNativeApp && (
+      <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
         <button
           type="button"
           onClick={onBack}
@@ -944,14 +956,32 @@ export function ItemManagerView({
         </button>
         <h1 className="truncate text-base font-bold text-slate-900">Kelola Item &amp; Sub-Item</h1>
       </header>
+      )}
 
       <div
         className={`space-y-4 px-4 pt-4 ${
-          !isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:px-6 lg:pt-6' : ''
+          !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''
         }`}
       >
+        {!isNativeApp && (
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+              aria-label="Kembali"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              <span>Kembali</span>
+            </button>
+            <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
+              Kelola Item &amp; Sub-Item
+            </h1>
+          </div>
+        )}
+
         {/* Top Bar: Pilih Tahun + Tombol Tambah Item */}
-        <div className={`flex items-center gap-2 ${!isNativeApp ? 'lg:justify-between' : ''}`}>
+        <div className={`flex items-center gap-2 ${!isNativeApp ? 'md:justify-between' : ''}`}>
           <FilterSelect
             ariaLabel="Pilih tahun katalog item"
             value={selectedYear}
@@ -973,7 +1003,7 @@ export function ItemManagerView({
               type="button"
               onClick={openCreateForm}
               className={`inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.99] ${
-                !isNativeApp ? 'lg:flex-none lg:px-5' : ''
+                !isNativeApp ? 'md:flex-none md:px-5' : ''
               }`}
             >
               <PackagePlus className="h-4 w-4 shrink-0" />
@@ -986,7 +1016,7 @@ export function ItemManagerView({
         {yearCatalogItems.length === 0 ? (
           <div
             className={`rounded-2xl border border-slate-200 bg-white p-6 text-center space-y-3 ${
-              !isNativeApp ? 'lg:mx-auto lg:max-w-xl' : ''
+              !isNativeApp ? 'md:mx-auto md:max-w-xl' : ''
             }`}
           >
             <p className="text-sm font-bold text-slate-900">
@@ -1013,7 +1043,7 @@ export function ItemManagerView({
           <div
             className={`overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100 ${
               !isNativeApp
-                ? 'lg:grid lg:grid-cols-2 lg:items-start lg:gap-4 lg:divide-y-0 lg:overflow-visible lg:rounded-none lg:border-0 lg:bg-transparent'
+                ? 'md:grid md:grid-cols-2 md:items-start md:gap-4 md:divide-y-0 md:overflow-visible md:rounded-none md:border-0 md:bg-transparent'
                 : ''
             }`}
           >
@@ -1030,7 +1060,7 @@ export function ItemManagerView({
                   key={`${item.tahun}-${item.code}`}
                   className={`bg-white ${
                     !isNativeApp
-                      ? 'lg:overflow-hidden lg:rounded-2xl lg:border lg:border-slate-200 lg:shadow-xs'
+                      ? 'md:overflow-hidden md:rounded-2xl md:border md:border-slate-200 md:shadow-xs'
                       : ''
                   }`}
                 >

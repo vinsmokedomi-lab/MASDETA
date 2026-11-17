@@ -6,6 +6,7 @@ import {
   Camera,
   CheckCircle2,
   Loader2,
+  Lock,
   LogOut,
   RefreshCw,
   Shield,
@@ -23,7 +24,7 @@ import { InternalUser, UserPresenceStatus } from '../types/kpm';
 import { capitalizeWords, validateImageUploadFile } from '../utils/imageProcessor';
 import { PresenceDot, getPresenceMeta } from './PresenceDot';
 import { APP_VERSION } from '../config/appVersion';
-import { isNativeAppPlatform, useIsDesktopWeb } from '../utils/platform';
+import { useIsDesktopWeb } from '../utils/platform';
 
 interface UserProfileViewProps {
   user: InternalUser;
@@ -60,7 +61,6 @@ export function UserProfileView({
   onCheckAppUpdate,
   checkingAppUpdate = false,
 }: UserProfileViewProps) {
-  const isNativeApp = isNativeAppPlatform();
   const isDesktopWeb = useIsDesktopWeb();
   const [nama, setNama] = useState(user.nama);
   const [kontak, setKontak] = useState(user.kontak || '');
@@ -303,7 +303,10 @@ export function UserProfileView({
             {user.role}
           </span>
 
-          <p className="mt-1.5 text-xs text-slate-500">{user.email}</p>
+          <p className="mt-1.5 text-xs text-slate-500">
+            {user.username ? `@${user.username} · ` : ''}
+            {user.email}
+          </p>
 
           <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-slate-50 px-3 py-1">
             <span className={`h-2 w-2 rounded-full ${presenceMeta.dotClass}`} />
@@ -425,6 +428,26 @@ export function UserProfileView({
           <h2 className="text-sm font-bold text-slate-900">Biodata &amp; Keamanan</h2>
 
           <div>
+            <div className="flex items-center justify-between gap-2">
+              <label className="block text-xs font-semibold text-slate-700">Username</label>
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500">
+                <Lock className="h-3 w-3" />
+                <span>Terkunci Permanen</span>
+              </span>
+            </div>
+            <input
+              type="text"
+              value={user.username ? `@${user.username}` : 'Belum ditetapkan'}
+              readOnly
+              disabled
+              className="mt-1 min-h-[44px] w-full cursor-not-allowed rounded-xl border border-slate-200 bg-slate-100 px-3.5 text-sm font-medium text-slate-600"
+            />
+            <p className="mt-1 text-[11px] leading-snug text-slate-500">
+              Username hanya diisi sekali saat pendaftaran dan tidak dapat diubah.
+            </p>
+          </div>
+
+          <div>
             <label className="block text-xs font-semibold text-slate-700">Nama Lengkap</label>
             <input
               type="text"
@@ -502,11 +525,8 @@ export function UserProfileView({
 
   return (
     <div className="min-h-screen pb-24">
-      <header
-        className={`sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md ${
-          !isNativeApp ? 'lg:px-6' : ''
-        }`}
-      >
+      {!isDesktopWeb && (
+      <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
         <button
           type="button"
           onClick={onBack}
@@ -517,9 +537,24 @@ export function UserProfileView({
         </button>
         <h1 className="truncate text-base font-bold text-slate-900">Atur Profil User</h1>
       </header>
+      )}
 
       {isDesktopWeb ? (
         <div className="mx-auto grid max-w-5xl grid-cols-12 items-start gap-5 px-6 pt-6">
+          <div className="col-span-12 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+              aria-label="Kembali"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              <span>Kembali</span>
+            </button>
+            <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
+              Atur Profil User
+            </h1>
+          </div>
           <div className="col-span-5 space-y-5">{leftColumnBlocks}</div>
           <div className="col-span-7 space-y-5">{rightColumnBlocks}</div>
         </div>
@@ -533,7 +568,7 @@ export function UserProfileView({
       {feedback && (
         <div
           className={`fixed bottom-5 left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2 animate-[toastSlideUp_0.22s_ease-out] ${
-            !isNativeApp ? 'lg:left-auto lg:right-6 lg:w-96 lg:translate-x-0' : ''
+            isDesktopWeb ? 'md:left-auto md:right-6 md:w-96 md:translate-x-0' : ''
           }`}
         >
           <div

@@ -6,7 +6,7 @@ import {
   ProposalRecord,
 } from '../types/kpm';
 import { formatUploadDateTime } from '../utils/imageProcessor';
-import { isNativeAppPlatform } from '../utils/platform';
+import { useIsDesktopWeb } from '../utils/platform';
 
 interface HistoryDetailViewProps {
   mode: 'proposal' | 'kpm';
@@ -25,7 +25,8 @@ export function HistoryDetailView({
   kpmAuditLogs = [],
   onBack,
 }: HistoryDetailViewProps) {
-  const isNativeApp = isNativeAppPlatform();
+  const isDesktopWeb = useIsDesktopWeb();
+  const isNativeApp = !isDesktopWeb;
   if (mode === 'proposal' && proposal) {
     const entries = proposalHistory
       .filter((h) => !h.registerCode?.startsWith('ACTLOG::'))
@@ -33,27 +34,41 @@ export function HistoryDetailView({
 
     return (
       <div className="min-h-screen pb-10">
-        <header
-          className={`sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md ${
-            !isNativeApp ? 'lg:px-6' : ''
-          }`}
-        >
-          <button
-            type="button"
-            onClick={onBack}
-            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
-            aria-label="Kembali"
-          >
-            <ArrowLeft className="h-5 w-5" />
-          </button>
-          <h1 className="truncate text-base font-bold text-slate-900">Rekam Jejak</h1>
-        </header>
+        {isNativeApp && (
+          <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
+              aria-label="Kembali"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </button>
+            <h1 className="truncate text-base font-bold text-slate-900">Rekam Jejak</h1>
+          </header>
+        )}
 
         <main
           className={`space-y-4 px-4 pt-4 ${
-            !isNativeApp ? 'lg:mx-auto lg:max-w-4xl lg:px-6 lg:pt-6' : ''
+            !isNativeApp ? 'md:mx-auto md:max-w-4xl md:px-6 md:pt-6' : ''
           }`}
         >
+          {!isNativeApp && (
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={onBack}
+                className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+                aria-label="Kembali"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                <span>Kembali</span>
+              </button>
+              <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
+                Rekam Jejak
+              </h1>
+            </div>
+          )}
           <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3.5">
             <p className="text-sm font-bold text-slate-900">
               {proposal.namaProposal} {proposal.tahun}
@@ -133,27 +148,41 @@ export function HistoryDetailView({
 
   return (
     <div className="min-h-screen pb-10">
-      <header
-        className={`sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md ${
-          !isNativeApp ? 'lg:px-6' : ''
-        }`}
-      >
-        <button
-          type="button"
-          onClick={onBack}
-          className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
-          aria-label="Kembali"
-        >
-          <ArrowLeft className="h-5 w-5" />
-        </button>
-        <h1 className="truncate text-base font-bold text-slate-900">Rekam Jejak</h1>
-      </header>
+      {isNativeApp && (
+        <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
+          <button
+            type="button"
+            onClick={onBack}
+            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
+            aria-label="Kembali"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </button>
+          <h1 className="truncate text-base font-bold text-slate-900">Rekam Jejak</h1>
+        </header>
+      )}
 
       <main
         className={`space-y-4 px-4 pt-4 ${
-          !isNativeApp ? 'lg:mx-auto lg:max-w-4xl lg:px-6 lg:pt-6' : ''
+          !isNativeApp ? 'md:mx-auto md:max-w-4xl md:px-6 md:pt-6' : ''
         }`}
       >
+        {!isNativeApp && (
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+              aria-label="Kembali"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              <span>Kembali</span>
+            </button>
+            <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
+              Rekam Jejak
+            </h1>
+          </div>
+        )}
         {record && (
           <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3.5">
             <p className="text-sm font-bold text-slate-900">{record.nama}</p>

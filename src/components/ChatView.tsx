@@ -448,7 +448,7 @@ export function ChatView({
           >
             <div
               className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm shadow-xs ${
-                !isNativeApp ? 'lg:max-w-[68%]' : ''
+                !isNativeApp ? 'md:max-w-[68%]' : ''
               } ${
                 isMine
                   ? 'rounded-br-md bg-teal-700 text-white'
@@ -608,7 +608,7 @@ export function ChatView({
           <section className="flex min-w-0 flex-1 flex-col bg-slate-50/70">
             {activePeer && activeMeta ? (
               <>
-                <header className="flex h-16 shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-5">
+                <div className="flex h-16 shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-5">
                   <div className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-visible rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
                     {activePeer.fotoDataUrl ? (
                       <DriveImage
@@ -659,7 +659,7 @@ export function ChatView({
                       <Edit3 className="h-4 w-4" />
                     </button>
                   )}
-                </header>
+                </div>
 
                 <div className="flex-1 space-y-3 overflow-y-auto px-6 py-5">
                   {renderThreadMessagesBody()}
@@ -717,65 +717,116 @@ export function ChatView({
 
     return (
       <div className="flex min-h-screen flex-col bg-slate-100">
-        <header className="sticky top-0 z-20 flex h-14 items-center gap-2 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
-          <button
-            type="button"
-            onClick={() => onSelectPeer(null)}
-            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 hover:bg-slate-100"
-            aria-label="Kembali ke daftar chat"
-          >
-            <ArrowLeft className="h-5 w-5" />
-          </button>
-
-          <div className="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-visible rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
-            {activePeer.fotoDataUrl ? (
-              <DriveImage
-                src={activePeer.fotoDataUrl}
-                thumbnailUrl={activePeer.fotoThumbnailUrl}
-                alt={activePeerDisplayName}
-                className="h-full w-full rounded-xl object-cover"
-              />
-            ) : (
-              <User className="h-4 w-4" />
-            )}
-            <PresenceDot
-              status={activePeer.presenceStatus}
-              size="sm"
-              className="absolute -right-0.5 -bottom-0.5"
-            />
-          </div>
-
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5">
-              <p className="truncate text-sm font-bold text-slate-900">{activePeerDisplayName}</p>
-              <span
-                className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold ${
-                  activePeer.role === 'SuperAdmin'
-                    ? 'bg-slate-900 text-white'
-                    : 'bg-teal-50 text-teal-800'
-                }`}
-              >
-                {activePeer.role}
-              </span>
-            </div>
-            <p className={`truncate text-[11px] font-medium ${meta.textClass}`}>
-              {meta.label}
-              {hasCustomAlias ? ` · Asli: ${activePeer.nama}` : ''}
-            </p>
-          </div>
-
-          {onSaveUserAlias && (
+        {!isDesktopWeb ? (
+          <header className="sticky top-0 z-20 flex h-14 items-center gap-2 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
             <button
               type="button"
-              onClick={() => openRenameModal(activePeer)}
-              aria-label={`Ubah nama pribadi ${activePeerDisplayName}`}
-              title="Ubah nama panggilan pribadi"
-              className="inline-flex min-h-[40px] min-w-[40px] shrink-0 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+              onClick={() => onSelectPeer(null)}
+              className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 hover:bg-slate-100"
+              aria-label="Kembali ke daftar chat"
             >
-              <Edit3 className="h-4 w-4" />
+              <ArrowLeft className="h-5 w-5" />
             </button>
-          )}
-        </header>
+
+            <div className="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-visible rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
+              {activePeer.fotoDataUrl ? (
+                <DriveImage
+                  src={activePeer.fotoDataUrl}
+                  thumbnailUrl={activePeer.fotoThumbnailUrl}
+                  alt={activePeerDisplayName}
+                  className="h-full w-full rounded-xl object-cover"
+                />
+              ) : (
+                <User className="h-4 w-4" />
+              )}
+              <PresenceDot
+                status={activePeer.presenceStatus}
+                size="sm"
+                className="absolute -right-0.5 -bottom-0.5"
+              />
+            </div>
+
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <p className="truncate text-sm font-bold text-slate-900">{activePeerDisplayName}</p>
+                <span
+                  className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                    activePeer.role === 'SuperAdmin'
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-teal-50 text-teal-800'
+                  }`}
+                >
+                  {activePeer.role}
+                </span>
+              </div>
+              <p className={`truncate text-[11px] font-medium ${meta.textClass}`}>
+                {meta.label}
+                {hasCustomAlias ? ` · Asli: ${activePeer.nama}` : ''}
+              </p>
+            </div>
+
+            {onSaveUserAlias && (
+              <button
+                type="button"
+                onClick={() => openRenameModal(activePeer)}
+                aria-label={`Ubah nama pribadi ${activePeerDisplayName}`}
+                title="Ubah nama panggilan pribadi"
+                className="inline-flex min-h-[40px] min-w-[40px] shrink-0 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+              >
+                <Edit3 className="h-4 w-4" />
+              </button>
+            )}
+          </header>
+        ) : (
+          <div className="mx-3 mt-3 flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2.5">
+            <button
+              type="button"
+              onClick={() => onSelectPeer(null)}
+              className="inline-flex min-h-[38px] shrink-0 items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+              aria-label="Kembali ke daftar chat"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              <span>Kembali</span>
+            </button>
+
+            <div className="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-visible rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
+              {activePeer.fotoDataUrl ? (
+                <DriveImage
+                  src={activePeer.fotoDataUrl}
+                  thumbnailUrl={activePeer.fotoThumbnailUrl}
+                  alt={activePeerDisplayName}
+                  className="h-full w-full rounded-xl object-cover"
+                />
+              ) : (
+                <User className="h-4 w-4" />
+              )}
+              <PresenceDot
+                status={activePeer.presenceStatus}
+                size="sm"
+                className="absolute -right-0.5 -bottom-0.5"
+              />
+            </div>
+
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-bold text-slate-900">{activePeerDisplayName}</p>
+              <p className={`truncate text-[11px] font-medium ${meta.textClass}`}>
+                {activePeer.role} · {meta.label}
+              </p>
+            </div>
+
+            {onSaveUserAlias && (
+              <button
+                type="button"
+                onClick={() => openRenameModal(activePeer)}
+                aria-label={`Ubah nama pribadi ${activePeerDisplayName}`}
+                title="Ubah nama panggilan pribadi"
+                className="inline-flex min-h-[38px] min-w-[38px] shrink-0 items-center justify-center rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50"
+              >
+                <Edit3 className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Thread Body */}
         <div className="flex-1 space-y-2.5 overflow-y-auto px-3.5 py-4 pb-24">
@@ -786,7 +837,9 @@ export function ChatView({
         {/* Bottom Composer */}
         <form
           onSubmit={handleSend}
-          className="fixed bottom-0 left-1/2 z-30 flex w-full max-w-md -translate-x-1/2 items-center gap-2 border-t border-slate-200 bg-white px-3 py-2.5"
+          className={`fixed bottom-0 left-1/2 z-30 flex w-full -translate-x-1/2 items-center gap-2 border-t border-slate-200 bg-white px-3 py-2.5 ${
+            isNativeApp ? 'max-w-md' : ''
+          }`}
         >
           <input
             type="text"
@@ -813,19 +866,35 @@ export function ChatView({
   // Contact List Screen (Strictly 1-on-1 Direct Contacts)
   return (
     <div className="min-h-screen pb-24">
-      <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
-        <button
-          type="button"
-          onClick={onBack}
-          className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 hover:bg-slate-100"
-          aria-label="Kembali"
-        >
-          <ArrowLeft className="h-5 w-5" />
-        </button>
-        <h1 className="truncate text-base font-bold text-slate-900">Obrolan</h1>
-      </header>
+      {!isDesktopWeb && (
+        <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
+          <button
+            type="button"
+            onClick={onBack}
+            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 hover:bg-slate-100"
+            aria-label="Kembali"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </button>
+          <h1 className="truncate text-base font-bold text-slate-900">Obrolan</h1>
+        </header>
+      )}
 
       <div className="space-y-4 px-4 pt-4">
+        {isDesktopWeb && (
+          <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+              aria-label="Kembali"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              <span>Kembali</span>
+            </button>
+            <h1 className="truncate text-lg font-bold tracking-tight text-slate-900">Obrolan</h1>
+          </div>
+        )}
         {pushPermission === 'default' && (
           <div className="flex items-center justify-between gap-3 rounded-2xl border border-teal-200 bg-teal-50 px-4 py-3">
             <div className="flex min-w-0 items-center gap-2.5">

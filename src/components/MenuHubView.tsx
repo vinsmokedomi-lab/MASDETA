@@ -84,7 +84,7 @@ import {
   isKecamatanProposal,
   resolveProposalDomicile,
 } from '../utils/imageProcessor';
-import { isNativeAppPlatform } from '../utils/platform';
+import { useIsDesktopWeb } from '../utils/platform';
 
 export type MenuSection =
   | 'root'
@@ -174,6 +174,7 @@ interface MenuHubViewProps {
   onVerifySuperAdminPassword?: (password: string) => Promise<{ ok: boolean; error?: string }>;
   onRegisterInternalUser: (user: {
     nama: string;
+    username?: string;
     email: string;
     jabatan: string;
     kontak: string;
@@ -276,7 +277,8 @@ export function MenuHubView({
   reportTemplate,
   onSaveReportTemplate,
 }: MenuHubViewProps) {
-  const isNativeApp = isNativeAppPlatform();
+  const isDesktopWeb = useIsDesktopWeb();
+  const isNativeApp = !isDesktopWeb;
   const isSuperAdminRole = currentUser.role === 'SuperAdmin';
   const canAdd =
     isSuperAdminRole || (currentUser.role !== 'Viewer' && Boolean(currentUser.permissions?.add));
@@ -337,6 +339,7 @@ export function MenuHubView({
   // Internal User creation form (SuperAdmin adds active user with password)
   const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
   const [regNama, setRegNama] = useState('');
+  const [regUsername, setRegUsername] = useState('');
   const [regEmail, setRegEmail] = useState('');
   const [regJabatan, setRegJabatan] = useState('');
   const [regKontak, setRegKontak] = useState('');
@@ -1009,8 +1012,15 @@ export function MenuHubView({
   const handleRegisterUserSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setRegError(null);
+    const cleanUsername = regUsername.trim().toLowerCase().replace(/^@+/, '');
     if (!regNama.trim() || !regEmail.trim()) {
       setRegError('Nama lengkap dan email wajib diisi.');
+      return;
+    }
+    if (cleanUsername && !/^[a-z0-9._-]{3,30}$/.test(cleanUsername)) {
+      setRegError(
+        'Username harus 3–30 karakter dan hanya boleh huruf kecil, angka, titik (.), garis bawah (_), atau tanda hubung (-).'
+      );
       return;
     }
     if (regPassword.trim() && regPassword.trim().length < 6) {
@@ -1021,6 +1031,7 @@ export function MenuHubView({
     try {
       const result = await onRegisterInternalUser({
         nama: capitalizeWords(regNama.trim()),
+        username: cleanUsername || undefined,
         email: regEmail.trim().toLowerCase(),
         jabatan: regJabatan.trim() || regRole,
         kontak: regKontak.trim(),
@@ -1032,6 +1043,7 @@ export function MenuHubView({
         return;
       }
       setRegNama('');
+      setRegUsername('');
       setRegEmail('');
       setRegJabatan('');
       setRegKontak('');
@@ -1044,23 +1056,38 @@ export function MenuHubView({
     }
   };
 
-  const renderSubHeader = (title: string, onBack: () => void) => (
-    <header
-      className={`sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md ${
-        !isNativeApp ? 'lg:px-6' : ''
-      }`}
-    >
-      <button
-        type="button"
-        onClick={onBack}
-        className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100 shrink-0"
-        aria-label="Kembali"
+  const renderSubHeader = (
+    title: string,
+    onBack: () => void,
+    webMaxWidthClass = 'md:max-w-[1440px]'
+  ) =>
+    isNativeApp ? (
+      <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
+        <button
+          type="button"
+          onClick={onBack}
+          className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100 shrink-0"
+          aria-label="Kembali"
+        >
+          <ArrowLeft className="h-5 w-5" />
+        </button>
+        <h1 className="truncate text-base font-bold text-slate-900">{title}</h1>
+      </header>
+    ) : (
+      <div
+        className={`mx-auto flex w-full items-center gap-3 px-4 pt-4 md:px-6 md:pt-6 ${webMaxWidthClass}`}
       >
-        <ArrowLeft className="h-5 w-5" />
-      </button>
-      <h1 className="truncate text-base font-bold text-slate-900">{title}</h1>
-    </header>
-  );
+        <button
+          type="button"
+          onClick={onBack}
+          className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 shrink-0"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          <span>Kembali</span>
+        </button>
+        <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">{title}</h1>
+      </div>
+    );
 
   // 1. ROOT MENU HUB
   if (activeSection === 'root') {
@@ -1068,19 +1095,20 @@ export function MenuHubView({
 
     return (
       <div className="min-h-screen pb-24">
-        <header
-          className={`sticky top-0 z-20 flex h-14 items-center border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md ${
-            !isNativeApp ? 'lg:px-6' : ''
-          }`}
-        >
-          <h1 className="truncate text-base font-bold text-slate-900">Menu</h1>
-        </header>
+        {isNativeApp && (
+          <header className="sticky top-0 z-20 flex h-14 items-center border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md">
+            <h1 className="truncate text-base font-bold text-slate-900">Menu</h1>
+          </header>
+        )}
 
         <div
           className={`space-y-5 px-4 pt-4 ${
-            !isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:px-6 lg:pt-6' : ''
+            !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''
           }`}
         >
+          {!isNativeApp && (
+            <h1 className="text-xl font-bold tracking-tight text-slate-900">Menu &amp; Alat</h1>
+          )}
           {/* Active Profile Card */}
           <button
             type="button"
@@ -1127,12 +1155,12 @@ export function MenuHubView({
           <div
             className={
               !isNativeApp
-                ? 'space-y-5 lg:grid lg:grid-cols-2 lg:items-start lg:gap-6 lg:space-y-0'
+                ? 'space-y-5 md:grid md:grid-cols-2 md:items-start md:gap-6 md:space-y-0'
                 : 'space-y-5'
             }
           >
           {/* Group 1: Komunikasi & Koordinasi */}
-          <section className={!isNativeApp ? 'lg:col-start-1' : ''}>
+          <section className={!isNativeApp ? 'md:col-start-1' : ''}>
             <h2 className="mb-2 px-1 text-xs font-bold tracking-wide text-slate-500">
               Komunikasi Tim
             </h2>
@@ -1167,7 +1195,7 @@ export function MenuHubView({
           </section>
 
           {/* Group 2: Audit & Rekapitulasi */}
-          <section className={!isNativeApp ? 'lg:col-start-2 lg:row-span-3' : ''}>
+          <section className={!isNativeApp ? 'md:col-start-2 md:row-span-3' : ''}>
             <h2 className="mb-2 px-1 text-xs font-bold tracking-wide text-slate-500">
               Audit &amp; Rekapitulasi
             </h2>
@@ -1367,7 +1395,7 @@ export function MenuHubView({
           </section>
 
           {/* Group 3: Basis Data Lapangan */}
-          <section className={!isNativeApp ? 'lg:col-start-1' : ''}>
+          <section className={!isNativeApp ? 'md:col-start-1' : ''}>
             <h2 className="mb-2 px-1 text-xs font-bold tracking-wide text-slate-500">
               Basis Data Lapangan
             </h2>
@@ -1462,7 +1490,7 @@ export function MenuHubView({
           </section>
 
           {/* Group 4: Administrasi Sistem & Pengaturan */}
-          <section className={!isNativeApp ? 'lg:col-start-1' : ''}>
+          <section className={!isNativeApp ? 'md:col-start-1' : ''}>
             <h2 className="mb-2 px-1 text-xs font-bold tracking-wide text-slate-500">
               Sistem &amp; Pengaturan
             </h2>
@@ -1666,11 +1694,11 @@ export function MenuHubView({
 
     return (
       <div className="min-h-screen pb-24">
-        {renderSubHeader('Kontrol Super Admin', () => onChangeSection('root'))}
+        {renderSubHeader('Kontrol Super Admin', () => onChangeSection('root'), 'md:max-w-4xl')}
 
         <div
           className={`space-y-4 px-4 pt-4 ${
-            !isNativeApp ? 'lg:mx-auto lg:max-w-4xl lg:px-6 lg:pt-6' : ''
+            !isNativeApp ? 'md:mx-auto md:max-w-4xl md:px-6 md:pt-6' : ''
           }`}
         >
           {!isSuperAdmin ? (
@@ -2157,7 +2185,7 @@ export function MenuHubView({
 
         <div
           className={`space-y-4 px-4 pt-4 ${
-            !isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:px-6 lg:pt-6' : ''
+            !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''
           }`}
         >
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -2202,7 +2230,7 @@ export function MenuHubView({
           ) : (
             <div
               className={`space-y-3 ${
-                !isNativeApp ? 'lg:grid lg:grid-cols-2 lg:gap-4 lg:space-y-0' : ''
+                !isNativeApp ? 'md:grid md:grid-cols-2 md:gap-4 md:space-y-0' : ''
               }`}
             >
               {filteredUsers.map((user) => {
@@ -2257,7 +2285,10 @@ export function MenuHubView({
                               Nama asli: {user.nama}
                             </p>
                           )}
-                          <p className="mt-0.5 truncate text-xs text-slate-500">{user.email}</p>
+                          <p className="mt-0.5 truncate text-xs text-slate-500">
+                            {user.username ? `@${user.username} · ` : ''}
+                            {user.email}
+                          </p>
                           <p className={`mt-0.5 text-[11px] font-medium ${pMeta.textClass}`}>
                             {pMeta.label} · {user.jabatan}
                           </p>
@@ -2553,6 +2584,24 @@ export function MenuHubView({
                   placeholder="Nama lengkap *"
                   className="min-h-[44px] w-full rounded-xl border border-slate-300 px-3.5 text-sm focus:border-teal-700 focus:outline-none"
                 />
+                <div>
+                  <input
+                    type="text"
+                    minLength={3}
+                    maxLength={30}
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    value={regUsername}
+                    onChange={(e) =>
+                      setRegUsername(e.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, ''))
+                    }
+                    placeholder="Username (opsional, permanen)"
+                    className="min-h-[44px] w-full rounded-xl border border-slate-300 px-3.5 text-sm focus:border-teal-700 focus:outline-none"
+                  />
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Bila diisi, username hanya ditetapkan sekali dan tidak dapat diubah.
+                  </p>
+                </div>
                 <input
                   type="email"
                   required
@@ -2896,10 +2945,10 @@ export function MenuHubView({
   if (activeSection === 'wilayah') {
     return (
       <div className="min-h-screen pb-24">
-        {renderSubHeader('Wilayah', () => onChangeSection('root'))}
+        {renderSubHeader('Wilayah', () => onChangeSection('root'), 'md:max-w-5xl')}
           <div
             className={`space-y-4 px-4 pt-4 ${
-              !isNativeApp ? 'lg:mx-auto lg:max-w-5xl lg:px-6 lg:pt-6' : ''
+              !isNativeApp ? 'md:mx-auto md:max-w-5xl md:px-6 md:pt-6' : ''
             }`}
           >
             {canAdd && (
@@ -3221,10 +3270,10 @@ export function MenuHubView({
 
     return (
       <div className="min-h-screen pb-24">
-        {renderSubHeader('Duplikasi NIK / KK', () => onChangeSection('root'))}
+        {renderSubHeader('Duplikasi NIK / KK', () => onChangeSection('root'), 'md:max-w-5xl')}
         <div
           className={`space-y-4 px-4 pt-4 ${
-            !isNativeApp ? 'lg:mx-auto lg:max-w-5xl lg:px-6 lg:pt-6' : ''
+            !isNativeApp ? 'md:mx-auto md:max-w-5xl md:px-6 md:pt-6' : ''
           }`}
         >
           <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3.5">
@@ -3369,7 +3418,7 @@ export function MenuHubView({
 
         <div
           className={`space-y-4 px-4 pt-4 ${
-            !isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:px-6 lg:pt-6' : ''
+            !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''
           }`}
         >
           {/* Header & Filter konsisten dengan KpmListView */}
@@ -3454,7 +3503,7 @@ export function MenuHubView({
             <div
               className={`overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100 ${
                 !isNativeApp
-                  ? 'lg:grid lg:grid-cols-2 lg:gap-3 lg:divide-y-0 lg:overflow-visible lg:rounded-none lg:border-0 lg:bg-transparent'
+                  ? 'md:grid md:grid-cols-2 md:gap-3 md:divide-y-0 md:overflow-visible md:rounded-none md:border-0 md:bg-transparent'
                   : ''
               }`}
             >
@@ -3488,7 +3537,7 @@ export function MenuHubView({
                   <div
                     key={rec.id}
                     className={`bg-white ${
-                      !isNativeApp ? 'lg:overflow-hidden lg:rounded-2xl lg:border lg:border-slate-200' : ''
+                      !isNativeApp ? 'md:overflow-hidden md:rounded-2xl md:border md:border-slate-200' : ''
                     }`}
                   >
                     <button
@@ -3618,12 +3667,14 @@ export function MenuHubView({
 
     return (
       <div className="min-h-screen pb-24">
-        {renderSubHeader('Administrasi', () =>
-          onChangeSection(isSuperAdmin ? 'superadmin' : 'root')
+        {renderSubHeader(
+          'Administrasi',
+          () => onChangeSection(isSuperAdmin ? 'superadmin' : 'root'),
+          'md:max-w-5xl'
         )}
         <div
           className={`space-y-4 px-4 pt-4 ${
-            !isNativeApp ? 'lg:mx-auto lg:max-w-5xl lg:px-6 lg:pt-6' : ''
+            !isNativeApp ? 'md:mx-auto md:max-w-5xl md:px-6 md:pt-6' : ''
           }`}
         >
           {!isSuperAdmin ? (
@@ -3806,7 +3857,7 @@ export function MenuHubView({
           {renderSubHeader(drillLabel, () => setDtsenDrill(null))}
           <div
             className={`px-4 pt-4 ${
-              !isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:px-6 lg:pt-6' : ''
+              !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''
             }`}
           >
             <CorrespondentKpmListPanel
@@ -3826,10 +3877,10 @@ export function MenuHubView({
 
     return (
       <div className="min-h-screen pb-24">
-        {renderSubHeader('Klasifikasi DTSEN', () => onChangeSection('root'))}
+        {renderSubHeader('Klasifikasi DTSEN', () => onChangeSection('root'), 'md:max-w-5xl')}
         <div
           className={`px-4 pt-4 ${
-            !isNativeApp ? 'lg:mx-auto lg:max-w-5xl lg:px-6 lg:pt-6' : ''
+            !isNativeApp ? 'md:mx-auto md:max-w-5xl md:px-6 md:pt-6' : ''
           }`}
         >
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
@@ -3905,7 +3956,7 @@ export function MenuHubView({
           {renderSubHeader(pengelolaTitle, () => setPengelolaDrill(null))}
           <div
             className={`px-4 pt-4 ${
-              !isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:px-6 lg:pt-6' : ''
+              !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''
             }`}
           >
             <CorrespondentKpmListPanel
@@ -4048,7 +4099,7 @@ export function MenuHubView({
         {renderSubHeader('Pengelola Lapangan', () => onChangeSection('root'))}
         <div
           className={`space-y-3 px-4 pt-4 ${
-            !isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:px-6 lg:pt-6' : ''
+            !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''
           }`}
         >
           {canAdd && (
@@ -4056,7 +4107,7 @@ export function MenuHubView({
               type="button"
               onClick={() => setIsAddPengelolaOpen(true)}
               className={`inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.99] ${
-                !isNativeApp ? 'lg:w-auto lg:px-5' : ''
+                !isNativeApp ? 'md:w-auto md:px-5' : ''
               }`}
             >
               <Plus className="h-4 w-4" />
@@ -4300,7 +4351,7 @@ export function MenuHubView({
                             }}
                             aria-label={`Edit pengelola ${p.displayName}`}
                             title="Edit pengelola"
-                            className="hidden h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 lg:inline-flex"
+                            className="hidden h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 md:inline-flex"
                           >
                             <Edit3 className="h-3.5 w-3.5" />
                           </button>
@@ -4314,7 +4365,7 @@ export function MenuHubView({
                             }}
                             aria-label={`Hapus pengelola ${p.displayName}`}
                             title="Hapus pengelola"
-                            className="hidden h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 lg:inline-flex"
+                            className="hidden h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 md:inline-flex"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
@@ -4423,7 +4474,7 @@ export function MenuHubView({
           {renderSubHeader(activePekerjaanDrill, () => setPekerjaanDrill(null))}
           <div
             className={`px-4 pt-4 ${
-              !isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:px-6 lg:pt-6' : ''
+              !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''
             }`}
           >
             <CorrespondentKpmListPanel
@@ -4500,7 +4551,7 @@ export function MenuHubView({
         {renderSubHeader('Profesi & Pekerjaan', () => onChangeSection('root'))}
         <div
           className={`space-y-3 px-4 pt-4 ${
-            !isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:px-6 lg:pt-6' : ''
+            !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''
           }`}
         >
           {canAdd && (
@@ -4512,7 +4563,7 @@ export function MenuHubView({
                 setIsAddPekerjaanOpen(true);
               }}
               className={`inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.99] ${
-                !isNativeApp ? 'lg:w-auto lg:px-5' : ''
+                !isNativeApp ? 'md:w-auto md:px-5' : ''
               }`}
             >
               <Plus className="h-4 w-4" />
@@ -4694,7 +4745,7 @@ export function MenuHubView({
                             }}
                             aria-label={`Edit pekerjaan ${job}`}
                             title="Edit pekerjaan"
-                            className="hidden h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 lg:inline-flex"
+                            className="hidden h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 md:inline-flex"
                           >
                             <Edit3 className="h-3.5 w-3.5" />
                           </button>
@@ -4708,7 +4759,7 @@ export function MenuHubView({
                             }}
                             aria-label={`Hapus pekerjaan ${job}`}
                             title="Hapus pekerjaan"
-                            className="hidden h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 lg:inline-flex"
+                            className="hidden h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 md:inline-flex"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
@@ -4972,11 +5023,11 @@ export function MenuHubView({
 
     return (
       <div className="min-h-screen pb-24">
-        {renderSubHeader('Log Aktivitas Umum', () => onChangeSection('root'))}
+        {renderSubHeader('Log Aktivitas Umum', () => onChangeSection('root'), 'md:max-w-5xl')}
 
         <div
           className={`space-y-4 px-4 pt-4 ${
-            !isNativeApp ? 'lg:mx-auto lg:max-w-5xl lg:px-6 lg:pt-6' : ''
+            !isNativeApp ? 'md:mx-auto md:max-w-5xl md:px-6 md:pt-6' : ''
           }`}
         >
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
@@ -5119,7 +5170,7 @@ export function MenuHubView({
         {renderSubHeader('Matriks Kelengkapan Berkas', () => onChangeSection('root'))}
         <div
           className={`space-y-4 px-4 pt-4 ${
-            !isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:px-6 lg:pt-6' : ''
+            !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''
           }`}
         >
           <div className="flex items-center gap-2">
@@ -5162,14 +5213,14 @@ export function MenuHubView({
           <div
             className={`overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100 ${
               !isNativeApp
-                ? 'lg:grid lg:grid-cols-2 lg:gap-3 lg:divide-y-0 lg:overflow-visible lg:rounded-none lg:border-0 lg:bg-transparent'
+                ? 'md:grid md:grid-cols-2 md:gap-3 md:divide-y-0 md:overflow-visible md:rounded-none md:border-0 md:bg-transparent'
                 : ''
             }`}
           >
             {rows.length === 0 ? (
               <div
                 className={`px-4 py-10 text-center text-xs text-slate-500 ${
-                  !isNativeApp ? 'lg:col-span-2 lg:rounded-2xl lg:border lg:border-slate-200 lg:bg-white' : ''
+                  !isNativeApp ? 'md:col-span-2 md:rounded-2xl md:border md:border-slate-200 md:bg-white' : ''
                 }`}
               >
                 Tidak ada KPM pada filter ini.
@@ -5181,7 +5232,7 @@ export function MenuHubView({
                   type="button"
                   onClick={() => onSelectKpm?.(rec)}
                   className={`block w-full px-4 py-3 text-left transition-colors hover:bg-slate-50 ${
-                    !isNativeApp ? 'lg:rounded-2xl lg:border lg:border-slate-200 lg:bg-white' : ''
+                    !isNativeApp ? 'md:rounded-2xl md:border md:border-slate-200 md:bg-white' : ''
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
@@ -5256,11 +5307,15 @@ export function MenuHubView({
 
     return (
       <div className="min-h-screen pb-24">
-        {renderSubHeader('Jadwal & Target Proposal', () => onChangeSection('root'))}
+        {renderSubHeader(
+          'Jadwal & Target Proposal',
+          () => onChangeSection('root'),
+          onAddSchedule && canAdd ? 'md:max-w-[1440px]' : 'md:max-w-5xl'
+        )}
         <div
           className={`space-y-4 px-4 pt-4 ${
             !isNativeApp
-              ? `lg:mx-auto ${onAddSchedule && canAdd ? 'lg:max-w-[1440px] lg:grid lg:grid-cols-12 lg:items-start lg:gap-6 lg:space-y-0' : 'lg:max-w-5xl'} lg:px-6 lg:pt-6`
+              ? `md:mx-auto ${onAddSchedule && canAdd ? 'md:max-w-[1440px] md:grid md:grid-cols-12 md:items-start md:gap-6 md:space-y-0' : 'md:max-w-5xl'} md:px-6 md:pt-6`
               : ''
           }`}
         >
@@ -5268,7 +5323,7 @@ export function MenuHubView({
             <form
               onSubmit={handleSubmitSchedule}
               className={`rounded-2xl border border-slate-200 bg-white p-4 space-y-3 ${
-                !isNativeApp ? 'lg:col-span-5' : ''
+                !isNativeApp ? 'md:col-span-5' : ''
               }`}
             >
               <h2 className="text-sm font-bold text-slate-900">Tambah Agenda Baru</h2>
@@ -5344,7 +5399,7 @@ export function MenuHubView({
 
           <div
             className={`overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100 ${
-              !isNativeApp && onAddSchedule && canAdd ? 'lg:col-span-7' : ''
+              !isNativeApp && onAddSchedule && canAdd ? 'md:col-span-7' : ''
             }`}
           >
             {sortedSchedules.length === 0 ? (
@@ -5438,10 +5493,10 @@ export function MenuHubView({
     const nowMs = Date.now();
     return (
       <div className="min-h-screen pb-24">
-        {renderSubHeader('Tempat Sampah (30 Hari)', () => onChangeSection('superadmin'))}
+        {renderSubHeader('Tempat Sampah (30 Hari)', () => onChangeSection('superadmin'), 'md:max-w-5xl')}
         <div
           className={`space-y-4 px-4 pt-4 ${
-            !isNativeApp ? 'lg:mx-auto lg:max-w-5xl lg:px-6 lg:pt-6' : ''
+            !isNativeApp ? 'md:mx-auto md:max-w-5xl md:px-6 md:pt-6' : ''
           }`}
         >
           <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-900 leading-relaxed">
@@ -5610,10 +5665,10 @@ export function MenuHubView({
 
     return (
       <div className="min-h-screen pb-24">
-        {renderSubHeader('Riwayat Pembaruan', () => onChangeSection('root'))}
+        {renderSubHeader('Riwayat Pembaruan', () => onChangeSection('root'), 'md:max-w-4xl')}
         <div
           className={`space-y-4 px-4 pt-4 ${
-            !isNativeApp ? 'lg:mx-auto lg:max-w-4xl lg:px-6 lg:pt-6' : ''
+            !isNativeApp ? 'md:mx-auto md:max-w-4xl md:px-6 md:pt-6' : ''
           }`}
         >
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs">
@@ -5736,10 +5791,10 @@ export function MenuHubView({
   // 9. LAPORAN (COMING SOON)
   return (
     <div className="min-h-screen pb-24">
-      {renderSubHeader('Laporan', () => onChangeSection('root'))}
+      {renderSubHeader('Laporan', () => onChangeSection('root'), 'md:max-w-4xl')}
       <div
         className={`space-y-4 px-4 pt-6 ${
-          !isNativeApp ? 'lg:mx-auto lg:max-w-4xl lg:px-6 lg:pt-6' : ''
+          !isNativeApp ? 'md:mx-auto md:max-w-4xl md:px-6 md:pt-6' : ''
         }`}
       >
         <div className="rounded-3xl border border-slate-200 bg-white px-5 py-10 text-center shadow-xs">

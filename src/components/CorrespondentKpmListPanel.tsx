@@ -244,7 +244,7 @@ export function CorrespondentKpmListPanel({
       {/* Collapsible Filter & Sorting Panel */}
       {showFilters && (
         <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-3.5">
-          <div className={`grid grid-cols-2 gap-2.5 ${!isNativeApp ? 'lg:grid-cols-4' : ''}`}>
+          <div className={`grid grid-cols-2 gap-2.5 ${!isNativeApp ? 'md:grid-cols-4' : ''}`}>
             <div>
               <label className="mb-1 block text-[11px] font-semibold text-slate-600">
                 Tahun Anggaran
@@ -382,7 +382,7 @@ export function CorrespondentKpmListPanel({
         <div
           className={`overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100 ${
             !isNativeApp
-              ? 'lg:grid lg:grid-cols-2 lg:gap-3 lg:divide-y-0 lg:overflow-visible lg:rounded-none lg:border-0 lg:bg-transparent'
+              ? 'md:grid md:grid-cols-2 md:gap-3 md:divide-y-0 md:overflow-visible md:rounded-none md:border-0 md:bg-transparent'
               : ''
           }`}
         >
@@ -409,7 +409,7 @@ export function CorrespondentKpmListPanel({
                 type="button"
                 onClick={() => onSelectRecord?.(rec)}
                 className={`flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70 ${
-                  !isNativeApp ? 'lg:rounded-2xl lg:border lg:border-slate-200 lg:bg-white' : ''
+                  !isNativeApp ? 'md:rounded-2xl md:border md:border-slate-200 md:bg-white' : ''
                 }`}
               >
                 <div className="flex w-5 shrink-0 items-center justify-center">

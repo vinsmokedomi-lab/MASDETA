@@ -14,7 +14,7 @@ export function isNativeAppPlatform(): boolean {
 }
 
 /**
- * True ONLY when running in a web browser at desktop viewport width (>= 1024px).
+ * True ONLY when running in a web browser at web workspace viewport width (>= 768px).
  * Never returns true inside the native Android APK.
  */
 export function useIsDesktopWeb(): boolean {
@@ -23,7 +23,7 @@ export function useIsDesktopWeb(): boolean {
     if (isNative || typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
       return false;
     }
-    return window.matchMedia('(min-width: 1024px)').matches;
+    return window.matchMedia('(min-width: 768px)').matches;
   });
 
   useEffect(() => {
@@ -31,7 +31,7 @@ export function useIsDesktopWeb(): boolean {
       setIsDesktopWidth(false);
       return;
     }
-    const mq = window.matchMedia('(min-width: 1024px)');
+    const mq = window.matchMedia('(min-width: 768px)');
     const sync = () => setIsDesktopWidth(mq.matches);
     sync();
     mq.addEventListener('change', sync);

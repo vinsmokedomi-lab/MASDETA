@@ -203,6 +203,7 @@ export interface UserPermissions {
 export interface InternalUser {
   id: string;
   nama: string;
+  username?: string;
   email: string;
   jabatan: string;
   kontak: string;

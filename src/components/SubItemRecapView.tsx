@@ -16,7 +16,7 @@ import {
   resolvePackageForKpm,
 } from '../utils/imageProcessor';
 import { SegmentedTabs } from './FormControls';
-import { isNativeAppPlatform } from '../utils/platform';
+import { useIsDesktopWeb } from '../utils/platform';
 
 export type RecapDrillTarget =
   | { kind: 'item'; code: string; name: string }
@@ -47,7 +47,7 @@ export function SubItemRecapView({
   onBack,
   onSelectKpm,
 }: SubItemRecapViewProps) {
-  const isNativeApp = isNativeAppPlatform();
+  const isDesktopWeb = useIsDesktopWeb();
   const [activeTab, setActiveTab] = useState<RecapMainTab>('item');
   const [internalDrillTarget, setInternalDrillTarget] = useState<RecapDrillTarget>(null);
   const drillTarget =
@@ -176,11 +176,8 @@ export function SubItemRecapView({
 
     return (
       <div className="min-h-screen pb-24">
-        <header
-          className={`sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md ${
-            !isNativeApp ? 'lg:px-6' : ''
-          }`}
-        >
+        {!isDesktopWeb && (
+        <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
           <button
             type="button"
             onClick={() => setDrillTarget(null)}
@@ -196,8 +193,30 @@ export function SubItemRecapView({
             {drillKpmRows.length} KPM
           </span>
         </header>
+        )}
 
-        <main className={`px-4 pt-4 ${!isNativeApp ? 'lg:mx-auto lg:max-w-5xl lg:px-6 lg:pt-6' : ''}`}>
+        <main className={`space-y-4 px-4 pt-4 ${isDesktopWeb ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''}`}>
+          {isDesktopWeb && (
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setDrillTarget(null)}
+                  className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+                  aria-label="Kembali ke Rekap Item"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  <span>Kembali</span>
+                </button>
+                <h1 className="min-w-0 truncate text-xl font-bold tracking-tight text-slate-900">
+                  {drillTitle}
+                </h1>
+              </div>
+              <span className="shrink-0 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700 tabular-nums">
+                {drillKpmRows.length} KPM
+              </span>
+            </div>
+          )}
           {drillKpmRows.length === 0 ? (
             <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
               <p className="text-sm font-semibold text-slate-900">
@@ -265,11 +284,8 @@ export function SubItemRecapView({
 
   return (
     <div className="min-h-screen pb-24">
-      <header
-        className={`sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md ${
-          !isNativeApp ? 'lg:px-6' : ''
-        }`}
-      >
+      {!isDesktopWeb && (
+      <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
         <button
           type="button"
           onClick={onBack}
@@ -278,18 +294,25 @@ export function SubItemRecapView({
         >
           <ArrowLeft className="h-5 w-5" />
         </button>
-        <h1 className="truncate text-base font-bold text-slate-900">
-          Rekapitulasi Item &amp; Sub-Item
-        </h1>
+        <h1 className="truncate text-base font-bold text-slate-900">Rekap Item</h1>
       </header>
+      )}
 
       <main
         className={`space-y-4 px-4 pt-4 ${
-          !isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:space-y-5 lg:px-6 lg:pt-6' : ''
+          isDesktopWeb ? 'md:mx-auto md:max-w-[1440px] md:space-y-5 md:px-6 md:pt-6' : ''
         }`}
       >
+        {isDesktopWeb && (
+          <div className="flex items-center justify-between gap-3">
+            <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
+              Rekap Item
+            </h1>
+          </div>
+        )}
+
         {/* 2 Tab Navigasi: Item vs Sub-Item */}
-        <div className={!isNativeApp ? 'lg:max-w-md' : ''}>
+        <div className={isDesktopWeb ? 'md:max-w-md' : ''}>
           <SegmentedTabs<RecapMainTab>
             value={activeTab}
             onChange={(tab) => {
@@ -303,9 +326,9 @@ export function SubItemRecapView({
           />
         </div>
 
-        <div className={!isNativeApp ? 'space-y-4 lg:grid lg:grid-cols-12 lg:items-start lg:gap-5 lg:space-y-0' : 'space-y-4'}>
+        <div className={isDesktopWeb ? 'space-y-4 md:grid md:grid-cols-12 md:items-start md:gap-5 md:space-y-0' : 'space-y-4'}>
         {/* Hero Heading Container (identik dengan Dashboard) */}
-        <section className={`rounded-3xl bg-slate-900 p-5 text-white ${!isNativeApp ? 'lg:col-span-5' : ''}`}>
+        <section className={`rounded-3xl bg-slate-900 p-5 text-white ${isDesktopWeb ? 'md:col-span-5' : ''}`}>
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0 flex-1">
               <p className="truncate text-lg font-bold tracking-tight text-white leading-snug">
@@ -385,7 +408,7 @@ export function SubItemRecapView({
 
         {/* LISTING ITEM */}
         {activeTab === 'item' && (
-          <section className={`space-y-3 ${!isNativeApp ? 'lg:col-span-7' : ''}`}>
+          <section className={`space-y-3 ${isDesktopWeb ? 'md:col-span-7' : ''}`}>
             {itemRows.length === 0 ? (
               <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
                 <p className="text-sm font-semibold text-slate-900">
@@ -444,7 +467,7 @@ export function SubItemRecapView({
 
         {/* LISTING SUB-ITEM */}
         {activeTab === 'subitem' && (
-          <section className={`space-y-3 ${!isNativeApp ? 'lg:col-span-7' : ''}`}>
+          <section className={`space-y-3 ${isDesktopWeb ? 'md:col-span-7' : ''}`}>
             {recap.aggregates.length === 0 ? (
               <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
                 <p className="text-sm font-semibold text-slate-900">

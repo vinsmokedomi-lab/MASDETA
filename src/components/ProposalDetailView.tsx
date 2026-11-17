@@ -1057,7 +1057,7 @@ export function ProposalDetailView({
                 </div>
               )}
 
-              <div className={`mt-3 grid grid-cols-2 gap-2.5 ${!isNativeApp ? 'lg:grid-cols-3' : ''}`}>
+              <div className={`mt-3 grid grid-cols-2 gap-2.5 ${!isNativeApp ? 'md:grid-cols-3' : ''}`}>
                 {uploadedDocSlots.map((slot) => {
                   const doc = proposal.documents?.[slot.key];
                   if (!doc) return null;
@@ -1277,12 +1277,9 @@ export function ProposalDetailView({
 
   return (
     <div className="min-h-screen pb-24">
-      {/* Sub-Screen Header: hanya panah kembali + judul */}
-      <header
-        className={`sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md ${
-          !isNativeApp ? 'lg:px-6' : ''
-        }`}
-      >
+      {/* Sub-Screen Header (Android View: APK & Phone Browser) */}
+      {!isDesktopWeb && (
+      <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
         <button
           type="button"
           onClick={onBack}
@@ -1293,9 +1290,22 @@ export function ProposalDetailView({
         </button>
         <h1 className="truncate text-base font-bold text-slate-900">Proposal</h1>
       </header>
+      )}
 
       {isDesktopWeb ? (
         <main className="mx-auto grid max-w-[1440px] grid-cols-12 items-start gap-5 px-6 pt-6">
+          <div className="col-span-12 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+              aria-label="Kembali"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              <span>Kembali</span>
+            </button>
+            <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">Proposal</h1>
+          </div>
           <div className="col-span-5 space-y-5">
             {overviewAndDtsenBlock}
             {historyBlock}
@@ -1316,7 +1326,7 @@ export function ProposalDetailView({
       {canUpdate && (
         <div
           className={`pointer-events-none fixed bottom-6 left-1/2 z-30 flex w-full max-w-md -translate-x-1/2 justify-end px-4 ${
-            !isNativeApp ? 'lg:left-auto lg:right-6 lg:w-auto lg:max-w-none lg:translate-x-0 lg:px-0' : ''
+            !isNativeApp ? 'md:left-auto md:right-6 md:w-auto md:max-w-none md:translate-x-0 md:px-0' : ''
           }`}
         >
           <button
@@ -1342,7 +1352,7 @@ export function ProposalDetailView({
         >
           <div
             className={`flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-t-3xl border border-slate-200 bg-white shadow-2xl sm:rounded-3xl ${
-              !isNativeApp ? 'lg:max-w-xl' : ''
+              !isNativeApp ? 'md:max-w-xl' : ''
             }`}
             onClick={(e) => e.stopPropagation()}
           >

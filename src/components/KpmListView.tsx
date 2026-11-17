@@ -32,7 +32,7 @@ import {
   isKecamatanProposal,
   resolveProposalDomicile,
 } from '../utils/imageProcessor';
-import { isNativeAppPlatform } from '../utils/platform';
+import { useIsDesktopWeb } from '../utils/platform';
 import { DriveImage } from './DriveImage';
 import { FilterSelect, SegmentedTabs } from './FormControls';
 import { QrScannerLookupModal } from './QrScannerLookupModal';
@@ -388,33 +388,20 @@ export function KpmListView({
     setPekerjaanFilter('all');
   };
 
-  const isNativeApp = isNativeAppPlatform();
+  const isDesktopWeb = useIsDesktopWeb();
+  const isNativeApp = !isDesktopWeb;
 
   return (
-    <div className={`min-h-screen pb-28 ${!isNativeApp ? 'lg:pb-12' : ''}`}>
-      {/* Sticky Header */}
-      <header className={`sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md ${!isNativeApp ? 'lg:px-6' : ''}`}>
+    <div className={`min-h-screen pb-28 ${!isNativeApp ? 'md:pb-12' : ''}`}>
+      {/* Sticky Header (Native APK only) */}
+      {isNativeApp && (
+      <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md">
         <div className="flex min-w-0 items-center gap-2.5">
           <h1 className="truncate text-base font-bold text-slate-900">
             Keluarga Penerima Manfaat
           </h1>
-          {!isNativeApp && (
-            <span className="hidden lg:inline-flex items-center rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-700 tabular-nums">
-              {filteredRecords.length} KPM
-            </span>
-          )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {!isNativeApp && (
-            <button
-              type="button"
-              onClick={onCreateNew}
-              className="hidden lg:inline-flex min-h-[36px] items-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white transition-colors hover:bg-teal-800"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              <span>Daftarkan KPM</span>
-            </button>
-          )}
           {canUpdate && onBulkUpdateKpms && (
             <button
               type="button"
@@ -439,8 +426,53 @@ export function KpmListView({
           )}
         </div>
       </header>
+      )}
 
-      <div className={`space-y-4 px-4 pt-4 ${!isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:px-6 lg:pt-6' : ''}`}>
+      <div className={`space-y-4 px-4 pt-4 ${!isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''}`}>
+        {!isNativeApp && (
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
+                Keluarga Penerima Manfaat
+              </h1>
+              <span className="inline-flex shrink-0 items-center rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700 tabular-nums">
+                {filteredRecords.length} KPM
+              </span>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {canUpdate && onBulkUpdateKpms && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBulkMode((prev) => {
+                      if (prev) {
+                        setSelectedIds([]);
+                        setBulkSheet('none');
+                      }
+                      return !prev;
+                    });
+                  }}
+                  className={`inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border px-3 text-xs font-semibold transition-colors ${
+                    bulkMode
+                      ? 'border-teal-700 bg-teal-700 text-white'
+                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <CheckSquare className="h-3.5 w-3.5" />
+                  <span>{bulkMode ? 'Selesai' : 'Pilih Banyak'}</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onCreateNew}
+                className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl bg-teal-700 px-3.5 text-xs font-semibold text-white transition-colors hover:bg-teal-800"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>Daftarkan KPM</span>
+              </button>
+            </div>
+          </div>
+        )}
         {proposalFilter !== 'all' && onChangeProposalFilter && (
           <div className="flex items-center justify-between gap-2 rounded-2xl border border-teal-200 bg-teal-50 px-3.5 py-2.5 text-xs text-teal-900">
             <span className="truncate font-semibold">Proposal: {proposalFilter}</span>
@@ -514,8 +546,8 @@ export function KpmListView({
           </div>
 
           {showExtraFilters && (
-            <div className={`rounded-2xl border border-slate-200 bg-white p-3 space-y-2.5 ${!isNativeApp ? 'lg:p-4' : ''}`}>
-              <div className={!isNativeApp ? 'grid grid-cols-2 gap-2 lg:grid-cols-6 lg:gap-2.5' : 'grid grid-cols-2 gap-2'}>
+            <div className={`rounded-2xl border border-slate-200 bg-white p-3 space-y-2.5 ${!isNativeApp ? 'md:p-4' : ''}`}>
+              <div className={!isNativeApp ? 'grid grid-cols-2 gap-2 md:grid-cols-6 md:gap-2.5' : 'grid grid-cols-2 gap-2'}>
                 <FilterSelect
                   ariaLabel="Filter item bantuan"
                   value={itemFilter}
@@ -665,7 +697,7 @@ export function KpmListView({
           <>
           {/* Desktop SaaS High-Density Data Table */}
           {!isNativeApp && (
-            <div className="hidden lg:block overflow-hidden rounded-2xl border border-slate-200 bg-white">
+            <div className="hidden md:block overflow-hidden rounded-2xl border border-slate-200 bg-white">
               <div className="overflow-x-auto">
                 <table className="w-full border-collapse text-left text-xs">
                   <thead>
@@ -861,7 +893,7 @@ export function KpmListView({
           )}
 
           {/* Mobile & Native APK Swipeable Cards */}
-          <div className={`overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100 ${!isNativeApp ? 'lg:hidden' : ''}`}>
+          <div className={`overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100 ${!isNativeApp ? 'md:hidden' : ''}`}>
             {filteredRecords.slice(0, visibleLimit).map((rec) => {
               const thumb = getPrimaryKpmPhoto(rec.documents);
               const locked = isRecordProposalLocked(rec);
@@ -1120,7 +1152,7 @@ export function KpmListView({
       {bulkMode && selectedIds.length > 0 && (
         <div
           className={`fixed bottom-20 left-1/2 z-40 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2 rounded-2xl border border-slate-700 bg-slate-900 p-3 text-white shadow-2xl ${
-            !isNativeApp ? 'lg:bottom-6 lg:left-[calc(50%+8rem)] lg:max-w-xl' : ''
+            !isNativeApp ? 'md:bottom-6 md:left-[calc(50%+8rem)] md:max-w-xl' : ''
           }`}
         >
           <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-800">

@@ -170,6 +170,7 @@ import {
 } from './services/nativeChatNotifier';
 import { APP_VERSION } from './config/appVersion';
 import { DesktopSidebar } from './components/DesktopSidebar';
+import { NotificationPageView } from './components/NotificationPageView';
 import { isNativeAppPlatform, useIsDesktopWeb } from './utils/platform';
 
 type SubView =
@@ -183,6 +184,7 @@ type SubView =
   | 'proposal-detail'
   | 'proposal-history'
   | 'chat'
+  | 'notifications'
   | 'profile';
 
 interface FeedbackBanner {
@@ -3308,7 +3310,7 @@ export default function App() {
       return;
     }
 
-    if (subView === 'profile') {
+    if (subView === 'profile' || subView === 'notifications') {
       navigateRestoreScroll();
       setSubView('none');
       setActiveTab(returnToTab);
@@ -6166,7 +6168,7 @@ export default function App() {
   };
 
   const handleLogin = async (
-    email: string,
+    identifier: string,
     password: string
   ): Promise<{ ok: boolean; error?: string }> => {
     if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
@@ -6177,9 +6179,12 @@ export default function App() {
     }
     if (supabaseReadyRef.current) {
       try {
-        const res = await supabaseLogin(email, password);
+        const res = await supabaseLogin(identifier, password);
         if (!res.ok || !res.user) {
-          return { ok: false, error: res.error || 'Email atau kata sandi tidak sesuai.' };
+          return {
+            ok: false,
+            error: res.error || 'Username/email atau kata sandi tidak sesuai.',
+          };
         }
         const [users, msgs] = await Promise.all([
           supabaseFetchInternalUsers(),
@@ -6230,7 +6235,7 @@ export default function App() {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: identifier, identifier, password }),
       });
       const data = (await res.json()) as {
         error?: string;
@@ -6240,7 +6245,10 @@ export default function App() {
         messages?: DirectChatMessage[];
       };
       if (!res.ok || !data.user || !data.token) {
-        return { ok: false, error: data.error || 'Email atau kata sandi tidak sesuai.' };
+        return {
+          ok: false,
+          error: data.error || 'Username/email atau kata sandi tidak sesuai.',
+        };
       }
 
       if (Array.isArray(data.users)) {
@@ -6271,6 +6279,7 @@ export default function App() {
 
   const handleRegister = async (payload: {
     nama: string;
+    username: string;
     email: string;
     kontak: string;
     password: string;
@@ -6687,6 +6696,7 @@ export default function App() {
 
   const handleRegisterInternalUser = async (user: {
     nama: string;
+    username?: string;
     email: string;
     jabatan: string;
     kontak: string;
@@ -6911,6 +6921,17 @@ export default function App() {
     setFeedback(null);
     setReturnToTab(activeTab);
     setSubView('profile');
+  };
+
+  const openNotificationsView = () => {
+    navigateForwardScroll();
+    setFeedback(null);
+    setReturnToTab(activeTab);
+    setBellAckChatCount(unreadChatCount);
+    setAppNotifications((prev) =>
+      prev.some((n) => !n.read) ? prev.map((n) => ({ ...n, read: true })) : prev
+    );
+    setSubView('notifications');
   };
 
   const handleAcceptAllInProposal = (proposalName: string, tahun: string) => {
@@ -7461,21 +7482,21 @@ export default function App() {
 
   if (!currentUser) {
     return (
-      <div className={`min-h-screen bg-slate-200/70 sm:py-3 ${!isNativeApp ? 'lg:bg-slate-100 lg:py-0' : ''}`}>
+      <div className={isNativeApp ? 'min-h-screen bg-slate-200/70 sm:py-3' : 'min-h-screen bg-slate-100'}>
         <OfflineIndicator
           isOnline={isOnline}
           isChecking={checkingInternet}
           onRetry={checkConnection}
         />
         <div
-          className={`mx-auto min-h-screen w-full max-w-md overflow-x-hidden bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm ${
-            !isNativeApp
-              ? 'lg:min-h-screen lg:max-w-none lg:rounded-none lg:border-0 lg:bg-transparent lg:shadow-none'
-              : ''
-          }`}
+          className={
+            isNativeApp
+              ? 'mx-auto min-h-screen w-full max-w-md overflow-x-hidden bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm'
+              : 'min-h-screen w-full bg-slate-100'
+          }
         >
           {supabaseSchemaMissing && !dismissedSchemaNotice && (
-            <div className={`mx-4 mt-3 flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 ${!isNativeApp ? 'lg:mx-auto lg:max-w-5xl' : ''}`}>
+            <div className={`mx-4 mt-3 flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 ${!isNativeApp ? 'md:mx-auto md:max-w-5xl' : ''}`}>
               <Database className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
               <div className="min-w-0 flex-1">
                 <p className="font-bold">Tabel Supabase belum dibuat</p>
@@ -7511,14 +7532,14 @@ export default function App() {
   }
 
   return (
-    <div className={`min-h-screen bg-slate-200/70 sm:py-3 ${!isNativeApp ? 'lg:bg-slate-100 lg:py-0' : ''}`}>
+    <div className={isNativeApp ? 'min-h-screen bg-slate-200/70 sm:py-3' : 'min-h-screen bg-slate-100'}>
       <OfflineIndicator
         isOnline={isOnline}
         isChecking={checkingInternet}
         onRetry={checkConnection}
       />
 
-      {!isNativeApp && (
+      {isDesktopWeb && (
         <DesktopSidebar
           logo={<MasdetaLogo />}
           currentUser={currentUser}
@@ -7533,6 +7554,9 @@ export default function App() {
           duplicateNikCount={duplicateNikCount}
           hasAppUpdate={Boolean(appUpdateInfo?.hasUpdate)}
           canAdd={hasPermission('add')}
+          appNotifications={appNotifications}
+          bellHasUnread={bellHasUnread}
+          onOpenNotifications={openNotificationsView}
           onSelectTab={(tab) => {
             setFeedback(null);
             setMenuOpenedFromDashboard(false);
@@ -7578,7 +7602,7 @@ export default function App() {
       )}
 
       {supabaseSchemaMissing && !dismissedSchemaNotice && (
-        <div className={`mx-auto mb-2 w-full max-w-md px-3 sm:px-0 ${!isNativeApp ? 'lg:max-w-none lg:pl-64 lg:pr-6 lg:pt-3' : ''}`}>
+        <div className={isNativeApp ? 'mx-auto mb-2 w-full max-w-md px-3 sm:px-0' : 'mx-auto mb-2 w-full px-4 pt-3 md:pl-64 md:pr-6'}>
           <div className="flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 shadow-xs">
             <Database className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
             <div className="min-w-0 flex-1">
@@ -7611,7 +7635,7 @@ export default function App() {
               ? 'bottom-24'
               : 'bottom-5'
           } ${
-            !isNativeApp ? 'lg:left-auto lg:right-6 lg:bottom-6 lg:w-96 lg:translate-x-0' : ''
+            !isNativeApp ? 'md:left-auto md:right-6 md:bottom-6 md:w-96 md:translate-x-0' : ''
           }`}
         >
           <div
@@ -7646,7 +7670,7 @@ export default function App() {
       {incomingToast && (
         <div
           className={`fixed top-3 left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2 ${
-            !isNativeApp ? 'lg:top-4 lg:right-6 lg:left-auto lg:w-96 lg:translate-x-0' : ''
+            !isNativeApp ? 'md:top-4 md:right-6 md:left-auto md:w-96 md:translate-x-0' : ''
           }`}
         >
           <div className="flex items-start gap-3 rounded-2xl border border-teal-200 bg-white p-3 shadow-lg shadow-slate-900/10">
@@ -7688,7 +7712,7 @@ export default function App() {
         (appAlertToast.type !== 'user_registered' || currentUser.role === 'SuperAdmin') && (
         <div
           className={`fixed top-3 left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2 ${
-            !isNativeApp ? 'lg:top-4 lg:right-6 lg:left-auto lg:w-96 lg:translate-x-0' : ''
+            !isNativeApp ? 'md:top-4 md:right-6 md:left-auto md:w-96 md:translate-x-0' : ''
           }`}
         >
           <div
@@ -7769,11 +7793,11 @@ export default function App() {
         }
       >
         <div
-          className={`mx-auto min-h-screen w-full max-w-md overflow-x-hidden bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm ${
-            !isNativeApp
-              ? 'lg:min-h-screen lg:max-w-none lg:overflow-x-visible lg:rounded-none lg:border-0 lg:bg-slate-100 lg:pl-64 lg:shadow-none'
-              : ''
-          }`}
+          className={
+            isNativeApp
+              ? 'mx-auto min-h-screen w-full max-w-md overflow-x-hidden bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm'
+              : 'min-h-screen w-full overflow-x-hidden bg-slate-100 md:overflow-x-visible md:pl-64'
+          }
         >
         {/* Sub-Views */}
         {(subView === 'chat' ||
@@ -7824,6 +7848,39 @@ export default function App() {
               }}
             />
           </div>
+        )}
+
+        {subView === 'notifications' && (
+          <NotificationPageView
+            currentUser={currentUser}
+            unreadChatCount={unreadChatCount}
+            pendingUsersCount={currentUser.role === 'SuperAdmin' ? pendingUsersCount : 0}
+            appNotifications={appNotifications}
+            onMarkNotificationsRead={() =>
+              setAppNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
+            }
+            onDismissNotification={(id) =>
+              setAppNotifications((prev) => prev.filter((n) => n.id !== id))
+            }
+            onClearNotifications={() => {
+              setBellAckChatCount(unreadChatCount);
+              setAppNotifications([]);
+              setAppAlertToast(null);
+            }}
+            onOpenChat={() => openChatView()}
+            onOpenUserApproval={() => {
+              navigateForwardScroll();
+              setSubView('none');
+              setMenuOpenedFromDashboard(false);
+              setMenuSection('users');
+              setActiveTab('menu');
+            }}
+            onOpenProposalList={() => {
+              navigateForwardScroll();
+              setSubView('none');
+              setActiveTab('proposal');
+            }}
+          />
         )}
 
         {subView === 'profile' && (

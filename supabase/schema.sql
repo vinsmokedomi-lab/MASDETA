@@ -252,6 +252,7 @@ CREATE TABLE IF NOT EXISTS public.kpm_audit_logs (
 CREATE TABLE IF NOT EXISTS public.internal_users (
   id TEXT PRIMARY KEY,
   nama TEXT NOT NULL,
+  username TEXT,
   email TEXT NOT NULL UNIQUE,
   jabatan TEXT NOT NULL DEFAULT 'Admin Lapangan',
   kontak TEXT NOT NULL DEFAULT '',
@@ -270,6 +271,13 @@ CREATE TABLE IF NOT EXISTS public.internal_users (
   registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE public.internal_users
+  ADD COLUMN IF NOT EXISTS username TEXT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_internal_users_username_unique
+  ON public.internal_users (lower(username))
+  WHERE username IS NOT NULL AND username <> '';
 
 CREATE TABLE IF NOT EXISTS public.direct_chat_messages (
   id TEXT PRIMARY KEY,
