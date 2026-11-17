@@ -12,8 +12,7 @@ import {
   getAbsenSeq,
   getItemHierarchyRank,
   getPrimaryKpmPhoto,
-  isKecamatanProposal,
-  resolveProposalDomicile,
+  resolveKpmDomicile,
 } from '../utils/imageProcessor';
 import { DriveImage } from './DriveImage';
 import { FilterSelect, SegmentedTabs } from './FormControls';
@@ -53,15 +52,16 @@ export function CorrespondentKpmListPanel({
   const [showFilters, setShowFilters] = useState(false);
 
   const getRecordKelurahan = (rec: KpmRecord) => {
-    if (rec.kelurahan?.trim()) return rec.kelurahan.trim();
-    return resolveProposalDomicile(rec.proposal, proposals, rec.tahun, wilayahList).kelurahan || '';
+    return resolveKpmDomicile(rec, proposals, wilayahList).kelurahan || '';
   };
 
   const getCompactKelurahan = (rawKel: string) =>
     rawKel.replace(/^(kelurahan|kel\.?)\s+/i, '').trim();
 
   const isRecordProposalLocked = (rec: KpmRecord) => {
+    if (!rec.proposal?.trim() && !rec.proposalId) return false;
     const match =
+      (rec.proposalId ? proposals.find((p) => p.id === rec.proposalId) : undefined) ??
       proposals.find((p) => p.namaProposal === rec.proposal && p.tahun === rec.tahun) ??
       proposals.find((p) => p.namaProposal === rec.proposal);
     return match?.status === 'locked';
@@ -396,10 +396,14 @@ export function CorrespondentKpmListPanel({
               rec.dtsen && /^\d/.test(rec.dtsen.trim())
                 ? rec.dtsen.trim().replace(/\s*-\s*/g, '-')
                 : '';
-            const kelurahanName = isKecamatanProposal(rec.proposal)
-              ? getCompactKelurahan(getRecordKelurahan(rec))
-              : '';
-            const metaLine = [kelurahanName, rec.pengelola?.trim()]
+            const dom = resolveKpmDomicile(rec, proposals, wilayahList);
+            const kelurahanName = getCompactKelurahan(dom.kelurahan);
+            const containerTitle = rec.proposal?.trim()
+              ? rec.proposal
+              : rec.validasi === 'rejected'
+                ? 'Arsip Berkas Ditolak'
+                : 'Database KPM';
+            const metaLine = [dom.kecamatan, kelurahanName, rec.pengelola?.trim()]
               .filter(Boolean)
               .join(' · ');
 
@@ -457,10 +461,10 @@ export function CorrespondentKpmListPanel({
                   {/* Baris 2: Proposal & Tahun */}
                   <div className="mt-1 flex items-center justify-between gap-2 text-[11px] leading-tight">
                     <span className="truncate font-medium text-slate-600">
-                      {rec.proposal}
+                      {containerTitle}
                     </span>
                     <span className="shrink-0 font-semibold text-slate-400 tabular-nums">
-                      {rec.tahun}
+                      {rec.tahun || 'Tanpa Tahun'}
                     </span>
                   </div>
 

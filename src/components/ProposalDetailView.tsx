@@ -57,7 +57,7 @@ interface ProposalDetailViewProps {
   onEditProposal: (proposalId: string) => void;
   onAddKpmInProposal: (proposalName: string, tahun: string) => void;
   onViewKpmInProposal: (proposalName: string, tahun: string) => void;
-  onAcceptAllKpm: (proposalName: string, tahun: string) => void;
+  onAcceptAllKpm?: (proposalName: string, tahun: string) => void;
   onTransferKpm?: (kpmIds: string[], targetProposalId: string) => Promise<boolean> | boolean;
   onOpenFullHistory: () => void;
   onPreviewDocument?: (file: KpmDocumentFile, title: string) => void;
@@ -80,7 +80,6 @@ export function ProposalDetailView({
   onEditProposal,
   onAddKpmInProposal,
   onViewKpmInProposal,
-  onAcceptAllKpm,
   onTransferKpm,
   onOpenFullHistory,
   onPreviewDocument,
@@ -88,7 +87,6 @@ export function ProposalDetailView({
 }: ProposalDetailViewProps) {
   const isNativeApp = isNativeAppPlatform();
   const isDesktopWeb = useIsDesktopWeb();
-  const [confirmAcceptAll, setConfirmAcceptAll] = useState(false);
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
   const [transferYear, setTransferYear] = useState<string>(proposal.tahun);
   const [transferTargetId, setTransferTargetId] = useState<string>('');
@@ -148,9 +146,13 @@ export function ProposalDetailView({
   const proposalRecords = useMemo(
     () =>
       records.filter(
-        (r) => r.proposal === proposal.namaProposal && r.tahun === proposal.tahun
+        (r) =>
+          r.validasi === 'accepted' &&
+          (r.proposalId
+            ? r.proposalId === proposal.id
+            : r.proposal === proposal.namaProposal && r.tahun === proposal.tahun)
       ),
-    [records, proposal.namaProposal, proposal.tahun]
+    [records, proposal.id, proposal.namaProposal, proposal.tahun]
   );
 
   const showKelurahanCard = !/\b(kelurahan|desa)\b/i.test(proposal.namaProposal);
@@ -160,14 +162,14 @@ export function ProposalDetailView({
     [proposalRecords, items]
   );
 
-  // KPM Stats
+  // KPM Stats (Proposal hanya menampung KPM berstatus Diterima)
   const kpmCounts = useMemo(() => {
     const total = proposalRecords.length;
-    const accepted = proposalRecords.filter((r) => r.validasi === 'accepted').length;
-    const pending = proposalRecords.filter((r) => r.validasi === 'pending').length;
-    const rejected = proposalRecords.filter((r) => r.validasi === 'rejected').length;
-    return { total, accepted, pending, rejected };
-  }, [proposalRecords]);
+    const accepted = total;
+    const quota = proposal.jumlahKpm ?? 66;
+    const remainingQuota = Math.max(0, quota - total);
+    return { total, accepted, quota, remainingQuota };
+  }, [proposalRecords, proposal.jumlahKpm]);
 
   // DTSEN Breakdown (Desil 1-4, Desil 5, Desil 6-10, Belum Ada Desil, Data Tidak Ditemukan)
   const dtsenBreakdown = useMemo(() => {
@@ -338,7 +340,10 @@ export function ProposalDetailView({
   const unlockedTargetProposals = useMemo(
     () =>
       allProposals.filter(
-        (p) => p.id !== proposal.id && p.status !== 'locked'
+        (p) =>
+          p.id !== proposal.id &&
+          p.status !== 'locked' &&
+          (p.tipe === 'Murni' || p.tipe === 'Perubahan')
       ),
     [allProposals, proposal.id]
   );
@@ -655,10 +660,10 @@ export function ProposalDetailView({
             </div>
             <div className="flex flex-col items-center justify-center px-1.5 text-center">
               <p className="whitespace-nowrap text-[11px] font-medium leading-tight text-slate-500">
-                Menunggu / Ditolak
+                Sisa Kuota
               </p>
               <p className="mt-1.5 whitespace-nowrap text-lg font-bold leading-none text-slate-700 tabular-nums">
-                {kpmCounts.pending + kpmCounts.rejected}
+                {kpmCounts.remainingQuota}
               </p>
             </div>
           </div>
@@ -725,47 +730,6 @@ export function ProposalDetailView({
                   </button>
                 )}
               </div>
-
-              {kpmCounts.pending + kpmCounts.rejected > 0 && proposal.status !== 'locked' && canUpdate && (
-                !confirmAcceptAll ? (
-                  <button
-                    type="button"
-                    onClick={() => setConfirmAcceptAll(true)}
-                    className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl border border-teal-200 bg-teal-50 px-4 text-xs font-bold text-teal-800 transition-colors hover:bg-teal-100"
-                  >
-                    <CheckCircle2 className="h-4 w-4" />
-                    <span>
-                      Terima Semua ({kpmCounts.pending + kpmCounts.rejected} Menunggu / Ditolak)
-                    </span>
-                  </button>
-                ) : (
-                  <div className="rounded-xl border border-teal-200 bg-teal-50 p-3">
-                    <p className="text-xs font-bold text-teal-950">
-                      Ubah status {kpmCounts.pending + kpmCounts.rejected} (Menunggu / Ditolak)
-                      menjadi Diterima?
-                    </p>
-                    <div className="mt-2.5 flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setConfirmAcceptAll(false)}
-                        className="min-h-[38px] flex-1 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                      >
-                        Batal
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setConfirmAcceptAll(false);
-                          onAcceptAllKpm(proposal.namaProposal, proposal.tahun);
-                        }}
-                        className="min-h-[38px] flex-1 rounded-lg bg-teal-700 text-xs font-semibold text-white hover:bg-teal-800"
-                      >
-                        Ya, Terima Semua
-                      </button>
-                    </div>
-                  </div>
-                )
-              )}
             </div>
           )}
         </section>
@@ -1416,7 +1380,11 @@ export function ProposalDetailView({
                       >
                         {transferTargetOptions.map((tp) => {
                           const existingCount = records.filter(
-                            (r) => r.proposal === tp.namaProposal && r.tahun === tp.tahun
+                            (r) =>
+                              r.validasi === 'accepted' &&
+                              (r.proposalId
+                                ? r.proposalId === tp.id
+                                : r.proposal === tp.namaProposal && r.tahun === tp.tahun)
                           ).length;
                           return (
                             <option key={tp.id} value={tp.id}>

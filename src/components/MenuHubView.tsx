@@ -13,6 +13,7 @@ import {
   ClipboardCheck,
   Clock,
   CopyCheck,
+  Database,
   Download,
   Edit3,
   Eye,
@@ -53,6 +54,7 @@ import { SwipeAction, SwipeableRow } from './SwipeableRow';
 import { APP_VERSION, GITHUB_REPO } from '../config/appVersion';
 import { APP_CHANGELOG, ChangelogRelease } from '../data/changelogData';
 import { CorrespondentKpmListPanel } from './CorrespondentKpmListPanel';
+import { StandaloneKpmView } from './StandaloneKpmView';
 import { DTSEN_OPTION_ITEMS } from '../data/kpmOptions';
 import {
   InternalUser,
@@ -81,8 +83,6 @@ import {
   getAbsenSeq,
   getPrimaryKpmPhoto,
   isArchivedKpm,
-  isKecamatanProposal,
-  resolveProposalDomicile,
 } from '../utils/imageProcessor';
 import { useIsDesktopWeb } from '../utils/platform';
 
@@ -93,6 +93,7 @@ export type MenuSection =
   | 'wilayah'
   | 'users'
   | 'duplikasi'
+  | 'database-kpm'
   | 'arsip'
   | 'administrasi'
   | 'dtsen'
@@ -211,6 +212,11 @@ interface MenuHubViewProps {
   onPermanentDeleteTrashItem?: (trashId: string) => void;
   reportTemplate?: ReportTemplateConfig;
   onSaveReportTemplate?: (next: ReportTemplateConfig) => void;
+  onOpenCreateStandaloneDatabaseKpm?: () => void;
+  onBulkRecoverToDatabase?: (kpmIds: string[]) => Promise<void> | void;
+  onBulkRejectToArsip?: (kpmIds: string[]) => Promise<void> | void;
+  onBulkAssignToProposal?: (kpmIds: string[], targetProposal: ProposalRecord) => Promise<void> | void;
+  onBulkPermanentDeleteKpms?: (kpmIds: string[]) => Promise<void> | void;
 }
 
 export function MenuHubView({
@@ -276,6 +282,11 @@ export function MenuHubView({
   onPermanentDeleteTrashItem,
   reportTemplate,
   onSaveReportTemplate,
+  onOpenCreateStandaloneDatabaseKpm,
+  onBulkRecoverToDatabase,
+  onBulkRejectToArsip,
+  onBulkAssignToProposal,
+  onBulkPermanentDeleteKpms,
 }: MenuHubViewProps) {
   const isDesktopWeb = useIsDesktopWeb();
   const isNativeApp = !isDesktopWeb;
@@ -682,12 +693,6 @@ export function MenuHubView({
   const [adminProposalFilter, setAdminProposalFilter] = useState<string>('all');
   const [adminSortBy, setAdminSortBy] = useState<'absen' | 'amount_desc' | 'amount_asc' | 'name_asc'>('absen');
 
-  // Arsip Berkas KPM filters
-  const [arsipQuery, setArsipQuery] = useState('');
-  const [arsipYearFilter, setArsipYearFilter] = useState<string>('all');
-  const [arsipProposalFilter, setArsipProposalFilter] = useState<string>('all');
-  const [showArsipExtraFilters, setShowArsipExtraFilters] = useState(false);
-
   // Pengelola Lapangan search, filter & sorting
   const [pengelolaQuery, setPengelolaQuery] = useState('');
   const [pengelolaWilayahFilter, setPengelolaWilayahFilter] = useState<string>('all');
@@ -736,8 +741,13 @@ export function MenuHubView({
   // Tempat Sampah confirmation state
   const [pendingPermanentDeleteTrashId, setPendingPermanentDeleteTrashId] = useState<string | null>(null);
 
+  const databaseKpmRecords = useMemo(
+    () => records.filter((r) => r.validasi === 'pending' && !(r.proposal || '').trim()),
+    [records]
+  );
+
   const archivedRecords = useMemo(
-    () => records.filter((r) => isArchivedKpm(r)),
+    () => records.filter((r) => isArchivedKpm(r) && !(r.proposal || '').trim()),
     [records]
   );
 
@@ -1266,16 +1276,43 @@ export function MenuHubView({
 
               <button
                 type="button"
-                onClick={() => onChangeSection('arsip')}
+                onClick={() => onChangeSection('database-kpm')}
                 className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
               >
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                  <Database className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-slate-900">Database KPM</p>
+                    <span className="text-xs font-bold text-amber-700 tabular-nums">
+                      {databaseKpmRecords.length}
+                    </span>
+                  </div>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    Calon KPM standalone berstatus menunggu (berbasis domisili)
+                  </p>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onChangeSection('arsip')}
+                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+              >
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-700">
                   <Archive className="h-5 w-5" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">Arsip Berkas Ditolak</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-slate-900">Arsip Berkas Ditolak</p>
+                    <span className="text-xs font-bold text-rose-700 tabular-nums">
+                      {archivedRecords.length}
+                    </span>
+                  </div>
                   <p className="mt-0.5 truncate text-xs text-slate-500">
-                    Daftar berkas KPM berstatus ditolak
+                    Daftar berkas KPM standalone berstatus ditolak
                   </p>
                 </div>
                 <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -3372,235 +3409,47 @@ export function MenuHubView({
     );
   }
 
-  // 4B. ARSIP BERKAS KPM (Hanya KPM Ditolak untuk Pengembalian Berkas Fisik)
-  if (activeSection === 'arsip') {
-    const arsipYearOptions = Array.from(
-      new Set(archivedRecords.map((r) => r.tahun).filter(Boolean))
-    ).sort((a, b) => b.localeCompare(a));
-
-    const arsipProposalOptions = Array.from(
-      new Set(archivedRecords.map((r) => r.proposal).filter(Boolean))
-    ).sort((a, b) => a.localeCompare(b, 'id'));
-
-    const scopedArsip = archivedRecords.filter((rec) => {
-      if (arsipYearFilter !== 'all' && rec.tahun !== arsipYearFilter) return false;
-      if (arsipProposalFilter !== 'all' && rec.proposal !== arsipProposalFilter) return false;
-      return true;
-    });
-
-    const q = arsipQuery.trim().toLowerCase();
-    const visibleArsip = scopedArsip
-      .filter((rec) => {
-        if (!q) return true;
-        return (
-          rec.nama.toLowerCase().includes(q) ||
-          rec.proposal.toLowerCase().includes(q) ||
-          (rec.pengelola && rec.pengelola.toLowerCase().includes(q)) ||
-          (rec.kelurahan && rec.kelurahan.toLowerCase().includes(q)) ||
-          rec.nikKtp.includes(q) ||
-          rec.nikKk.includes(q)
-        );
-      })
-      .sort((a, b) => {
-        return (
-          a.proposal.localeCompare(b.proposal, 'id') ||
-          getAbsenSeq(a.registerCode) - getAbsenSeq(b.registerCode) ||
-          a.nama.localeCompare(b.nama, 'id')
-        );
-      });
-
-    const getCompactKelurahan = (rawKel: string) =>
-      rawKel.replace(/^(kelurahan|kel\.?)\s+/i, '').trim();
-
+  // 4A. DATABASE KPM STANDALONE (Status Menunggu, Tanpa Proposal)
+  if (activeSection === 'database-kpm') {
     return (
-      <div className="min-h-screen pb-24">
-        {renderSubHeader('Arsip Berkas Ditolak', () => onChangeSection('root'))}
+      <StandaloneKpmView
+        mode="database"
+        records={databaseKpmRecords}
+        proposals={proposals}
+        items={items}
+        pengelolaList={pengelolaList}
+        wilayahList={wilayahList}
+        canAdd={canAdd}
+        canUpdate={canUpdate}
+        canDelete={canDelete}
+        onBack={() => onChangeSection('root')}
+        onSelectKpm={(rec) => onSelectKpm?.(rec)}
+        onCreateNewStandalone={onOpenCreateStandaloneDatabaseKpm}
+        onBulkAssignToProposal={onBulkAssignToProposal}
+        onBulkRejectToArsip={onBulkRejectToArsip}
+        onBulkPermanentDelete={onBulkPermanentDeleteKpms}
+      />
+    );
+  }
 
-        <div
-          className={`space-y-4 px-4 pt-4 ${
-            !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''
-          }`}
-        >
-          {/* Header & Filter konsisten dengan KpmListView */}
-          <div className="space-y-2">
-            <p className="px-0.5 text-xs text-slate-500">
-              Daftar berkas calon KPM yang berstatus ditolak.
-            </p>
-
-            <div className="flex items-center gap-2">
-              <div className="relative min-w-0 flex-1">
-                <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="search"
-                  value={arsipQuery}
-                  onChange={(e) => setArsipQuery(e.target.value)}
-                  placeholder="Pencarian..."
-                  className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pr-3 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
-                />
-              </div>
-
-              <FilterSelect
-                ariaLabel="Filter tahun arsip"
-                value={arsipYearFilter}
-                onChange={setArsipYearFilter}
-                className="w-[82px] shrink-0"
-              >
-                <option value="all">Semua</option>
-                {arsipYearOptions.map((yr) => (
-                  <option key={yr} value={yr}>
-                    {yr}
-                  </option>
-                ))}
-              </FilterSelect>
-
-              <button
-                type="button"
-                onClick={() => setShowArsipExtraFilters((prev) => !prev)}
-                aria-label="Filter proposal arsip"
-                aria-expanded={showArsipExtraFilters}
-                className={`relative inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl border transition-colors ${
-                  showArsipExtraFilters || arsipProposalFilter !== 'all'
-                    ? 'border-teal-700 bg-teal-50 text-teal-800'
-                    : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                }`}
-              >
-                <SlidersHorizontal className="h-4 w-4" />
-                {arsipProposalFilter !== 'all' && (
-                  <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-teal-700 px-1 text-[10px] font-bold text-white">
-                    1
-                  </span>
-                )}
-              </button>
-            </div>
-
-            {showArsipExtraFilters && (
-              <div className="rounded-2xl border border-slate-200 bg-white p-3">
-                <FilterSelect
-                  ariaLabel="Filter proposal arsip"
-                  value={arsipProposalFilter}
-                  onChange={setArsipProposalFilter}
-                >
-                  <option value="all">Semua Proposal</option>
-                  {arsipProposalOptions.map((prop) => (
-                    <option key={prop} value={prop}>
-                      {prop}
-                    </option>
-                  ))}
-                </FilterSelect>
-              </div>
-            )}
-
-          </div>
-
-          {visibleArsip.length === 0 ? (
-            <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
-              <p className="text-sm font-bold text-slate-900">Tidak ada berkas di arsip</p>
-              <p className="mt-1 text-xs text-slate-500">
-                KPM Desil 5 ke atas atau lainnya yang berstatus Ditolak akan masuk ke sini.
-              </p>
-            </div>
-          ) : (
-            <div
-              className={`overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100 ${
-                !isNativeApp
-                  ? 'md:grid md:grid-cols-2 md:gap-3 md:divide-y-0 md:overflow-visible md:rounded-none md:border-0 md:bg-transparent'
-                  : ''
-              }`}
-            >
-              {visibleArsip.map((rec) => {
-                const thumb = getPrimaryKpmPhoto(rec.documents);
-                const absenSeq = getAbsenSeq(rec.registerCode);
-                const absenLabel =
-                  absenSeq < 999999 ? String(absenSeq).padStart(2, '0') : '--';
-                const desilNumeric =
-                  rec.dtsen && /^\d/.test(rec.dtsen.trim())
-                    ? rec.dtsen.trim().replace(/\s*-\s*/g, '-')
-                    : '';
-                const propMatch =
-                  proposals.find(
-                    (p) => p.namaProposal === rec.proposal && p.tahun === rec.tahun
-                  ) ?? proposals.find((p) => p.namaProposal === rec.proposal);
-                const locked = propMatch?.status === 'locked';
-                const kelRaw =
-                  rec.kelurahan?.trim() ||
-                  resolveProposalDomicile(rec.proposal, proposals, rec.tahun, wilayahList)
-                    .kelurahan ||
-                  '';
-                const kelurahanName = isKecamatanProposal(rec.proposal)
-                  ? getCompactKelurahan(kelRaw)
-                  : '';
-                const metaLine = [kelurahanName, rec.pengelola?.trim()]
-                  .filter(Boolean)
-                  .join(' · ');
-
-                return (
-                  <div
-                    key={rec.id}
-                    className={`bg-white ${
-                      !isNativeApp ? 'md:overflow-hidden md:rounded-2xl md:border md:border-slate-200' : ''
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => onSelectKpm?.(rec)}
-                      className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70"
-                    >
-                      <div className="flex w-5 shrink-0 items-center justify-center">
-                        <span className="font-mono text-[11px] font-bold text-slate-500 tabular-nums">
-                          {absenLabel}
-                        </span>
-                      </div>
-
-                      <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
-                        {thumb ? (
-                          <DriveImage
-                            doc={thumb}
-                            alt={rec.nama}
-                            className="absolute inset-0 h-full w-full object-cover"
-                          />
-                        ) : (
-                          <User className="h-5 w-5" />
-                        )}
-                      </div>
-
-                      <div className="min-w-0 flex-1 flex flex-col justify-center">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex min-w-0 items-center gap-1">
-                            <span className="truncate text-[13px] font-medium leading-tight text-slate-900">
-                              {rec.nama}
-                            </span>
-                            {locked && <Lock className="h-3 w-3 shrink-0 text-slate-400" />}
-                          </div>
-
-                          <span className="shrink-0 rounded-md bg-rose-50 px-1.5 py-0.5 text-[11px] font-bold leading-none text-rose-700 tabular-nums">
-                            {rec.item}
-                            {desilNumeric ? ` · ${desilNumeric}` : ''}
-                          </span>
-                        </div>
-
-                        <div className="mt-1 flex items-center justify-between gap-2 text-[11px] leading-tight">
-                          <span className="truncate font-medium text-slate-600">
-                            {rec.proposal}
-                          </span>
-                          <span className="shrink-0 font-semibold text-slate-400 tabular-nums">
-                            {rec.tahun}
-                          </span>
-                        </div>
-
-                        {metaLine && (
-                          <p className="mt-0.5 truncate text-[11px] leading-tight text-slate-500">
-                            {metaLine}
-                          </p>
-                        )}
-                      </div>
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
+  // 4B. ARSIP BERKAS DITOLAK STANDALONE (Status Ditolak, Tanpa Proposal)
+  if (activeSection === 'arsip') {
+    return (
+      <StandaloneKpmView
+        mode="arsip"
+        records={archivedRecords}
+        proposals={proposals}
+        items={items}
+        pengelolaList={pengelolaList}
+        wilayahList={wilayahList}
+        canAdd={false}
+        canUpdate={canUpdate}
+        canDelete={canDelete}
+        onBack={() => onChangeSection('root')}
+        onSelectKpm={(rec) => onSelectKpm?.(rec)}
+        onBulkRecoverToDatabase={onBulkRecoverToDatabase}
+        onBulkPermanentDelete={onBulkPermanentDeleteKpms}
+      />
     );
   }
 

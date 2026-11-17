@@ -203,7 +203,9 @@ export const INITIAL_PENGELOLA_LIST: PengelolaProfile[] = [];
 
 export const INITIAL_FORM_VALUES: KpmFormValues = {
   tahun: '2026',
+  proposalId: null,
   proposal: '',
+  kabKota: '',
   kecamatan: '',
   kelurahan: '',
   item: '',
@@ -231,7 +233,6 @@ export const SAMPLE_KPM_RECORDS: KpmRecord[] = [];
 export const PROPOSAL_TIPE_OPTIONS: ProposalTipe[] = [
   'Murni',
   'Perubahan',
-  'Database',
 ];
 
 export const ALL_KELURAHAN_OPTIONS: string[] = Array.from(

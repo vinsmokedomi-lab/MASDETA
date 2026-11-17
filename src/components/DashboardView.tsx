@@ -80,6 +80,7 @@ interface DashboardViewProps {
   onOpenUserApproval: () => void;
   onOpenDuplicateCheck: () => void;
   onOpenArsip?: () => void;
+  onOpenDatabaseKpm?: () => void;
   onOpenDtsen?: () => void;
 }
 
@@ -120,6 +121,7 @@ export function DashboardView({
   onOpenUserApproval,
   onOpenDuplicateCheck,
   onOpenArsip,
+  onOpenDatabaseKpm,
   onOpenDtsen,
 }: DashboardViewProps) {
   const [openHeaderMenu, setOpenHeaderMenu] = useState<'none' | 'notifications' | 'profile'>('none');
@@ -269,12 +271,14 @@ export function DashboardView({
   // Detailed proposal breakdown (smart-sorted: needing attention first, then newest update)
   const proposalSummaryList = useMemo(() => {
     const mapped = filteredProposals.map((prop) => {
-      const propRecords = filteredRecords.filter(
-        (r) => r.proposal === prop.namaProposal && r.tahun === prop.tahun
-      );
-      const activeKpmCount = propRecords.filter((r) => r.validasi !== 'rejected').length;
-      const acceptedCount = propRecords.filter((r) => r.validasi === 'accepted').length;
-      const pendingCount = propRecords.filter((r) => r.validasi === 'pending').length;
+      const propRecords = filteredRecords.filter((r) => {
+        if (r.validasi !== 'accepted') return false;
+        if (r.proposalId) return r.proposalId === prop.id;
+        return r.proposal === prop.namaProposal && r.tahun === prop.tahun;
+      });
+      const acceptedCount = propRecords.length;
+      const activeKpmCount = acceptedCount;
+      const pendingCount = 0;
       const target = prop.jumlahKpm ?? 66;
       const checklistDone = [
         prop.checklist.docx,
@@ -288,7 +292,7 @@ export function DashboardView({
 
       return {
         ...prop,
-        totalKpm: propRecords.length,
+        totalKpm: acceptedCount,
         activeKpmCount,
         acceptedCount,
         pendingCount,
@@ -818,7 +822,9 @@ export function DashboardView({
                 </button>
                 <button
                   type="button"
-                  onClick={() => onOpenKpmList({ status: 'pending' })}
+                  onClick={() =>
+                    onOpenDatabaseKpm ? onOpenDatabaseKpm() : onOpenKpmList({ status: 'pending' })
+                  }
                   className="px-1.5 text-center transition-opacity hover:opacity-80"
                 >
                   <p className="text-[11px] text-slate-400">Menunggu</p>
@@ -828,7 +834,9 @@ export function DashboardView({
                 </button>
                 <button
                   type="button"
-                  onClick={() => onOpenKpmList({ status: 'rejected' })}
+                  onClick={() =>
+                    onOpenArsip ? onOpenArsip() : onOpenKpmList({ status: 'rejected' })
+                  }
                   className="px-1.5 text-center transition-opacity hover:opacity-80"
                 >
                   <p className="text-[11px] text-slate-400">Ditolak</p>
@@ -1034,7 +1042,9 @@ export function DashboardView({
 
             <button
               type="button"
-              onClick={() => onOpenKpmList({ status: 'pending' })}
+              onClick={() =>
+                onOpenDatabaseKpm ? onOpenDatabaseKpm() : onOpenKpmList({ status: 'pending' })
+              }
               className="px-2 text-center transition-opacity hover:opacity-80"
             >
               <p className="text-[11px] text-slate-300">Menunggu</p>
@@ -1045,7 +1055,9 @@ export function DashboardView({
 
             <button
               type="button"
-              onClick={() => onOpenKpmList({ status: 'rejected' })}
+              onClick={() =>
+                onOpenArsip ? onOpenArsip() : onOpenKpmList({ status: 'rejected' })
+              }
               className="px-2 text-center transition-opacity hover:opacity-80"
             >
               <p className="text-[11px] text-slate-300">Ditolak</p>
@@ -1533,7 +1545,11 @@ export function DashboardView({
                       </div>
                       <p className="mt-0.5 truncate text-[11px] text-slate-500 tabular-nums">
                         {rec.item?.trim() ? `${rec.item} · ` : ''}
-                        {rec.proposal} ·{' '}
+                        {rec.proposal ||
+                          (rec.validasi === 'rejected'
+                            ? 'Arsip Berkas Ditolak'
+                            : 'Database KPM')}{' '}
+                        ·{' '}
                         <span className="inline-flex items-center gap-0.5">
                           <Clock className="inline h-2.5 w-2.5" />{' '}
                           {formatUploadDateTime(rec.updatedAt || rec.createdAt)}

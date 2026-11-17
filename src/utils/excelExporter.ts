@@ -5,11 +5,11 @@ import * as XLSX from 'xlsx';
 import { INITIAL_WILAYAH_LIST } from '../data/kpmOptions';
 import { ItemBantuan, KpmRecord, ProposalRecord, ReportTemplateConfig, WilayahKabKota } from '../types/kpm';
 import {
+  formatKecamatanCategoryLabel,
   getAbsenSeq,
   getItemHierarchyRank,
+  resolveKpmDomicile,
   resolvePackageForKpm,
-  resolveProposalDomicile,
-  resolveProposalKecamatanCategory,
 } from './imageProcessor';
 
 function sanitizeExcelFileName(name: string): string {
@@ -54,14 +54,11 @@ export async function exportKpmRecordsToExcel({
   const rows = sortedRecords.map((rec, idx) => {
     const seq = getAbsenSeq(rec.registerCode);
     const noAbsen = seq < 999999 ? String(seq).padStart(2, '0') : String(idx + 1).padStart(2, '0');
-    const domicile = resolveProposalDomicile(rec.proposal, proposals, rec.tahun, wilayahList);
-    const kelurahan = (rec.kelurahan || domicile.kelurahan || '-').trim();
-    const kecamatan = resolveProposalKecamatanCategory(
-      rec.proposal,
-      proposals,
-      rec.tahun,
-      wilayahList
-    );
+    const domicile = resolveKpmDomicile(rec, proposals, wilayahList);
+    const kelurahan = (domicile.kelurahan || '-').trim();
+    const kecamatan = domicile.kecamatan
+      ? formatKecamatanCategoryLabel(domicile.kecamatan)
+      : 'Wilayah Lainnya';
     const pkg = resolvePackageForKpm(items, rec.tahun, rec.item);
     const statusLabel =
       rec.validasi === 'accepted'
@@ -70,11 +67,15 @@ export async function exportKpmRecordsToExcel({
           ? 'Ditolak'
           : 'Menunggu';
 
+    const proposalLabel =
+      rec.proposal?.trim() ||
+      (rec.validasi === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM');
+
     return {
       No: noAbsen,
       'Kode Register': rec.registerCode || '-',
-      Tahun: rec.tahun || '-',
-      Proposal: rec.proposal || '-',
+      Tahun: rec.tahun || 'Tanpa Tahun',
+      Proposal: proposalLabel,
       Kecamatan: kecamatan,
       'Kelurahan / Desa': kelurahan,
       'Kode Item': rec.item || '-',

@@ -172,6 +172,119 @@ export function resolveProposalDomicile(
   return { kabKota, kecamatan, kelurahan };
 }
 
+export function isLegacyDummyProposal(prop: { tipe?: unknown; namaProposal?: string }): boolean {
+  const tipeStr = String(prop?.tipe || '').trim();
+  return tipeStr !== 'Murni' && tipeStr !== 'Perubahan';
+}
+
+export function resolveKpmDomicile(
+  record: Pick<KpmRecord, 'kabKota' | 'kecamatan' | 'kelurahan' | 'proposal' | 'proposalId' | 'tahun'>,
+  proposals: ProposalRecord[],
+  wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST
+): { kabKota: string; kecamatan: string; kelurahan: string } {
+  let kabKota = (record.kabKota || '').trim();
+  let kecamatan = (record.kecamatan || '').trim();
+  let kelurahan = (record.kelurahan || '').trim();
+
+  const propName = (record.proposal || '').trim();
+  if (propName) {
+    const matchedProp =
+      (record.proposalId ? proposals.find((p) => p.id === record.proposalId) : undefined) ??
+      resolveProposalDomicile(propName, proposals, record.tahun, wilayahList);
+    if ('namaProposal' in matchedProp) {
+      const dom = resolveProposalDomicile(matchedProp.namaProposal, proposals, matchedProp.tahun, wilayahList);
+      if (!kabKota) kabKota = matchedProp.kabKota?.trim() || dom.kabKota;
+      if (!kecamatan) kecamatan = matchedProp.kecamatan?.trim() || dom.kecamatan;
+      if (!kelurahan) kelurahan = matchedProp.kelurahan?.trim() || dom.kelurahan;
+    } else {
+      if (!kabKota) kabKota = matchedProp.kabKota;
+      if (!kecamatan) kecamatan = matchedProp.kecamatan;
+      if (!kelurahan) kelurahan = matchedProp.kelurahan;
+    }
+  }
+
+  if ((!kabKota || !kecamatan) && kelurahan) {
+    const kelLower = kelurahan.toLowerCase();
+    const bareKel = kelLower.replace(/^(kelurahan|desa)\s+/i, '').trim();
+    outer: for (const w of wilayahList) {
+      for (const kec of w.kecamatanList) {
+        const hit = kec.kelurahanList.some((k) => {
+          const kLow = k.toLowerCase();
+          return kLow === kelLower || kLow.replace(/^(kelurahan|desa)\s+/i, '').trim() === bareKel;
+        });
+        if (hit) {
+          if (!kabKota) kabKota = w.nama;
+          if (!kecamatan) kecamatan = kec.nama;
+          break outer;
+        }
+      }
+    }
+  }
+
+  if (!kabKota && kecamatan) {
+    const kecBare = kecamatan.replace(/^kecamatan\s+/i, '').trim().toLowerCase();
+    const matchedKab = wilayahList.find((w) =>
+      w.kecamatanList.some((k) => k.nama.toLowerCase() === kecBare)
+    );
+    if (matchedKab) kabKota = matchedKab.nama;
+  }
+
+  return { kabKota, kecamatan, kelurahan };
+}
+
+export function normalizeKpmRouting(
+  record: KpmRecord,
+  proposals: ProposalRecord[],
+  wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST
+): KpmRecord {
+  const dom = resolveKpmDomicile(record, proposals, wilayahList);
+  const tahun = (record.tahun || '').trim();
+
+  if (record.validasi !== 'accepted') {
+    return {
+      ...record,
+      tahun,
+      proposalId: null,
+      proposal: '',
+      kabKota: dom.kabKota,
+      kecamatan: dom.kecamatan,
+      kelurahan: dom.kelurahan,
+    };
+  }
+
+  const activeProposals = proposals.filter((p) => !isLegacyDummyProposal(p));
+  const matchedProp =
+    (record.proposalId ? activeProposals.find((p) => p.id === record.proposalId) : undefined) ??
+    (record.proposal
+      ? activeProposals.find(
+          (p) => p.namaProposal === record.proposal && (!tahun || p.tahun === tahun)
+        ) ?? activeProposals.find((p) => p.namaProposal === record.proposal)
+      : undefined);
+
+  if (!matchedProp && !record.proposal?.trim()) {
+    return {
+      ...record,
+      tahun,
+      validasi: 'pending',
+      proposalId: null,
+      proposal: '',
+      kabKota: dom.kabKota,
+      kecamatan: dom.kecamatan,
+      kelurahan: dom.kelurahan,
+    };
+  }
+
+  return {
+    ...record,
+    tahun: tahun || matchedProp?.tahun || '',
+    proposalId: matchedProp?.id ?? record.proposalId ?? null,
+    proposal: matchedProp?.namaProposal ?? (record.proposal || '').trim(),
+    kabKota: dom.kabKota,
+    kecamatan: dom.kecamatan,
+    kelurahan: dom.kelurahan,
+  };
+}
+
 export function formatKecamatanCategoryLabel(rawKecamatan?: string): string {
   const trimmed = (rawKecamatan || '').trim();
   if (!trimmed) return 'Wilayah Lainnya';
@@ -777,24 +890,26 @@ export function loadProposals(fallback: ProposalRecord[]): ProposalRecord[] {
     if (!raw) return fallback;
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return fallback;
-    const validTipes = new Set(['Murni', 'Perubahan', 'Database', 'Arsip']);
-    return parsed.map((prop: ProposalRecord) => {
-      const docs = prop.documents || {};
-      return {
-        ...prop,
-        tipe: validTipes.has(prop.tipe) ? prop.tipe : 'Murni',
-        checklist: {
-          docx: Boolean(docs.proposalOpd || docs.proposalLurahCamat),
-          dinas: Boolean(prop.checklist?.dinas),
-          dinasAt: prop.checklist?.dinasAt,
-          rab: Boolean(docs.rab),
-          rt: Boolean(docs.capRt),
-          rw: Boolean(docs.capRw),
-          lurah: Boolean(docs.capLurah),
-          camat: Boolean(docs.capCamat),
-        },
-      };
-    });
+    const validTipes = new Set(['Murni', 'Perubahan']);
+    return parsed
+      .filter((prop: ProposalRecord) => validTipes.has(String(prop?.tipe || '')))
+      .map((prop: ProposalRecord) => {
+        const docs = prop.documents || {};
+        return {
+          ...prop,
+          tipe: prop.tipe === 'Perubahan' ? 'Perubahan' : 'Murni',
+          checklist: {
+            docx: Boolean(docs.proposalOpd || docs.proposalLurahCamat),
+            dinas: Boolean(prop.checklist?.dinas),
+            dinasAt: prop.checklist?.dinasAt,
+            rab: Boolean(docs.rab),
+            rt: Boolean(docs.capRt),
+            rw: Boolean(docs.capRw),
+            lurah: Boolean(docs.capLurah),
+            camat: Boolean(docs.capCamat),
+          },
+        };
+      });
   } catch {
     return fallback;
   }
@@ -811,8 +926,9 @@ export function saveProposals(list: ProposalRecord[]): boolean {
 
 export function generateRegisterCode(tahun: string, item: string, count: number): string {
   const seq = String(count + 1).padStart(3, '0');
+  const yearPart = (tahun || '').trim() || 'NON';
   const itemCode = item || 'BNS';
-  return `${seq}. ${tahun} - ${itemCode}`;
+  return `${seq}. ${yearPart} - ${itemCode}`;
 }
 
 export function getAbsenSeq(registerCode: string): number {
@@ -838,10 +954,38 @@ export function recalculateProposalRegisterCodes(
 ): KpmRecord[] {
   if (records.length === 0) return records;
 
-  // Group records by proposal + tahun
+  // Normalisasi status routing standalone vs proposal-bound terlebih dahulu
+  const normalizedRecords = records.map((rec) => {
+    const dom = resolveKpmDomicile(rec, proposals, wilayahList);
+    if (rec.validasi !== 'accepted') {
+      return {
+        ...rec,
+        tahun: (rec.tahun || '').trim(),
+        proposalId: null,
+        proposal: '',
+        kabKota: dom.kabKota,
+        kecamatan: dom.kecamatan,
+        kelurahan: dom.kelurahan,
+      };
+    }
+    return {
+      ...rec,
+      tahun: (rec.tahun || '').trim(),
+      kabKota: dom.kabKota,
+      kecamatan: dom.kecamatan,
+      kelurahan: dom.kelurahan,
+    };
+  });
+
+  // Group records by proposal (accepted only) OR standalone bucket (pending / rejected)
   const groups = new Map<string, KpmRecord[]>();
-  for (const rec of records) {
-    const key = `${rec.proposal}__${rec.tahun}`;
+  for (const rec of normalizedRecords) {
+    const propName = (rec.proposal || '').trim();
+    const tahunVal = (rec.tahun || '').trim();
+    const key =
+      rec.validasi === 'accepted' && propName
+        ? `prop::${rec.proposalId || propName}__${tahunVal}`
+        : `standalone::${rec.validasi}__${tahunVal || 'NON'}`;
     const list = groups.get(key) ?? [];
     list.push(rec);
     groups.set(key, list);
@@ -855,13 +999,13 @@ export function recalculateProposalRegisterCodes(
       const rankA = getItemHierarchyRank(a.item, a.tahun, catalog);
       const rankB = getItemHierarchyRank(b.item, b.tahun, catalog);
       if (rankA !== rankB) return rankA - rankB;
-      const itemCmp = a.item.localeCompare(b.item, 'id');
+      const itemCmp = (a.item || '').localeCompare(b.item || '', 'id');
       if (itemCmp !== 0) return itemCmp;
 
-      const domA = resolveProposalDomicile(a.proposal, proposals, a.tahun, wilayahList);
-      const domB = resolveProposalDomicile(b.proposal, proposals, b.tahun, wilayahList);
-      const kecA = (a.kecamatan || domA.kecamatan || '').trim();
-      const kecB = (b.kecamatan || domB.kecamatan || '').trim();
+      const domA = resolveKpmDomicile(a, proposals, wilayahList);
+      const domB = resolveKpmDomicile(b, proposals, wilayahList);
+      const kecA = domA.kecamatan;
+      const kecB = domB.kecamatan;
       const kecCmp = kecA.localeCompare(kecB, 'id');
       if (kecCmp !== 0) return kecCmp;
 
@@ -873,34 +1017,45 @@ export function recalculateProposalRegisterCodes(
       const rtNumB = parseInt(b.rt || '0', 10) || 0;
       if (rtNumA !== rtNumB) return rtNumA - rtNumB;
 
-      const kelA = (a.kelurahan || domA.kelurahan || '').trim();
-      const kelB = (b.kelurahan || domB.kelurahan || '').trim();
+      const kelA = domA.kelurahan;
+      const kelB = domB.kelurahan;
       const kelCmp = kelA.localeCompare(kelB, 'id');
       if (kelCmp !== 0) return kelCmp;
 
-      const namaCmp = a.nama.localeCompare(b.nama, 'id');
+      const namaCmp = (a.nama || '').localeCompare(b.nama || '', 'id');
       if (namaCmp !== 0) return namaCmp;
 
-      return a.createdAt.localeCompare(b.createdAt);
+      return (a.createdAt || '').localeCompare(b.createdAt || '');
     });
 
     sorted.forEach((rec, idx) => {
       const seq = String(idx + 1).padStart(3, '0');
-      nextCodeById.set(rec.id, `${seq}. ${rec.tahun} - ${rec.item || 'BNS'}`);
+      const yearPart = (rec.tahun || '').trim() || (rec.validasi === 'rejected' ? 'ARSIP' : 'DB');
+      nextCodeById.set(rec.id, `${seq}. ${yearPart} - ${rec.item || 'BNS'}`);
     });
   }
 
   let changed = false;
-  const updated = records.map((rec) => {
+  const updated = normalizedRecords.map((rec, idx) => {
+    const orig = records[idx];
     const nextCode = nextCodeById.get(rec.id);
-    if (nextCode && nextCode !== rec.registerCode) {
+    const codeChanged = Boolean(nextCode && nextCode !== rec.registerCode);
+    const routingChanged =
+      rec.proposal !== orig.proposal ||
+      (rec.proposalId ?? null) !== (orig.proposalId ?? null) ||
+      (rec.kecamatan || '') !== (orig.kecamatan || '') ||
+      (rec.kelurahan || '') !== (orig.kelurahan || '');
+    if (codeChanged || routingChanged) {
       changed = true;
-      return { ...rec, registerCode: nextCode };
+      return {
+        ...rec,
+        registerCode: nextCode || rec.registerCode,
+      };
     }
     return rec;
   });
 
-  return changed ? updated : records;
+  return changed ? updated : normalizedRecords;
 }
 
 export function normalizeSubItemKey(name: string): string {

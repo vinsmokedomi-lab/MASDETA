@@ -17,6 +17,7 @@ export type OfflineQueuedAction =
       label: string;
       kpmId: string;
       status: ValidationStatus;
+      targetProposalId?: string;
     }
   | {
       id: string;

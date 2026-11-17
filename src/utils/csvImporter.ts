@@ -360,32 +360,6 @@ export function importProposalKpmFromCsv({
 
     if (!rawNama && !rawNikKtp) continue;
 
-    const tahunRaw = get(idxTahun) || bannerTahun || '2026';
-    const tahun = /^20\d{2}$/.test(tahunRaw) ? tahunRaw : bannerTahun || '2026';
-
-    const rawProposal = get(idxProposal) || bannerProposal || 'Kecamatan Pontianak Kota';
-    let proposalName = formatProposalTitle(rawProposal);
-    const existingProp = proposalLookup.get(`${tahun}::${proposalName.toLowerCase()}`);
-    if (existingProp) {
-      proposalName = existingProp.namaProposal;
-    }
-
-    const nama = rawNama.trim().toUpperCase();
-    const rt = padRtRw(get(idxRt));
-    const rw = padRtRw(get(idxRw));
-
-    const dedupKtpKey = rawNikKtp
-      ? `${tahun}::${proposalName.toLowerCase()}::ktp::${rawNikKtp}`
-      : '';
-    const dedupNameKey = `${tahun}::${proposalName.toLowerCase()}::name::${nama}::${rt}::${rw}`;
-
-    if (skipDuplicates && ((dedupKtpKey && existingKeys.has(dedupKtpKey)) || existingKeys.has(dedupNameKey))) {
-      skippedCount += 1;
-      continue;
-    }
-    if (dedupKtpKey) existingKeys.add(dedupKtpKey);
-    existingKeys.add(dedupNameKey);
-
     const rawKelurahan = normalizeKelurahanName(get(idxKelurahan));
     const rawKecamatan = normalizeKecamatanName(get(idxKecamatan));
 
@@ -399,6 +373,41 @@ export function importProposalKpmFromCsv({
     if (rawValidasi === 'diterima' || rawValidasi === 'accepted') validasi = 'accepted';
     else if (rawValidasi === 'ditolak' || rawValidasi === 'rejected') validasi = 'rejected';
     else if (rawValidasi === 'menunggu' || rawValidasi === 'pending') validasi = 'pending';
+
+    const tahunRaw = get(idxTahun);
+    const tahun =
+      validasi !== 'accepted' && (!tahunRaw || tahunRaw === '-' || /tanpa\s*tahun/i.test(tahunRaw))
+        ? ''
+        : /^20\d{2}$/.test(tahunRaw)
+          ? tahunRaw
+          : bannerTahun || '2026';
+
+    const isStandalone = validasi !== 'accepted';
+    const rawProposal = isStandalone ? '' : get(idxProposal) || bannerProposal || 'Kecamatan Pontianak Kota';
+    let proposalName = isStandalone ? '' : formatProposalTitle(rawProposal);
+    const existingProp = !isStandalone
+      ? proposalLookup.get(`${tahun}::${proposalName.toLowerCase()}`)
+      : undefined;
+    if (existingProp) {
+      proposalName = existingProp.namaProposal;
+    }
+
+    const nama = rawNama.trim().toUpperCase();
+    const rt = padRtRw(get(idxRt));
+    const rw = padRtRw(get(idxRw));
+
+    const scopeKey = isStandalone ? `standalone::${validasi}` : proposalName.toLowerCase();
+    const dedupKtpKey = rawNikKtp
+      ? `${tahun}::${scopeKey}::ktp::${rawNikKtp}`
+      : '';
+    const dedupNameKey = `${tahun}::${scopeKey}::name::${nama}::${rt}::${rw}`;
+
+    if (skipDuplicates && ((dedupKtpKey && existingKeys.has(dedupKtpKey)) || existingKeys.has(dedupNameKey))) {
+      skippedCount += 1;
+      continue;
+    }
+    if (dedupKtpKey) existingKeys.add(dedupKtpKey);
+    existingKeys.add(dedupNameKey);
 
     // Match or add Pekerjaan
     const rawJob = get(idxPekerjaan).trim();
@@ -443,16 +452,22 @@ export function importProposalKpmFromCsv({
     const payment = paymentDigits ? parseInt(paymentDigits, 10) : 0;
 
     // Resolve domicile fallback if missing
-    const dom = resolveProposalDomicile(proposalName, existingProposals, tahun, wilayahList);
+    const domHintProp = rawProposal || formatProposalTitle(get(idxProposal) || bannerProposal || '');
+    const dom = domHintProp
+      ? resolveProposalDomicile(domHintProp, existingProposals, tahun, wilayahList)
+      : { kabKota: '', kecamatan: '', kelurahan: '' };
     const finalKecamatan = rawKecamatan || dom.kecamatan;
     const finalKelurahan = rawKelurahan || dom.kelurahan;
 
     const recCreatedAt = new Date(baseTimeMs + parsedRows.length).toISOString();
+    const regYearPart = tahun || (validasi === 'rejected' ? 'ARSIP' : 'DB');
     const newRecord: KpmRecord = {
       id: `kpm-csv-${baseTimeMs}-${parsedRows.length}-${Math.random().toString(36).slice(2, 6)}`,
-      registerCode: `${String(parsedRows.length + 1).padStart(3, '0')}. ${tahun} - ${rawItem || 'OV'}`,
+      registerCode: `${String(parsedRows.length + 1).padStart(3, '0')}. ${regYearPart} - ${rawItem || 'OV'}`,
       tahun,
+      proposalId: isStandalone ? null : existingProp?.id ?? null,
       proposal: proposalName,
+      kabKota: dom.kabKota || 'Kota Pontianak',
       kecamatan: finalKecamatan,
       kelurahan: finalKelurahan,
       item: rawItem || 'OV',
@@ -503,10 +518,11 @@ export function importProposalKpmFromCsv({
     };
   }
 
-  // Ensure every referenced Proposal exists in nextProposals
+  // Ensure every referenced Proposal exists in nextProposals (HANYA untuk KPM berstatus Diterima)
   const proposalsToAdd: ProposalRecord[] = [];
   const rowsByProposal = new Map<string, typeof parsedRows>();
   for (const item of parsedRows) {
+    if (item.record.validasi !== 'accepted' || !item.record.proposal.trim()) continue;
     const key = `${item.record.tahun}::${item.record.proposal}`;
     const list = rowsByProposal.get(key) ?? [];
     list.push(item);
@@ -554,7 +570,15 @@ export function importProposalKpmFromCsv({
   }
 
   const nextProposals = [...proposalsToAdd, ...existingProposals];
-  const mergedRawRecords = [...existingRecords, ...parsedRows.map((p) => p.record)];
+  // Isi proposalId pada parsedRows accepted yang baru dibuatkan proposal
+  const preparedParsedRecords = parsedRows.map((p) => {
+    if (p.record.validasi !== 'accepted' || !p.record.proposal.trim()) return p.record;
+    const matchedProp = proposalLookup.get(
+      `${p.record.tahun}::${p.record.proposal.toLowerCase()}`
+    );
+    return matchedProp ? { ...p.record, proposalId: matchedProp.id } : p.record;
+  });
+  const mergedRawRecords = [...existingRecords, ...preparedParsedRecords];
   const nextRecords = recalculateProposalRegisterCodes(
     mergedRawRecords,
     nextProposals,
@@ -574,6 +598,9 @@ export function importProposalKpmFromCsv({
       itemMatch && itemMatch.name !== itemMatch.code
         ? `${itemMatch.code} — ${itemMatch.name}`
         : saved.item;
+    const targetLabel =
+      saved.proposal?.trim() ||
+      (saved.validasi === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM');
 
     newAuditLogs.push({
       id: `audit-csv-${baseTimeMs}-${i}`,
@@ -588,7 +615,7 @@ export function importProposalKpmFromCsv({
         {
           field: 'Impor Proposal CSV',
           before: '-',
-          after: `${saved.proposal} (${saved.tahun})`,
+          after: `${targetLabel}${saved.tahun ? ` (${saved.tahun})` : ''}`,
         },
         { field: 'Item Bantuan', before: '-', after: itemDisplay },
         {
@@ -599,18 +626,20 @@ export function importProposalKpmFromCsv({
       ],
     });
 
-    newProposalHistory.push({
-      id: `hist-csv-${baseTimeMs}-${i}`,
-      tahun: saved.tahun,
-      proposalName: saved.proposal,
-      kpmId: saved.id,
-      kpmName: saved.nama,
-      registerCode: saved.registerCode,
-      action: 'entered',
-      toProposal: saved.proposal,
-      actorName,
-      timestamp: now,
-    });
+    if (saved.validasi === 'accepted' && saved.proposal) {
+      newProposalHistory.push({
+        id: `hist-csv-${baseTimeMs}-${i}`,
+        tahun: saved.tahun,
+        proposalName: saved.proposal,
+        kpmId: saved.id,
+        kpmName: saved.nama,
+        registerCode: saved.registerCode,
+        action: 'entered',
+        toProposal: saved.proposal,
+        actorName,
+        timestamp: now,
+      });
+    }
   }
 
   const sortedPekerjaan =
@@ -714,16 +743,22 @@ export function previewImportFile({
   const idxNikKk = colIndex(['NIK KK', 'NO KK', 'NOMOR KK']);
   const idxProposal = colIndex(['PROPOSAL', 'NAMA PROPOSAL']);
   const idxTahun = colIndex(['TAHUN']);
+  const idxDtsen = colIndex(['DTSEN', 'DESIL']);
+  const idxValidasi = colIndex(['VALIDASI', 'STATUS']);
 
   const existingKeys = new Set<string>();
   const globalNikSet = new Set<string>();
   for (const r of existingRecords) {
+    const scopeKey =
+      r.validasi !== 'accepted' || !r.proposal?.trim()
+        ? `standalone::${r.validasi}`
+        : r.proposal.toLowerCase();
     if (r.nikKtp) {
-      existingKeys.add(`${r.tahun}::${r.proposal.toLowerCase()}::ktp::${r.nikKtp}`);
+      existingKeys.add(`${r.tahun}::${scopeKey}::ktp::${r.nikKtp}`);
       globalNikSet.add(r.nikKtp);
     }
     existingKeys.add(
-      `${r.tahun}::${r.proposal.toLowerCase()}::name::${r.nama.trim().toUpperCase()}::${r.rt}::${r.rw}`
+      `${r.tahun}::${scopeKey}::name::${r.nama.trim().toUpperCase()}::${r.rt}::${r.rw}`
     );
   }
 
@@ -745,19 +780,34 @@ export function previewImportFile({
     if (!rawNama && !rawNikKtp) continue;
     const rawNikKk = sanitizeDigits(get(idxNikKk).replace(/^'/, ''), 16);
     const rawItem = get(idxItem).toUpperCase();
-    const tahunRaw = get(idxTahun) || bannerTahun || '2026';
-    const tahun = /^20\d{2}$/.test(tahunRaw) ? tahunRaw : bannerTahun || '2026';
-    const proposalName = formatProposalTitle(
-      get(idxProposal) || bannerProposal || 'Kecamatan Pontianak Kota'
-    );
+    const dtsen = get(idxDtsen) || '1';
+    let validasi: ValidationStatus = getValidationForDtsen(dtsen) || 'pending';
+    const rawValidasi = get(idxValidasi).toLowerCase();
+    if (rawValidasi === 'diterima' || rawValidasi === 'accepted') validasi = 'accepted';
+    else if (rawValidasi === 'ditolak' || rawValidasi === 'rejected') validasi = 'rejected';
+    else if (rawValidasi === 'menunggu' || rawValidasi === 'pending') validasi = 'pending';
+
+    const tahunRaw = get(idxTahun);
+    const tahun =
+      validasi !== 'accepted' && (!tahunRaw || tahunRaw === '-' || /tanpa\s*tahun/i.test(tahunRaw))
+        ? ''
+        : /^20\d{2}$/.test(tahunRaw)
+          ? tahunRaw
+          : bannerTahun || '2026';
+
+    const isStandalone = validasi !== 'accepted';
+    const proposalName = isStandalone
+      ? ''
+      : formatProposalTitle(get(idxProposal) || bannerProposal || 'Kecamatan Pontianak Kota');
     const nama = rawNama.trim().toUpperCase();
     const rt = padRtRw(get(idxRt));
     const rw = padRtRw(get(idxRw));
 
+    const scopeKey = isStandalone ? `standalone::${validasi}` : proposalName.toLowerCase();
     const dedupKtpKey = rawNikKtp
-      ? `${tahun}::${proposalName.toLowerCase()}::ktp::${rawNikKtp}`
+      ? `${tahun}::${scopeKey}::ktp::${rawNikKtp}`
       : '';
-    const dedupNameKey = `${tahun}::${proposalName.toLowerCase()}::name::${nama}::${rt}::${rw}`;
+    const dedupNameKey = `${tahun}::${scopeKey}::name::${nama}::${rt}::${rw}`;
     const isDuplicateInProposal =
       (dedupKtpKey && existingKeys.has(dedupKtpKey)) || existingKeys.has(dedupNameKey);
     const isCrossProposalNik = !isDuplicateInProposal && Boolean(rawNikKtp && globalNikSet.has(rawNikKtp));
@@ -766,23 +816,25 @@ export function previewImportFile({
     let note = '';
     if (isDuplicateInProposal) {
       status = 'duplicate';
-      note = 'Sudah ada di proposal ini';
+      note = isStandalone ? 'Sudah ada di Database/Arsip' : 'Sudah ada di proposal ini';
       duplicateCount += 1;
     } else if (!rawItem) {
       status = 'missing_item';
       note = 'Item kosong (default OV)';
       validCount += 1;
     } else {
-      if (isCrossProposalNik) note = 'NIK tercatat di proposal lain';
+      if (isCrossProposalNik) note = 'NIK tercatat di data lain';
       validCount += 1;
     }
 
     if (dedupKtpKey) existingKeys.add(dedupKtpKey);
     existingKeys.add(dedupNameKey);
 
-    const propKey = `${tahun}::${proposalName.toLowerCase()}`;
-    if (!proposalSet.has(propKey)) {
-      newPropMap.set(propKey, `${proposalName} (${tahun})`);
+    if (!isStandalone && proposalName) {
+      const propKey = `${tahun}::${proposalName.toLowerCase()}`;
+      if (!proposalSet.has(propKey)) {
+        newPropMap.set(propKey, `${proposalName} (${tahun})`);
+      }
     }
 
     rows.push({
@@ -790,8 +842,9 @@ export function previewImportFile({
       nama,
       nikKtp: rawNikKtp,
       nikKk: rawNikKk,
-      proposal: proposalName,
-      tahun,
+      proposal:
+        proposalName || (validasi === 'rejected' ? 'Arsip Ditolak (Standalone)' : 'Database KPM (Standalone)'),
+      tahun: tahun || 'Tanpa Tahun',
       item: rawItem || 'OV',
       status,
       note,

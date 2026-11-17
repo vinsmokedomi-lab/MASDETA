@@ -1,8 +1,10 @@
 import { useMemo } from 'react';
 import {
+  Archive,
   Bell,
   CalendarClock,
   CopyCheck,
+  Database,
   Download,
   FolderOpen,
   Home,
@@ -29,6 +31,8 @@ interface DesktopSidebarProps {
   activeMenuSection: MenuSection;
   kpmCount: number;
   proposalCount: number;
+  databaseKpmCount?: number;
+  archivedKpmCount?: number;
   unreadChatCount: number;
   pendingUsersCount: number;
   urgentSchedulesCount: number;
@@ -55,6 +59,8 @@ export function DesktopSidebar({
   activeMenuSection,
   kpmCount,
   proposalCount,
+  databaseKpmCount = 0,
+  archivedKpmCount = 0,
   unreadChatCount,
   pendingUsersCount,
   urgentSchedulesCount,
@@ -110,9 +116,15 @@ export function DesktopSidebar({
   const isRecapActive = activeSubView === 'subitem-recap';
   const isChatActive = activeSubView === 'chat';
   const isNotificationsActive = activeSubView === 'notifications';
+  const isDatabaseKpmActive =
+    activeSubView === 'none' && activeTab === 'menu' && activeMenuSection === 'database-kpm';
+  const isArsipActive =
+    activeSubView === 'none' && activeTab === 'menu' && activeMenuSection === 'arsip';
   const isMenuActive =
     activeSubView === 'none' &&
     activeTab === 'menu' &&
+    activeMenuSection !== 'database-kpm' &&
+    activeMenuSection !== 'arsip' &&
     activeMenuSection !== 'jadwal' &&
     activeMenuSection !== 'duplikasi' &&
     activeMenuSection !== 'download';
@@ -211,6 +223,42 @@ export function DesktopSidebar({
               <span className="flex-1 truncate">Proposal</span>
               <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600 tabular-nums">
                 {proposalCount}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onOpenMenuSection('database-kpm')}
+              className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
+                isDatabaseKpmActive
+                  ? 'bg-teal-50 text-teal-800'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+              }`}
+            >
+              <Database
+                className={`h-4 w-4 shrink-0 ${isDatabaseKpmActive ? 'text-teal-700' : 'text-slate-400'}`}
+              />
+              <span className="flex-1 truncate">Database KPM</span>
+              <span className="rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-800 tabular-nums">
+                {databaseKpmCount}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onOpenMenuSection('arsip')}
+              className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
+                isArsipActive
+                  ? 'bg-teal-50 text-teal-800'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+              }`}
+            >
+              <Archive
+                className={`h-4 w-4 shrink-0 ${isArsipActive ? 'text-teal-700' : 'text-slate-400'}`}
+              />
+              <span className="flex-1 truncate">Arsip Ditolak</span>
+              <span className="rounded-md bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold text-rose-700 tabular-nums">
+                {archivedKpmCount}
               </span>
             </button>
 

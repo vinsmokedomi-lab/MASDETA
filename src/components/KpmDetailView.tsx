@@ -1,12 +1,14 @@
 import { ChangeEvent, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  Archive,
   ArrowLeft,
   Camera,
   CheckCircle2,
   ChevronRight,
   Clock,
   CreditCard,
+  Database,
   Download,
   ExternalLink,
   FileText,
@@ -31,6 +33,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { DriveImage } from './DriveImage';
+import { ProposalPickerModal } from './ProposalPickerModal';
 import { KpmQrCardModal } from './QrScannerLookupModal';
 import { SignaturePadModal } from './SignaturePadModal';
 import { DTSEN_OPTION_ITEMS, INITIAL_WILAYAH_LIST } from '../data/kpmOptions';
@@ -58,8 +61,8 @@ import {
   getKpmSubItemStatusList,
   getPrimaryKpmPhoto,
   removeDocumentFromDrive,
+  resolveKpmDomicile,
   resolvePackageForKpm,
-  resolveProposalDomicile,
   uploadImageDocumentToDrive,
 } from '../utils/imageProcessor';
 import { exportKpmBastToPdf, exportSingleKpmToPdf } from '../utils/pdfExporter';
@@ -81,7 +84,7 @@ interface KpmDetailViewProps {
   onBack: () => void;
   onEditRecord: (record: KpmRecord) => void;
   onDeleteRecord: (id: string) => void;
-  onUpdateStatus: (id: string, status: ValidationStatus) => void;
+  onUpdateStatus: (id: string, status: ValidationStatus, targetProposalId?: string) => void;
   onToggleSubItem: (
     kpmId: string,
     subItemKey: string,
@@ -152,6 +155,10 @@ export function KpmDetailView({
   const [isDownloadingBastPdf, setIsDownloadingBastPdf] = useState(false);
   const [isQrCardOpen, setIsQrCardOpen] = useState(false);
   const [isSignatureOpen, setIsSignatureOpen] = useState(false);
+  const [isProposalPickerOpen, setIsProposalPickerOpen] = useState(false);
+  const [pendingStatusConfirm, setPendingStatusConfirm] = useState<{
+    targetStatus: 'pending' | 'rejected';
+  } | null>(null);
   const [pdfNotice, setPdfNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(
     null
   );
@@ -190,19 +197,28 @@ export function KpmDetailView({
     }
   };
 
+  const isStandalone = record.validasi !== 'accepted' || !record.proposal?.trim();
+
   const matchingProposal = useMemo(
     () =>
-      proposals.find(
-        (p) => p.namaProposal === record.proposal && p.tahun === record.tahun
-      ) ?? proposals.find((p) => p.namaProposal === record.proposal),
-    [proposals, record.proposal, record.tahun]
+      isStandalone
+        ? undefined
+        : (record.proposalId
+            ? proposals.find((p) => p.id === record.proposalId)
+            : undefined) ??
+          proposals.find(
+            (p) => p.namaProposal === record.proposal && p.tahun === record.tahun
+          ) ??
+          proposals.find((p) => p.namaProposal === record.proposal),
+    [isStandalone, proposals, record.proposalId, record.proposal, record.tahun]
   );
 
   const resolvedDomicile = useMemo(
-    () => resolveProposalDomicile(record.proposal, proposals, record.tahun, wilayahList),
-    [record.proposal, proposals, record.tahun, wilayahList]
+    () => resolveKpmDomicile(record, proposals, wilayahList),
+    [record, proposals, wilayahList]
   );
 
+  const displayKabKota = record.kabKota?.trim() || resolvedDomicile.kabKota;
   const displayKelurahan = record.kelurahan?.trim() || resolvedDomicile.kelurahan;
   const rawKecamatan = record.kecamatan?.trim() || resolvedDomicile.kecamatan;
   const displayKecamatan = rawKecamatan
@@ -211,7 +227,28 @@ export function KpmDetailView({
       : `Kecamatan ${rawKecamatan}`
     : '';
 
-  const isProposalLocked = matchingProposal?.status === 'locked';
+  const standaloneContainerLabel =
+    record.validasi === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM';
+  const displayTahun = record.tahun?.trim() || 'Tanpa Tahun';
+
+  const isProposalLocked = !isStandalone && matchingProposal?.status === 'locked';
+
+  const handleClickStatus = (nextStatus: ValidationStatus) => {
+    if (isProposalLocked || !canUpdate || nextStatus === record.validasi) return;
+    if (nextStatus === 'accepted' && isStandalone) {
+      setIsProposalPickerOpen(true);
+      return;
+    }
+    if (
+      (nextStatus === 'pending' || nextStatus === 'rejected') &&
+      record.validasi === 'accepted' &&
+      Boolean(record.proposal?.trim())
+    ) {
+      setPendingStatusConfirm({ targetStatus: nextStatus });
+      return;
+    }
+    onUpdateStatus(record.id, nextStatus);
+  };
 
   const resolvedPackage = useMemo(
     () => resolvePackageForKpm(items, record.tahun, record.item),
@@ -301,13 +338,15 @@ export function KpmDetailView({
         action: 'created' as const,
         actorName: 'Petugas Internal',
         timestamp: record.createdAt,
-        proposal: record.proposal,
-        tahun: record.tahun,
+        proposal: record.proposal || standaloneContainerLabel,
+        tahun: displayTahun,
         changes: [
           {
-            field: 'Proposal Awal',
+            field: 'Penempatan Awal',
             before: '-',
-            after: `${record.proposal} (${record.tahun})`,
+            after: record.proposal
+              ? `${record.proposal} (${displayTahun})`
+              : `${standaloneContainerLabel} (${displayTahun})`,
           },
           { field: 'Item Bantuan', before: '-', after: itemName },
         ],
@@ -487,10 +526,10 @@ export function KpmDetailView({
       kpmId: record.id,
       registerCode: record.registerCode,
       nama: record.nama,
-      tahun: record.tahun,
+      tahun: record.tahun || '-',
       item: record.item,
       itemName,
-      proposal: record.proposal,
+      proposal: record.proposal || standaloneContainerLabel,
       kontak: record.kontak,
       dtsen: record.dtsen,
       kelurahan: displayKelurahan,
@@ -577,7 +616,7 @@ export function KpmDetailView({
           {/* Card Top Bar */}
           <div className="flex items-center justify-between gap-2 border-b border-slate-100 bg-slate-50/70 px-4 py-2.5">
             <p className="truncate text-xs font-medium text-teal-800 tabular-nums">
-              {record.registerCode} · {record.tahun}
+              {record.registerCode} · {displayTahun}
             </p>
             {renderStatusIndicator(record.validasi)}
           </div>
@@ -616,19 +655,35 @@ export function KpmDetailView({
                   <span className="truncate font-medium">{itemName}</span>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => onOpenProposal(record.proposal, record.tahun)}
-                  className="flex w-full items-start gap-1 text-left text-xs font-medium leading-snug text-teal-700 hover:underline"
-                >
-                  <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  <span className="line-clamp-2">
-                    {displayKelurahan &&
-                    !record.proposal.toLowerCase().includes(displayKelurahan.toLowerCase())
-                      ? `${record.proposal} · ${displayKelurahan}`
-                      : record.proposal}
-                  </span>
-                </button>
+                {!isStandalone && record.proposal ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenProposal(record.proposal, record.tahun)}
+                    className="flex w-full items-start gap-1 text-left text-xs font-medium leading-snug text-teal-700 hover:underline"
+                  >
+                    <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span className="line-clamp-2">
+                      {displayKelurahan &&
+                      !record.proposal.toLowerCase().includes(displayKelurahan.toLowerCase())
+                        ? `${record.proposal} · ${displayKelurahan}`
+                        : record.proposal}
+                    </span>
+                  </button>
+                ) : (
+                  <div className="flex w-full items-start gap-1 text-left text-xs font-medium leading-snug text-slate-600">
+                    {record.validasi === 'rejected' ? (
+                      <Archive className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-600" />
+                    ) : (
+                      <Database className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+                    )}
+                    <span className="line-clamp-2">
+                      {standaloneContainerLabel}
+                      {displayKecamatan || displayKelurahan
+                        ? ` · ${[displayKecamatan, displayKelurahan].filter(Boolean).join(', ')}`
+                        : ' · Domisili belum diisi'}
+                    </span>
+                  </div>
+                )}
 
                 <div className="flex items-center gap-1.5 text-xs text-slate-700">
                   <UserCheck className="h-3.5 w-3.5 shrink-0 text-teal-700" />
@@ -671,7 +726,7 @@ export function KpmDetailView({
                       key={st.key}
                       type="button"
                       disabled={isProposalLocked || !canUpdate}
-                      onClick={() => onUpdateStatus(record.id, st.key)}
+                      onClick={() => handleClickStatus(st.key)}
                       className={`min-h-[38px] rounded-xl px-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                         record.validasi === st.key
                           ? st.key === 'accepted'
@@ -796,7 +851,10 @@ export function KpmDetailView({
                         {matchReason} · {renderStatusIndicator(dup.validasi)}
                       </p>
                       <p className="mt-1 truncate text-xs text-slate-600">
-                        {dup.proposal} ({dup.tahun}) · DTSEN: {dup.dtsen}
+                        {dup.proposal
+                          ? `${dup.proposal} (${dup.tahun || 'Tanpa Tahun'})`
+                          : `${dup.validasi === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM'}${dup.tahun ? ` (${dup.tahun})` : ''}`}{' '}
+                        · DTSEN: {dup.dtsen}
                       </p>
                       <p className="mt-0.5 truncate text-[11px] text-slate-500">
                         {dup.pekerjaan} · Pengelola: {dup.pengelola}
@@ -848,7 +906,7 @@ export function KpmDetailView({
               <div className="min-w-0">
                 <h3 className="text-sm font-bold text-slate-900">Penyaluran Sub-Item</h3>
                 <p className="text-xs leading-snug text-slate-500">
-                  {itemName} · {record.tahun}
+                  {itemName} · {displayTahun}
                 </p>
               </div>
             </div>
@@ -881,7 +939,7 @@ export function KpmDetailView({
 
           {subItemStatuses.length === 0 ? (
             <div className="px-4 py-6 text-center text-xs text-slate-500">
-              Belum ada rincian sub-item untuk paket {record.item} tahun {record.tahun}.
+              Belum ada rincian sub-item untuk paket {record.item || 'bantuan'} ({displayTahun}).
             </div>
           ) : (
             <>
@@ -1081,19 +1139,33 @@ export function KpmDetailView({
             <div className="flex items-center justify-between gap-3 px-4 py-3">
               <dt className="text-xs text-slate-500 shrink-0">Tahun</dt>
               <dd className="text-right text-xs font-medium text-slate-900 tabular-nums">
-                {record.tahun}
+                {displayTahun}
               </dd>
             </div>
             <div className="flex items-start justify-between gap-3 px-4 py-3">
-              <dt className="text-xs text-slate-500 shrink-0">Proposal</dt>
-              <dd className="max-w-[64%] text-right text-xs font-medium text-teal-700">
-                <button
-                  type="button"
-                  onClick={() => onOpenProposal(record.proposal, record.tahun)}
-                  className="text-right hover:underline"
-                >
-                  {record.proposal}
-                </button>
+              <dt className="text-xs text-slate-500 shrink-0">
+                {!isStandalone && record.proposal ? 'Proposal' : 'Status Penempatan'}
+              </dt>
+              <dd className="max-w-[64%] text-right text-xs font-medium">
+                {!isStandalone && record.proposal ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenProposal(record.proposal, record.tahun)}
+                    className="text-right text-teal-700 hover:underline"
+                  >
+                    {record.proposal}
+                  </button>
+                ) : (
+                  <span
+                    className={
+                      record.validasi === 'rejected'
+                        ? 'text-rose-700'
+                        : 'text-amber-700'
+                    }
+                  >
+                    Standalone · {standaloneContainerLabel}
+                  </span>
+                )}
               </dd>
             </div>
             <div className="flex items-start justify-between gap-3 px-4 py-3">
@@ -1176,6 +1248,14 @@ export function KpmDetailView({
                 <dt className="text-xs text-slate-500 shrink-0">Kecamatan</dt>
                 <dd className="text-right text-xs font-medium text-slate-900">
                   {displayKecamatan}
+                </dd>
+              </div>
+            )}
+            {displayKabKota && (
+              <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <dt className="text-xs text-slate-500 shrink-0">Kab / Kota</dt>
+                <dd className="text-right text-xs font-medium text-slate-900">
+                  {displayKabKota}
                 </dd>
               </div>
             )}
@@ -1513,8 +1593,11 @@ export function KpmDetailView({
                 {initialCreationEntry.actorName}
               </p>
               <p className="mt-0.5 text-xs text-slate-600">
-                Masuk ke <span className="font-medium text-slate-800">{initialCreationEntry.proposal}</span> · Tahun{' '}
-                {initialCreationEntry.tahun}
+                Masuk ke{' '}
+                <span className="font-medium text-slate-800">
+                  {initialCreationEntry.proposal || standaloneContainerLabel}
+                </span>{' '}
+                · Tahun {initialCreationEntry.tahun || 'Tanpa Tahun'}
               </p>
             </div>
           )}
@@ -1698,11 +1781,11 @@ export function KpmDetailView({
               </div>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[11px] font-medium text-teal-700 tabular-nums">
-                  {record.registerCode} · {record.tahun}
+                  {record.registerCode} · {displayTahun}
                 </p>
                 <p className="truncate text-sm font-bold text-slate-900">{record.nama}</p>
                 <p className="truncate text-xs text-slate-500">
-                  {itemName} · {record.proposal}
+                  {itemName} · {record.proposal || standaloneContainerLabel}
                 </p>
               </div>
             </div>
@@ -1916,6 +1999,94 @@ export function KpmDetailView({
             });
           }}
         />
+      )}
+
+      {/* Proposal Picker Modal when accepting standalone KPM */}
+      <ProposalPickerModal
+        isOpen={isProposalPickerOpen}
+        title="Pilih Proposal untuk KPM Diterima"
+        subtitle={`Menyetujui "${record.nama}" menjadi Diterima mewajibkan pemilihan proposal aktif (Murni / Perubahan).`}
+        confirmLabel="Terima & Masukkan"
+        proposals={proposals}
+        records={allRecords}
+        wilayahList={wilayahList}
+        initialYear={record.tahun || 'all'}
+        onClose={() => setIsProposalPickerOpen(false)}
+        onSelectProposal={(targetProp) => {
+          setIsProposalPickerOpen(false);
+          onUpdateStatus(record.id, 'accepted', targetProp.id);
+        }}
+      />
+
+      {/* Confirmation Modal when detaching KPM from an active proposal */}
+      {pendingStatusConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-4 backdrop-blur-xs sm:items-center"
+          onClick={() => setPendingStatusConfirm(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Konfirmasi Pindah ke Standalone"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm space-y-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-xl"
+          >
+            <div className="flex items-start gap-3">
+              <div
+                className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+                  pendingStatusConfirm.targetStatus === 'rejected'
+                    ? 'bg-rose-100 text-rose-700'
+                    : 'bg-amber-100 text-amber-700'
+                }`}
+              >
+                {pendingStatusConfirm.targetStatus === 'rejected' ? (
+                  <Archive className="h-5 w-5" />
+                ) : (
+                  <Database className="h-5 w-5" />
+                )}
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">
+                  {pendingStatusConfirm.targetStatus === 'rejected'
+                    ? 'Pindahkan ke Arsip Berkas Ditolak?'
+                    : 'Pindahkan ke Database KPM?'}
+                </h3>
+                <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                  Mengubah status <strong>{record.nama}</strong> menjadi{' '}
+                  <strong>
+                    {pendingStatusConfirm.targetStatus === 'rejected' ? 'Ditolak' : 'Menunggu'}
+                  </strong>{' '}
+                  akan melepaskan keterkaitan dari proposal{' '}
+                  <strong>{record.proposal}</strong>. Data domisili tetap dipertahankan.
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingStatusConfirm(null)}
+                className="min-h-[42px] flex-1 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const nextSt = pendingStatusConfirm.targetStatus;
+                  setPendingStatusConfirm(null);
+                  onUpdateStatus(record.id, nextSt);
+                }}
+                className={`min-h-[42px] flex-1 rounded-xl text-xs font-semibold text-white ${
+                  pendingStatusConfirm.targetStatus === 'rejected'
+                    ? 'bg-rose-600 hover:bg-rose-700'
+                    : 'bg-amber-600 hover:bg-amber-700'
+                }`}
+              >
+                Ya, Pindahkan
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

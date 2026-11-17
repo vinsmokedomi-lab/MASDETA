@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS public.pengelola (
 CREATE TABLE IF NOT EXISTS public.proposals (
   id TEXT PRIMARY KEY,
   tahun VARCHAR(10) NOT NULL,
-  tipe VARCHAR(30) NOT NULL CHECK (tipe IN ('Murni', 'Perubahan', 'Database', 'Arsip')),
+  tipe VARCHAR(30) NOT NULL CHECK (tipe IN ('Murni', 'Perubahan')),
   kab_kota TEXT NOT NULL DEFAULT '',
   kecamatan TEXT NOT NULL DEFAULT '',
   kelurahan TEXT NOT NULL DEFAULT '',
@@ -151,9 +151,9 @@ CREATE TABLE IF NOT EXISTS public.proposal_documents (
 CREATE TABLE IF NOT EXISTS public.kpm_records (
   id TEXT PRIMARY KEY,
   register_code TEXT NOT NULL DEFAULT '',
-  tahun VARCHAR(10) NOT NULL,
+  tahun VARCHAR(10),
   proposal_id TEXT REFERENCES public.proposals(id) ON DELETE SET NULL,
-  proposal TEXT NOT NULL,
+  proposal TEXT,
   kecamatan TEXT NOT NULL DEFAULT '',
   kelurahan TEXT NOT NULL DEFAULT '',
   item VARCHAR(20) NOT NULL,
@@ -221,9 +221,9 @@ CREATE TABLE IF NOT EXISTS public.kpm_sub_item_deliveries (
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.proposal_kpm_history (
   id TEXT PRIMARY KEY,
-  tahun VARCHAR(10) NOT NULL,
+  tahun VARCHAR(10) DEFAULT '',
   proposal_id TEXT REFERENCES public.proposals(id) ON DELETE SET NULL,
-  proposal_name TEXT NOT NULL,
+  proposal_name TEXT NOT NULL DEFAULT '',
   kpm_id TEXT REFERENCES public.kpm_records(id) ON DELETE SET NULL,
   kpm_name TEXT NOT NULL,
   register_code TEXT NOT NULL DEFAULT '',

@@ -175,9 +175,12 @@ export function ProposalForm({
 }: ProposalFormProps) {
   const isDesktopWeb = useIsDesktopWeb();
   const isNativeApp = !isDesktopWeb;
+  const normalizeTipe = (t: string): ProposalTipe =>
+    t === 'Perubahan' ? 'Perubahan' : 'Murni';
+
   const [values, setValues] = useState<ProposalFormValues>({
     tahun: proposal.tahun,
-    tipe: proposal.tipe,
+    tipe: normalizeTipe(proposal.tipe),
     kabKota: proposal.kabKota,
     kecamatan: proposal.kecamatan,
     kelurahan: proposal.kelurahan,
@@ -205,7 +208,7 @@ export function ProposalForm({
   useEffect(() => {
     setValues({
       tahun: proposal.tahun,
-      tipe: proposal.tipe,
+      tipe: normalizeTipe(proposal.tipe),
       kabKota: proposal.kabKota,
       kecamatan: proposal.kecamatan,
       kelurahan: proposal.kelurahan,

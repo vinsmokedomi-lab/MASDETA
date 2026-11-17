@@ -156,9 +156,23 @@ export function ProposalListView({
     [activeSettingsProposals]
   );
 
+  const isKpmInProposal = (r: KpmRecord, prop: ProposalRecord, matchSelectedYear = false) =>
+    r.validasi === 'accepted' &&
+    (r.proposalId
+      ? r.proposalId === prop.id
+      : r.proposal === prop.namaProposal &&
+        (matchSelectedYear && selectedYear !== 'all'
+          ? r.tahun === selectedYear
+          : r.tahun === prop.tahun));
+
   const countKpmsInProposals = (list: ProposalRecord[]) => {
+    const idSet = new Set(list.map((p) => p.id));
     const keySet = new Set(list.map((p) => `${p.tahun}::${p.namaProposal}`));
-    return records.filter((r) => keySet.has(`${r.tahun}::${r.proposal}`)).length;
+    return records.filter(
+      (r) =>
+        r.validasi === 'accepted' &&
+        (r.proposalId ? idSet.has(r.proposalId) : keySet.has(`${r.tahun}::${r.proposal}`))
+    ).length;
   };
 
   const isDesktopWeb = useIsDesktopWeb();
@@ -309,12 +323,8 @@ export function ProposalListView({
                     {!isNativeApp && (
                       <div className="hidden md:grid md:grid-cols-2 xl:grid-cols-3 md:gap-3">
                         {group.proposals.map((prop) => {
-                          const matchingRecords = records.filter(
-                            (r) =>
-                              r.proposal === prop.namaProposal &&
-                              (selectedYear === 'all'
-                                ? r.tahun === prop.tahun
-                                : r.tahun === selectedYear)
+                          const matchingRecords = records.filter((r) =>
+                            isKpmInProposal(r, prop, true)
                           );
                           const isLocked = prop.status === 'locked';
                           const targetQuota = prop.jumlahKpm ?? 66;
@@ -428,10 +438,8 @@ export function ProposalListView({
 
                     <div className={`overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100 ${!isNativeApp ? 'md:hidden' : ''}`}>
                       {group.proposals.map((prop) => {
-                        const matchingRecords = records.filter(
-                          (r) =>
-                            r.proposal === prop.namaProposal &&
-                            (selectedYear === 'all' ? r.tahun === prop.tahun : r.tahun === selectedYear)
+                        const matchingRecords = records.filter((r) =>
+                          isKpmInProposal(r, prop, true)
                         );
                         const isLocked = prop.status === 'locked';
 

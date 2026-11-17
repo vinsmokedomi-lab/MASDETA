@@ -29,12 +29,12 @@ import {
   getItemHierarchyRank,
   getItemsForYear,
   getPrimaryKpmPhoto,
-  isKecamatanProposal,
-  resolveProposalDomicile,
+  resolveKpmDomicile,
 } from '../utils/imageProcessor';
 import { useIsDesktopWeb } from '../utils/platform';
 import { DriveImage } from './DriveImage';
 import { FilterSelect, SegmentedTabs } from './FormControls';
+import { ProposalPickerModal } from './ProposalPickerModal';
 import { QrScannerLookupModal } from './QrScannerLookupModal';
 import { SwipeAction, SwipeableRow } from './SwipeableRow';
 
@@ -64,6 +64,7 @@ interface KpmListViewProps {
     ids: string[],
     patch: {
       validasi?: ValidationStatus;
+      targetProposalId?: string;
       dtsen?: string;
       item?: string;
       markAllSubItems?: boolean;
@@ -107,6 +108,7 @@ export function KpmListView({
   const [bulkMode, setBulkMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkSheet, setBulkSheet] = useState<'none' | 'dtsen' | 'item'>('none');
+  const [isBulkProposalPickerOpen, setIsBulkProposalPickerOpen] = useState(false);
   const [bulkProcessing, setBulkProcessing] = useState(false);
 
   useEffect(() => {
@@ -125,16 +127,20 @@ export function KpmListView({
   ]);
 
   const isRecordProposalLocked = (rec: KpmRecord) => {
+    if (!rec.proposal?.trim() && !rec.proposalId) return false;
     const match =
+      (rec.proposalId ? proposals.find((p) => p.id === rec.proposalId) : undefined) ??
       proposals.find((p) => p.namaProposal === rec.proposal && p.tahun === rec.tahun) ??
       proposals.find((p) => p.namaProposal === rec.proposal);
     return match?.status === 'locked';
   };
 
   const getRecordKelurahan = (rec: KpmRecord) => {
-    if (rec.kelurahan?.trim()) return rec.kelurahan.trim();
-    return resolveProposalDomicile(rec.proposal, proposals, rec.tahun, wilayahList).kelurahan || '';
+    return resolveKpmDomicile(rec, proposals, wilayahList).kelurahan || '';
   };
+
+  const getStandalonePlaceLabel = (rec: KpmRecord) =>
+    rec.validasi === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM';
 
   const getCompactKelurahan = (rawKel: string) =>
     rawKel.replace(/^(kelurahan|kel\.?)\s+/i, '').trim();
@@ -363,6 +369,7 @@ export function KpmListView({
 
   const runBulkPatch = async (patch: {
     validasi?: ValidationStatus;
+    targetProposalId?: string;
     dtsen?: string;
     item?: string;
     markAllSubItems?: boolean;
@@ -377,6 +384,19 @@ export function KpmListView({
     } finally {
       setBulkProcessing(false);
     }
+  };
+
+  const handleBulkAcceptClick = () => {
+    if (selectedIds.length === 0 || bulkProcessing) return;
+    const selectedRecs = records.filter((r) => selectedIds.includes(r.id));
+    const needsProposalPicker = selectedRecs.some(
+      (r) => !r.proposal?.trim() || r.validasi !== 'accepted'
+    );
+    if (needsProposalPicker) {
+      setIsBulkProposalPickerOpen(true);
+      return;
+    }
+    void runBulkPatch({ validasi: 'accepted' });
   };
 
   const handleResetExtraFilters = () => {
@@ -723,9 +743,12 @@ export function KpmListView({
                         rec.dtsen && /^\d/.test(rec.dtsen.trim())
                           ? rec.dtsen.trim().replace(/\s*-\s*/g, '-')
                           : '';
-                      const kelurahanName = isKecamatanProposal(rec.proposal)
-                        ? getCompactKelurahan(getRecordKelurahan(rec))
-                        : '';
+                      const dom = resolveKpmDomicile(rec, proposals, wilayahList);
+                      const kelurahanName = getCompactKelurahan(dom.kelurahan);
+                      const isStandalone = !rec.proposal?.trim() || rec.validasi !== 'accepted';
+                      const containerTitle = isStandalone
+                        ? getStandalonePlaceLabel(rec)
+                        : rec.proposal;
                       const isSelected = selectedIds.includes(rec.id);
 
                       return (
@@ -796,9 +819,10 @@ export function KpmListView({
                             </div>
                           </td>
                           <td className="px-3 py-2.5 max-w-[220px]">
-                            <p className="truncate font-medium text-slate-800">{rec.proposal}</p>
+                            <p className="truncate font-medium text-slate-800">{containerTitle}</p>
                             <p className="truncate text-[11px] text-slate-500 tabular-nums">
-                              {rec.tahun}
+                              {rec.tahun || 'Tanpa Tahun'}
+                              {dom.kecamatan ? ` · ${dom.kecamatan}` : ''}
                               {kelurahanName ? ` · ${kelurahanName}` : ''}
                               {rec.rt || rec.rw ? ` · RT ${rec.rt || '-'}/RW ${rec.rw || '-'}` : ''}
                             </p>
@@ -903,10 +927,11 @@ export function KpmListView({
               const desilNumeric = rec.dtsen && /^\d/.test(rec.dtsen.trim())
                 ? rec.dtsen.trim().replace(/\s*-\s*/g, '-')
                 : '';
-              const kelurahanName = isKecamatanProposal(rec.proposal)
-                ? getCompactKelurahan(getRecordKelurahan(rec))
-                : '';
-              const metaLine = [kelurahanName, rec.pengelola?.trim()]
+              const dom = resolveKpmDomicile(rec, proposals, wilayahList);
+              const kelurahanName = getCompactKelurahan(dom.kelurahan);
+              const isStandalone = !rec.proposal?.trim() || rec.validasi !== 'accepted';
+              const containerTitle = isStandalone ? getStandalonePlaceLabel(rec) : rec.proposal;
+              const metaLine = [dom.kecamatan, kelurahanName, rec.pengelola?.trim()]
                 .filter(Boolean)
                 .join(' · ');
 
@@ -1016,13 +1041,13 @@ export function KpmListView({
                         </span>
                       </div>
 
-                      {/* Baris 2: Proposal & Tahun */}
+                      {/* Baris 2: Proposal / Status Standalone & Tahun */}
                       <div className="mt-1 flex items-center justify-between gap-2 text-[11px] leading-tight">
                         <span className="truncate font-medium text-slate-600">
-                          {rec.proposal}
+                          {containerTitle}
                         </span>
                         <span className="shrink-0 font-semibold text-slate-400 tabular-nums">
-                          {rec.tahun}
+                          {rec.tahun || 'Tanpa Tahun'}
                         </span>
                       </div>
 
@@ -1172,7 +1197,7 @@ export function KpmListView({
             <button
               type="button"
               disabled={bulkProcessing}
-              onClick={() => void runBulkPatch({ validasi: 'accepted' })}
+              onClick={handleBulkAcceptClick}
               className="inline-flex min-h-[36px] items-center justify-center gap-1 rounded-xl bg-teal-600 px-2 text-[11px] font-semibold text-white hover:bg-teal-500 disabled:opacity-60"
             >
               <Check className="h-3.5 w-3.5" />
@@ -1312,6 +1337,23 @@ export function KpmListView({
         records={records}
         onClose={() => setIsQrModalOpen(false)}
         onSelectRecord={onSelectRecord}
+      />
+
+      {/* Bulk Accept Target Proposal Picker Modal */}
+      <ProposalPickerModal
+        isOpen={isBulkProposalPickerOpen}
+        title={`Pilih Proposal Tujuan (${selectedIds.length} KPM)`}
+        subtitle="KPM berstatus Diterima wajib masuk ke salah satu Proposal aktif (Murni / Perubahan)."
+        confirmLabel="Terima & Masukkan"
+        proposals={proposals}
+        records={records}
+        wilayahList={wilayahList}
+        initialYear={selectedYear}
+        onClose={() => setIsBulkProposalPickerOpen(false)}
+        onSelectProposal={(targetProp) => {
+          setIsBulkProposalPickerOpen(false);
+          void runBulkPatch({ validasi: 'accepted', targetProposalId: targetProp.id });
+        }}
       />
     </div>
   );

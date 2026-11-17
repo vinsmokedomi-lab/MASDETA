@@ -22,6 +22,7 @@ import {
   getItemHierarchyRank,
   getKpmSubItemStatusList,
   getPrimaryKpmPhotoWithMeta,
+  resolveKpmDomicile,
   resolvePackageForKpm,
   resolveProposalDomicile,
   resolveProposalKecamatanCategory,
@@ -484,13 +485,13 @@ export async function exportKpmTableToPdf({
   const bodyRows = sortedRecords.map((rec, rowIdx) => {
     const seq = getAbsenSeq(rec.registerCode);
     const absenText = seq < 999999 ? String(seq).padStart(2, '0') : String(rowIdx + 1).padStart(2, '0');
-    const domicile = resolveProposalDomicile(rec.proposal, proposals, rec.tahun, wilayahList);
-    const resolvedKel = (rec.kelurahan || domicile.kelurahan || '-').trim();
-    const resolvedKec = resolveProposalKecamatanCategory(
-      rec.proposal,
-      proposals,
-      rec.tahun,
-      wilayahList
+    const domicile = resolveKpmDomicile(rec, proposals, wilayahList);
+    const resolvedKel = (domicile.kelurahan || '-').trim();
+    const resolvedKec = (
+      domicile.kecamatan ||
+      (rec.proposal
+        ? resolveProposalKecamatanCategory(rec.proposal, proposals, rec.tahun, wilayahList)
+        : '')
     ).replace(/^Kecamatan\s+/i, '');
 
     return activeCols.map((col) => {

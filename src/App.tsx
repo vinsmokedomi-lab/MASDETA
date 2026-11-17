@@ -13,6 +13,7 @@ import {
   appendKpmAuditLogsInSupabase,
   checkSupabaseSchemaReady,
   deleteKpmRecordWithSideEffectsInSupabase,
+  deleteKpmsBatchInSupabase,
   deletePengelolaInSupabase,
   fetchAppStateSlice,
   fetchChatDeliveryWatermarks,
@@ -96,6 +97,7 @@ import {
   diffKpmRecordChanges,
   formatValidationLabel,
   generateRegisterCode,
+  isLegacyDummyProposal,
   loadCustomYears,
   loadInternalUsers,
   loadItemList,
@@ -106,9 +108,11 @@ import {
   loadProposalHistory,
   loadProposals,
   loadWilayahList,
+  normalizeKpmRouting,
   normalizeSubItemKey,
   recalculateProposalRegisterCodes,
   removeDocumentFromDrive,
+  resolveKpmDomicile,
   resolvePackageForKpm,
   resolveProposalDomicile,
   saveCustomYears,
@@ -426,7 +430,7 @@ export default function App() {
     loadPengelolaList(INITIAL_PENGELOLA_LIST)
   );
   const [proposals, setProposals] = useState<ProposalRecord[]>(() =>
-    loadProposals(INITIAL_PROPOSAL_LIST)
+    loadProposals(INITIAL_PROPOSAL_LIST).filter((p) => !isLegacyDummyProposal(p))
   );
   const [proposalHistory, setProposalHistory] = useState<ProposalKpmHistoryEntry[]>(() =>
     loadProposalHistory(INITIAL_PROPOSAL_HISTORY)
@@ -461,6 +465,9 @@ export default function App() {
     namaProposal: string;
     tahun: string;
   } | null>(null);
+  const [kpmFormInitialStandaloneStatus, setKpmFormInitialStandaloneStatus] = useState<
+    'pending' | 'rejected' | null
+  >(null);
   const [feedback, setFeedback] = useState<FeedbackBanner | null>(null);
   const [lightboxDoc, setLightboxDoc] = useState<{ file: KpmDocumentFile; title: string } | null>(
     null
@@ -1368,16 +1375,18 @@ export default function App() {
   const applyRemoteOperationalState = useCallback(
     (state: Partial<OperationalDataPayload>) => {
       hasAppliedRemoteRef.current = true;
-      const nextProposals = Array.isArray(state.proposals)
+      const rawProposals = Array.isArray(state.proposals)
         ? state.proposals
         : latestDataRef.current.proposals;
+      const nextProposals = rawProposals.filter((p) => !isLegacyDummyProposal(p));
       const nextItems = Array.isArray(state.items) ? state.items : latestDataRef.current.items;
       const nextWilayah = Array.isArray(state.wilayahList)
         ? state.wilayahList
         : latestDataRef.current.wilayahList;
-      const rawRecords = Array.isArray(state.records)
+      const rawRecords = (Array.isArray(state.records)
         ? state.records
-        : latestDataRef.current.records;
+        : latestDataRef.current.records
+      ).map((r) => normalizeKpmRouting(r, nextProposals, nextWilayah));
 
       setProposals(nextProposals);
       setItems(nextItems);
@@ -3623,7 +3632,8 @@ export default function App() {
     fromTab: MainTab = activeTab,
     returnToDetail = false,
     returnToProposalDetail = false,
-    lockedScope: { namaProposal: string; tahun: string } | null = null
+    lockedScope: { namaProposal: string; tahun: string } | null = null,
+    standaloneStatus: 'pending' | 'rejected' | null = null
   ) => {
     if (record) {
       if (!requirePermission('update', 'mengubah data calon KPM')) return;
@@ -3636,6 +3646,7 @@ export default function App() {
     setKpmFormReturnToDetail(returnToDetail);
     setKpmFormReturnToProposalDetail(returnToProposalDetail);
     setLockedKpmProposalScope(lockedScope);
+    setKpmFormInitialStandaloneStatus(record ? null : standaloneStatus);
     setEditingKpmRecord(record);
     setSubView('kpm-form');
   };
@@ -3884,9 +3895,31 @@ export default function App() {
       if (!requirePermission('add', 'menyimpan calon KPM baru')) return false;
     }
 
-    const matchingProposal =
-      proposals.find((p) => p.namaProposal === values.proposal && p.tahun === values.tahun) ??
-      proposals.find((p) => p.namaProposal === values.proposal);
+    const targetStatus: ValidationStatus = values.validasi || 'pending';
+    const isAcceptedTarget = targetStatus === 'accepted';
+
+    const matchingProposal = isAcceptedTarget
+      ? (values.proposalId
+          ? proposals.find((p) => !isLegacyDummyProposal(p) && p.id === values.proposalId)
+          : undefined) ??
+        proposals.find(
+          (p) =>
+            !isLegacyDummyProposal(p) &&
+            p.namaProposal === values.proposal &&
+            (!values.tahun || p.tahun === values.tahun)
+        ) ??
+        proposals.find(
+          (p) => !isLegacyDummyProposal(p) && p.namaProposal === values.proposal
+        )
+      : undefined;
+
+    if (isAcceptedTarget && !matchingProposal && !values.proposal?.trim()) {
+      setFeedback({
+        type: 'error',
+        message: 'Calon KPM berstatus Diterima wajib memilih Proposal tujuan (Murni / Perubahan).',
+      });
+      return false;
+    }
 
     if (matchingProposal?.status === 'locked') {
       setFeedback({
@@ -3896,6 +3929,29 @@ export default function App() {
       return false;
     }
 
+    const resolvedDom = resolveKpmDomicile(
+      {
+        ...values,
+        proposal: matchingProposal?.namaProposal ?? values.proposal,
+        proposalId: matchingProposal?.id ?? values.proposalId,
+      },
+      proposals,
+      wilayahList
+    );
+
+    const normalizedValues: KpmFormValues & { validasi: ValidationStatus } = {
+      ...values,
+      validasi: targetStatus,
+      tahun: isAcceptedTarget
+        ? values.tahun?.trim() || matchingProposal?.tahun || ''
+        : values.tahun?.trim() || '',
+      proposalId: isAcceptedTarget ? (matchingProposal?.id ?? values.proposalId ?? null) : null,
+      proposal: isAcceptedTarget ? (matchingProposal?.namaProposal ?? values.proposal.trim()) : '',
+      kabKota: resolvedDom.kabKota,
+      kecamatan: resolvedDom.kecamatan,
+      kelurahan: resolvedDom.kelurahan,
+    };
+
     const now = new Date().toISOString();
 
     if (editingId) {
@@ -3904,10 +3960,15 @@ export default function App() {
       let nextProposalHistory = proposalHistory;
 
       if (previousRecord) {
-        const prevProp =
-          proposals.find(
-            (p) => p.namaProposal === previousRecord.proposal && p.tahun === previousRecord.tahun
-          ) ?? proposals.find((p) => p.namaProposal === previousRecord.proposal);
+        const prevProp = previousRecord.proposal?.trim()
+          ? (previousRecord.proposalId
+              ? proposals.find((p) => p.id === previousRecord.proposalId)
+              : undefined) ??
+            proposals.find(
+              (p) => p.namaProposal === previousRecord.proposal && p.tahun === previousRecord.tahun
+            ) ??
+            proposals.find((p) => p.namaProposal === previousRecord.proposal)
+          : undefined;
 
         if (prevProp?.status === 'locked') {
           setFeedback({
@@ -3917,7 +3978,7 @@ export default function App() {
           return false;
         }
 
-        const fieldChanges = diffKpmRecordChanges(previousRecord, values);
+        const fieldChanges = diffKpmRecordChanges(previousRecord, normalizedValues);
         if (fieldChanges.length > 0) {
           const auditEntry: KpmAuditLogEntry = {
             id: `audit-upd-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -3926,44 +3987,60 @@ export default function App() {
             actorName: currentActor.nama,
             actorEmail: currentActor.email,
             timestamp: now,
-            proposal: values.proposal,
-            tahun: values.tahun,
+            proposal:
+              normalizedValues.proposal ||
+              (normalizedValues.validasi === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM'),
+            tahun: normalizedValues.tahun || 'Tanpa Tahun',
             changes: fieldChanges,
           };
           nextAuditLogs = [auditEntry, ...kpmAuditLogs];
         }
 
         if (
-          previousRecord.proposal !== values.proposal ||
-          previousRecord.tahun !== values.tahun
+          previousRecord.proposal !== normalizedValues.proposal ||
+          (normalizedValues.proposal && previousRecord.tahun !== normalizedValues.tahun)
         ) {
-          const moveOutEntry: ProposalKpmHistoryEntry = {
-            id: `hist-out-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            tahun: previousRecord.tahun,
-            proposalName: previousRecord.proposal,
-            kpmId: previousRecord.id,
-            kpmName: values.nama,
-            registerCode: previousRecord.registerCode,
-            action: 'moved_out',
-            fromProposal: previousRecord.proposal,
-            toProposal: values.proposal,
-            actorName: currentActor.nama,
-            timestamp: now,
-          };
-          const moveInEntry: ProposalKpmHistoryEntry = {
-            id: `hist-in-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            tahun: values.tahun,
-            proposalName: values.proposal,
-            kpmId: previousRecord.id,
-            kpmName: values.nama,
-            registerCode: previousRecord.registerCode,
-            action: 'moved_in',
-            fromProposal: previousRecord.proposal,
-            toProposal: values.proposal,
-            actorName: currentActor.nama,
-            timestamp: now,
-          };
-          nextProposalHistory = [moveInEntry, moveOutEntry, ...proposalHistory];
+          const addedHist: ProposalKpmHistoryEntry[] = [];
+          const prevLabel =
+            previousRecord.proposal ||
+            (previousRecord.validasi === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM');
+          const nextLabel =
+            normalizedValues.proposal ||
+            (normalizedValues.validasi === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM');
+
+          if (previousRecord.proposal?.trim()) {
+            addedHist.push({
+              id: `hist-out-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              tahun: previousRecord.tahun,
+              proposalName: previousRecord.proposal,
+              kpmId: previousRecord.id,
+              kpmName: normalizedValues.nama,
+              registerCode: previousRecord.registerCode,
+              action: 'moved_out',
+              fromProposal: previousRecord.proposal,
+              toProposal: nextLabel,
+              actorName: currentActor.nama,
+              timestamp: now,
+            });
+          }
+          if (normalizedValues.proposal?.trim()) {
+            addedHist.push({
+              id: `hist-in-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              tahun: normalizedValues.tahun,
+              proposalName: normalizedValues.proposal,
+              kpmId: previousRecord.id,
+              kpmName: normalizedValues.nama,
+              registerCode: previousRecord.registerCode,
+              action: 'moved_in',
+              fromProposal: prevLabel,
+              toProposal: normalizedValues.proposal,
+              actorName: currentActor.nama,
+              timestamp: now,
+            });
+          }
+          if (addedHist.length > 0) {
+            nextProposalHistory = [...addedHist, ...proposalHistory];
+          }
         }
       }
 
@@ -3971,8 +4048,7 @@ export default function App() {
         rec.id === editingId
           ? {
               ...rec,
-              ...values,
-              validasi: values.validasi || rec.validasi,
+              ...normalizedValues,
               updatedAt: now,
             }
           : rec
@@ -3984,9 +4060,9 @@ export default function App() {
           id: `off-save-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           createdAt: now,
           kind: 'save_kpm',
-          label: `Edit KPM: ${values.nama}`,
+          label: `Edit KPM: ${normalizedValues.nama}`,
           editingRecordId: editingId,
-          values,
+          values: normalizedValues,
         });
         const queue = await getOfflineQueue();
         setOfflineQueueCount(queue.length);
@@ -3994,6 +4070,7 @@ export default function App() {
         setProposalHistory(nextProposalHistory);
         setRecords(nextRecords);
         setEditingKpmRecord(null);
+        setKpmFormInitialStandaloneStatus(null);
         if (kpmFormReturnToDetail && activeKpmId) {
           setKpmFormReturnToDetail(false);
           navigateRestoreScroll();
@@ -4009,7 +4086,7 @@ export default function App() {
         }
         setFeedback({
           type: 'success',
-          message: `Mode Offline: Perubahan "${values.nama}" disimpan ke antrean & akan disinkronkan saat internet kembali.`,
+          message: `Mode Offline: Perubahan "${normalizedValues.nama}" disimpan ke antrean & akan disinkronkan saat internet kembali.`,
         });
         return true;
       }
@@ -4052,6 +4129,7 @@ export default function App() {
       setProposalHistory(nextProposalHistory);
       setRecords(nextRecords);
       setEditingKpmRecord(null);
+      setKpmFormInitialStandaloneStatus(null);
       navigateRestoreScroll();
       if (kpmFormReturnToDetail && activeKpmId) {
         setKpmFormReturnToDetail(false);
@@ -4065,7 +4143,7 @@ export default function App() {
       }
       setFeedback({
         type: 'success',
-        message: `Data calon KPM "${values.nama}" berhasil diperbarui.`,
+        message: `Data calon KPM "${normalizedValues.nama}" berhasil diperbarui.`,
       });
       return true;
     }
@@ -4073,12 +4151,15 @@ export default function App() {
     const rawNewRecord: KpmRecord = {
       id: `kpm-${Date.now()}`,
       registerCode: generateRegisterCode(
-        values.tahun,
-        values.item,
-        records.filter((r) => r.proposal === values.proposal && r.tahun === values.tahun).length
+        normalizedValues.tahun,
+        normalizedValues.item,
+        normalizedValues.proposal
+          ? records.filter(
+              (r) => r.proposal === normalizedValues.proposal && r.tahun === normalizedValues.tahun
+            ).length
+          : records.length
       ),
-      ...values,
-      validasi: values.validasi || 'pending',
+      ...normalizedValues,
       createdAt: now,
       updatedAt: now,
     };
@@ -4096,7 +4177,11 @@ export default function App() {
     const itemDisplay =
       itemMatch && itemMatch.name !== itemMatch.code
         ? `${itemMatch.code} — ${itemMatch.name}`
-        : savedNewRecord.item;
+        : savedNewRecord.item || '-';
+
+    const containerLabel =
+      savedNewRecord.proposal ||
+      (savedNewRecord.validasi === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM');
 
     const createdAuditEntry: KpmAuditLogEntry = {
       id: `audit-create-${Date.now()}`,
@@ -4105,13 +4190,13 @@ export default function App() {
       actorName: currentActor.nama,
       actorEmail: currentActor.email,
       timestamp: now,
-      proposal: savedNewRecord.proposal,
-      tahun: savedNewRecord.tahun,
+      proposal: containerLabel,
+      tahun: savedNewRecord.tahun || 'Tanpa Tahun',
       changes: [
         {
-          field: 'Proposal Awal',
+          field: 'Penempatan Awal',
           before: '-',
-          after: `${savedNewRecord.proposal} (${savedNewRecord.tahun})`,
+          after: `${containerLabel} (${savedNewRecord.tahun || 'Tanpa Tahun'})`,
         },
         { field: 'Item Bantuan', before: '-', after: itemDisplay },
         {
@@ -4122,30 +4207,34 @@ export default function App() {
       ],
     };
 
-    const enteredHistory: ProposalKpmHistoryEntry = {
-      id: `hist-enter-${Date.now()}`,
-      tahun: savedNewRecord.tahun,
-      proposalName: savedNewRecord.proposal,
-      kpmId: savedNewRecord.id,
-      kpmName: savedNewRecord.nama,
-      registerCode: savedNewRecord.registerCode,
-      action: 'entered',
-      toProposal: savedNewRecord.proposal,
-      actorName: currentActor.nama,
-      timestamp: now,
-    };
+    const enteredHistory: ProposalKpmHistoryEntry | null = savedNewRecord.proposal
+      ? {
+          id: `hist-enter-${Date.now()}`,
+          tahun: savedNewRecord.tahun,
+          proposalName: savedNewRecord.proposal,
+          kpmId: savedNewRecord.id,
+          kpmName: savedNewRecord.nama,
+          registerCode: savedNewRecord.registerCode,
+          action: 'entered',
+          toProposal: savedNewRecord.proposal,
+          actorName: currentActor.nama,
+          timestamp: now,
+        }
+      : null;
 
     const nextAuditLogs = [createdAuditEntry, ...kpmAuditLogs];
-    const nextProposalHistory = [enteredHistory, ...proposalHistory];
+    const nextProposalHistory = enteredHistory
+      ? [enteredHistory, ...proposalHistory]
+      : proposalHistory;
 
     if (!isOnlineRef.current || (typeof navigator !== 'undefined' && !navigator.onLine)) {
       await enqueueOfflineAction({
         id: `off-add-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         createdAt: now,
         kind: 'save_kpm',
-        label: `Tambah KPM: ${values.nama}`,
+        label: `Tambah KPM: ${normalizedValues.nama}`,
         clientRecordId: rawNewRecord.id,
-        values,
+        values: normalizedValues,
       });
       const queue = await getOfflineQueue();
       setOfflineQueueCount(queue.length);
@@ -4154,7 +4243,8 @@ export default function App() {
       setProposalHistory(nextProposalHistory);
       setPendingSelectedProposal(null);
       setLockedKpmProposalScope(null);
-      setSelectedYear(savedNewRecord.tahun);
+      setKpmFormInitialStandaloneStatus(null);
+      if (savedNewRecord.tahun) setSelectedYear(savedNewRecord.tahun);
       setActiveKpmId(savedNewRecord.id);
       setKpmDetailReturnToRecap(false);
       setKpmDetailReturnToChatPeerId(null);
@@ -4163,7 +4253,7 @@ export default function App() {
         setKpmDetailReturnToProposalDetail(true);
       } else {
         setKpmDetailReturnToProposalDetail(false);
-        setReturnToTab('kpm');
+        setReturnToTab(returnToTab);
       }
       navigateForwardScroll('smooth');
       setSubView('kpm-detail');
@@ -4188,7 +4278,7 @@ export default function App() {
               proposals,
               pengelolaList,
               auditLogs: [createdAuditEntry],
-              historyEntries: [enteredHistory],
+              historyEntries: enteredHistory ? [enteredHistory] : [],
               includeDeliveries: true,
             }),
           'Gagal menyimpan calon KPM ke Supabase'
@@ -4208,7 +4298,8 @@ export default function App() {
     setProposalHistory(nextProposalHistory);
     setPendingSelectedProposal(null);
     setLockedKpmProposalScope(null);
-    setSelectedYear(savedNewRecord.tahun);
+    setKpmFormInitialStandaloneStatus(null);
+    if (savedNewRecord.tahun) setSelectedYear(savedNewRecord.tahun);
     setActiveKpmId(savedNewRecord.id);
     setKpmDetailReturnToRecap(false);
     setKpmDetailReturnToChatPeerId(null);
@@ -4217,13 +4308,13 @@ export default function App() {
       setKpmDetailReturnToProposalDetail(true);
     } else {
       setKpmDetailReturnToProposalDetail(false);
-      setReturnToTab('kpm');
+      setReturnToTab(returnToTab);
     }
     navigateForwardScroll('smooth');
     setSubView('kpm-detail');
     setFeedback({
       type: 'success',
-      message: `Calon KPM "${savedNewRecord.nama}" (${savedNewRecord.registerCode}) berhasil disimpan.`,
+      message: `Calon KPM "${savedNewRecord.nama}" (${savedNewRecord.registerCode}) disimpan ke ${containerLabel}.`,
     });
     return true;
   };
@@ -4426,16 +4517,97 @@ export default function App() {
     await syncOperationalData({ proposals: nextProposals }, 'update');
   };
 
-  const handleUpdateKpmStatus = (id: string, status: ValidationStatus) => {
+  const handleUpdateKpmStatus = (
+    id: string,
+    status: ValidationStatus,
+    targetProposalId?: string
+  ) => {
     if (!requirePermission('update', 'mengubah status validasi KPM')) return;
     const target = records.find((r) => r.id === id);
-    if (!target || target.validasi === status) return;
-    const prop =
-      proposals.find((p) => p.namaProposal === target.proposal && p.tahun === target.tahun) ??
-      proposals.find((p) => p.namaProposal === target.proposal);
-    if (prop?.status === 'locked') return;
+    if (!target) return;
+    if (
+      target.validasi === status &&
+      (status !== 'accepted' || !targetProposalId || target.proposalId === targetProposalId)
+    ) {
+      return;
+    }
+
+    const currentProp = target.proposal?.trim()
+      ? (target.proposalId ? proposals.find((p) => p.id === target.proposalId) : undefined) ??
+        proposals.find((p) => p.namaProposal === target.proposal && p.tahun === target.tahun) ??
+        proposals.find((p) => p.namaProposal === target.proposal)
+      : undefined;
+    if (currentProp?.status === 'locked') {
+      setFeedback({
+        type: 'error',
+        message: `Proposal "${currentProp.namaProposal}" berstatus Terkunci.`,
+      });
+      return;
+    }
+
+    let nextProp: ProposalRecord | undefined;
+    if (status === 'accepted') {
+      nextProp =
+        (targetProposalId
+          ? proposals.find((p) => !isLegacyDummyProposal(p) && p.id === targetProposalId)
+          : undefined) ??
+        (target.proposal?.trim()
+          ? proposals.find(
+              (p) =>
+                !isLegacyDummyProposal(p) &&
+                p.namaProposal === target.proposal &&
+                (!target.tahun || p.tahun === target.tahun)
+            ) ??
+            proposals.find(
+              (p) => !isLegacyDummyProposal(p) && p.namaProposal === target.proposal
+            )
+          : undefined);
+      if (!nextProp) {
+        setFeedback({
+          type: 'error',
+          message: 'KPM berstatus Diterima wajib memilih Proposal aktif (Murni / Perubahan).',
+        });
+        return;
+      }
+      if (nextProp.status === 'locked') {
+        setFeedback({
+          type: 'error',
+          message: `Proposal tujuan "${nextProp.namaProposal}" sedang Terkunci.`,
+        });
+        return;
+      }
+    }
 
     const now = new Date().toISOString();
+    const dom = resolveKpmDomicile(target, proposals, wilayahList);
+    const nextProposalId = status === 'accepted' && nextProp ? nextProp.id : null;
+    const nextProposalName = status === 'accepted' && nextProp ? nextProp.namaProposal : '';
+    const nextTahun =
+      status === 'accepted' && nextProp
+        ? target.tahun?.trim() || nextProp.tahun
+        : target.tahun;
+
+    const prevPlaceLabel =
+      target.proposal ||
+      (target.validasi === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM');
+    const nextPlaceLabel =
+      nextProposalName || (status === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM');
+
+    const auditChanges: KpmAuditLogEntry['changes'] = [
+      {
+        field: 'Status Validasi',
+        before: formatValidationLabel(target.validasi),
+        after: formatValidationLabel(status),
+      },
+    ];
+    if (prevPlaceLabel !== nextPlaceLabel) {
+      auditChanges.push({
+        field: 'Penempatan',
+        before: prevPlaceLabel,
+        after: nextPlaceLabel,
+      });
+    }
+
     const statusAudit: KpmAuditLogEntry = {
       id: `audit-st-${Date.now()}`,
       kpmId: target.id,
@@ -4443,22 +4615,67 @@ export default function App() {
       actorName: currentActor.nama,
       actorEmail: currentActor.email,
       timestamp: now,
-      proposal: target.proposal,
-      tahun: target.tahun,
-      changes: [
-        {
-          field: 'Status Validasi',
-          before: formatValidationLabel(target.validasi),
-          after: formatValidationLabel(status),
-        },
-      ],
+      proposal: nextPlaceLabel,
+      tahun: nextTahun || 'Tanpa Tahun',
+      changes: auditChanges,
     };
 
-    const nextLogs = [statusAudit, ...kpmAuditLogs];
-    const nextRecords = records.map((r) =>
-      r.id === id ? { ...r, validasi: status, updatedAt: now } : r
+    const addedHist: ProposalKpmHistoryEntry[] = [];
+    if (target.proposal?.trim() && target.proposal !== nextProposalName) {
+      addedHist.push({
+        id: `hist-out-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+        tahun: target.tahun,
+        proposalName: target.proposal,
+        kpmId: target.id,
+        kpmName: target.nama,
+        registerCode: target.registerCode,
+        action: 'moved_out',
+        fromProposal: target.proposal,
+        toProposal: nextPlaceLabel,
+        actorName: currentActor.nama,
+        timestamp: now,
+      });
+    }
+    if (nextProposalName && target.proposal !== nextProposalName) {
+      addedHist.push({
+        id: `hist-in-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+        tahun: nextTahun,
+        proposalName: nextProposalName,
+        kpmId: target.id,
+        kpmName: target.nama,
+        registerCode: target.registerCode,
+        action: 'moved_in',
+        fromProposal: prevPlaceLabel,
+        toProposal: nextProposalName,
+        actorName: currentActor.nama,
+        timestamp: now,
+      });
+    }
+
+    const mapped = records.map((r) =>
+      r.id === id
+        ? {
+            ...r,
+            validasi: status,
+            proposalId: nextProposalId,
+            proposal: nextProposalName,
+            tahun: nextTahun,
+            kabKota: dom.kabKota,
+            kecamatan: dom.kecamatan,
+            kelurahan: dom.kelurahan,
+            updatedAt: now,
+          }
+        : r
     );
+    const nextRecords = mergeBastIntoRecords(
+      recalculateProposalRegisterCodes(mapped, proposals, items, wilayahList),
+      kpmBastMapRef.current
+    );
+    const nextLogs = [statusAudit, ...kpmAuditLogs];
+    const nextHistory = addedHist.length > 0 ? [...addedHist, ...proposalHistory] : proposalHistory;
+
     setKpmAuditLogs(nextLogs);
+    setProposalHistory(nextHistory);
     setRecords(nextRecords);
 
     if (!isOnlineRef.current || (typeof navigator !== 'undefined' && !navigator.onLine)) {
@@ -4469,6 +4686,7 @@ export default function App() {
         label: `Status ${target.nama} → ${formatValidationLabel(status)}`,
         kpmId: id,
         status,
+        targetProposalId: nextProp?.id,
       }).then(() => getOfflineQueue().then((q) => setOfflineQueueCount(q.length)));
       setFeedback({
         type: 'success',
@@ -4477,18 +4695,34 @@ export default function App() {
       return;
     }
 
+    const prevById = new Map(records.map((r) => [r.id, r]));
+    const changedRecords = nextRecords.filter(
+      (r) => r.id === id || prevById.get(r.id)?.registerCode !== r.registerCode
+    );
+
     if (supabaseReadyRef.current) {
       void runSupabaseMutation(
         () =>
-          updateKpmStatusesBatchInSupabase({
-            updates: [{ id, validasi: status, updatedAt: now }],
+          upsertKpmRecordsBatchInSupabase({
+            records: changedRecords,
+            proposals,
+            pengelolaList,
             auditLogs: [statusAudit],
+            historyEntries: addedHist,
+            includeDeliveries: false,
           }),
-        'Gagal memperbarui status validasi ke Supabase'
+        'Gagal memperbarui status & penempatan KPM ke Supabase'
       );
     } else {
-      void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
+      void syncOperationalData(
+        { records: nextRecords, kpmAuditLogs: nextLogs, proposalHistory: nextHistory },
+        'update'
+      );
     }
+    setFeedback({
+      type: 'success',
+      message: `Status "${target.nama}" diperbarui ke ${formatValidationLabel(status)} (${nextPlaceLabel}).`,
+    });
   };
 
   const handleToggleSubItem = (
@@ -4752,6 +4986,23 @@ export default function App() {
           } else if (act.kind === 'update_status') {
             const target = workRecords.find((r) => r.id === act.kpmId);
             if (target && target.validasi !== act.status) {
+              const targetProp =
+                act.status === 'accepted'
+                  ? (act.targetProposalId
+                      ? workProposals.find((p) => !isLegacyDummyProposal(p) && p.id === act.targetProposalId)
+                      : undefined) ??
+                    (target.proposal
+                      ? workProposals.find(
+                          (p) => !isLegacyDummyProposal(p) && p.namaProposal === target.proposal
+                        )
+                      : undefined)
+                  : undefined;
+              const resolvedStatus: ValidationStatus =
+                act.status === 'accepted' && !targetProp ? 'pending' : act.status;
+              const dom = resolveKpmDomicile(target, workProposals, workWilayah);
+              const nextPropName = resolvedStatus === 'accepted' && targetProp ? targetProp.namaProposal : '';
+              const nextPropId = resolvedStatus === 'accepted' && targetProp ? targetProp.id : null;
+
               const auditEntry: KpmAuditLogEntry = {
                 id: `audit-off-st-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
                 kpmId: target.id,
@@ -4759,20 +5010,32 @@ export default function App() {
                 actorName: actor.nama,
                 actorEmail: actor.email,
                 timestamp: act.createdAt,
-                proposal: target.proposal,
-                tahun: target.tahun,
+                proposal: nextPropName || (resolvedStatus === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM'),
+                tahun: target.tahun || targetProp?.tahun || 'Tanpa Tahun',
                 changes: [
                   {
                     field: 'Status Validasi',
                     before: formatValidationLabel(target.validasi),
-                    after: formatValidationLabel(act.status),
+                    after: formatValidationLabel(resolvedStatus),
                   },
                 ],
               };
               workAuditLogs = [auditEntry, ...workAuditLogs];
               addedAuditLogs.push(auditEntry);
               workRecords = workRecords.map((r) =>
-                r.id === act.kpmId ? { ...r, validasi: act.status, updatedAt: act.createdAt } : r
+                r.id === act.kpmId
+                  ? {
+                      ...r,
+                      validasi: resolvedStatus,
+                      proposalId: nextPropId,
+                      proposal: nextPropName,
+                      tahun: target.tahun || targetProp?.tahun || '',
+                      kabKota: dom.kabKota,
+                      kecamatan: dom.kecamatan,
+                      kelurahan: dom.kelurahan,
+                      updatedAt: act.createdAt,
+                    }
+                  : r
               );
               touchedRecordIds.add(act.kpmId);
             }
@@ -4903,6 +5166,7 @@ export default function App() {
     ids: string[],
     patch: {
       validasi?: ValidationStatus;
+      targetProposalId?: string;
       dtsen?: string;
       item?: string;
       markAllSubItems?: boolean;
@@ -4911,29 +5175,144 @@ export default function App() {
     if (!requirePermission('update', 'mengubah data KPM secara massal')) return;
     if (ids.length === 0) return;
 
+    const targetProposalForBulk = patch.targetProposalId
+      ? proposals.find((p) => !isLegacyDummyProposal(p) && p.id === patch.targetProposalId)
+      : undefined;
+
+    if (targetProposalForBulk?.status === 'locked') {
+      setFeedback({
+        type: 'error',
+        message: `Proposal tujuan "${targetProposalForBulk.namaProposal}" berstatus Terkunci.`,
+      });
+      return;
+    }
+
     const idSet = new Set(ids);
     const now = new Date().toISOString();
     const newLogs: KpmAuditLogEntry[] = [];
+    const newHistEntries: ProposalKpmHistoryEntry[] = [];
     let updatedCount = 0;
 
-    const mapped = records.map((rec) => {
+    const mapped = records.map((rec, idx) => {
       if (!idSet.has(rec.id)) return rec;
-      const prop =
-        proposals.find((p) => p.namaProposal === rec.proposal && p.tahun === rec.tahun) ??
-        proposals.find((p) => p.namaProposal === rec.proposal);
+      const prop = rec.proposal?.trim()
+        ? (rec.proposalId ? proposals.find((p) => p.id === rec.proposalId) : undefined) ??
+          proposals.find((p) => p.namaProposal === rec.proposal && p.tahun === rec.tahun) ??
+          proposals.find((p) => p.namaProposal === rec.proposal)
+        : undefined;
       if (prop?.status === 'locked') return rec;
 
       const changes: KpmAuditLogEntry['changes'] = [];
       let nextRec = { ...rec };
 
-      if (patch.validasi && patch.validasi !== rec.validasi) {
-        changes.push({
-          field: 'Status Validasi (Massal)',
-          before: formatValidationLabel(rec.validasi),
-          after: formatValidationLabel(patch.validasi),
-        });
-        nextRec.validasi = patch.validasi;
+      if (patch.validasi) {
+        const dom = resolveKpmDomicile(rec, proposals, wilayahList);
+        if (patch.validasi === 'accepted') {
+          const resolvedProp =
+            targetProposalForBulk ??
+            (prop && !isLegacyDummyProposal(prop) ? prop : undefined);
+          if (!resolvedProp) {
+            return rec;
+          }
+          const statusChanged = rec.validasi !== 'accepted';
+          const propChanged = rec.proposal !== resolvedProp.namaProposal || rec.proposalId !== resolvedProp.id;
+          if (statusChanged) {
+            changes.push({
+              field: 'Status Validasi (Massal)',
+              before: formatValidationLabel(rec.validasi),
+              after: 'Diterima',
+            });
+          }
+          if (propChanged) {
+            const prevPlace =
+              rec.proposal ||
+              (rec.validasi === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM');
+            changes.push({
+              field: 'Penempatan (Massal)',
+              before: prevPlace,
+              after: resolvedProp.namaProposal,
+            });
+            if (rec.proposal?.trim()) {
+              newHistEntries.push({
+                id: `hist-bout-${Date.now()}-${idx}`,
+                tahun: rec.tahun,
+                proposalName: rec.proposal,
+                kpmId: rec.id,
+                kpmName: rec.nama,
+                registerCode: rec.registerCode,
+                action: 'moved_out',
+                fromProposal: rec.proposal,
+                toProposal: resolvedProp.namaProposal,
+                actorName: currentActor.nama,
+                timestamp: now,
+              });
+            }
+            newHistEntries.push({
+              id: `hist-bin-${Date.now()}-${idx}`,
+              tahun: rec.tahun?.trim() || resolvedProp.tahun,
+              proposalName: resolvedProp.namaProposal,
+              kpmId: rec.id,
+              kpmName: rec.nama,
+              registerCode: rec.registerCode,
+              action: 'moved_in',
+              fromProposal: prevPlace,
+              toProposal: resolvedProp.namaProposal,
+              actorName: currentActor.nama,
+              timestamp: now,
+            });
+          }
+          nextRec = {
+            ...nextRec,
+            validasi: 'accepted',
+            proposalId: resolvedProp.id,
+            proposal: resolvedProp.namaProposal,
+            tahun: rec.tahun?.trim() || resolvedProp.tahun,
+            kabKota: dom.kabKota,
+            kecamatan: dom.kecamatan,
+            kelurahan: dom.kelurahan,
+          };
+        } else {
+          const nextPlace =
+            patch.validasi === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM';
+          if (rec.validasi !== patch.validasi) {
+            changes.push({
+              field: 'Status Validasi (Massal)',
+              before: formatValidationLabel(rec.validasi),
+              after: formatValidationLabel(patch.validasi),
+            });
+          }
+          if (rec.proposal?.trim()) {
+            changes.push({
+              field: 'Penempatan (Massal)',
+              before: rec.proposal,
+              after: nextPlace,
+            });
+            newHistEntries.push({
+              id: `hist-bdetach-${Date.now()}-${idx}`,
+              tahun: rec.tahun,
+              proposalName: rec.proposal,
+              kpmId: rec.id,
+              kpmName: rec.nama,
+              registerCode: rec.registerCode,
+              action: 'moved_out',
+              fromProposal: rec.proposal,
+              toProposal: nextPlace,
+              actorName: currentActor.nama,
+              timestamp: now,
+            });
+          }
+          nextRec = {
+            ...nextRec,
+            validasi: patch.validasi,
+            proposalId: null,
+            proposal: '',
+            kabKota: dom.kabKota,
+            kecamatan: dom.kecamatan,
+            kelurahan: dom.kelurahan,
+          };
+        }
       }
+
       if (patch.dtsen !== undefined && patch.dtsen !== rec.dtsen) {
         changes.push({
           field: 'Klasifikasi DTSEN (Massal)',
@@ -4988,8 +5367,10 @@ export default function App() {
         actorName: currentActor.nama,
         actorEmail: currentActor.email,
         timestamp: now,
-        proposal: rec.proposal,
-        tahun: rec.tahun,
+        proposal:
+          nextRec.proposal ||
+          (nextRec.validasi === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM'),
+        tahun: nextRec.tahun || 'Tanpa Tahun',
         changes,
       });
       return nextRec;
@@ -5003,13 +5384,16 @@ export default function App() {
       return;
     }
 
-    const nextRecords = patch.item
-      ? mergeBastIntoRecords(
-          recalculateProposalRegisterCodes(mapped, proposals, items, wilayahList),
-          kpmBastMapRef.current
-        )
-      : mapped;
+    const nextRecords =
+      patch.item || patch.validasi
+        ? mergeBastIntoRecords(
+            recalculateProposalRegisterCodes(mapped, proposals, items, wilayahList),
+            kpmBastMapRef.current
+          )
+        : mapped;
     const nextLogs = [...newLogs, ...kpmAuditLogs];
+    const nextHistory =
+      newHistEntries.length > 0 ? [...newHistEntries, ...proposalHistory] : proposalHistory;
 
     const prevById = new Map(records.map((r) => [r.id, r]));
     const changedIdSet = new Set(newLogs.map((l) => l.kpmId));
@@ -5019,6 +5403,7 @@ export default function App() {
 
     setRecords(nextRecords);
     setKpmAuditLogs(nextLogs);
+    setProposalHistory(nextHistory);
     const ok = supabaseReadyRef.current
       ? await runSupabaseMutation(
           () =>
@@ -5027,12 +5412,13 @@ export default function App() {
               proposals,
               pengelolaList,
               auditLogs: newLogs,
+              historyEntries: newHistEntries,
               includeDeliveries: Boolean(patch.markAllSubItems),
             }),
           'Gagal memperbarui data massal ke Supabase'
         )
       : await syncOperationalData(
-          { records: nextRecords, kpmAuditLogs: nextLogs },
+          { records: nextRecords, kpmAuditLogs: nextLogs, proposalHistory: nextHistory },
           'update'
         );
     if (ok) {
@@ -5041,6 +5427,117 @@ export default function App() {
         message: `${updatedCount} calon KPM berhasil diperbarui secara massal.`,
       });
     }
+  };
+
+  const handleBulkRecoverToDatabase = async (kpmIds: string[]) => {
+    await handleBulkUpdateKpms(kpmIds, { validasi: 'pending' });
+  };
+
+  const handleBulkRejectToArsip = async (kpmIds: string[]) => {
+    await handleBulkUpdateKpms(kpmIds, { validasi: 'rejected' });
+  };
+
+  const handleBulkAssignToProposal = async (
+    kpmIds: string[],
+    targetProposal: ProposalRecord
+  ) => {
+    await handleBulkUpdateKpms(kpmIds, {
+      validasi: 'accepted',
+      targetProposalId: targetProposal.id,
+    });
+  };
+
+  const handleBulkPermanentDeleteKpms = async (kpmIds: string[]) => {
+    if (!requirePermission('delete', 'menghapus data KPM secara permanen')) return;
+    if (kpmIds.length === 0) return;
+
+    const idSet = new Set(kpmIds);
+    const deletableTargets = records.filter((rec) => {
+      if (!idSet.has(rec.id)) return false;
+      if (rec.proposal?.trim()) {
+        const prop =
+          (rec.proposalId ? proposals.find((p) => p.id === rec.proposalId) : undefined) ??
+          proposals.find((p) => p.namaProposal === rec.proposal && p.tahun === rec.tahun) ??
+          proposals.find((p) => p.namaProposal === rec.proposal);
+        if (prop?.status === 'locked') return false;
+      }
+      return true;
+    });
+
+    if (deletableTargets.length === 0) {
+      setFeedback({
+        type: 'error',
+        message: 'Tidak ada KPM yang dapat dihapus permanen.',
+      });
+      return;
+    }
+
+    const deleteSet = new Set(deletableTargets.map((r) => r.id));
+    const now = new Date().toISOString();
+    const removedHistory: ProposalKpmHistoryEntry[] = deletableTargets
+      .filter((t) => Boolean(t.proposal?.trim()))
+      .map((t, idx) => ({
+        id: `hist-pdel-${Date.now()}-${idx}`,
+        tahun: t.tahun,
+        proposalName: t.proposal,
+        kpmId: t.id,
+        kpmName: t.nama,
+        registerCode: t.registerCode,
+        action: 'removed',
+        fromProposal: t.proposal,
+        actorName: currentActor.nama,
+        timestamp: now,
+      }));
+
+    const remainingRecords = recalculateProposalRegisterCodes(
+      records.filter((r) => !deleteSet.has(r.id)),
+      proposals,
+      items,
+      wilayahList
+    );
+    const nextRecords = mergeBastIntoRecords(remainingRecords, kpmBastMapRef.current);
+    const nextLogs = kpmAuditLogs.filter((l) => !deleteSet.has(l.kpmId));
+    const nextHistory =
+      removedHistory.length > 0 ? [...removedHistory, ...proposalHistory] : proposalHistory;
+
+    const prevById = new Map(records.map((r) => [r.id, r]));
+    const updatedShiftRecords = nextRecords.filter(
+      (r) => prevById.get(r.id)?.registerCode !== r.registerCode
+    );
+
+    const ok = supabaseReadyRef.current
+      ? await runSupabaseMutation(
+          () =>
+            deleteKpmsBatchInSupabase({
+              kpmIds: deletableTargets.map((t) => t.id),
+              updatedRecords: updatedShiftRecords,
+              proposals,
+              pengelolaList,
+              historyEntries: removedHistory,
+            }),
+          'Gagal menghapus KPM permanen dari Supabase'
+        )
+      : await syncOperationalData(
+          {
+            records: nextRecords,
+            kpmAuditLogs: nextLogs,
+            proposalHistory: nextHistory,
+          },
+          'delete'
+        );
+    if (!ok) return;
+
+    setRecords(nextRecords);
+    setKpmAuditLogs(nextLogs);
+    setProposalHistory(nextHistory);
+    if (activeKpmId && deleteSet.has(activeKpmId)) {
+      setActiveKpmId(null);
+      setSubView('none');
+    }
+    setFeedback({
+      type: 'success',
+      message: `${deletableTargets.length} data KPM berhasil dihapus permanen beserta dokumen dan riwayat terkait.`,
+    });
   };
 
   const handleSaveKpmBast = async (
@@ -6934,89 +7431,6 @@ export default function App() {
     setSubView('notifications');
   };
 
-  const handleAcceptAllInProposal = (proposalName: string, tahun: string) => {
-    if (!requirePermission('update', 'menyetujui seluruh KPM pada proposal')) return;
-    const prop =
-      proposals.find((p) => p.namaProposal === proposalName && p.tahun === tahun) ??
-      proposals.find((p) => p.namaProposal === proposalName);
-    if (prop?.status === 'locked') {
-      setFeedback({
-        type: 'error',
-        message: `Proposal "${prop.namaProposal}" sedang Terkunci.`,
-      });
-      return;
-    }
-
-    const targets = records.filter(
-      (r) =>
-        r.proposal === proposalName &&
-        r.tahun === tahun &&
-        (r.validasi === 'pending' || r.validasi === 'rejected')
-    );
-    if (targets.length === 0) return;
-
-    const now = new Date().toISOString();
-    const targetIds = new Set(targets.map((t) => t.id));
-    const newLogs: KpmAuditLogEntry[] = targets.map((t, idx) => ({
-      id: `audit-accall-${Date.now()}-${idx}`,
-      kpmId: t.id,
-      action: 'status_changed',
-      actorName: currentActor.nama,
-      actorEmail: currentActor.email,
-      timestamp: now,
-      proposal: t.proposal,
-      tahun: t.tahun,
-      changes: [
-        {
-          field: 'Status Validasi',
-          before: formatValidationLabel(t.validasi),
-          after: 'Diterima',
-        },
-      ],
-    }));
-
-    const actEntry = createActivityHistoryEntry('kpm_accept_all', {
-      proposalName,
-      detail: `Menyetujui ${targets.length} calon KPM pada "${proposalName}" menjadi Diterima.`,
-      tahun,
-      action: 'entered',
-    });
-
-    const nextLogs = [...newLogs, ...kpmAuditLogs];
-    const nextHistory = [actEntry, ...proposalHistory];
-    const nextRecords = records.map((r) =>
-      targetIds.has(r.id) ? { ...r, validasi: 'accepted' as ValidationStatus, updatedAt: now } : r
-    );
-    setKpmAuditLogs(nextLogs);
-    setProposalHistory(nextHistory);
-    setRecords(nextRecords);
-    if (supabaseReadyRef.current) {
-      void runSupabaseMutation(
-        () =>
-          updateKpmStatusesBatchInSupabase({
-            updates: targets.map((t) => ({
-              id: t.id,
-              validasi: 'accepted' as ValidationStatus,
-              updatedAt: now,
-            })),
-            auditLogs: newLogs,
-            historyEntries: [actEntry],
-            proposals,
-          }),
-        'Gagal menyetujui massal ke Supabase'
-      );
-    } else {
-      void syncOperationalData(
-        { records: nextRecords, kpmAuditLogs: nextLogs, proposalHistory: nextHistory },
-        'update'
-      );
-    }
-    setFeedback({
-      type: 'success',
-      message: `${targets.length} calon KPM pada "${proposalName}" (${tahun}) disetujui menjadi Diterima.`,
-    });
-  };
-
   const handleTransferProposalKpms = async (
     kpmIds: string[],
     targetProposalId: string
@@ -7422,6 +7836,16 @@ export default function App() {
     return Array.from(set).sort((a, b) => b.localeCompare(a));
   }, [customYears, proposals, items, records]);
 
+  const databaseKpmCount = useMemo(
+    () => records.filter((r) => r.validasi === 'pending' && !(r.proposal || '').trim()).length,
+    [records]
+  );
+
+  const archivedKpmCount = useMemo(
+    () => records.filter((r) => r.validasi === 'rejected' && !(r.proposal || '').trim()).length,
+    [records]
+  );
+
   const handleDismissUpdateLater = () => {
     if (appUpdateInfo && !appUpdateInfo.isMandatory) {
       setDismissedUpdateVersion(appUpdateInfo.latestVersion);
@@ -7548,6 +7972,8 @@ export default function App() {
           activeMenuSection={menuSection}
           kpmCount={records.length}
           proposalCount={proposals.length}
+          databaseKpmCount={databaseKpmCount}
+          archivedKpmCount={archivedKpmCount}
           unreadChatCount={unreadChatCount}
           pendingUsersCount={currentUser.role === 'SuperAdmin' ? pendingUsersCount : 0}
           urgentSchedulesCount={urgentSchedulesCount}
@@ -8022,12 +8448,14 @@ export default function App() {
               onDismissFeedback={() => setFeedback(null)}
               preselectedProposal={pendingSelectedProposal}
               lockedProposalScope={lockedKpmProposalScope}
+              initialStandaloneStatus={kpmFormInitialStandaloneStatus}
               onClearPreselectedProposal={() => setPendingSelectedProposal(null)}
               onBack={() => {
                 navigateRestoreScroll();
                 setFeedback(null);
                 setEditingKpmRecord(null);
                 setLockedKpmProposalScope(null);
+                setKpmFormInitialStandaloneStatus(null);
                 if (kpmFormReturnToDetail && activeKpmId) {
                   setKpmFormReturnToDetail(false);
                   setSubView('kpm-detail');
@@ -8049,6 +8477,7 @@ export default function App() {
                 navigateRestoreScroll();
                 setEditingKpmRecord(null);
                 setLockedKpmProposalScope(null);
+                setKpmFormInitialStandaloneStatus(null);
                 if (kpmFormReturnToDetail && activeKpmId) {
                   setKpmFormReturnToDetail(false);
                   setSubView('kpm-detail');
@@ -8118,14 +8547,13 @@ export default function App() {
               onViewKpmInProposal={(proposalName, tahun) => {
                 navigateForwardScroll();
                 setSelectedYear(tahun);
-                setKpmStatusFilter('all');
+                setKpmStatusFilter('accepted');
                 setKpmItemFilter('all');
                 setKpmProposalFilter(proposalName);
                 setKpmOpenedFromProposalDetail(true);
                 setSubView('none');
                 setActiveTab('kpm');
               }}
-              onAcceptAllKpm={handleAcceptAllInProposal}
               onTransferKpm={handleTransferProposalKpms}
               onOpenFullHistory={() => {
                 navigateForwardScroll();
@@ -8252,6 +8680,12 @@ export default function App() {
               navigateForwardScroll();
               setMenuOpenedFromDashboard(true);
               setMenuSection('arsip');
+              setActiveTab('menu');
+            }}
+            onOpenDatabaseKpm={() => {
+              navigateForwardScroll();
+              setMenuOpenedFromDashboard(true);
+              setMenuSection('database-kpm');
               setActiveTab('menu');
             }}
             onOpenDtsen={() => {
@@ -8466,6 +8900,13 @@ export default function App() {
             onPermanentDeleteTrashItem={handlePermanentDeleteTrashItem}
             reportTemplate={reportTemplate}
             onSaveReportTemplate={handleSaveReportTemplate}
+            onOpenCreateStandaloneDatabaseKpm={() =>
+              openKpmForm(null, 'menu', false, false, null, 'pending')
+            }
+            onBulkRecoverToDatabase={handleBulkRecoverToDatabase}
+            onBulkRejectToArsip={handleBulkRejectToArsip}
+            onBulkAssignToProposal={handleBulkAssignToProposal}
+            onBulkPermanentDeleteKpms={handleBulkPermanentDeleteKpms}
           />
         </div>
         </div>

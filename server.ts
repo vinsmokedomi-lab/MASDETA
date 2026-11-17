@@ -1279,10 +1279,44 @@ async function startServer() {
     res.json({ updatedCount: updatedIds.length, readAt: now });
   });
 
+  function normalizeOperationalStateOnServer() {
+    const removedIds = new Set<string>();
+    const removedNames = new Set<string>();
+    const rawProps = Array.isArray(dataStore.proposals)
+      ? (dataStore.proposals as Array<Record<string, unknown>>)
+      : [];
+    dataStore.proposals = rawProps.filter((p) => {
+      const tipe = String(p?.tipe || '').trim();
+      if (tipe !== 'Murni' && tipe !== 'Perubahan') {
+        if (p?.id) removedIds.add(String(p.id));
+        if (p?.namaProposal) removedNames.add(String(p.namaProposal).trim().toLowerCase());
+        return false;
+      }
+      return true;
+    });
+    const rawRecs = Array.isArray(dataStore.records)
+      ? (dataStore.records as Array<Record<string, unknown>>)
+      : [];
+    dataStore.records = rawRecs.map((r) => {
+      const validasi = String(r?.validasi || 'pending');
+      const propId = r?.proposalId ? String(r.proposalId) : null;
+      const propName = r?.proposal ? String(r.proposal).trim() : '';
+      const detached =
+        validasi !== 'accepted' ||
+        (propId && removedIds.has(propId)) ||
+        (propName && removedNames.has(propName.toLowerCase()));
+      if (detached) {
+        return { ...r, proposalId: null, proposal: '' };
+      }
+      return r;
+    });
+  }
+
   // REST: Get full operational KPM/Proposal/Master data state
   app.get('/api/data/state', (req: Request, res: Response) => {
     const authUser = requireAuth(req, res);
     if (!authUser) return;
+    normalizeOperationalStateOnServer();
     res.json(dataStore);
   });
 
@@ -1308,6 +1342,7 @@ async function startServer() {
     if (Array.isArray(body.proposalHistory)) dataStore.proposalHistory = body.proposalHistory;
     if (Array.isArray(body.kpmAuditLogs)) dataStore.kpmAuditLogs = body.kpmAuditLogs;
 
+    normalizeOperationalStateOnServer();
     dataStore.initialized = true;
     dataStore.updatedAt = new Date().toISOString();
     saveDataStore(dataStore);
@@ -1364,6 +1399,7 @@ async function startServer() {
     if (Array.isArray(body.proposalHistory)) dataStore.proposalHistory = body.proposalHistory;
     if (Array.isArray(body.kpmAuditLogs)) dataStore.kpmAuditLogs = body.kpmAuditLogs;
 
+    normalizeOperationalStateOnServer();
     dataStore.initialized = true;
     dataStore.updatedAt = new Date().toISOString();
     saveDataStore(dataStore);

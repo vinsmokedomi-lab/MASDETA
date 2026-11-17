@@ -577,60 +577,73 @@ export async function fetchOperationalDataFromSupabase(): Promise<SupabaseOperat
     docsByProposal.set(propId, existing);
   }
 
-  const proposals: ProposalRecord[] = (proposalsRes.data || []).map((p) => {
-    const propId = String(p.id);
-    const docMap = docsByProposal.get(propId) || {};
-    const documents: ProposalDocuments = {
-      proposalOpd:
-        docMap.proposalOpd ||
-        buildDocFileFromUrlFallback(p.proposal_opd_url as string | null, null, `${propId}-opd`, 'Proposal OPD'),
-      proposalLurahCamat:
-        docMap.proposalLurahCamat ||
-        buildDocFileFromUrlFallback(
-          p.proposal_lurah_camat_url as string | null,
-          null,
-          `${propId}-lc`,
-          'Proposal Lurah & Camat'
-        ),
-      rab: docMap.rab || buildDocFileFromUrlFallback(p.rab_url as string | null, null, `${propId}-rab`, 'RAB'),
-      capRt: docMap.capRt || buildDocFileFromUrlFallback(p.cap_rt_url as string | null, null, `${propId}-rt`, 'Cap RT'),
-      capRw: docMap.capRw || buildDocFileFromUrlFallback(p.cap_rw_url as string | null, null, `${propId}-rw`, 'Cap RW'),
-      capLurah:
-        docMap.capLurah ||
-        buildDocFileFromUrlFallback(p.cap_lurah_url as string | null, null, `${propId}-lurah`, 'Cap Lurah'),
-      capCamat:
-        docMap.capCamat ||
-        buildDocFileFromUrlFallback(p.cap_camat_url as string | null, null, `${propId}-camat`, 'Cap Camat'),
-    };
+  const removedDummyPropIds = new Set<string>();
+  const removedDummyPropNames = new Set<string>();
+  const proposals: ProposalRecord[] = (proposalsRes.data || [])
+    .filter((p) => {
+      const tipeRaw = String(p.tipe || '').trim();
+      if (tipeRaw !== 'Murni' && tipeRaw !== 'Perubahan') {
+        removedDummyPropIds.add(String(p.id));
+        const nameLower = String(p.nama_proposal || '').trim().toLowerCase();
+        if (nameLower) removedDummyPropNames.add(nameLower);
+        return false;
+      }
+      return true;
+    })
+    .map((p) => {
+      const propId = String(p.id);
+      const docMap = docsByProposal.get(propId) || {};
+      const documents: ProposalDocuments = {
+        proposalOpd:
+          docMap.proposalOpd ||
+          buildDocFileFromUrlFallback(p.proposal_opd_url as string | null, null, `${propId}-opd`, 'Proposal OPD'),
+        proposalLurahCamat:
+          docMap.proposalLurahCamat ||
+          buildDocFileFromUrlFallback(
+            p.proposal_lurah_camat_url as string | null,
+            null,
+            `${propId}-lc`,
+            'Proposal Lurah & Camat'
+          ),
+        rab: docMap.rab || buildDocFileFromUrlFallback(p.rab_url as string | null, null, `${propId}-rab`, 'RAB'),
+        capRt: docMap.capRt || buildDocFileFromUrlFallback(p.cap_rt_url as string | null, null, `${propId}-rt`, 'Cap RT'),
+        capRw: docMap.capRw || buildDocFileFromUrlFallback(p.cap_rw_url as string | null, null, `${propId}-rw`, 'Cap RW'),
+        capLurah:
+          docMap.capLurah ||
+          buildDocFileFromUrlFallback(p.cap_lurah_url as string | null, null, `${propId}-lurah`, 'Cap Lurah'),
+        capCamat:
+          docMap.capCamat ||
+          buildDocFileFromUrlFallback(p.cap_camat_url as string | null, null, `${propId}-camat`, 'Cap Camat'),
+      };
 
-    const rawChecklist = (p.checklist as Partial<ProposalChecklist> | null) || {};
-    return {
-      id: propId,
-      tahun: String(p.tahun),
-      tipe: (p.tipe as ProposalRecord['tipe']) || 'Murni',
-      kabKota: String(p.kab_kota || ''),
-      kecamatan: String(p.kecamatan || ''),
-      kelurahan: String(p.kelurahan || ''),
-      jalan: String(p.jalan || ''),
-      namaProposal: String(p.nama_proposal || ''),
-      jumlahKpm: Number(p.jumlah_kpm ?? 66),
-      status: (p.status as ProposalRecord['status']) || 'unlocked',
-      checklist: {
-        docx: Boolean(documents.proposalOpd || documents.proposalLurahCamat),
-        dinas: Boolean(rawChecklist.dinas),
-        dinasAt: rawChecklist.dinasAt,
-        rab: Boolean(documents.rab),
-        rt: Boolean(documents.capRt),
-        rw: Boolean(documents.capRw),
-        lurah: Boolean(documents.capLurah),
-        camat: Boolean(documents.capCamat),
-      },
-      catatan: String(p.catatan || ''),
-      documents,
-      createdAt: String(p.created_at || new Date().toISOString()),
-      updatedAt: String(p.updated_at || new Date().toISOString()),
-    };
-  });
+      const rawChecklist = (p.checklist as Partial<ProposalChecklist> | null) || {};
+      return {
+        id: propId,
+        tahun: String(p.tahun),
+        tipe: String(p.tipe) === 'Perubahan' ? 'Perubahan' : 'Murni',
+        kabKota: String(p.kab_kota || ''),
+        kecamatan: String(p.kecamatan || ''),
+        kelurahan: String(p.kelurahan || ''),
+        jalan: String(p.jalan || ''),
+        namaProposal: String(p.nama_proposal || ''),
+        jumlahKpm: Number(p.jumlah_kpm ?? 66),
+        status: (p.status as ProposalRecord['status']) || 'unlocked',
+        checklist: {
+          docx: Boolean(documents.proposalOpd || documents.proposalLurahCamat),
+          dinas: Boolean(rawChecklist.dinas),
+          dinasAt: rawChecklist.dinasAt,
+          rab: Boolean(documents.rab),
+          rt: Boolean(documents.capRt),
+          rw: Boolean(documents.capRw),
+          lurah: Boolean(documents.capLurah),
+          camat: Boolean(documents.capCamat),
+        },
+        catatan: String(p.catatan || ''),
+        documents,
+        createdAt: String(p.created_at || new Date().toISOString()),
+        updatedAt: String(p.updated_at || new Date().toISOString()),
+      };
+    });
 
   // 6. KPM Records, KPM Documents & Sub-Item Deliveries
   const docsByKpm = new Map<string, KpmDocuments>();
@@ -703,13 +716,28 @@ export async function fetchOperationalDataFromSupabase(): Promise<SupabaseOperat
       lainnya: bag.lainnya,
     };
 
+    const rawValidasi = (r.validasi as KpmRecord['validasi']) || 'pending';
+    const rawPropId = r.proposal_id ? String(r.proposal_id) : null;
+    const rawPropName = r.proposal ? String(r.proposal).trim() : '';
+    const isDetached =
+      rawValidasi !== 'accepted' ||
+      Boolean(rawPropId && removedDummyPropIds.has(rawPropId)) ||
+      Boolean(rawPropName && removedDummyPropNames.has(rawPropName.toLowerCase()));
+    const matchedProp = !isDetached
+      ? (rawPropId ? proposals.find((p) => p.id === rawPropId) : undefined) ??
+        proposals.find((p) => p.namaProposal === rawPropName && p.tahun === String(r.tahun || '')) ??
+        proposals.find((p) => p.namaProposal === rawPropName)
+      : undefined;
+
     return {
       id: kpmId,
       registerCode: String(r.register_code || ''),
-      tahun: String(r.tahun || ''),
-      proposal: String(r.proposal || ''),
-      kecamatan: String(r.kecamatan || ''),
-      kelurahan: String(r.kelurahan || ''),
+      tahun: r.tahun ? String(r.tahun).trim() : '',
+      proposalId: isDetached ? null : matchedProp?.id ?? rawPropId,
+      proposal: isDetached ? '' : matchedProp?.namaProposal ?? rawPropName,
+      kabKota: matchedProp?.kabKota || '',
+      kecamatan: String(r.kecamatan || '') || matchedProp?.kecamatan || '',
+      kelurahan: String(r.kelurahan || '') || matchedProp?.kelurahan || '',
       item: String(r.item || ''),
       nama: String(r.nama || ''),
       alamat: String(r.alamat || ''),
@@ -718,7 +746,7 @@ export async function fetchOperationalDataFromSupabase(): Promise<SupabaseOperat
       nikKk: String(r.nik_kk || ''),
       nikKtp: String(r.nik_ktp || ''),
       dtsen: String(r.dtsen || ''),
-      validasi: (r.validasi as KpmRecord['validasi']) || 'pending',
+      validasi: rawValidasi,
       kontak: String(r.kontak || ''),
       pekerjaan: String(r.pekerjaan || ''),
       pengelola: String(r.pengelola || ''),
@@ -853,9 +881,12 @@ function buildKpmRecordRow(
   proposals: ProposalRecord[],
   pengelolaList: PengelolaProfile[]
 ) {
-  const matchedProposal =
-    proposals.find((p) => p.namaProposal === record.proposal && p.tahun === record.tahun) ??
-    proposals.find((p) => p.namaProposal === record.proposal);
+  const isAccepted = record.validasi === 'accepted';
+  const matchedProposal = isAccepted
+    ? (record.proposalId ? proposals.find((p) => p.id === record.proposalId) : undefined) ??
+      proposals.find((p) => p.namaProposal === record.proposal && p.tahun === record.tahun) ??
+      proposals.find((p) => p.namaProposal === record.proposal)
+    : undefined;
   const matchedPengelola = pengelolaList.find((p) => p.displayName === record.pengelola);
 
   const ktpUrl = sanitizeMediaUrl(record.documents.ktp?.directUrl || record.documents.ktp?.dataUrl);
@@ -867,12 +898,18 @@ function buildKpmRecordRow(
     record.documents.survey?.directUrl || record.documents.survey?.dataUrl
   );
 
+  const tahunVal = record.tahun?.trim() ? record.tahun.trim() : null;
+  const proposalIdVal = isAccepted ? matchedProposal?.id || record.proposalId || null : null;
+  const proposalNameVal = isAccepted
+    ? matchedProposal?.namaProposal || (record.proposal?.trim() ? record.proposal.trim() : null)
+    : null;
+
   return {
     id: record.id,
     register_code: record.registerCode,
-    tahun: record.tahun,
-    proposal_id: matchedProposal?.id || null,
-    proposal: record.proposal,
+    tahun: tahunVal,
+    proposal_id: proposalIdVal,
+    proposal: proposalNameVal,
     kecamatan: record.kecamatan || '',
     kelurahan: record.kelurahan || '',
     item: record.item,
@@ -1062,10 +1099,10 @@ export async function appendProposalHistoryInSupabase(
       h.kpmId && (!validKpmIdsHint || validKpmIdsHint.has(h.kpmId)) ? h.kpmId : null;
     rows.push({
       id: h.id,
-      tahun: h.tahun,
+      tahun: h.tahun || '',
       proposal_id:
-        propIdByKey.get(`${h.tahun}::${h.proposalName.trim().toLowerCase()}`) || null,
-      proposal_name: h.proposalName,
+        propIdByKey.get(`${h.tahun || ''}::${(h.proposalName || '').trim().toLowerCase()}`) || null,
+      proposal_name: h.proposalName || '',
       kpm_id: cleanKpmId,
       kpm_name: h.kpmName,
       register_code: h.registerCode || '',
@@ -1171,27 +1208,101 @@ export async function deleteKpmRecordWithSideEffectsInSupabase(params: {
   }
 }
 
+export async function deleteKpmsBatchInSupabase(params: {
+  kpmIds: string[];
+  updatedRecords?: KpmRecord[];
+  proposals: ProposalRecord[];
+  pengelolaList: PengelolaProfile[];
+  historyEntries?: ProposalKpmHistoryEntry[];
+}): Promise<void> {
+  const {
+    kpmIds,
+    updatedRecords = [],
+    proposals,
+    pengelolaList,
+    historyEntries = [],
+  } = params;
+
+  const uniqueIds = Array.from(new Set(kpmIds.filter(Boolean)));
+  if (uniqueIds.length > 0) {
+    await deleteByIdsInChunks('kpm_records', 'id', uniqueIds);
+  }
+
+  if (updatedRecords.length > 0) {
+    const kpmRows = updatedRecords.map((rec) =>
+      buildKpmRecordRow(rec, proposals, pengelolaList)
+    );
+    await upsertInChunks('kpm_records', kpmRows, 'id');
+  }
+
+  if (historyEntries.length > 0) {
+    await appendProposalHistoryInSupabase(historyEntries, proposals, new Set());
+  }
+}
+
 export async function updateKpmStatusesBatchInSupabase(params: {
-  updates: Array<{ id: string; validasi: KpmRecord['validasi']; updatedAt: string }>;
+  updates: Array<{
+    id: string;
+    validasi: KpmRecord['validasi'];
+    proposalId?: string | null;
+    proposal?: string | null;
+    tahun?: string | null;
+    registerCode?: string;
+    updatedAt: string;
+  }>;
   auditLogs?: KpmAuditLogEntry[];
   historyEntries?: ProposalKpmHistoryEntry[];
   proposals?: ProposalRecord[];
 }): Promise<void> {
   const { updates, auditLogs = [], historyEntries = [], proposals = [] } = params;
-  const byStatus = new Map<KpmRecord['validasi'], typeof updates>();
+  const groupedUpdates = new Map<string, typeof updates>();
   for (const u of updates) {
-    const list = byStatus.get(u.validasi) || [];
+    const isAccepted = u.validasi === 'accepted';
+    const propId = isAccepted ? u.proposalId ?? null : null;
+    const propName = isAccepted ? u.proposal?.trim() || null : null;
+    const key = `${u.validasi}::${propId || ''}::${propName || ''}::${u.tahun ?? '__keep__'}`;
+    const list = groupedUpdates.get(key) || [];
     list.push(u);
-    byStatus.set(u.validasi, list);
+    groupedUpdates.set(key, list);
   }
-  for (const [validasi, list] of byStatus.entries()) {
+  for (const list of groupedUpdates.values()) {
+    const first = list[0];
+    if (!first) continue;
+    const isAccepted = first.validasi === 'accepted';
+    const updatedAt = first.updatedAt || new Date().toISOString();
+    const hasCustomRegister = list.some((x) => Boolean(x.registerCode));
+
+    if (hasCustomRegister) {
+      for (const u of list) {
+        const patch: Record<string, unknown> = {
+          validasi: u.validasi,
+          proposal_id: isAccepted ? u.proposalId ?? null : null,
+          proposal: isAccepted ? u.proposal?.trim() || null : null,
+          updated_at: u.updatedAt || updatedAt,
+        };
+        if (u.tahun !== undefined) patch.tahun = u.tahun?.trim() ? u.tahun.trim() : null;
+        if (u.registerCode) patch.register_code = u.registerCode;
+        const { error } = await supabase.from('kpm_records').update(patch).eq('id', u.id);
+        if (error) throw error;
+      }
+      continue;
+    }
+
     const ids = Array.from(new Set(list.map((x) => x.id).filter(Boolean)));
-    const updatedAt = list[0]?.updatedAt || new Date().toISOString();
+    const batchPatch: Record<string, unknown> = {
+      validasi: first.validasi,
+      proposal_id: isAccepted ? first.proposalId ?? null : null,
+      proposal: isAccepted ? first.proposal?.trim() || null : null,
+      updated_at: updatedAt,
+    };
+    if (first.tahun !== undefined) {
+      batchPatch.tahun = first.tahun?.trim() ? first.tahun.trim() : null;
+    }
     for (let i = 0; i < ids.length; i += 100) {
       const chunk = ids.slice(i, i + 100);
       const { error } = await supabase
         .from('kpm_records')
-        .update({ validasi, updated_at: updatedAt })
+        .update(batchPatch)
         .in('id', chunk);
       if (error) throw error;
     }
@@ -2475,6 +2586,7 @@ export async function syncAllOperationalDataToSupabase(
   const keepPropIds = new Set<string>();
 
   for (const prop of snapshot.proposals) {
+    if (String(prop.tipe) !== 'Murni' && String(prop.tipe) !== 'Perubahan') continue;
     const propKey = `${prop.tahun}::${prop.namaProposal.trim().toLowerCase()}`;
     if (seenPropKeys.has(propKey)) continue;
     seenPropKeys.add(propKey);

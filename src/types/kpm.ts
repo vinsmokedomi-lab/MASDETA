@@ -73,7 +73,9 @@ export interface KpmRecord {
   id: string;
   registerCode: string;
   tahun: string;
+  proposalId?: string | null;
   proposal: string;
+  kabKota?: string;
   kecamatan?: string;
   kelurahan: string;
   item: string;
@@ -102,7 +104,9 @@ export interface KpmRecord {
 
 export interface KpmFormValues {
   tahun: string;
+  proposalId?: string | null;
   proposal: string;
+  kabKota?: string;
   kecamatan?: string;
   kelurahan: string;
   item: string;
@@ -122,7 +126,7 @@ export interface KpmFormValues {
   documents: KpmDocuments;
 }
 
-export type ProposalTipe = 'Murni' | 'Perubahan' | 'Database' | 'Arsip';
+export type ProposalTipe = 'Murni' | 'Perubahan';
 
 export type ProposalLockStatus = 'unlocked' | 'locked';
 

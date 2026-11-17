@@ -49,10 +49,10 @@ import {
   formatAlamatLengkap,
   getItemsForYear,
   getKelurahanOptionsForProposal,
-  getValidationForDtsen,
   isKecamatanProposal,
   isValidNik16,
   isValidRtRw,
+  resolveKpmDomicile,
   resolvePackageForKpm,
   resolveProposalDomicile,
   resolveProposalKecamatanCategory,
@@ -80,6 +80,7 @@ interface KpmRegistrationFormProps {
   onDismissFeedback?: () => void;
   preselectedProposal?: { namaProposal: string; tahun: string } | null;
   lockedProposalScope?: { namaProposal: string; tahun: string } | null;
+  initialStandaloneStatus?: 'pending' | 'rejected' | null;
   onClearPreselectedProposal?: () => void;
   onBack?: () => void;
   onOpenAddProposal: (selectedYear?: string) => void;
@@ -107,6 +108,7 @@ export function KpmRegistrationForm({
   onDismissFeedback,
   preselectedProposal,
   lockedProposalScope,
+  initialStandaloneStatus,
   onClearPreselectedProposal,
   onBack,
   onOpenAddProposal,
@@ -122,16 +124,47 @@ export function KpmRegistrationForm({
   const isNativeApp = !isDesktopWeb;
   const isProposalScopeLocked = Boolean(lockedProposalScope && !editingRecord);
 
-  const [values, setValues] = useState<KpmFormValues>(() => {
-    if (lockedProposalScope && !editingRecord) {
+  const buildInitialFormValues = (): KpmFormValues => {
+    if (lockedProposalScope) {
+      const matched = proposals.find(
+        (p) =>
+          p.namaProposal === lockedProposalScope.namaProposal &&
+          p.tahun === lockedProposalScope.tahun
+      );
+      const dom = resolveProposalDomicile(
+        lockedProposalScope.namaProposal,
+        proposals,
+        lockedProposalScope.tahun,
+        wilayahList
+      );
       return {
         ...INITIAL_FORM_VALUES,
         tahun: lockedProposalScope.tahun || INITIAL_FORM_VALUES.tahun,
+        proposalId: matched?.id || null,
         proposal: lockedProposalScope.namaProposal,
+        kabKota: dom.kabKota || wilayahList[0]?.nama || '',
+        kecamatan: dom.kecamatan || '',
+        kelurahan: dom.kelurahan || '',
+        validasi: 'accepted',
       };
     }
-    return INITIAL_FORM_VALUES;
-  });
+    if (initialStandaloneStatus === 'pending' || initialStandaloneStatus === 'rejected') {
+      return {
+        ...INITIAL_FORM_VALUES,
+        tahun: '',
+        proposalId: null,
+        proposal: '',
+        kabKota: wilayahList[0]?.nama || '',
+        validasi: initialStandaloneStatus,
+      };
+    }
+    return {
+      ...INITIAL_FORM_VALUES,
+      kabKota: wilayahList[0]?.nama || '',
+    };
+  };
+
+  const [values, setValues] = useState<KpmFormValues>(buildInitialFormValues);
   const [errors, setErrors] = useState<FormErrors>({});
   const [isTahunModalOpen, setIsTahunModalOpen] = useState(false);
   const [isProposalModalOpen, setIsProposalModalOpen] = useState(false);
@@ -199,11 +232,15 @@ export function KpmRegistrationForm({
 
   useEffect(() => {
     if (editingRecord) {
+      const dom = resolveKpmDomicile(editingRecord, proposals, wilayahList);
+      const isStandalone = editingRecord.validasi !== 'accepted';
       setValues({
-        tahun: editingRecord.tahun,
-        proposal: editingRecord.proposal,
-        kecamatan: editingRecord.kecamatan || '',
-        kelurahan: editingRecord.kelurahan || '',
+        tahun: editingRecord.tahun || '',
+        proposalId: isStandalone ? null : editingRecord.proposalId ?? null,
+        proposal: isStandalone ? '' : editingRecord.proposal || '',
+        kabKota: editingRecord.kabKota || dom.kabKota || wilayahList[0]?.nama || '',
+        kecamatan: editingRecord.kecamatan || dom.kecamatan || '',
+        kelurahan: editingRecord.kelurahan || dom.kelurahan || '',
         item: editingRecord.item,
         nama: editingRecord.nama,
         alamat: editingRecord.alamat,
@@ -234,10 +271,40 @@ export function KpmRegistrationForm({
       setScanError(null);
       setScanReport(null);
     } else if (lockedProposalScope) {
+      const matched = proposals.find(
+        (p) =>
+          p.namaProposal === lockedProposalScope.namaProposal &&
+          p.tahun === lockedProposalScope.tahun
+      );
+      const dom = resolveProposalDomicile(
+        lockedProposalScope.namaProposal,
+        proposals,
+        lockedProposalScope.tahun,
+        wilayahList
+      );
       setValues({
         ...INITIAL_FORM_VALUES,
         tahun: lockedProposalScope.tahun || INITIAL_FORM_VALUES.tahun,
+        proposalId: matched?.id || null,
         proposal: lockedProposalScope.namaProposal,
+        kabKota: dom.kabKota || wilayahList[0]?.nama || '',
+        kecamatan: dom.kecamatan || '',
+        kelurahan: dom.kelurahan || '',
+        validasi: 'accepted',
+      });
+      setErrors({});
+      setKtpOcrImage(undefined);
+      setKkOcrImage(undefined);
+      setScanError(null);
+      setScanReport(null);
+    } else if (initialStandaloneStatus === 'pending' || initialStandaloneStatus === 'rejected') {
+      setValues({
+        ...INITIAL_FORM_VALUES,
+        tahun: '',
+        proposalId: null,
+        proposal: '',
+        kabKota: wilayahList[0]?.nama || '',
+        validasi: initialStandaloneStatus,
       });
       setErrors({});
       setKtpOcrImage(undefined);
@@ -245,31 +312,51 @@ export function KpmRegistrationForm({
       setScanError(null);
       setScanReport(null);
     } else {
-      setValues(INITIAL_FORM_VALUES);
+      setValues({
+        ...INITIAL_FORM_VALUES,
+        kabKota: wilayahList[0]?.nama || '',
+      });
       setErrors({});
       setKtpOcrImage(undefined);
       setKkOcrImage(undefined);
       setScanError(null);
       setScanReport(null);
     }
-  }, [editingRecord, lockedProposalScope]);
+  }, [editingRecord, lockedProposalScope, initialStandaloneStatus]);
 
   useEffect(() => {
     if (preselectedProposal && !editingRecord && !lockedProposalScope) {
+      const matched = proposals.find(
+        (p) =>
+          p.namaProposal === preselectedProposal.namaProposal &&
+          p.tahun === preselectedProposal.tahun
+      );
       const nextOptions = getKelurahanOptionsForProposal(
         preselectedProposal.namaProposal,
         wilayahList
       );
+      const dom = resolveProposalDomicile(
+        preselectedProposal.namaProposal,
+        proposals,
+        preselectedProposal.tahun,
+        wilayahList
+      );
       setValues((prev) => ({
         ...prev,
-        tahun: preselectedProposal.tahun || prev.tahun,
+        validasi: 'accepted',
+        tahun: preselectedProposal.tahun || prev.tahun || '2026',
+        proposalId: matched?.id || null,
         proposal: preselectedProposal.namaProposal,
-        kelurahan: nextOptions.includes(prev.kelurahan) ? prev.kelurahan : '',
+        kabKota: dom.kabKota || prev.kabKota || wilayahList[0]?.nama || '',
+        kecamatan: dom.kecamatan || prev.kecamatan || '',
+        kelurahan: nextOptions.includes(prev.kelurahan)
+          ? prev.kelurahan
+          : dom.kelurahan || '',
       }));
-      setErrors((prev) => ({ ...prev, proposal: undefined, kelurahan: undefined }));
+      setErrors((prev) => ({ ...prev, proposal: undefined, kelurahan: undefined, kecamatan: undefined }));
       onClearPreselectedProposal?.();
     }
-  }, [preselectedProposal, editingRecord, lockedProposalScope, onClearPreselectedProposal, wilayahList]);
+  }, [preselectedProposal, editingRecord, lockedProposalScope, onClearPreselectedProposal, wilayahList, proposals]);
 
   const proposalMenuItems = useMemo(() => {
     const map = new Map<
@@ -346,7 +433,32 @@ export function KpmRegistrationForm({
     return recProp?.status === 'locked';
   }, [editingRecord, proposals]);
 
-  const isKecamatanSelected = isKecamatanProposal(values.proposal);
+  const isStandaloneMode = values.validasi === 'pending' || values.validasi === 'rejected';
+
+  const standaloneKabKotaOptions = useMemo(() => wilayahList.map((w) => w.nama), [wilayahList]);
+
+  const standaloneKecamatanOptions = useMemo(() => {
+    const activeKab =
+      wilayahList.find((w) => w.nama === values.kabKota) || wilayahList[0];
+    return activeKab ? activeKab.kecamatanList.map((k) => k.nama) : [];
+  }, [wilayahList, values.kabKota]);
+
+  const standaloneKelurahanOptions = useMemo(() => {
+    const activeKab =
+      wilayahList.find((w) => w.nama === values.kabKota) || wilayahList[0];
+    if (!values.kecamatan) {
+      return activeKab
+        ? Array.from(new Set(activeKab.kecamatanList.flatMap((k) => k.kelurahanList)))
+        : ALL_KELURAHAN_OPTIONS;
+    }
+    const kecLower = (values.kecamatan ?? '').toLowerCase();
+    const matchedKec = activeKab?.kecamatanList.find(
+      (k) => k.nama.toLowerCase() === kecLower
+    );
+    return matchedKec ? matchedKec.kelurahanList : [];
+  }, [wilayahList, values.kabKota, values.kecamatan]);
+
+  const isKecamatanSelected = !isStandaloneMode && isKecamatanProposal(values.proposal);
   const showKelurahanField = isKecamatanSelected;
   const matchedKelurahanOptions = getKelurahanOptionsForProposal(values.proposal, wilayahList);
   const allWilayahKelurahanOptions = useMemo(() => {
@@ -355,8 +467,9 @@ export function KpmRegistrationForm({
     );
     return list.length > 0 ? Array.from(new Set(list)) : ALL_KELURAHAN_OPTIONS;
   }, [wilayahList]);
-  const kelurahanOptions =
-    matchedKelurahanOptions.length > 0
+  const kelurahanOptions = isStandaloneMode
+    ? standaloneKelurahanOptions
+    : matchedKelurahanOptions.length > 0
       ? matchedKelurahanOptions
       : isKecamatanSelected
         ? allWilayahKelurahanOptions
@@ -379,21 +492,59 @@ export function KpmRegistrationForm({
     });
   };
 
+  const handleStatusRoutingChange = (nextStatus: ValidationStatus) => {
+    if (isProposalScopeLocked && nextStatus !== 'accepted') return;
+    setValues((prev) => {
+      if (nextStatus === 'pending' || nextStatus === 'rejected') {
+        const resolvedDom = prev.proposal
+          ? resolveProposalDomicile(prev.proposal, proposals, prev.tahun, wilayahList)
+          : { kabKota: prev.kabKota || '', kecamatan: prev.kecamatan || '', kelurahan: prev.kelurahan || '' };
+        return {
+          ...prev,
+          validasi: nextStatus,
+          proposalId: null,
+          proposal: '',
+          kabKota: prev.kabKota || resolvedDom.kabKota || wilayahList[0]?.nama || '',
+          kecamatan: prev.kecamatan || resolvedDom.kecamatan || '',
+          kelurahan: prev.kelurahan || resolvedDom.kelurahan || '',
+        };
+      }
+      // Switching to 'accepted' -> require active proposal
+      return {
+        ...prev,
+        validasi: 'accepted',
+        tahun: prev.tahun || '2026',
+      };
+    });
+    setErrors((prev) => ({
+      ...prev,
+      validasi: undefined,
+      proposal: undefined,
+      tahun: undefined,
+      kecamatan: undefined,
+      kelurahan: undefined,
+    }));
+  };
+
   const handleYearChange = (nextYear: string) => {
     setValues((prev) => {
       const keepProposal =
         editingRecord ||
         isProposalScopeLocked ||
-        proposals.some((p) => p.tahun === nextYear && p.namaProposal === prev.proposal);
-      const nextYearItems = getItemsForYear(itemOptions || [], nextYear);
+        (prev.validasi === 'accepted' &&
+          proposals.some((p) => p.tahun === nextYear && p.namaProposal === prev.proposal));
+      const itemYearRef = nextYear || '2026';
+      const nextYearItems = getItemsForYear(itemOptions || [], itemYearRef);
       const keepItem =
         editingRecord ||
         nextYearItems.some((item) => item.code === prev.item);
       return {
         ...prev,
         tahun: nextYear,
+        proposalId: keepProposal ? prev.proposalId : null,
         proposal: keepProposal ? prev.proposal : '',
-        kelurahan: keepProposal ? prev.kelurahan : '',
+        kelurahan:
+          prev.validasi !== 'accepted' || keepProposal ? prev.kelurahan : '',
         item: keepItem ? prev.item : '',
       };
     });
@@ -411,23 +562,31 @@ export function KpmRegistrationForm({
       onOpenAddProposal();
       return;
     }
+    const matchedProp = proposals.find(
+      (p) => p.namaProposal === nextProposal && (!values.tahun || p.tahun === values.tahun)
+    );
     const nextOptions = getKelurahanOptionsForProposal(nextProposal, wilayahList);
+    const resolvedDom = resolveProposalDomicile(nextProposal, proposals, values.tahun, wilayahList);
     setValues((prev) => ({
       ...prev,
+      validasi: 'accepted',
+      proposalId: matchedProp?.id || null,
       proposal: nextProposal,
-      kelurahan: nextOptions.includes(prev.kelurahan) ? prev.kelurahan : '',
+      kabKota: resolvedDom.kabKota || prev.kabKota || wilayahList[0]?.nama || '',
+      kecamatan: resolvedDom.kecamatan || prev.kecamatan || '',
+      kelurahan: nextOptions.includes(prev.kelurahan)
+        ? prev.kelurahan
+        : resolvedDom.kelurahan || '',
     }));
-    setErrors((prev) => ({ ...prev, proposal: undefined, kelurahan: undefined }));
+    setErrors((prev) => ({ ...prev, proposal: undefined, kelurahan: undefined, validasi: undefined }));
   };
 
   const handleDtsenChange = (nextDtsen: string) => {
-    const autoValidasi = getValidationForDtsen(nextDtsen);
     setValues((prev) => ({
       ...prev,
       dtsen: nextDtsen,
-      validasi: autoValidasi,
     }));
-    setErrors((prev) => ({ ...prev, dtsen: undefined, validasi: undefined }));
+    setErrors((prev) => ({ ...prev, dtsen: undefined }));
   };
 
   const handleRtRwChange = (key: 'rt' | 'rw', rawVal: string) => {
@@ -511,16 +670,26 @@ export function KpmRegistrationForm({
   const validate = (): FormErrors => {
     const nextErrors: FormErrors = {};
 
-    // Kategori 01: Wajib semua + cek kunci proposal
-    if (!values.tahun) nextErrors.tahun = 'Pilih tahun anggaran.';
-    if (!values.proposal) {
-      nextErrors.proposal = 'Pilih proposal pengajuan.';
-    } else if (selectedProposalRecord?.status === 'locked') {
-      nextErrors.proposal =
-        'Proposal ini berstatus Terkunci dan tidak dapat menerima atau mengubah data KPM.';
-    }
-    if (showKelurahanField && !values.kelurahan) {
-      nextErrors.kelurahan = 'Pilih kelurahan domisili calon KPM.';
+    // Kategori 01: Aturan routing Proposal vs Standalone Domisili
+    if (values.validasi === 'accepted') {
+      if (!values.tahun) nextErrors.tahun = 'Pilih tahun anggaran proposal.';
+      if (!values.proposal) {
+        nextErrors.proposal = 'KPM berstatus Diterima wajib dihubungkan ke Proposal aktif (Murni / Perubahan).';
+      } else if (selectedProposalRecord?.status === 'locked') {
+        nextErrors.proposal =
+          'Proposal ini berstatus Terkunci dan tidak dapat menerima atau mengubah data KPM.';
+      }
+      if (showKelurahanField && !values.kelurahan) {
+        nextErrors.kelurahan = 'Pilih kelurahan domisili calon KPM.';
+      }
+    } else {
+      // Standalone (Database KPM / Arsip Ditolak): tahun boleh kosong, domisili wajib
+      if (!values.kecamatan?.trim()) {
+        nextErrors.kecamatan = 'Pilih kecamatan domisili calon KPM.';
+      }
+      if (!values.kelurahan?.trim()) {
+        nextErrors.kelurahan = 'Pilih kelurahan / desa domisili calon KPM.';
+      }
     }
 
     // Kategori 02: Wajib semua KECUALI Nomor HP (kontak)
@@ -574,22 +743,32 @@ export function KpmRegistrationForm({
       return;
     }
 
-    const resolvedDomicile = resolveProposalDomicile(
-      values.proposal,
-      proposals,
-      values.tahun,
-      wilayahList
-    );
+    const isStandalone = values.validasi === 'pending' || values.validasi === 'rejected';
+    const resolvedProp = !isStandalone
+      ? selectedProposalRecord ||
+        proposals.find(
+          (p) => p.namaProposal === values.proposal && (!values.tahun || p.tahun === values.tahun)
+        )
+      : undefined;
+    const resolvedDomicile = !isStandalone
+      ? resolveProposalDomicile(values.proposal, proposals, values.tahun, wilayahList)
+      : { kabKota: values.kabKota || '', kecamatan: values.kecamatan || '', kelurahan: values.kelurahan || '' };
 
     setIsSubmitting(true);
     try {
       const saveResult = await onSave(
         {
           ...values,
+          tahun: isStandalone ? values.tahun.trim() : values.tahun,
+          proposalId: isStandalone ? null : resolvedProp?.id || values.proposalId || null,
+          proposal: isStandalone ? '' : values.proposal,
+          kabKota: resolvedDomicile.kabKota || values.kabKota || '',
           kecamatan: resolvedDomicile.kecamatan || values.kecamatan || '',
-          kelurahan: showKelurahanField
+          kelurahan: isStandalone
             ? values.kelurahan
-            : resolvedDomicile.kelurahan || values.kelurahan || '',
+            : showKelurahanField
+              ? values.kelurahan
+              : resolvedDomicile.kelurahan || values.kelurahan || '',
           nama: values.nama.trim().toUpperCase(),
           alamat: formatAlamatLengkap(values.alamat, true),
           catatan: values.catatan.trim(),
@@ -600,15 +779,7 @@ export function KpmRegistrationForm({
       );
 
       if (saveResult !== false && !editingRecord) {
-        setValues(
-          lockedProposalScope
-            ? {
-                ...INITIAL_FORM_VALUES,
-                tahun: lockedProposalScope.tahun || INITIAL_FORM_VALUES.tahun,
-                proposal: lockedProposalScope.namaProposal,
-              }
-            : INITIAL_FORM_VALUES
-        );
+        setValues(buildInitialFormValues());
         setErrors({});
         setKtpOcrImage(undefined);
         setKkOcrImage(undefined);
@@ -624,15 +795,7 @@ export function KpmRegistrationForm({
     if (editingRecord) {
       onCancelEdit();
     } else {
-      setValues(
-        lockedProposalScope
-          ? {
-              ...INITIAL_FORM_VALUES,
-              tahun: lockedProposalScope.tahun || INITIAL_FORM_VALUES.tahun,
-              proposal: lockedProposalScope.namaProposal,
-            }
-          : INITIAL_FORM_VALUES
-      );
+      setValues(buildInitialFormValues());
       setErrors({});
       setKtpOcrImage(undefined);
       setKkOcrImage(undefined);
@@ -768,7 +931,7 @@ export function KpmRegistrationForm({
 
   const errorCount = Object.values(errors).filter(Boolean).length;
   const selectedPengelolaObj = pengelolaList.find((p) => p.displayName === values.pengelola);
-  const hasProposalSelected = Boolean(values.tahun && values.proposal);
+  const hasProposalSelected = isStandaloneMode || Boolean(values.tahun && values.proposal);
 
   return (
     <>
@@ -877,20 +1040,69 @@ export function KpmRegistrationForm({
                   : 'space-y-4'
               }
             >
-          {/* Section 1: Data Usulan & Proposal */}
+          {/* Section 1: Tujuan Penempatan & Data Usulan */}
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
             <h2 className="text-sm font-bold text-slate-900">
-              01. Data Usulan & Proposal
+              01. Penempatan Data &amp; Usulan
             </h2>
             <p className="mt-0.5 text-xs text-slate-500">
-              Tentukan tahun anggaran dan proposal pengajuan bantuan.
+              Tentukan tujuan penyimpanan data KPM: Proposal aktif (Diterima), Database KPM (Menunggu), atau Arsip Berkas Ditolak.
             </p>
 
             <div className="mt-4 space-y-4">
-              <div id="field-tahun">
+              {/* Status Routing Selector */}
+              <div>
                 <span className="block text-xs font-semibold text-slate-700">
-                  Tahun Anggaran <span className="text-rose-600">*</span>
+                  Status / Tujuan Penempatan <span className="text-rose-600">*</span>
                 </span>
+                <div className="mt-1.5 grid grid-cols-3 gap-1.5 rounded-xl bg-slate-100 p-1">
+                  {(
+                    [
+                      { key: 'accepted', label: 'Diterima (Proposal)' },
+                      { key: 'pending', label: 'Database KPM' },
+                      { key: 'rejected', label: 'Arsip Ditolak' },
+                    ] as { key: ValidationStatus; label: string }[]
+                  ).map((opt) => {
+                    const active = values.validasi === opt.key;
+                    const activeTone =
+                      opt.key === 'accepted'
+                        ? 'bg-teal-700 text-white'
+                        : opt.key === 'rejected'
+                          ? 'bg-rose-600 text-white'
+                          : 'bg-white text-slate-900 shadow-sm';
+                    return (
+                      <button
+                        key={opt.key}
+                        type="button"
+                        disabled={editingProposalLocked || (isProposalScopeLocked && opt.key !== 'accepted')}
+                        onClick={() => handleStatusRoutingChange(opt.key)}
+                        className={`min-h-[40px] rounded-lg px-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                          active ? activeTone : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">
+                  {isStandaloneMode
+                    ? values.validasi === 'rejected'
+                      ? 'Mode Standalone: data tidak terhubung ke proposal (proposal_id = NULL) dan langsung masuk ke menu Arsip Berkas Ditolak.'
+                      : 'Mode Standalone: data tidak terhubung ke proposal (proposal_id = NULL) dan langsung masuk ke menu Database KPM.'
+                    : 'Mode Proposal: KPM berstatus Diterima wajib terhubung ke salah satu Proposal aktif bertipe Murni atau Perubahan.'}
+                </p>
+              </div>
+
+              <div id="field-tahun">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="block text-xs font-semibold text-slate-700">
+                    Tahun Anggaran {!isStandaloneMode && <span className="text-rose-600">*</span>}
+                  </span>
+                  {isStandaloneMode && (
+                    <span className="text-[11px] text-slate-400">Opsional (boleh kosong)</span>
+                  )}
+                </div>
                 <button
                   type="button"
                   id="input-tahun"
@@ -902,80 +1114,175 @@ export function KpmRegistrationForm({
                 >
                   <span
                     className={`truncate ${
-                      values.tahun ? 'font-medium text-slate-900' : 'text-slate-400'
+                      values.tahun ? 'font-medium text-slate-900' : 'text-slate-500'
                     }`}
                   >
-                    {values.tahun || 'Pilih Tahun'}
+                    {values.tahun || (isStandaloneMode ? 'Tanpa Tahun' : 'Pilih Tahun')}
                   </span>
                   <ChevronDown className="h-4 w-4 text-slate-500 shrink-0" />
                 </button>
                 {errors.tahun && <p className="mt-1 text-xs text-rose-600">{errors.tahun}</p>}
               </div>
 
-              <div id="field-proposal">
-                <span className="block text-xs font-semibold text-slate-700">
-                  Proposal <span className="text-rose-600">*</span>
-                </span>
-                <button
-                  type="button"
-                  id="input-proposal"
-                  disabled={editingProposalLocked || isProposalScopeLocked}
-                  onClick={() => setIsProposalModalOpen(true)}
-                  className={`mt-1.5 flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border bg-white px-3.5 text-left text-sm transition-colors hover:bg-slate-50 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-700 ${
-                    errors.proposal ? 'border-rose-400' : 'border-slate-300'
-                  }`}
-                >
-                  <span
-                    className={`truncate ${
-                      values.proposal ? 'font-medium text-slate-900' : 'text-slate-400'
-                    }`}
-                  >
-                    {values.proposal || 'Pilih Kelurahan / Kecamatan'}
-                  </span>
-                  <ChevronDown className="h-4 w-4 text-slate-500 shrink-0" />
-                </button>
-
-                {isProposalScopeLocked && (
-                  <p className="mt-1.5 flex items-center gap-1.5 text-[11px] font-medium text-teal-800">
-                    <Lock className="h-3.5 w-3.5 shrink-0" />
-                    <span>
-                      Tahun dan proposal dikunci otomatis. Ubah nanti melalui menu Edit Data KPM jika perlu.
+              {!isStandaloneMode ? (
+                <>
+                  <div id="field-proposal">
+                    <span className="block text-xs font-semibold text-slate-700">
+                      Proposal Tujuan (Murni / Perubahan) <span className="text-rose-600">*</span>
                     </span>
-                  </p>
-                )}
+                    <button
+                      type="button"
+                      id="input-proposal"
+                      disabled={editingProposalLocked || isProposalScopeLocked}
+                      onClick={() => setIsProposalModalOpen(true)}
+                      className={`mt-1.5 flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border bg-white px-3.5 text-left text-sm transition-colors hover:bg-slate-50 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-700 ${
+                        errors.proposal ? 'border-rose-400' : 'border-slate-300'
+                      }`}
+                    >
+                      <span
+                        className={`truncate ${
+                          values.proposal ? 'font-medium text-slate-900' : 'text-slate-400'
+                        }`}
+                      >
+                        {values.proposal || 'Pilih Proposal Aktif'}
+                      </span>
+                      <ChevronDown className="h-4 w-4 text-slate-500 shrink-0" />
+                    </button>
 
-                {errors.proposal && <p className="mt-0.5 text-xs text-rose-600">{errors.proposal}</p>}
-              </div>
+                    {isProposalScopeLocked && (
+                      <p className="mt-1.5 flex items-center gap-1.5 text-[11px] font-medium text-teal-800">
+                        <Lock className="h-3.5 w-3.5 shrink-0" />
+                        <span>
+                          Tahun dan proposal dikunci otomatis. Ubah nanti melalui menu Edit Data KPM jika perlu.
+                        </span>
+                      </p>
+                    )}
 
-              {/* Conditional Kelurahan Field when Proposal is Kecamatan */}
-              {showKelurahanField && (
-                <div id="field-kelurahan">
-                  <div className="flex items-center justify-between gap-2">
-                    <label htmlFor="input-kelurahan" className="block text-xs font-semibold text-slate-700">
-                      Kelurahan / Desa Domisili Calon KPM <span className="text-rose-600">*</span>
-                    </label>
-                    <span className="text-[11px] text-slate-500">
-                      Wajib (Kecamatan)
-                    </span>
+                    {errors.proposal && <p className="mt-0.5 text-xs text-rose-600">{errors.proposal}</p>}
                   </div>
-                  <PlaceholderSelect
-                    placeholder={`Pilih Kelurahan / Desa di ${values.proposal}`}
-                    id="input-kelurahan"
-                    value={values.kelurahan}
-                    onChange={(v) => updateField('kelurahan', v)}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
-                      errors.kelurahan ? 'border-rose-400' : 'border-slate-300'
-                    }`}
-                  >
-                    {kelurahanOptions.map((kel) => (
-                      <option key={kel} value={kel}>
-                        {kel}
-                      </option>
-                    ))}
-                  </PlaceholderSelect>
-                  {errors.kelurahan && (
-                    <p className="mt-1 text-xs text-rose-600">{errors.kelurahan}</p>
+
+                  {/* Conditional Kelurahan Field when Proposal is Kecamatan */}
+                  {showKelurahanField && (
+                    <div id="field-kelurahan">
+                      <div className="flex items-center justify-between gap-2">
+                        <label htmlFor="input-kelurahan" className="block text-xs font-semibold text-slate-700">
+                          Kelurahan / Desa Domisili Calon KPM <span className="text-rose-600">*</span>
+                        </label>
+                        <span className="text-[11px] text-slate-500">
+                          Wajib (Kecamatan)
+                        </span>
+                      </div>
+                      <PlaceholderSelect
+                        placeholder={`Pilih Kelurahan / Desa di ${values.proposal}`}
+                        id="input-kelurahan"
+                        value={values.kelurahan}
+                        onChange={(v) => updateField('kelurahan', v)}
+                        className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                          errors.kelurahan ? 'border-rose-400' : 'border-slate-300'
+                        }`}
+                      >
+                        {kelurahanOptions.map((kel) => (
+                          <option key={kel} value={kel}>
+                            {kel}
+                          </option>
+                        ))}
+                      </PlaceholderSelect>
+                      {errors.kelurahan && (
+                        <p className="mt-1 text-xs text-rose-600">{errors.kelurahan}</p>
+                      )}
+                    </div>
                   )}
+                </>
+              ) : (
+                /* Standalone Domicile Fields */
+                <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3.5">
+                  <p className="text-xs font-bold text-slate-800">
+                    Domisili Calon KPM (Tanpa Proposal)
+                  </p>
+
+                  {standaloneKabKotaOptions.length > 1 && (
+                    <div>
+                      <label htmlFor="input-kabkota-standalone" className="block text-xs font-semibold text-slate-700">
+                        Kabupaten / Kota
+                      </label>
+                      <PlaceholderSelect
+                        placeholder="Pilih Kabupaten / Kota"
+                        id="input-kabkota-standalone"
+                        value={values.kabKota || standaloneKabKotaOptions[0] || ''}
+                        onChange={(v) => {
+                          setValues((prev) => ({
+                            ...prev,
+                            kabKota: v,
+                            kecamatan: '',
+                            kelurahan: '',
+                          }));
+                        }}
+                        className="mt-1.5 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3.5 text-sm"
+                      >
+                        {standaloneKabKotaOptions.map((k) => (
+                          <option key={k} value={k}>
+                            {k}
+                          </option>
+                        ))}
+                      </PlaceholderSelect>
+                    </div>
+                  )}
+
+                  <div id="field-kecamatan">
+                    <label htmlFor="input-kecamatan-standalone" className="block text-xs font-semibold text-slate-700">
+                      Kecamatan Domisili <span className="text-rose-600">*</span>
+                    </label>
+                    <PlaceholderSelect
+                      placeholder="Pilih Kecamatan"
+                      id="input-kecamatan-standalone"
+                      value={values.kecamatan || ''}
+                      onChange={(v) => {
+                        setValues((prev) => ({
+                          ...prev,
+                          kecamatan: v,
+                          kelurahan: '',
+                        }));
+                        setErrors((prev) => ({ ...prev, kecamatan: undefined, kelurahan: undefined }));
+                      }}
+                      className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                        errors.kecamatan ? 'border-rose-400' : 'border-slate-300'
+                      }`}
+                    >
+                      {standaloneKecamatanOptions.map((kec) => (
+                        <option key={kec} value={kec}>
+                          {kec}
+                        </option>
+                      ))}
+                    </PlaceholderSelect>
+                    {errors.kecamatan && (
+                      <p className="mt-1 text-xs text-rose-600">{errors.kecamatan}</p>
+                    )}
+                  </div>
+
+                  <div id="field-kelurahan">
+                    <label htmlFor="input-kelurahan-standalone" className="block text-xs font-semibold text-slate-700">
+                      Kelurahan / Desa Domisili <span className="text-rose-600">*</span>
+                    </label>
+                    <PlaceholderSelect
+                      placeholder={values.kecamatan ? `Pilih Kelurahan / Desa` : 'Pilih Kecamatan terlebih dahulu'}
+                      id="input-kelurahan-standalone"
+                      disabled={!values.kecamatan}
+                      value={values.kelurahan || ''}
+                      onChange={(v) => updateField('kelurahan', v)}
+                      className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 ${
+                        errors.kelurahan ? 'border-rose-400' : 'border-slate-300'
+                      }`}
+                    >
+                      {standaloneKelurahanOptions.map((kel) => (
+                        <option key={kel} value={kel}>
+                          {kel}
+                        </option>
+                      ))}
+                    </PlaceholderSelect>
+                    {errors.kelurahan && (
+                      <p className="mt-1 text-xs text-rose-600">{errors.kelurahan}</p>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -1467,8 +1774,9 @@ export function KpmRegistrationForm({
                         <button
                           key={opt.key}
                           type="button"
-                          onClick={() => updateField('validasi', opt.key)}
-                          className={`min-h-[40px] rounded-lg px-2 text-xs font-semibold transition-colors whitespace-nowrap ${
+                          disabled={editingProposalLocked || (isProposalScopeLocked && opt.key !== 'accepted')}
+                          onClick={() => handleStatusRoutingChange(opt.key)}
+                          className={`min-h-[40px] rounded-lg px-2 text-xs font-semibold transition-colors whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-60 ${
                             active ? activeTone : 'text-slate-600 hover:text-slate-900'
                           }`}
                         >
@@ -1478,7 +1786,11 @@ export function KpmRegistrationForm({
                     })}
                   </div>
                   <p className="mt-1 text-[11px] text-slate-500">
-                    Otomatis Diterima untuk Desil 1–4, dan Menunggu untuk selain itu.
+                    {values.validasi === 'accepted'
+                      ? 'Diterima wajib terhubung ke Proposal aktif (Murni / Perubahan).'
+                      : values.validasi === 'rejected'
+                        ? 'Ditolak otomatis memutuskan proposal dan memindahkan data ke Arsip Berkas Ditolak.'
+                        : 'Menunggu otomatis memutuskan proposal dan memindahkan data ke Database KPM.'}
                   </p>
                   {errors.validasi && (
                     <p className="mt-1 text-xs text-rose-600">{errors.validasi}</p>
@@ -1819,13 +2131,24 @@ export function KpmRegistrationForm({
       <SelectionPickerModal
         isOpen={isTahunModalOpen}
         title="Pilih Tahun Anggaran"
-        options={resolvedYearOptions.map(
-          (yr): SelectionPickerOption => ({
-            value: yr,
-            label: `Tahun ${yr}`,
-            subtitle: TAHUN_OPTIONS.includes(yr) ? 'Tahun standar operasional' : 'Tahun tambahan',
-          })
-        )}
+        options={[
+          ...(isStandaloneMode
+            ? [
+                {
+                  value: '',
+                  label: 'Tanpa Tahun',
+                  subtitle: 'Untuk data arsip / database tanpa tahun spesifik',
+                },
+              ]
+            : []),
+          ...resolvedYearOptions.map(
+            (yr): SelectionPickerOption => ({
+              value: yr,
+              label: `Tahun ${yr}`,
+              subtitle: TAHUN_OPTIONS.includes(yr) ? 'Tahun standar operasional' : 'Tahun tambahan',
+            })
+          ),
+        ]}
         selectedValue={values.tahun}
         onClose={() => setIsTahunModalOpen(false)}
         onSelect={handleYearChange}
