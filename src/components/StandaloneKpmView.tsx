@@ -383,8 +383,8 @@ export function StandaloneKpmView({
 
   const title = isDatabase ? 'Database KPM' : 'Arsip Berkas Ditolak';
   const subtitle = isDatabase
-    ? 'Calon KPM berstatus Menunggu berbasis domisili yang belum terikat ke proposal mana pun.'
-    : 'Berkas calon KPM berstatus Ditolak berbasis domisili. Dapat dipulihkan ke Database KPM atau dihapus permanen.';
+    ? 'KPM berstatus Menunggu berbasis domisili yang belum terikat ke proposal mana pun.'
+    : 'Berkas KPM berstatus Ditolak berbasis domisili. Dapat dipulihkan ke Database KPM atau dihapus permanen.';
 
   const canBulkAct = canUpdate || canDelete;
 

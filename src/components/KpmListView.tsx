@@ -875,9 +875,9 @@ export function KpmListView({
           </div>
         ) : renderedEntries.length === 0 ? (
           <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
-            <p className="text-sm font-semibold text-slate-900">Tidak ada data calon KPM ditemukan</p>
+            <p className="text-sm font-semibold text-slate-900">Tidak ada data KPM ditemukan</p>
             <p className="mt-1 text-xs text-slate-500">
-              Ubah filter pencarian, atau daftarkan calon KPM lewat tombol tambah data.
+              Ubah filter pencarian, atau daftarkan KPM lewat tombol tambah data.
             </p>
           </div>
         ) : (
@@ -890,7 +890,7 @@ export function KpmListView({
                   <thead>
                     <tr className="border-b border-slate-200 bg-slate-50/90 text-[11px] font-bold uppercase tracking-wider text-slate-500">
                       <th className="w-12 px-3 py-3 text-center">No</th>
-                      <th className="px-3 py-3">Calon KPM</th>
+                      <th className="px-3 py-3">KPM</th>
                       <th className="px-3 py-3">Proposal &amp; Wilayah</th>
                       <th className="px-3 py-3">Item &amp; Desil</th>
                       <th className="px-3 py-3">Pengelola</th>
@@ -1665,7 +1665,7 @@ export function KpmListView({
               <div className="min-w-0">
                 <h2 className="text-base font-bold text-slate-900">Data KPM Terkunci</h2>
                 <p className="mt-1 text-xs leading-relaxed text-slate-600">
-                  Calon KPM <strong>&ldquo;{lockedNoticeRecord.nama}&rdquo;</strong> berada di
+                  KPM <strong>&ldquo;{lockedNoticeRecord.nama}&rdquo;</strong> berada di
                   dalam proposal <strong>&ldquo;{lockedNoticeRecord.proposal}&rdquo;</strong> yang
                   sedang berstatus Terkunci, sehingga ikut terkunci dan tidak dapat diubah atau
                   dihapus.
@@ -1859,7 +1859,7 @@ export function KpmListView({
           onClick={() => setDbPickerTargetSlot(null)}
           role="dialog"
           aria-modal="true"
-          aria-label="Pilih Calon KPM dari Database"
+          aria-label="Pilih KPM dari Database"
         >
           <div
             onClick={(e) => e.stopPropagation()}
@@ -1872,7 +1872,7 @@ export function KpmListView({
                   Isi Baris Kosong #{String(dbPickerTargetSlot.slotNumber).padStart(2, '0')} dari Database
                 </h2>
                 <p className="mt-0.5 text-xs text-slate-500">
-                  Pilih calon KPM berstatus Menunggu di {dbPickerTargetSlot.proposalName}
+                  Pilih KPM berstatus Menunggu di {dbPickerTargetSlot.proposalName}
                   {dbPickerTargetSlot.item ? ` · Item dicadangkan: ${dbPickerTargetSlot.item}` : ''}
                 </p>
               </div>
@@ -1901,7 +1901,7 @@ export function KpmListView({
             <div className="max-h-72 divide-y divide-slate-100 overflow-y-auto rounded-2xl border border-slate-200">
               {databaseCandidates.length === 0 ? (
                 <p className="px-4 py-8 text-center text-xs text-slate-500">
-                  Tidak ada calon KPM tersedia di Database KPM.
+                  Tidak ada KPM tersedia di Database KPM.
                 </p>
               ) : (
                 databaseCandidates.slice(0, 50).map((cand) => {

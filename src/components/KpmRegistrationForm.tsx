@@ -745,15 +745,15 @@ export function KpmRegistrationForm({
           'Proposal ini berstatus Terkunci dan tidak dapat menerima atau mengubah data KPM.';
       }
       if (showKelurahanField && !values.kelurahan) {
-        nextErrors.kelurahan = 'Pilih kelurahan domisili calon KPM.';
+        nextErrors.kelurahan = 'Pilih kelurahan domisili KPM.';
       }
     } else {
       // Standalone (Database KPM / Arsip Ditolak): tahun boleh kosong, domisili wajib
       if (!values.kecamatan?.trim()) {
-        nextErrors.kecamatan = 'Pilih kecamatan domisili calon KPM.';
+        nextErrors.kecamatan = 'Pilih kecamatan domisili KPM.';
       }
       if (!values.kelurahan?.trim()) {
-        nextErrors.kelurahan = 'Pilih kelurahan / desa domisili calon KPM.';
+        nextErrors.kelurahan = 'Pilih kelurahan / desa domisili KPM.';
       }
     }
 
@@ -1062,7 +1062,7 @@ export function KpmRegistrationForm({
             <ArrowLeft className="h-5 w-5" />
           </button>
           <h1 className="truncate text-base font-bold text-slate-900">
-            {editingRecord ? 'Perbarui Data Calon KPM' : 'Pendaftaran Calon KPM'}
+            {editingRecord ? 'Perbarui Data KPM' : 'Pendaftaran KPM'}
           </h1>
         </header>
         )}
@@ -1092,7 +1092,7 @@ export function KpmRegistrationForm({
                 <span>Kembali</span>
               </button>
               <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
-                {editingRecord ? 'Perbarui Data Calon KPM' : 'Pendaftaran Calon KPM'}
+                {editingRecord ? 'Perbarui Data KPM' : 'Pendaftaran KPM'}
               </h1>
             </div>
           )}
@@ -1316,7 +1316,7 @@ export function KpmRegistrationForm({
                     <div id="field-kelurahan">
                       <div className="flex items-center justify-between gap-2">
                         <label htmlFor="input-kelurahan" className="block text-xs font-semibold text-slate-700">
-                          Kelurahan / Desa Domisili Calon KPM <span className="text-rose-600">*</span>
+                          Kelurahan / Desa Domisili KPM <span className="text-rose-600">*</span>
                         </label>
                         <span className="text-[11px] text-slate-500">
                           Wajib (Kecamatan)
@@ -1347,7 +1347,7 @@ export function KpmRegistrationForm({
                 /* Standalone Domicile Fields */
                 <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3.5">
                   <p className="text-xs font-bold text-slate-800">
-                    Domisili Calon KPM (Tanpa Proposal)
+                    Domisili KPM (Tanpa Proposal)
                   </p>
 
                   {standaloneKabKotaOptions.length > 1 && (
@@ -1440,10 +1440,10 @@ export function KpmRegistrationForm({
 
           {hasProposalSelected && (
             <>
-          {/* Section 2: Profil Calon KPM */}
+          {/* Section 2: Profil KPM */}
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
             <h2 className="text-sm font-bold text-slate-900">
-              02. Profil Calon KPM
+              02. Profil KPM
             </h2>
             <p className="mt-0.5 text-xs text-slate-500">
               Seluruh data wajib diisi sesuai dokumen kecuali Nomor HP (opsional).
@@ -1589,7 +1589,7 @@ export function KpmRegistrationForm({
                 <div id="field-nama" className="col-span-2">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <label htmlFor="input-nama" className="block text-xs font-semibold text-slate-700">
-                      Nama Lengkap Calon KPM <span className="text-rose-600">*</span>
+                      Nama Lengkap KPM <span className="text-rose-600">*</span>
                     </label>
                     {renderFieldScanBadge('nama')}
                   </div>
@@ -1974,7 +1974,7 @@ export function KpmRegistrationForm({
                     />
                   </div>
                   <p className="mt-1 text-[11px] text-slate-500">
-                    Biaya pelayanan administrasi dari calon KPM (kosongkan jika tidak ada).
+                    Biaya pelayanan administrasi dari KPM (kosongkan jika tidak ada).
                   </p>
                 </div>
 
@@ -2010,7 +2010,7 @@ export function KpmRegistrationForm({
                   Pilih Tahun dan Proposal Terlebih Dahulu
                 </p>
                 <p className="mt-1 text-xs text-slate-500">
-                  Kolom pengisian profil calon KPM, bantuan, dan dokumen akan tampil otomatis setelah tahun anggaran dan proposal dipilih.
+                  Kolom pengisian profil KPM, bantuan, dan dokumen akan tampil otomatis setelah tahun anggaran dan proposal dipilih.
                 </p>
               </div>
             ) : (
@@ -2268,7 +2268,7 @@ export function KpmRegistrationForm({
               ) : (
                 <>
                   <Save className="h-4 w-4" />
-                  <span>Simpan Calon KPM</span>
+                  <span>Simpan KPM</span>
                 </>
               )}
             </button>

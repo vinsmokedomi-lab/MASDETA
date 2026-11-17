@@ -11,6 +11,7 @@ import {
   DEFAULT_BAST_TEMPLATE,
   DEFAULT_COUPON_CONFIG,
   DEFAULT_KOP_LOGO_URL,
+  DEFAULT_SPTJM_TEMPLATE,
   ItemBantuan,
   KpmDocumentFile,
   KpmRecord,
@@ -19,6 +20,7 @@ import {
   ProposalSlotMap,
   ReportTemplateConfig,
   ScheduleEventItem,
+  SptjmTemplateConfig,
   WilayahKabKota,
 } from '../types/kpm';
 import {
@@ -280,21 +282,54 @@ function formatNikForPdf(raw: string): string {
   return digits;
 }
 
-export function buildKpmQrUrl(record: Pick<KpmRecord, 'id' | 'registerCode'>): string {
-  const envPublic = (import.meta.env?.VITE_PUBLIC_APP_URL as string | undefined)
-    ?.trim()
-    .replace(/\/+$/, '');
-  let baseUrl = envPublic || 'https://masdeta.pages.dev';
-  if (typeof window !== 'undefined') {
-    const origin = window.location.origin || '';
-    if (
-      /^https?:\/\//i.test(origin) &&
-      !origin.includes('localhost') &&
-      !origin.includes('127.0.0.1')
-    ) {
-      baseUrl = origin.replace(/\/+$/, '');
-    }
+function isNonPublicOrigin(origin: string): boolean {
+  const lower = (origin || '').toLowerCase();
+  if (!lower || !/^https?:\/\//i.test(lower)) return true;
+  if (
+    lower.includes('localhost') ||
+    lower.includes('127.0.0.1') ||
+    lower.includes('0.0.0.0') ||
+    lower.includes('ais-dev-') ||
+    lower.includes('ais-pre-') ||
+    lower.includes('aistudio.google.com')
+  ) {
+    return true;
   }
+  return false;
+}
+
+export function resolveQrBaseUrlPreview(customBaseUrl?: string): {
+  baseUrl: string;
+  isPreviewDevOrigin: boolean;
+} {
+  const cleanedCustom = (customBaseUrl || '').trim().replace(/\/+$/, '');
+  const envPublic = ((import.meta.env?.VITE_PUBLIC_APP_URL as string | undefined) || '')
+    .trim()
+    .replace(/\/+$/, '');
+  const basePath = ((import.meta.env?.BASE_URL as string | undefined) || '/').replace(/\/+$/, '');
+  const currentOrigin =
+    typeof window !== 'undefined'
+      ? `${(window.location.origin || '').trim().replace(/\/+$/, '')}${basePath}`
+      : '';
+  const isPreviewDevOrigin = isNonPublicOrigin(currentOrigin);
+
+  if (cleanedCustom && /^https?:\/\//i.test(cleanedCustom)) {
+    return { baseUrl: cleanedCustom, isPreviewDevOrigin };
+  }
+  if (!isPreviewDevOrigin && currentOrigin) {
+    return { baseUrl: currentOrigin, isPreviewDevOrigin: false };
+  }
+  if (envPublic && /^https?:\/\//i.test(envPublic)) {
+    return { baseUrl: envPublic, isPreviewDevOrigin };
+  }
+  return { baseUrl: 'https://masdeta.pages.dev', isPreviewDevOrigin };
+}
+
+export function buildKpmQrUrl(
+  record: Pick<KpmRecord, 'id' | 'registerCode'>,
+  customBaseUrl?: string
+): string {
+  const { baseUrl } = resolveQrBaseUrlPreview(customBaseUrl);
   const token = encodeURIComponent(record.id || record.registerCode || '');
   return `${baseUrl}/?kpm=${token}`;
 }
@@ -387,6 +422,74 @@ export function formatIndonesianDateWords(isoDate?: string): string {
   const yearWords = numberToIndonesianWords(date.getFullYear());
 
   return `${dayName} tanggal ${dayWords} bulan ${monthName} tahun ${yearWords}`;
+}
+
+export function formatIndonesianShortDate(isoDate?: string): string {
+  let date: Date;
+  if (isoDate && /^\d{4}-\d{2}-\d{2}$/.test(isoDate.trim())) {
+    const [y, m, d] = isoDate.trim().split('-').map(Number);
+    date = new Date(y, m - 1, d);
+  } else if (isoDate && isoDate.trim()) {
+    const parsed = new Date(isoDate);
+    date = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+  } else {
+    date = new Date();
+  }
+  const monthName = INDONESIAN_MONTHS[date.getMonth()] || 'Januari';
+  return `${date.getDate()} ${monthName} ${date.getFullYear()}`;
+}
+
+export const SPTJM_DAY_OPTIONS = [
+  'Senin',
+  'Selasa',
+  'Rabu',
+  'Kamis',
+  "Jum'at",
+  'Sabtu',
+  'Minggu',
+] as const;
+
+function parseIsoOrTodayDate(isoDate?: string): Date {
+  if (isoDate && /^\d{4}-\d{2}-\d{2}$/.test(isoDate.trim())) {
+    const [y, m, d] = isoDate.trim().split('-').map(Number);
+    return new Date(y, m - 1, d);
+  }
+  if (isoDate && isoDate.trim()) {
+    const parsed = new Date(isoDate);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+  return new Date();
+}
+
+export function getSptjmAutoDayFromIso(isoDate?: string): string {
+  const date = parseIsoOrTodayDate(isoDate);
+  const idx = date.getDay();
+  if (idx === 5) return "Jum'at";
+  return INDONESIAN_WEEKDAYS[idx] || 'Senin';
+}
+
+export function formatIndonesianDDMonthYYYY(isoDate?: string): string {
+  const date = parseIsoOrTodayDate(isoDate);
+  const dd = String(date.getDate()).padStart(2, '0');
+  const monthName = INDONESIAN_MONTHS[date.getMonth()] || 'Januari';
+  return `${dd} ${monthName} ${date.getFullYear()}`;
+}
+
+export function formatSptjmFullDate(sptjmConfig?: Partial<SptjmTemplateConfig>): string {
+  const hariVal = (sptjmConfig?.hari || '').trim();
+  const isoVal = (sptjmConfig?.tanggalIso || '').trim();
+  const customLegacy = (sptjmConfig?.tanggalCustomText || '').trim();
+  if (customLegacy && !hariVal && !isoVal) {
+    return customLegacy;
+  }
+  const resolvedDay = hariVal || getSptjmAutoDayFromIso(isoVal);
+  const resolvedDate = formatIndonesianDDMonthYYYY(isoVal);
+  return `${resolvedDay} ${resolvedDate}`;
+}
+
+export function formatIndonesianDayShortDate(isoDate?: string): string {
+  const dayName = getSptjmAutoDayFromIso(isoDate);
+  return `${dayName} ${formatIndonesianDDMonthYYYY(isoDate)}`;
 }
 
 export function formatBastProposalLocation(
@@ -782,7 +885,7 @@ export async function exportKpmTableToPdf({
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
   doc.setTextColor(15, 23, 42);
-  doc.text(title.trim() || 'Daftar Calon KPM', F4_PDF_MARGINS.left, headerTopY + 6);
+  doc.text(title.trim() || 'Daftar KPM', F4_PDF_MARGINS.left, headerTopY + 6);
 
   let tableStartY = headerTopY + 11;
   if (subtitle && subtitle.trim()) {
@@ -1065,10 +1168,15 @@ function loadSingleImageForPdf(url: string, timeoutMs = 2400): Promise<LoadedPdf
       resolve(res);
     };
 
-    const resolvedUrl =
-      url.startsWith('/') && !url.startsWith('//')
-        ? `${window.location.origin}${url}`
+    const appBase = ((import.meta.env?.BASE_URL as string | undefined) || '/').replace(/\/+$/, '');
+    const normalizedPathUrl =
+      url.startsWith('/') && !url.startsWith('//') && appBase && !url.startsWith(`${appBase}/`)
+        ? `${appBase}${url}`
         : url;
+    const resolvedUrl =
+      normalizedPathUrl.startsWith('/') && !normalizedPathUrl.startsWith('//')
+        ? `${window.location.origin}${normalizedPathUrl}`
+        : normalizedPathUrl;
 
     const timer = window.setTimeout(() => finish(null), timeoutMs);
     const img = new Image();
@@ -1217,7 +1325,7 @@ export async function exportSingleKpmToPdf({
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(14.5);
   doc.setTextColor(15, 23, 42);
-  doc.text('PROFIL DATA CALON KPM', A4_MARGIN.left, A4_MARGIN.top + 5.5);
+  doc.text('PROFIL DATA KPM', A4_MARGIN.left, A4_MARGIN.top + 5.5);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9.5);
@@ -1514,7 +1622,7 @@ export async function exportSingleKpmToPdf({
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.2);
   doc.setTextColor(100, 116, 139);
-  doc.text('Dokumen Profil Calon KPM · Sistem Informasi MASDETA', A4_MARGIN.left, effectiveFooterY);
+  doc.text('Dokumen Profil KPM · Sistem Informasi MASDETA', A4_MARGIN.left, effectiveFooterY);
   doc.text(
     `Dicetak pada ${formatUploadDateTime(new Date().toISOString())}`,
     A4_WIDTH_MM - A4_MARGIN.right,
@@ -1736,7 +1844,7 @@ export async function exportKuponPdf({
   const qrEntries = await Promise.all(
     targetRecords.map(async (rec) => {
       try {
-        const url = await QRCode.toDataURL(buildKpmQrUrl(rec), {
+        const url = await QRCode.toDataURL(buildKpmQrUrl(rec, couponConfig?.qrBaseUrl), {
           width: 180,
           margin: 1,
           errorCorrectionLevel: 'M',
@@ -1836,6 +1944,274 @@ export async function exportKuponPdf({
   return { ...res, count: targetRecords.length };
 }
 
+interface FenceDensityPreset {
+  bodyFontSize: number;
+  titleFontSize: number;
+  subTitleFontSize: number;
+  lineHeightFactor: number;
+  idRowStep: number;
+  tableHeadFontSize: number;
+  tableBodyFontSize: number;
+  cellPadY: number;
+  cellPadX: number;
+  minCellHeight: number;
+  gapScale: number;
+  minBlankRowsBast: number;
+  minBlankRowsSptjm: number;
+}
+
+const FENCE_DENSITY_PRESETS: FenceDensityPreset[] = [
+  {
+    bodyFontSize: 10,
+    titleFontSize: 11,
+    subTitleFontSize: 10,
+    lineHeightFactor: 1.48,
+    idRowStep: 5.5,
+    tableHeadFontSize: 9.5,
+    tableBodyFontSize: 9.2,
+    cellPadY: 2.1,
+    cellPadX: 2.2,
+    minCellHeight: 8.2,
+    gapScale: 1.0,
+    minBlankRowsBast: 4,
+    minBlankRowsSptjm: 0,
+  },
+  {
+    bodyFontSize: 9.6,
+    titleFontSize: 10.6,
+    subTitleFontSize: 9.6,
+    lineHeightFactor: 1.4,
+    idRowStep: 5.0,
+    tableHeadFontSize: 9.1,
+    tableBodyFontSize: 8.8,
+    cellPadY: 1.65,
+    cellPadX: 2.0,
+    minCellHeight: 7.0,
+    gapScale: 0.84,
+    minBlankRowsBast: 0,
+    minBlankRowsSptjm: 0,
+  },
+  {
+    bodyFontSize: 9.1,
+    titleFontSize: 10.3,
+    subTitleFontSize: 9.2,
+    lineHeightFactor: 1.32,
+    idRowStep: 4.55,
+    tableHeadFontSize: 8.6,
+    tableBodyFontSize: 8.3,
+    cellPadY: 1.35,
+    cellPadX: 1.8,
+    minCellHeight: 6.0,
+    gapScale: 0.72,
+    minBlankRowsBast: 0,
+    minBlankRowsSptjm: 0,
+  },
+  {
+    bodyFontSize: 8.5,
+    titleFontSize: 10.0,
+    subTitleFontSize: 8.8,
+    lineHeightFactor: 1.24,
+    idRowStep: 4.15,
+    tableHeadFontSize: 8.1,
+    tableBodyFontSize: 7.8,
+    cellPadY: 1.05,
+    cellPadX: 1.6,
+    minCellHeight: 5.1,
+    gapScale: 0.58,
+    minBlankRowsBast: 0,
+    minBlankRowsSptjm: 0,
+  },
+  {
+    bodyFontSize: 8.0,
+    titleFontSize: 9.6,
+    subTitleFontSize: 8.4,
+    lineHeightFactor: 1.18,
+    idRowStep: 3.8,
+    tableHeadFontSize: 7.5,
+    tableBodyFontSize: 7.2,
+    cellPadY: 0.78,
+    cellPadX: 1.4,
+    minCellHeight: 4.3,
+    gapScale: 0.48,
+    minBlankRowsBast: 0,
+    minBlankRowsSptjm: 0,
+  },
+  {
+    bodyFontSize: 7.4,
+    titleFontSize: 9.2,
+    subTitleFontSize: 8.0,
+    lineHeightFactor: 1.13,
+    idRowStep: 3.45,
+    tableHeadFontSize: 6.9,
+    tableBodyFontSize: 6.6,
+    cellPadY: 0.55,
+    cellPadX: 1.2,
+    minCellHeight: 3.65,
+    gapScale: 0.38,
+    minBlankRowsBast: 0,
+    minBlankRowsSptjm: 0,
+  },
+];
+
+function drawOfficialDinsosKop(
+  doc: AutoTableDoc,
+  kopConfig: BastTemplateConfig,
+  loadedKopLogo: LoadedPdfImage | null
+): number {
+  const left = F4_PDF_MARGINS.left; // 20mm
+  const right = F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right; // 201mm
+  const centerX = left + PRINTABLE_WIDTH_MM / 2;
+  const topY = F4_PDF_MARGINS.top; // 10mm (FIXATED mentok batas margin atas)
+
+  const logoW = loadedKopLogo ? 17 : 0;
+  const logoH = loadedKopLogo ? 21 : 0;
+  if (loadedKopLogo) {
+    const imgRatio = loadedKopLogo.width / Math.max(loadedKopLogo.height, 1);
+    let drawW = logoW;
+    let drawH = logoH;
+    if (imgRatio > logoW / logoH) {
+      drawH = logoW / imgRatio;
+    } else {
+      drawW = logoH * imgRatio;
+    }
+    doc.addImage(
+      loadedKopLogo.dataUrl,
+      loadedKopLogo.format,
+      left + (logoW - drawW) / 2,
+      topY + (logoH - drawH) / 2,
+      drawW,
+      drawH
+    );
+  }
+
+  const kopCenterX = loadedKopLogo ? left + logoW + (PRINTABLE_WIDTH_MM - logoW) / 2 : centerX;
+
+  doc.setTextColor(15, 23, 42);
+  if (kopConfig.orgHeaderLine1?.trim()) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(12);
+    doc.text(kopConfig.orgHeaderLine1.trim().toUpperCase(), kopCenterX, topY + 4.5, {
+      align: 'center',
+    });
+  }
+  if (kopConfig.orgHeaderLine2?.trim()) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(15.5);
+    doc.text(kopConfig.orgHeaderLine2.trim().toUpperCase(), kopCenterX, topY + 10.5, {
+      align: 'center',
+    });
+  }
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.3);
+  if (kopConfig.orgAddress1?.trim()) {
+    doc.text(kopConfig.orgAddress1.trim(), kopCenterX, topY + 14.8, { align: 'center' });
+  }
+  if (kopConfig.orgAddress2?.trim()) {
+    doc.text(kopConfig.orgAddress2.trim(), kopCenterX, topY + 18.5, { align: 'center' });
+  }
+  if (kopConfig.orgAddress3?.trim()) {
+    doc.text(kopConfig.orgAddress3.trim(), kopCenterX, topY + 22.2, { align: 'center' });
+  }
+
+  const lineY = topY + 25.2;
+  doc.setDrawColor(15, 23, 42);
+  doc.setLineWidth(0.75);
+  doc.line(left, lineY, right, lineY);
+  doc.setLineWidth(0.25);
+  doc.line(left, lineY + 1.1, right, lineY + 1.1);
+  return lineY + 1.1; // 36.3mm
+}
+
+function estimateSinglePageTableHeight(
+  doc: AutoTableDoc,
+  headRow: string[],
+  bodyRows: string[][],
+  colWidths: number[],
+  headFontSize: number,
+  bodyFontSize: number,
+  cellPadY: number,
+  cellPadX: number,
+  minCellHeight: number
+): number {
+  const PT_TO_MM = 0.352778;
+  const LINE_FACTOR = 1.18;
+
+  const measureRow = (cells: string[], fontSize: number, bold: boolean): number => {
+    doc.setFont('helvetica', bold ? 'bold' : 'normal');
+    doc.setFontSize(fontSize);
+    let maxLines = 1;
+    for (let c = 0; c < colWidths.length; c += 1) {
+      const txt = String(cells[c] ?? '');
+      if (!txt) continue;
+      const availW = Math.max(4, colWidths[c] - cellPadX * 2);
+      const wrapped = doc.splitTextToSize(txt, availW) as string[];
+      if (wrapped.length > maxLines) {
+        maxLines = wrapped.length;
+      }
+    }
+    const textH = maxLines * fontSize * PT_TO_MM * LINE_FACTOR + cellPadY * 2;
+    return Math.max(minCellHeight, textH);
+  };
+
+  let total = measureRow(headRow, headFontSize, true);
+  for (const row of bodyRows) {
+    total += measureRow(row, bodyFontSize, false);
+  }
+  return total;
+}
+
+function resolveAutoFitPreset(
+  measureHeightForPreset: (preset: FenceDensityPreset) => number,
+  availableMiddleH: number
+): { preset: FenceDensityPreset; estimatedH: number } {
+  for (const preset of FENCE_DENSITY_PRESETS) {
+    const estimatedH = measureHeightForPreset(preset);
+    if (estimatedH <= availableMiddleH) {
+      return { preset, estimatedH };
+    }
+  }
+
+  // Fallback ekstrem (misal sub-item kustom sangat banyak 15-25+ baris): kompresi progresif ekstra
+  const base = FENCE_DENSITY_PRESETS[FENCE_DENSITY_PRESETS.length - 1];
+  for (let step = 1; step <= 8; step += 1) {
+    const scale = Math.max(0.45, 1 - step * 0.07);
+    const customPreset: FenceDensityPreset = {
+      bodyFontSize: Math.max(6.2, Number((base.bodyFontSize * scale).toFixed(2))),
+      titleFontSize: Math.max(8.2, Number((base.titleFontSize * scale).toFixed(2))),
+      subTitleFontSize: Math.max(7.0, Number((base.subTitleFontSize * scale).toFixed(2))),
+      lineHeightFactor: Math.max(1.06, Number((base.lineHeightFactor - step * 0.01).toFixed(2))),
+      idRowStep: Math.max(2.9, Number((base.idRowStep * scale).toFixed(2))),
+      tableHeadFontSize: Math.max(5.8, Number((base.tableHeadFontSize * scale).toFixed(2))),
+      tableBodyFontSize: Math.max(5.6, Number((base.tableBodyFontSize * scale).toFixed(2))),
+      cellPadY: Math.max(0.28, Number((base.cellPadY * scale).toFixed(2))),
+      cellPadX: Math.max(0.85, Number((base.cellPadX * scale).toFixed(2))),
+      minCellHeight: Math.max(2.75, Number((base.minCellHeight * scale).toFixed(2))),
+      gapScale: Math.max(0.22, Number((base.gapScale * scale).toFixed(2))),
+      minBlankRowsBast: 0,
+      minBlankRowsSptjm: 0,
+    };
+    const estimatedH = measureHeightForPreset(customPreset);
+    if (estimatedH <= availableMiddleH) {
+      return { preset: customPreset, estimatedH };
+    }
+  }
+
+  const ultra = {
+    ...base,
+    bodyFontSize: 6.2,
+    idRowStep: 2.8,
+    tableHeadFontSize: 5.6,
+    tableBodyFontSize: 5.4,
+    cellPadY: 0.25,
+    cellPadX: 0.8,
+    minCellHeight: 2.6,
+    gapScale: 0.2,
+    minBlankRowsBast: 0,
+    minBlankRowsSptjm: 0,
+  };
+  return { preset: ultra, estimatedH: measureHeightForPreset(ultra) };
+}
+
 function renderSingleBastPage(
   doc: AutoTableDoc,
   {
@@ -1860,74 +2236,38 @@ function renderSingleBastPage(
     loadedSig: LoadedPdfImage | null;
   }
 ) {
+  const PT_TO_MM = 0.352778;
   const left = F4_PDF_MARGINS.left; // 20mm
   const right = F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right; // 201mm
   const centerX = left + PRINTABLE_WIDTH_MM / 2;
-  let cursorY = F4_PDF_MARGINS.top; // 10mm
+  const bottomEdgeY = F4_PAPER_HEIGHT_MM - F4_PDF_MARGINS.bottom; // 300mm
 
-  // 1. KOP DINAS SOSIAL
-  const logoW = loadedKopLogo ? 17 : 0;
-  const logoH = loadedKopLogo ? 21 : 0;
-  if (loadedKopLogo) {
-    const imgRatio = loadedKopLogo.width / Math.max(loadedKopLogo.height, 1);
-    let drawW = logoW;
-    let drawH = logoH;
-    if (imgRatio > logoW / logoH) {
-      drawH = logoW / imgRatio;
-    } else {
-      drawW = logoH * imgRatio;
-    }
-    doc.addImage(
-      loadedKopLogo.dataUrl,
-      loadedKopLogo.format,
-      left + (logoW - drawW) / 2,
-      cursorY + (logoH - drawH) / 2,
-      drawW,
-      drawH
-    );
-  }
+  // 1. PAGAR ATAS: KOP DINAS SOSIAL MENTOK MARGIN ATAS (10mm)
+  const kopEndY = drawOfficialDinsosKop(doc, bastConfig, loadedKopLogo);
 
-  const kopCenterX = loadedKopLogo ? left + logoW + (PRINTABLE_WIDTH_MM - logoW) / 2 : centerX;
+  const leftSigX = left + PRINTABLE_WIDTH_MM * 0.23;
+  const rightSigX = left + PRINTABLE_WIDTH_MM * 0.77;
+  const sigColMaxW = PRINTABLE_WIDTH_MM * 0.40;
 
-  doc.setTextColor(15, 23, 42);
-  if (bastConfig.orgHeaderLine1?.trim()) {
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(12);
-    doc.text(bastConfig.orgHeaderLine1.trim().toUpperCase(), kopCenterX, cursorY + 4.5, {
-      align: 'center',
-    });
-  }
-  if (bastConfig.orgHeaderLine2?.trim()) {
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(15.5);
-    doc.text(bastConfig.orgHeaderLine2.trim().toUpperCase(), kopCenterX, cursorY + 10.5, {
-      align: 'center',
-    });
-  }
+  const pejabatNama = bastConfig.pejabatNama?.trim() || DEFAULT_BAST_TEMPLATE.pejabatNama;
+  const pejabatJabatan =
+    bastConfig.pejabatJabatan?.trim() || DEFAULT_BAST_TEMPLATE.pejabatJabatan;
+  const pejabatPangkat =
+    bastConfig.pejabatPangkat?.trim() || DEFAULT_BAST_TEMPLATE.pejabatPangkat;
+  const pejabatNip = bastConfig.pejabatNip?.trim() || DEFAULT_BAST_TEMPLATE.pejabatNip;
+  const kpmFullName = (record.bast?.recipientName || record.nama || '-').toUpperCase();
+
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.3);
-  if (bastConfig.orgAddress1?.trim()) {
-    doc.text(bastConfig.orgAddress1.trim(), kopCenterX, cursorY + 14.8, { align: 'center' });
-  }
-  if (bastConfig.orgAddress2?.trim()) {
-    doc.text(bastConfig.orgAddress2.trim(), kopCenterX, cursorY + 18.5, { align: 'center' });
-  }
-  if (bastConfig.orgAddress3?.trim()) {
-    doc.text(bastConfig.orgAddress3.trim(), kopCenterX, cursorY + 22.2, { align: 'center' });
-  }
+  doc.setFontSize(9.2);
+  const leftJabLines = doc.splitTextToSize(pejabatJabatan, sigColMaxW) as string[];
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  const kpmSigNameLines = (doc.splitTextToSize(kpmFullName, sigColMaxW) as string[]).slice(0, 2);
 
-  cursorY += 25.2;
-  doc.setDrawColor(15, 23, 42);
-  doc.setLineWidth(0.75);
-  doc.line(left, cursorY, right, cursorY);
-  doc.setLineWidth(0.25);
-  doc.line(left, cursorY + 1.1, right, cursorY + 1.1);
-  cursorY += 7.8;
-
-  // Hitung rincian barang lebih dulu untuk menyesuaikan kepadatan vertikal agar selalu pas 1 halaman F4
+  // Siapkan data konten tengah
   const subStatuses = getKpmSubItemStatusList(record, items);
   const pkg = resolvePackageForKpm(items, record.tahun, record.item);
-  const tableRows: string[][] =
+  const rawTableRows: string[][] =
     subStatuses.length > 0
       ? subStatuses.map((s, i) => [
           `${i + 1}.`,
@@ -1945,30 +2285,7 @@ function renderSingleBastPage(
             'Berfungsi Dengan Baik dan Lengkap',
           ],
         ];
-  const isCompactBast = tableRows.length > 5;
 
-  // 2. JUDUL & NOMOR BAST (#1)
-  const titleText = 'BERITA ACARA SERAH TERIMA BARANG';
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
-  doc.setTextColor(15, 23, 42);
-  doc.text(titleText, centerX, cursorY, { align: 'center' });
-  const titleW = doc.getTextWidth(titleText);
-  doc.setLineWidth(0.35);
-  doc.line(centerX - titleW / 2, cursorY + 0.8, centerX + titleW / 2, cursorY + 0.8);
-
-  cursorY += isCompactBast ? 5.0 : 5.5;
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
-  doc.text(
-    bastConfig.nomorBast?.trim() || DEFAULT_BAST_TEMPLATE.nomorBast,
-    centerX,
-    cursorY,
-    { align: 'center' }
-  );
-  cursorY += isCompactBast ? 7.0 : 9.0;
-
-  // 3. PARAGRAF PEMBUKA (#2, #3, #4, #5; tanpa kata merah "dan penampungan air hujan")
   const dateWords = bastConfig.tanggalSerahTerimaCustomText?.trim()
     ? bastConfig.tanggalSerahTerimaCustomText.trim()
     : formatIndonesianDateWords(
@@ -1992,52 +2309,484 @@ function renderSingleBastPage(
     `kesejahteraan keluarga provinsi kalimantan barat tahun anggaran ${tahunAnggaran}. ` +
     `Berdasarkan surat pesanan (SP) nomor : ${nomorPesanan} tanggal ${tanggalPemesanan}.`;
 
-  const bodyLineFactor = isCompactBast ? 1.42 : 1.54;
-  const bodyLineStep = isCompactBast ? 4.95 : 5.45;
+  const slotNo = getKpmSlotNumberInProposal(
+    record,
+    allRecords,
+    proposals,
+    items,
+    wilayahList,
+    proposalSlotMap
+  );
+  const absenSeq = getAbsenSeq(record.registerCode);
+  const noBantuanNum =
+    slotNo && slotNo > 0 ? slotNo : absenSeq < 999999 ? absenSeq : null;
+  const noBantuanStr = noBantuanNum ? String(noBantuanNum).padStart(2, '0') : '01';
 
+  const idValX = left + 38;
+  const idMaxW = right - idValX;
+  const nominalRaw =
+    bastConfig.nilaiNominalText?.trim() || DEFAULT_BAST_TEMPLATE.nilaiNominalText;
+  const isDottedBlank = /^[.\s_…-]+$/.test(nominalRaw);
+  const p2Lead =
+    'Dengan ini PIHAK PERTAMA secara sah telah menyerahkan barang berupa 1 (satu) paket bantuan berupa peralatan kerja dan dalam keadaan “berfungsi dengan baik dan lengkap”';
+  const p2Full =
+    `Dengan ini PIHAK PERTAMA secara sah telah menyerahkan barang berupa 1 (satu) paket bantuan berupa peralatan kerja ` +
+    `dan dalam keadaan “berfungsi dengan baik dan lengkap” dengan nilai sebesar ${nominalRaw} dengan rincian barang sebagai berikut :`;
+  const pClose =
+    'Maka PIHAK KEDUA menyatakan telah menerima bantuan diatas dalam keadaan sadar dengan kondisi barang bantuan yang di berikan “berfungsi dengan baik dan lengkap”. Demikian berita acara ini dibuat untuk digunakan sebagaimana mestinya.';
+
+  const colWidths = [11, 61, 17, 17, 75]; // sum = 181mm
+  const headRow = ['No.', 'Nama Barang', 'Satuan', 'Volume', 'Keterangan'];
+
+  const buildTableRowsForPreset = (preset: FenceDensityPreset): string[][] => {
+    const rows = rawTableRows.map((r) => [...r]);
+    while (rows.length < preset.minBlankRowsBast) {
+      rows.push(['', '', '', '', '']);
+    }
+    return rows;
+  };
+
+  const getBastSigMetrics = (preset: FenceDensityPreset) => {
+    const sigScale = Math.max(0.7, preset.gapScale);
+    const sigGap = 6.8 * Math.max(0.65, preset.gapScale);
+    const sigTitleH = 4.6 * sigScale;
+    const jabLineStep = 4.0 * sigScale;
+    const jabH = Math.max(1, leftJabLines.length) * jabLineStep;
+    const signingSpaceH = 16.5 * Math.max(0.7, preset.gapScale);
+    const extraKpmOffset = Math.max(0, kpmSigNameLines.length - 1) * 3.8;
+    const pangkatOffset = 4.8;
+    const nipOffset = 4.3;
+    const totalSigH =
+      sigTitleH + jabH + signingSpaceH + extraKpmOffset + pangkatOffset + nipOffset;
+    return {
+      sigGap,
+      sigTitleH,
+      jabLineStep,
+      jabH,
+      signingSpaceH,
+      extraKpmOffset,
+      pangkatOffset,
+      nipOffset,
+      totalSigH,
+    };
+  };
+
+  // Ruang total di bawah Kop Surat sampai batas margin bawah (agar selalu 1 halaman F4)
+  const middleStartBaseY = kopEndY + 5.8; // 42.1mm
+  const totalAvailableH = Math.max(120, bottomEdgeY - middleStartBaseY);
+
+  const measureBastTotalHeight = (preset: FenceDensityPreset): number => {
+    const gs = preset.gapScale;
+    const bodyStep = preset.bodyFontSize * PT_TO_MM * preset.lineHeightFactor;
+    let h = 0;
+
+    // Judul + Nomor BAST
+    h += 4.8 * gs;
+    h += 6.4 * gs;
+
+    // Paragraf 1
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(preset.bodyFontSize);
+    const p1Lines = doc.splitTextToSize(p1, PRINTABLE_WIDTH_MM) as string[];
+    h += p1Lines.length * bodyStep + 4.2 * gs;
+
+    // Lead + Pihak Pertama + Pihak Kedua
+    h += 5.2 * gs;
+    const jabLines = doc.splitTextToSize(pejabatJabatan, idMaxW) as string[];
+    const idJabStep = Math.max(3.3, preset.idRowStep * 0.9);
+    h += preset.idRowStep;
+    h += jabLines.length * idJabStep + 0.8 * gs;
+    h += 5.8 * gs;
+    h += preset.idRowStep * 3;
+    h += 5.8 * gs;
+
+    // Paragraf penyerahan
+    if (isDottedBlank) {
+      const leadLines = doc.splitTextToSize(p2Lead, PRINTABLE_WIDTH_MM) as string[];
+      h += leadLines.length * bodyStep + 2.4 * gs;
+      h += 7.4 * gs;
+    } else {
+      const p2Lines = doc.splitTextToSize(p2Full, PRINTABLE_WIDTH_MM) as string[];
+      h += p2Lines.length * bodyStep + 5.6 * gs;
+    }
+
+    // Tabel Rincian Barang
+    const rows = buildTableRowsForPreset(preset);
+    const tableH = estimateSinglePageTableHeight(
+      doc,
+      headRow,
+      rows,
+      colWidths,
+      preset.tableHeadFontSize,
+      preset.tableBodyFontSize,
+      preset.cellPadY,
+      preset.cellPadX,
+      preset.minCellHeight
+    );
+    h += tableH + 7.4 * gs;
+
+    // Paragraf Penutup
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(preset.bodyFontSize);
+    const pCloseLines = doc.splitTextToSize(pClose, PRINTABLE_WIDTH_MM) as string[];
+    h += pCloseLines.length * bodyStep;
+
+    // Blok Tanda Tangan mengikuti baris akhir paragraf penutup
+    const sigMetrics = getBastSigMetrics(preset);
+    h += sigMetrics.sigGap + sigMetrics.totalSigH;
+    return h;
+  };
+
+  const { preset } = resolveAutoFitPreset(measureBastTotalHeight, totalAvailableH);
+  const gs = preset.gapScale;
+  const bodyStep = preset.bodyFontSize * PT_TO_MM * preset.lineHeightFactor;
+  const sigMetrics = getBastSigMetrics(preset);
+
+  let cursorY = middleStartBaseY;
+
+  // 2. KONTEN TENGAH MENGALIR ALAMI
+  const titleText = 'BERITA ACARA SERAH TERIMA BARANG';
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(preset.titleFontSize);
+  doc.setTextColor(15, 23, 42);
+  doc.text(titleText, centerX, cursorY, { align: 'center' });
+  const titleW = doc.getTextWidth(titleText);
+  doc.setLineWidth(0.35);
+  doc.line(centerX - titleW / 2, cursorY + 0.8, centerX + titleW / 2, cursorY + 0.8);
+
+  cursorY += 4.8 * gs;
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
+  doc.setFontSize(preset.subTitleFontSize);
+  doc.text(
+    bastConfig.nomorBast?.trim() || DEFAULT_BAST_TEMPLATE.nomorBast,
+    centerX,
+    cursorY,
+    { align: 'center' }
+  );
+  cursorY += 6.4 * gs;
+
+  // Paragraf pembuka
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(preset.bodyFontSize);
   doc.setTextColor(15, 23, 42);
   const p1Lines = doc.splitTextToSize(p1, PRINTABLE_WIDTH_MM) as string[];
   doc.text(p1, left, cursorY, {
     maxWidth: PRINTABLE_WIDTH_MM,
     align: 'justify',
-    lineHeightFactor: bodyLineFactor,
+    lineHeightFactor: preset.lineHeightFactor,
   });
-  cursorY += p1Lines.length * bodyLineStep + (isCompactBast ? 4.8 : 6.8);
+  cursorY += p1Lines.length * bodyStep + 4.2 * gs;
 
-  // 4. IDENTITAS PIHAK PERTAMA & PIHAK KEDUA (#6, #7, #8, #9)
+  // Identitas Pihak Pertama & Kedua
   doc.text('Kami yang bertanda tangan dibawah ini :', left, cursorY);
-  cursorY += isCompactBast ? 5.8 : 6.8;
+  cursorY += 5.2 * gs;
 
   const idLabelX = left + 9;
   const idColonX = left + 35;
-  const idValX = left + 38;
-  const idMaxW = right - idValX;
-  const idRowStep = isCompactBast ? 5.2 : 5.8;
 
   doc.setFont('helvetica', 'normal');
   doc.text('Nama', idLabelX, cursorY);
   doc.text(':', idColonX, cursorY);
   doc.setFont('helvetica', 'bold');
-  doc.text(bastConfig.pejabatNama?.trim() || DEFAULT_BAST_TEMPLATE.pejabatNama, idValX, cursorY);
-  cursorY += idRowStep;
+  doc.text(pejabatNama, idValX, cursorY);
+  cursorY += preset.idRowStep;
 
   doc.setFont('helvetica', 'normal');
   doc.text('Jabatan', idLabelX, cursorY);
   doc.text(':', idColonX, cursorY);
-  const jabatanLines = doc.splitTextToSize(
-    bastConfig.pejabatJabatan?.trim() || DEFAULT_BAST_TEMPLATE.pejabatJabatan,
-    idMaxW
-  ) as string[];
+  const jabatanLines = doc.splitTextToSize(pejabatJabatan, idMaxW) as string[];
+  const idJabStep = Math.max(3.3, preset.idRowStep * 0.9);
   doc.text(jabatanLines, idValX, cursorY);
-  cursorY += jabatanLines.length * (isCompactBast ? 4.8 : 5.2) + 1.0;
+  cursorY += jabatanLines.length * idJabStep + 0.8 * gs;
 
   doc.text('selanjutnya disebut sebagai ', idLabelX, cursorY);
   const p1PrefixW = doc.getTextWidth('selanjutnya disebut sebagai ');
   doc.setFont('helvetica', 'bold');
   doc.text('PIHAK PERTAMA', idLabelX + p1PrefixW, cursorY);
-  cursorY += isCompactBast ? 7.2 : 8.8;
+  cursorY += 5.8 * gs;
+
+  doc.setFont('helvetica', 'normal');
+  doc.text('Nama', idLabelX, cursorY);
+  doc.text(':', idColonX, cursorY);
+  doc.setFont('helvetica', 'bold');
+  doc.text(kpmFullName, idValX, cursorY);
+  cursorY += preset.idRowStep;
+
+  doc.setFont('helvetica', 'normal');
+  doc.text('No. Bantuan', idLabelX, cursorY);
+  doc.text(':', idColonX, cursorY);
+  doc.text(noBantuanStr, idValX, cursorY);
+  cursorY += preset.idRowStep;
+
+  doc.text('Jabatan', idLabelX, cursorY);
+  doc.text(':', idColonX, cursorY);
+  doc.text('sebagai Keluarga Penerima Manfaat (KPM)', idValX, cursorY);
+  cursorY += preset.idRowStep;
+
+  doc.text('selanjutnya disebut sebagai ', idLabelX, cursorY);
+  const p2PrefixW = doc.getTextWidth('selanjutnya disebut sebagai ');
+  doc.setFont('helvetica', 'bold');
+  doc.text('PIHAK KEDUA', idLabelX + p2PrefixW, cursorY);
+  cursorY += 5.8 * gs;
+
+  // Paragraf penyerahan + nominal
+  if (isDottedBlank) {
+    const leadLines = doc.splitTextToSize(p2Lead, PRINTABLE_WIDTH_MM) as string[];
+    doc.setFont('helvetica', 'normal');
+    doc.text(p2Lead, left, cursorY, {
+      maxWidth: PRINTABLE_WIDTH_MM,
+      align: 'justify',
+      lineHeightFactor: preset.lineHeightFactor,
+    });
+    cursorY += leadLines.length * bodyStep + 2.4 * gs;
+
+    const prefixNominal = 'dengan nilai sebesar ';
+    doc.text(prefixNominal, left, cursorY);
+    const prefixW = doc.getTextWidth(prefixNominal);
+    const dotWidth = 56;
+    doc.text(nominalRaw, left + prefixW + 1, cursorY + 1.3);
+    const suffixX = Math.min(
+      left + prefixW + Math.max(doc.getTextWidth(nominalRaw), dotWidth) + 3,
+      right - 58
+    );
+    doc.text('dengan rincian barang sebagai berikut :', suffixX, cursorY);
+    cursorY += 7.4 * gs;
+  } else {
+    const p2Lines = doc.splitTextToSize(p2Full, PRINTABLE_WIDTH_MM) as string[];
+    doc.setFont('helvetica', 'normal');
+    doc.text(p2Full, left, cursorY, {
+      maxWidth: PRINTABLE_WIDTH_MM,
+      align: 'justify',
+      lineHeightFactor: preset.lineHeightFactor,
+    });
+    cursorY += p2Lines.length * bodyStep + 5.6 * gs;
+  }
+
+  // Tabel rincian barang (selalu 1 halaman)
+  const tableRows = buildTableRowsForPreset(preset);
+  autoTable(doc, {
+    startY: cursorY,
+    margin: {
+      top: F4_PDF_MARGINS.top,
+      right: F4_PDF_MARGINS.right,
+      bottom: 2,
+      left: F4_PDF_MARGINS.left,
+    },
+    tableWidth: PRINTABLE_WIDTH_MM,
+    pageBreak: 'avoid',
+    rowPageBreak: 'avoid',
+    head: [headRow],
+    body: tableRows,
+    theme: 'grid',
+    styles: {
+      font: 'helvetica',
+      fontSize: preset.tableBodyFontSize,
+      minCellHeight: preset.minCellHeight,
+      textColor: [15, 23, 42],
+      lineColor: [30, 41, 59],
+      lineWidth: 0.25,
+      valign: 'middle',
+      cellPadding: {
+        top: preset.cellPadY,
+        right: preset.cellPadX,
+        bottom: preset.cellPadY,
+        left: preset.cellPadX,
+      },
+    },
+    headStyles: {
+      fillColor: [255, 255, 255],
+      textColor: [15, 23, 42],
+      fontStyle: 'bold',
+      fontSize: preset.tableHeadFontSize,
+      halign: 'center',
+      lineColor: [30, 41, 59],
+      lineWidth: 0.28,
+    },
+    columnStyles: {
+      0: { cellWidth: colWidths[0], halign: 'center' },
+      1: { cellWidth: colWidths[1], halign: 'left' },
+      2: { cellWidth: colWidths[2], halign: 'center' },
+      3: { cellWidth: colWidths[3], halign: 'center' },
+      4: { cellWidth: colWidths[4], halign: 'center' },
+    },
+  });
+
+  const pCloseLines = doc.splitTextToSize(pClose, PRINTABLE_WIDTH_MM) as string[];
+  const maxCloseY = bottomEdgeY - sigMetrics.totalSigH - sigMetrics.sigGap - pCloseLines.length * bodyStep;
+  const rawCloseY = (doc.lastAutoTable?.finalY ?? cursorY + 30) + 7.4 * gs;
+  const closeY = Math.min(rawCloseY, Math.max(cursorY + 5, maxCloseY));
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(preset.bodyFontSize);
+  doc.setTextColor(15, 23, 42);
+  doc.text(pClose, left, closeY, {
+    maxWidth: PRINTABLE_WIDTH_MM,
+    align: 'justify',
+    lineHeightFactor: preset.lineHeightFactor,
+  });
+
+  // 3. BLOK TANDA TANGAN MENGIKUTI BARIS AKHIR (TIDAK FIXATED KE BAWAH)
+  const pCloseEndY = closeY + pCloseLines.length * bodyStep;
+  const sigTopY = Math.min(
+    pCloseEndY + sigMetrics.sigGap,
+    bottomEdgeY - sigMetrics.totalSigH
+  );
+  const jabTopY = sigTopY + sigMetrics.sigTitleH;
+  const jabBottomY = jabTopY + sigMetrics.jabH;
+  const nameY = jabBottomY + sigMetrics.signingSpaceH;
+  const pangkatY = nameY + sigMetrics.extraKpmOffset + sigMetrics.pangkatOffset;
+  const nipY = pangkatY + sigMetrics.nipOffset;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text('PIHAK PERTAMA', leftSigX, sigTopY, { align: 'center' });
+  doc.text('PIHAK KEDUA', rightSigX, sigTopY, { align: 'center' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.1);
+  doc.text(leftJabLines, leftSigX, jabTopY, { align: 'center' });
+  doc.text('Keluarga Penerima Manfaat (KPM)', rightSigX, jabTopY, { align: 'center' });
+
+  // Kotak Materai Rp. 10.000 tepat di tengah antara dua tanda tangan
+  const materaiW = 16;
+  const materaiH = Math.min(10.5, Math.max(8, sigMetrics.signingSpaceH - 4));
+  const materaiX = left + PRINTABLE_WIDTH_MM * 0.5 - materaiW / 2;
+  const materaiY = jabBottomY + (sigMetrics.signingSpaceH - materaiH) / 2 - 1.5;
+  doc.setDrawColor(15, 23, 42);
+  doc.setLineWidth(0.28);
+  doc.rect(materaiX, materaiY, materaiW, materaiH);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.5);
+  doc.text('MATERAI', materaiX + materaiW / 2, materaiY + materaiH * 0.42, { align: 'center' });
+  doc.text('RP. 10.000', materaiX + materaiW / 2, materaiY + materaiH * 0.76, { align: 'center' });
+
+  if (loadedSig) {
+    const boxW = 40;
+    const boxH = Math.max(10, sigMetrics.signingSpaceH - 4.2);
+    const imgRatio = loadedSig.width / Math.max(loadedSig.height, 1);
+    let drawW = boxW;
+    let drawH = boxH;
+    if (imgRatio > boxW / boxH) {
+      drawH = boxW / imgRatio;
+    } else {
+      drawW = boxH * imgRatio;
+    }
+    doc.addImage(
+      loadedSig.dataUrl,
+      loadedSig.format,
+      rightSigX - drawW / 2,
+      jabBottomY + 0.5 + (boxH - drawH) / 2,
+      drawW,
+      drawH
+    );
+  }
+
+  // Nama PIHAK PERTAMA & PIHAK KEDUA beserta garis tanda tangan simetris & sejajar
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.4);
+  const pejabatW = doc.getTextWidth(pejabatNama);
+  const kpmMaxW = kpmSigNameLines.reduce((mx, ln) => Math.max(mx, doc.getTextWidth(ln)), 0);
+  const sharedSigLineW = Math.max(
+    46,
+    Math.min(sigColMaxW * 0.88, Math.max(pejabatW, kpmMaxW) + 10)
+  );
+  const sharedSigLineY = nameY + sigMetrics.extraKpmOffset + 1.0;
+
+  doc.text(pejabatNama, leftSigX, nameY, { align: 'center' });
+  doc.text(kpmSigNameLines, rightSigX, nameY, { align: 'center' });
+
+  doc.setDrawColor(15, 23, 42);
+  doc.setLineWidth(0.32);
+  doc.line(
+    leftSigX - sharedSigLineW / 2,
+    sharedSigLineY,
+    leftSigX + sharedSigLineW / 2,
+    sharedSigLineY
+  );
+  doc.line(
+    rightSigX - sharedSigLineW / 2,
+    sharedSigLineY,
+    rightSigX + sharedSigLineW / 2,
+    sharedSigLineY
+  );
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.0);
+  doc.text(pejabatPangkat, leftSigX, pangkatY, { align: 'center' });
+  doc.text(pejabatNip, leftSigX, nipY, { align: 'center' });
+}
+
+function renderSingleSptjmPage(
+  doc: AutoTableDoc,
+  {
+    record,
+    allRecords,
+    proposals,
+    items,
+    wilayahList,
+    proposalSlotMap,
+    kopConfig,
+    sptjmConfig,
+    loadedKopLogo,
+  }: {
+    record: KpmRecord;
+    allRecords: KpmRecord[];
+    proposals: ProposalRecord[];
+    items: ItemBantuan[];
+    wilayahList: WilayahKabKota[];
+    proposalSlotMap: ProposalSlotMap;
+    kopConfig: BastTemplateConfig;
+    sptjmConfig: SptjmTemplateConfig;
+    loadedKopLogo: LoadedPdfImage | null;
+  }
+) {
+  const PT_TO_MM = 0.352778;
+  const left = F4_PDF_MARGINS.left; // 20mm
+  const right = F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right; // 201mm
+  const centerX = left + PRINTABLE_WIDTH_MM / 2;
+  const bottomEdgeY = F4_PAPER_HEIGHT_MM - F4_PDF_MARGINS.bottom; // 300mm
+
+  // 1. PAGAR ATAS: KOP DINAS SOSIAL MENTOK MARGIN ATAS (10mm)
+  const kopEndY = drawOfficialDinsosKop(doc, kopConfig, loadedKopLogo);
+
+  const leftSigX = left + PRINTABLE_WIDTH_MM * 0.25;
+  const rightSigX = left + PRINTABLE_WIDTH_MM * 0.75;
+  const sigColMaxW = PRINTABLE_WIDTH_MM * 0.45;
+
+  const tempat = sptjmConfig.tempat?.trim() || DEFAULT_SPTJM_TEMPLATE.tempat;
+  const tanggalText = formatSptjmFullDate(sptjmConfig);
+  const pejabatJabatan =
+    sptjmConfig.pejabatJabatan?.trim() || DEFAULT_SPTJM_TEMPLATE.pejabatJabatan;
+  const pejabatNama =
+    sptjmConfig.pejabatNama?.trim() || DEFAULT_SPTJM_TEMPLATE.pejabatNama;
+  const pejabatNip =
+    sptjmConfig.pejabatNip?.trim() || DEFAULT_SPTJM_TEMPLATE.pejabatNip;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.4);
+  const leftJabLines = doc.splitTextToSize(pejabatJabatan, sigColMaxW) as string[];
+
+  const subStatuses = getKpmSubItemStatusList(record, items);
+  const pkg = resolvePackageForKpm(items, record.tahun, record.item);
+  const rawTableRows: string[][] =
+    subStatuses.length > 0
+      ? subStatuses.map((s, i) => [
+          `${i + 1}.`,
+          s.baseName || s.name,
+          s.satuan || 'Unit',
+          String(s.volume > 0 ? s.volume : 1),
+          'Berfungsi Dengan Baik dan Lengkap',
+        ])
+      : [
+          [
+            '1.',
+            pkg.name && pkg.name !== pkg.code ? pkg.name : record.item || 'Paket Bantuan',
+            'Unit',
+            '1',
+            'Berfungsi Dengan Baik dan Lengkap',
+          ],
+        ];
 
   const slotNo = getKpmSlotNumberInProposal(
     record,
@@ -2051,227 +2800,320 @@ function renderSingleBastPage(
   const noBantuanNum =
     slotNo && slotNo > 0 ? slotNo : absenSeq < 999999 ? absenSeq : null;
   const noBantuanStr = noBantuanNum ? String(noBantuanNum).padStart(2, '0') : '01';
-  const kpmFullName = (record.bast?.recipientName || record.nama || '-').toUpperCase();
 
+  const kpmFullName = (record.nama || '-').toUpperCase();
+  const locationText = formatBastProposalLocation(record, proposals, wilayahList);
+
+  const pIntro =
+    `Berkenaan dengan permohonan bantuan peralatan kerja di ${locationText}. ` +
+    `Kegiatan PFM pada Dinas Sosial Provinsi Kalimantan Barat yang telah direalisasikan barang-barang / peralatan berupa :`;
+
+  const pWill =
+    'Akan saya gunakan sesuai dengan proposal/ajuan saya dan dengan ini menyatakan dengan sebenar benarnya bahwa :';
+
+  const statementPoints = [
+    'Bertanggungjawab mutlak terhadap penggunaan bantuan tersebut diatas;',
+    'Bersedia memenuhi kewajiban yang ada, yaitu bertanggung jawab secara formil dan materil atas penggunaan bantuan sosial yang diterima serta bersedia menyampaikan laporan pemanfaatannya kepada pihak yang berwenang secara berjenjang;',
+    'Bersedia dan kooperatif terhadap auditor/pemeriksa yang akan melakukan pemeriksaan atas keabsahan laporan yang saya sampaikan terhadap pemanfaatan bantuan yang diterima;',
+    'Tidak akan memperjual belikan bantuan yang telah diterima dari Dinas Sosial Provinsi Kalimantan Barat.',
+  ];
+
+  const pClose =
+    'Demikian surat pernyataan ini saya buat dengan sebenar-benarnya. Apabila di kemudian hari terbukti terdapat keterangan yang tidak benar atau saya melanggar ketentuan terkait pemanfaatan bantuan ini, saya bersedia menanggung segala konsekuensi hukum, administratif, dan/atau finansial yang timbul tanpa hak untuk menuntut kompensasi dari pihak manapun.';
+
+  const idLabelX = left;
+  const idColonX = left + 25;
+  const idValX = left + 28.5;
+  const idMaxW = right - idValX;
+
+  const numColX = left + 4;
+  const pointTextX = left + 10.5;
+  const pointMaxW = right - pointTextX;
+
+  const colWidths = [11, 59, 17, 17, 77]; // sum = 181mm
+  const headRow = ['No.', 'Nama Barang', 'Satuan', 'Volume', 'Keterangan'];
+
+  const buildTableRowsForPreset = (preset: FenceDensityPreset): string[][] => {
+    const rows = rawTableRows.map((r) => [...r]);
+    while (rows.length < preset.minBlankRowsSptjm) {
+      rows.push(['', '', '', '', '']);
+    }
+    return rows;
+  };
+
+  const getSptjmSigMetrics = (preset: FenceDensityPreset) => {
+    const sigScale = Math.max(0.7, preset.gapScale);
+    const sigGap = 7.0 * Math.max(0.65, preset.gapScale);
+    const dateRowH = 5.4 * sigScale;
+    const mengetahuiRowH = 4.4 * sigScale;
+    const jabLineStep = 4.0 * sigScale;
+    const jabH = Math.max(1, leftJabLines.length) * jabLineStep;
+    const signingSpaceH = 18.0 * Math.max(0.68, preset.gapScale);
+    const nipOffset = 4.8;
+    const totalSigH = dateRowH + mengetahuiRowH + jabH + signingSpaceH + nipOffset;
+    return {
+      sigGap,
+      dateRowH,
+      mengetahuiRowH,
+      jabLineStep,
+      jabH,
+      signingSpaceH,
+      nipOffset,
+      totalSigH,
+    };
+  };
+
+  const middleStartBaseY = kopEndY + 6.5; // 42.8mm
+  const totalAvailableH = Math.max(120, bottomEdgeY - middleStartBaseY);
+
+  const measureSptjmTotalHeight = (preset: FenceDensityPreset): number => {
+    const gs = preset.gapScale;
+    const bodyStep = preset.bodyFontSize * PT_TO_MM * preset.lineHeightFactor;
+    let h = 0;
+
+    // Judul SPTJM (tanpa nomor surat)
+    h += 8.0 * gs;
+
+    // 'Saya yang bertanda tangan dibawah ini :' + Nama, No. Bantuan, Jabatan
+    h += 5.8 * gs;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(preset.bodyFontSize);
+    const namaLines = doc.splitTextToSize(kpmFullName, idMaxW) as string[];
+    h += Math.max(1, namaLines.length) * preset.idRowStep;
+    h += preset.idRowStep * 2 + 3.4 * gs;
+
+    // Paragraf pembuka
+    const pIntroLines = doc.splitTextToSize(pIntro, PRINTABLE_WIDTH_MM) as string[];
+    h += pIntroLines.length * bodyStep + 5.2 * gs;
+
+    // Tabel Rincian Barang
+    const rows = buildTableRowsForPreset(preset);
+    const tableH = estimateSinglePageTableHeight(
+      doc,
+      headRow,
+      rows,
+      colWidths,
+      preset.tableHeadFontSize,
+      preset.tableBodyFontSize,
+      preset.cellPadY,
+      preset.cellPadX,
+      preset.minCellHeight
+    );
+    h += tableH + 7.2 * gs;
+
+    // Kalimat lead 4 poin
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(preset.bodyFontSize);
+    const pWillLines = doc.splitTextToSize(pWill, PRINTABLE_WIDTH_MM) as string[];
+    h += pWillLines.length * bodyStep + 1.4 * gs;
+
+    // 4 poin pernyataan
+    for (const pt of statementPoints) {
+      const ptLines = doc.splitTextToSize(pt, pointMaxW) as string[];
+      h += ptLines.length * bodyStep + 0.8 * gs;
+    }
+    h += 2.6 * gs;
+
+    // Paragraf Penutup
+    const pCloseLines = doc.splitTextToSize(pClose, PRINTABLE_WIDTH_MM) as string[];
+    h += pCloseLines.length * bodyStep;
+
+    // Blok Tanggal & Tanda Tangan mengikuti baris akhir
+    const sigMetrics = getSptjmSigMetrics(preset);
+    h += sigMetrics.sigGap + sigMetrics.totalSigH;
+    return h;
+  };
+
+  const { preset } = resolveAutoFitPreset(measureSptjmTotalHeight, totalAvailableH);
+  const gs = preset.gapScale;
+  const bodyStep = preset.bodyFontSize * PT_TO_MM * preset.lineHeightFactor;
+  const sigMetrics = getSptjmSigMetrics(preset);
+
+  let cursorY = middleStartBaseY;
+
+  // Judul Resmi (persis contoh PDF: bold uppercase tanpa garis bawah & tanpa nomor surat)
+  const titleText = 'SURAT PERNYATAAN TANGGUNG JAWAB MUTLAK (SPTJM)';
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(preset.titleFontSize);
+  doc.setTextColor(15, 23, 42);
+  doc.text(titleText, centerX, cursorY, { align: 'center' });
+  cursorY += 8.0 * gs;
+
+  // Identitas Yang Membuat Pernyataan (KPM)
   doc.setFont('helvetica', 'normal');
+  doc.setFontSize(preset.bodyFontSize);
+  doc.text('Saya yang bertanda tangan dibawah ini :', left, cursorY);
+  cursorY += 5.8 * gs;
+
   doc.text('Nama', idLabelX, cursorY);
   doc.text(':', idColonX, cursorY);
-  doc.setFont('helvetica', 'bold');
-  doc.text(kpmFullName, idValX, cursorY);
-  cursorY += idRowStep;
+  const namaLines = doc.splitTextToSize(kpmFullName, idMaxW) as string[];
+  doc.text(namaLines, idValX, cursorY);
+  cursorY += Math.max(1, namaLines.length) * preset.idRowStep;
 
-  doc.setFont('helvetica', 'normal');
   doc.text('No. Bantuan', idLabelX, cursorY);
   doc.text(':', idColonX, cursorY);
   doc.text(noBantuanStr, idValX, cursorY);
-  cursorY += idRowStep;
+  cursorY += preset.idRowStep;
 
   doc.text('Jabatan', idLabelX, cursorY);
   doc.text(':', idColonX, cursorY);
-  doc.text('sebagai Keluarga Penerima Manfaat (KPM)', idValX, cursorY);
-  cursorY += idRowStep;
+  doc.text('Sebagai Keluarga Penerima Manfaat (KPM)', idValX, cursorY);
+  cursorY += preset.idRowStep + 3.4 * gs;
 
-  doc.text('selanjutnya disebut sebagai ', idLabelX, cursorY);
-  const p2PrefixW = doc.getTextWidth('selanjutnya disebut sebagai ');
-  doc.setFont('helvetica', 'bold');
-  doc.text('PIHAK KEDUA', idLabelX + p2PrefixW, cursorY);
-  cursorY += isCompactBast ? 7.2 : 8.8;
+  // Paragraf Permohonan & Realisasi Barang
+  const pIntroLines = doc.splitTextToSize(pIntro, PRINTABLE_WIDTH_MM) as string[];
+  doc.text(pIntro, left, cursorY, {
+    maxWidth: PRINTABLE_WIDTH_MM,
+    align: 'justify',
+    lineHeightFactor: preset.lineHeightFactor,
+  });
+  cursorY += pIntroLines.length * bodyStep + 5.2 * gs;
 
-  // 5. PARAGRAF PENYERAHAN BARANG + GARIS NOMINAL SEDIKIT TURUN (#10)
-  const nominalRaw =
-    bastConfig.nilaiNominalText?.trim() || DEFAULT_BAST_TEMPLATE.nilaiNominalText;
-  const isDottedBlank = /^[.\s_…-]+$/.test(nominalRaw);
-
-  if (isDottedBlank) {
-    // Sisakan ruang vertikal ekstra sebelum baris titik-titik agar mudah ditulis angka secara manual
-    const p2Lead =
-      'Dengan ini PIHAK PERTAMA secara sah telah menyerahkan barang berupa 1 (satu) paket bantuan berupa peralatan kerja dan dalam keadaan “berfungsi dengan baik dan lengkap”';
-    const leadLines = doc.splitTextToSize(p2Lead, PRINTABLE_WIDTH_MM) as string[];
-    doc.setFont('helvetica', 'normal');
-    doc.text(p2Lead, left, cursorY, {
-      maxWidth: PRINTABLE_WIDTH_MM,
-      align: 'justify',
-      lineHeightFactor: bodyLineFactor,
-    });
-    cursorY += leadLines.length * bodyLineStep + 2.8;
-
-    const prefixNominal = 'dengan nilai sebesar ';
-    doc.text(prefixNominal, left, cursorY);
-    const prefixW = doc.getTextWidth(prefixNominal);
-    const dotWidth = 56;
-    // Garis titik-titik diturunkan 1.4mm di bawah baseline normal agar ruang tulis di atasnya lapang
-    doc.text(nominalRaw, left + prefixW + 1, cursorY + 1.4);
-    const suffixX = Math.min(left + prefixW + Math.max(doc.getTextWidth(nominalRaw), dotWidth) + 3, right - 58);
-    doc.text('dengan rincian barang sebagai berikut :', suffixX, cursorY);
-    cursorY += isCompactBast ? 5.6 : 6.8;
-  } else {
-    const p2 =
-      `Dengan ini PIHAK PERTAMA secara sah telah menyerahkan barang berupa 1 (satu) paket bantuan berupa peralatan kerja ` +
-      `dan dalam keadaan “berfungsi dengan baik dan lengkap” dengan nilai sebesar ${nominalRaw} dengan rincian barang sebagai berikut :`;
-    const p2Lines = doc.splitTextToSize(p2, PRINTABLE_WIDTH_MM) as string[];
-    doc.setFont('helvetica', 'normal');
-    doc.text(p2, left, cursorY, {
-      maxWidth: PRINTABLE_WIDTH_MM,
-      align: 'justify',
-      lineHeightFactor: bodyLineFactor,
-    });
-    cursorY += p2Lines.length * bodyLineStep + (isCompactBast ? 3.5 : 4.8);
-  }
-
-  // 6. TABEL RINCIAN BARANG DARI SUB-ITEM KPM (#11)
-  // Tambahkan minimal beberapa baris kosong bila barang sangat sedikit agar proporsi formulir resmi terjaga
-  while (tableRows.length < 4) {
-    tableRows.push(['', '', '', '', '']);
-  }
-
+  // Tabel Rincian Barang
+  const tableRows = buildTableRowsForPreset(preset);
   autoTable(doc, {
     startY: cursorY,
     margin: {
       top: F4_PDF_MARGINS.top,
       right: F4_PDF_MARGINS.right,
-      bottom: F4_PDF_MARGINS.bottom,
+      bottom: 2,
       left: F4_PDF_MARGINS.left,
     },
     tableWidth: PRINTABLE_WIDTH_MM,
-    head: [['No.', 'Nama Barang', 'Satuan', 'Volume', 'Keterangan']],
+    pageBreak: 'avoid',
+    rowPageBreak: 'avoid',
+    head: [headRow],
     body: tableRows,
     theme: 'grid',
     styles: {
       font: 'helvetica',
-      fontSize: isCompactBast ? 9.1 : 9.4,
-      minCellHeight: isCompactBast ? 7.0 : 8.5,
+      fontSize: preset.tableBodyFontSize,
+      minCellHeight: preset.minCellHeight,
       textColor: [15, 23, 42],
       lineColor: [30, 41, 59],
       lineWidth: 0.25,
       valign: 'middle',
-      cellPadding: isCompactBast
-        ? { top: 1.7, right: 2.2, bottom: 1.7, left: 2.2 }
-        : { top: 2.3, right: 2.2, bottom: 2.3, left: 2.2 },
+      cellPadding: {
+        top: preset.cellPadY,
+        right: preset.cellPadX,
+        bottom: preset.cellPadY,
+        left: preset.cellPadX,
+      },
     },
     headStyles: {
       fillColor: [255, 255, 255],
       textColor: [15, 23, 42],
       fontStyle: 'bold',
-      fontSize: 9.6,
+      fontSize: preset.tableHeadFontSize,
       halign: 'center',
       lineColor: [30, 41, 59],
       lineWidth: 0.28,
     },
     columnStyles: {
-      0: { cellWidth: 12, halign: 'center' },
-      1: { cellWidth: PRINTABLE_WIDTH_MM - 109, halign: 'left' }, // 72mm
-      2: { cellWidth: 18, halign: 'center' },
-      3: { cellWidth: 17, halign: 'center' },
-      4: { cellWidth: 62, halign: 'center' },
+      0: { cellWidth: colWidths[0], halign: 'center' },
+      1: { cellWidth: colWidths[1], halign: 'left' },
+      2: { cellWidth: colWidths[2], halign: 'center' },
+      3: { cellWidth: colWidths[3], halign: 'center' },
+      4: { cellWidth: colWidths[4], halign: 'center' },
     },
   });
 
-  cursorY = (doc.lastAutoTable?.finalY ?? cursorY + 38) + (isCompactBast ? 5.8 : 7.8);
+  cursorY = (doc.lastAutoTable?.finalY ?? cursorY + 30) + 7.2 * gs;
 
-  // 7. PARAGRAF PENUTUP
-  const pClose =
-    'Maka PIHAK KEDUA menyatakan telah menerima bantuan diatas dalam keadaan sadar dengan kondisi barang bantuan yang di berikan “berfungsi dengan baik dan lengkap”. Demikian berita acara ini dibuat untuk digunakan sebagaimana mestinya.';
-  const pCloseLines = doc.splitTextToSize(pClose, PRINTABLE_WIDTH_MM) as string[];
+  // Pernyataan 4 poin bernomor
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
+  doc.setFontSize(preset.bodyFontSize);
   doc.setTextColor(15, 23, 42);
-  doc.text(pClose, left, cursorY, {
+  const pWillLines = doc.splitTextToSize(pWill, PRINTABLE_WIDTH_MM) as string[];
+  doc.text(pWill, left, cursorY, {
     maxWidth: PRINTABLE_WIDTH_MM,
     align: 'justify',
-    lineHeightFactor: bodyLineFactor,
+    lineHeightFactor: preset.lineHeightFactor,
   });
-  cursorY += pCloseLines.length * bodyLineStep + (isCompactBast ? 7.5 : 10.5);
+  cursorY += pWillLines.length * bodyStep + 1.4 * gs;
 
-  // 8. BLOK TANDA TANGAN (#12, #13 + MATERAI RP. 10.000)
-  const sigBlockHeight = isCompactBast ? 46 : 52;
-  if (cursorY + sigBlockHeight > F4_PAPER_HEIGHT_MM - F4_PDF_MARGINS.bottom) {
-    doc.addPage([F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM], 'portrait');
-    cursorY = F4_PDF_MARGINS.top + 8;
-  }
+  statementPoints.forEach((pt, idx) => {
+    doc.text(`${idx + 1}.`, numColX, cursorY);
+    const ptLines = doc.splitTextToSize(pt, pointMaxW) as string[];
+    doc.text(pt, pointTextX, cursorY, {
+      maxWidth: pointMaxW,
+      align: 'justify',
+      lineHeightFactor: preset.lineHeightFactor,
+    });
+    cursorY += ptLines.length * bodyStep + 0.8 * gs;
+  });
+  cursorY += 2.6 * gs;
 
-  const leftSigX = left + PRINTABLE_WIDTH_MM * 0.24;
-  const rightSigX = left + PRINTABLE_WIDTH_MM * 0.78;
-  const sigColMaxW = PRINTABLE_WIDTH_MM * 0.44;
+  // Paragraf Penutup
+  const pCloseLines = doc.splitTextToSize(pClose, PRINTABLE_WIDTH_MM) as string[];
+  const maxCloseY =
+    bottomEdgeY - sigMetrics.totalSigH - sigMetrics.sigGap - pCloseLines.length * bodyStep;
+  const closeY = Math.min(cursorY, Math.max(middleStartBaseY + 30, maxCloseY));
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.7);
-  doc.text('PIHAK PERTAMA', leftSigX, cursorY, { align: 'center' });
-  doc.text('PIHAK KEDUA', rightSigX, cursorY, { align: 'center' });
+  doc.text(pClose, left, closeY, {
+    maxWidth: PRINTABLE_WIDTH_MM,
+    align: 'justify',
+    lineHeightFactor: preset.lineHeightFactor,
+  });
+
+  // 2. BLOK TANGGAL & TANDA TANGAN 2 KOLOM MENGIKUTI BARIS AKHIR
+  const pCloseEndY = closeY + pCloseLines.length * bodyStep;
+  const dateY = Math.min(
+    pCloseEndY + sigMetrics.sigGap,
+    bottomEdgeY - sigMetrics.totalSigH
+  );
+  const mengetahuiY = dateY + sigMetrics.dateRowH;
+  const jabTopY = mengetahuiY + sigMetrics.mengetahuiRowH;
+  const nameY = jabTopY + sigMetrics.jabH + sigMetrics.signingSpaceH;
+  const nipY = nameY + sigMetrics.nipOffset;
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9.4);
-  const leftJabLines = doc.splitTextToSize(
-    bastConfig.pejabatJabatan?.trim() || DEFAULT_BAST_TEMPLATE.pejabatJabatan,
-    sigColMaxW
-  ) as string[];
-  doc.text(leftJabLines, leftSigX, cursorY + 5.2, { align: 'center' });
-  doc.text('Keluarga Penerima Manfaat (KPM)', rightSigX, cursorY + 5.2, { align: 'center' });
+  doc.setTextColor(15, 23, 42);
+  doc.text(`${tempat}, ${tanggalText}`, centerX, dateY, { align: 'center' });
 
-  // Kotak Materai Rp. 10.000 di antara dua tanda tangan
-  const materaiW = 16.5;
-  const materaiH = 10.5;
-  const materaiX = left + PRINTABLE_WIDTH_MM * 0.54 - materaiW / 2;
-  const materaiY = cursorY + (isCompactBast ? 13 : 15);
-  doc.setDrawColor(15, 23, 42);
-  doc.setLineWidth(0.28);
-  doc.rect(materaiX, materaiY, materaiW, materaiH);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(6.8);
-  doc.text('MATERAI', materaiX + materaiW / 2, materaiY + 4.3, { align: 'center' });
-  doc.text('RP. 10.000', materaiX + materaiW / 2, materaiY + 7.8, { align: 'center' });
+  doc.text('MENGETAHUI', leftSigX, mengetahuiY, { align: 'center' });
+  doc.text('YANG MENYATAKAN', rightSigX, mengetahuiY, { align: 'center' });
 
-  // Jika tersedia tanda tangan digital KPM, tampilkan di atas garis tanda tangan PIHAK KEDUA
-  if (loadedSig) {
-    const boxW = 42;
-    const boxH = 16;
-    const imgRatio = loadedSig.width / Math.max(loadedSig.height, 1);
-    let drawW = boxW;
-    let drawH = boxH;
-    if (imgRatio > boxW / boxH) {
-      drawH = boxW / imgRatio;
-    } else {
-      drawW = boxH * imgRatio;
-    }
-    doc.addImage(
-      loadedSig.dataUrl,
-      loadedSig.format,
-      rightSigX - drawW / 2,
-      cursorY + (isCompactBast ? 9.5 : 11.5) + (boxH - drawH) / 2,
-      drawW,
-      drawH
-    );
-  }
+  doc.setFontSize(9.2);
+  doc.text(leftJabLines, leftSigX, jabTopY, { align: 'center' });
+  doc.text('Keluarga Penerima Manfaat (KPM)', rightSigX, jabTopY, { align: 'center' });
 
-  const nameY = cursorY + (isCompactBast ? 29.5 : 34.5);
-  const pejabatNama = bastConfig.pejabatNama?.trim() || DEFAULT_BAST_TEMPLATE.pejabatNama;
+  // Kiri: Pejabat (bold) + NIP & Kanan: Nama KPM, dengan garis tanda tangan simetris sejajar
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.8);
-  doc.text(pejabatNama, leftSigX, nameY, { align: 'center' });
+  doc.setFontSize(9.4);
   const pejabatW = doc.getTextWidth(pejabatNama);
-  doc.setLineWidth(0.32);
-  doc.line(leftSigX - pejabatW / 2, nameY + 0.8, leftSigX + pejabatW / 2, nameY + 0.8);
+  doc.text(pejabatNama, leftSigX, nameY, { align: 'center' });
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9.4);
-  doc.text(
-    bastConfig.pejabatPangkat?.trim() || DEFAULT_BAST_TEMPLATE.pejabatPangkat,
-    leftSigX,
-    nameY + 5.2,
-    { align: 'center' }
+  const kpmW = doc.getTextWidth(kpmFullName);
+  doc.text(kpmFullName, rightSigX, nameY, { align: 'center' });
+
+  const sharedSptjmLineW = Math.max(
+    46,
+    Math.min(sigColMaxW * 0.9, Math.max(pejabatW, kpmW) + 12)
   );
-  doc.text(
-    bastConfig.pejabatNip?.trim() || DEFAULT_BAST_TEMPLATE.pejabatNip,
-    leftSigX,
-    nameY + 9.8,
-    { align: 'center' }
+  const sigLineY = nameY + 1.0;
+  doc.setDrawColor(15, 23, 42);
+  doc.setLineWidth(0.32);
+  doc.line(
+    leftSigX - sharedSptjmLineW / 2,
+    sigLineY,
+    leftSigX + sharedSptjmLineW / 2,
+    sigLineY
+  );
+  doc.line(
+    rightSigX - sharedSptjmLineW / 2,
+    sigLineY,
+    rightSigX + sharedSptjmLineW / 2,
+    sigLineY
   );
 
-  // Garis tanda tangan & nama lengkap PIHAK KEDUA (#13)
-  doc.setLineWidth(0.3);
-  doc.line(rightSigX - 28, nameY - 4.4, rightSigX + 28, nameY - 4.4);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.8);
-  doc.text(kpmFullName, rightSigX, nameY, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.2);
+  doc.text(pejabatNip, leftSigX, nipY, { align: 'center' });
 }
 
 export interface ExportKpmBastPdfOptions {
@@ -2340,6 +3182,56 @@ export async function exportKpmBastToPdf({
   });
 
   const safeName = `BAST_${record.tahun || 'KPM'}_${record.nama}_${record.registerCode || 'kpm'}`;
+  return saveOrOpenPdfDocument(doc, safeName);
+}
+
+export interface ExportKpmSptjmPdfOptions {
+  record: KpmRecord;
+  allRecords?: KpmRecord[];
+  proposals: ProposalRecord[];
+  items: ItemBantuan[];
+  wilayahList?: WilayahKabKota[];
+  proposalSlotMap?: ProposalSlotMap;
+  reportTemplate?: ReportTemplateConfig;
+  bastConfig?: BastTemplateConfig;
+  sptjmConfig?: SptjmTemplateConfig;
+}
+
+export async function exportKpmSptjmToPdf({
+  record,
+  allRecords,
+  proposals,
+  items,
+  wilayahList = INITIAL_WILAYAH_LIST,
+  proposalSlotMap = {},
+  reportTemplate,
+  bastConfig = DEFAULT_BAST_TEMPLATE,
+  sptjmConfig = DEFAULT_SPTJM_TEMPLATE,
+}: ExportKpmSptjmPdfOptions): Promise<{ savedFileName: string; openedNative: boolean }> {
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: [F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM],
+    compress: true,
+  }) as AutoTableDoc;
+
+  const kopConfig = resolveEffectiveBastConfig(bastConfig, undefined, undefined, reportTemplate);
+  const logoUrl = (kopConfig.kopLogoDataUrl || '').trim() || DEFAULT_KOP_LOGO_URL;
+  const loadedKopLogo = logoUrl ? await loadSingleImageForPdf(logoUrl) : null;
+
+  renderSingleSptjmPage(doc, {
+    record,
+    allRecords: allRecords && allRecords.length > 0 ? allRecords : [record],
+    proposals,
+    items,
+    wilayahList,
+    proposalSlotMap,
+    kopConfig,
+    sptjmConfig,
+    loadedKopLogo,
+  });
+
+  const safeName = `SPTJM_${record.tahun || 'KPM'}_${record.nama}_${record.registerCode || 'kpm'}`;
   return saveOrOpenPdfDocument(doc, safeName);
 }
 
@@ -2443,6 +3335,85 @@ export async function exportKpmBastBulkToPdf({
   }
 
   const resolvedName = fileName || `BAST_Bulk_${sortedRecords.length}_KPM`;
+  const res = await saveOrOpenPdfDocument(doc, resolvedName);
+  return { ...res, count: sortedRecords.length };
+}
+
+export interface ExportKpmSptjmBulkPdfOptions {
+  records: KpmRecord[];
+  allRecords?: KpmRecord[];
+  proposals: ProposalRecord[];
+  items: ItemBantuan[];
+  wilayahList?: WilayahKabKota[];
+  proposalSlotMap?: ProposalSlotMap;
+  reportTemplate?: ReportTemplateConfig;
+  bastConfig?: BastTemplateConfig;
+  sptjmConfig?: SptjmTemplateConfig;
+  fileName?: string;
+}
+
+export async function exportKpmSptjmBulkToPdf({
+  records,
+  allRecords,
+  proposals,
+  items,
+  wilayahList = INITIAL_WILAYAH_LIST,
+  proposalSlotMap = {},
+  reportTemplate,
+  bastConfig = DEFAULT_BAST_TEMPLATE,
+  sptjmConfig = DEFAULT_SPTJM_TEMPLATE,
+  fileName,
+}: ExportKpmSptjmBulkPdfOptions): Promise<{ savedFileName: string; openedNative: boolean; count: number }> {
+  if (records.length === 0) {
+    throw new Error('Tidak ada data KPM yang memenuhi filter untuk dicetak SPTJM.');
+  }
+
+  const pool = allRecords && allRecords.length > 0 ? allRecords : records;
+  const sortedRecords = [...records].sort((a, b) => {
+    const yearCmp = (a.tahun || '').localeCompare(b.tahun || '');
+    if (yearCmp !== 0) return yearCmp;
+    const propCmp = (a.proposal || '').localeCompare(b.proposal || '', 'id');
+    if (propCmp !== 0) return propCmp;
+    const slotA =
+      getKpmSlotNumberInProposal(a, pool, proposals, items, wilayahList, proposalSlotMap) ??
+      getAbsenSeq(a.registerCode);
+    const slotB =
+      getKpmSlotNumberInProposal(b, pool, proposals, items, wilayahList, proposalSlotMap) ??
+      getAbsenSeq(b.registerCode);
+    if (slotA !== slotB) return slotA - slotB;
+    return a.nama.localeCompare(b.nama, 'id');
+  });
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: [F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM],
+    compress: true,
+  }) as AutoTableDoc;
+
+  const kopConfig = resolveEffectiveBastConfig(bastConfig, undefined, undefined, reportTemplate);
+  const logoUrl = (kopConfig.kopLogoDataUrl || '').trim() || DEFAULT_KOP_LOGO_URL;
+  const loadedKopLogo = logoUrl ? await loadSingleImageForPdf(logoUrl) : null;
+
+  for (let i = 0; i < sortedRecords.length; i += 1) {
+    const rec = sortedRecords[i];
+    if (i > 0) {
+      doc.addPage([F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM], 'portrait');
+    }
+    renderSingleSptjmPage(doc, {
+      record: rec,
+      allRecords: pool,
+      proposals,
+      items,
+      wilayahList,
+      proposalSlotMap,
+      kopConfig,
+      sptjmConfig,
+      loadedKopLogo,
+    });
+  }
+
+  const resolvedName = fileName || `SPTJM_Bulk_${sortedRecords.length}_KPM`;
   const res = await saveOrOpenPdfDocument(doc, resolvedName);
   return { ...res, count: sortedRecords.length };
 }

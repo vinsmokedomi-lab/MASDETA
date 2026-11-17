@@ -82,6 +82,7 @@ interface DashboardViewProps {
   onOpenArsip?: () => void;
   onOpenDatabaseKpm?: () => void;
   onOpenDtsen?: () => void;
+  onOpenPengelolaList?: () => void;
 }
 
 export function DashboardView({
@@ -123,6 +124,7 @@ export function DashboardView({
   onOpenArsip,
   onOpenDatabaseKpm,
   onOpenDtsen,
+  onOpenPengelolaList,
 }: DashboardViewProps) {
   const [openHeaderMenu, setOpenHeaderMenu] = useState<'none' | 'notifications' | 'profile'>('none');
   const [dismissedPendingBellCount, setDismissedPendingBellCount] = useState(0);
@@ -790,7 +792,7 @@ export function DashboardView({
               <div>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                    Total Calon KPM
+                    Total KPM
                   </span>
                   <span className="text-xs font-semibold text-teal-300 tabular-nums">
                     {acceptedPct}% Terverifikasi
@@ -1262,7 +1264,7 @@ export function DashboardView({
                     <p className="mt-0.5 truncate text-[11px] text-slate-500 tabular-nums">
                       {incompleteQuotaProposals.length === 1
                         ? `Terisi ${incompleteQuotaProposals[0].totalKpm} dari ${incompleteQuotaProposals[0].target} kuota KPM`
-                        : 'Kuota calon KPM masih di bawah target'}
+                        : 'Kuota KPM masih di bawah target'}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-1.5">
@@ -1431,7 +1433,7 @@ export function DashboardView({
                 Belum ada usulan paket pada {yearDisplayLabel}
               </p>
               <p className="mt-1 text-[11px] text-slate-500">
-                Daftarkan calon KPM lewat tombol + di bawah.
+                Daftarkan KPM lewat tombol + di bawah.
               </p>
             </div>
           ) : (
@@ -1470,9 +1472,20 @@ export function DashboardView({
                   <Users className="h-4 w-4 text-teal-700" />
                   <h2 className="text-sm font-bold text-slate-900">Pengelola Teraktif</h2>
                 </div>
-                <span className="text-xs text-slate-500 tabular-nums">
-                  {pengelolaBreakdown.totalCoordinators} pengelola
-                </span>
+                {onOpenPengelolaList ? (
+                  <button
+                    type="button"
+                    onClick={onOpenPengelolaList}
+                    className="inline-flex items-center gap-0.5 text-xs font-semibold text-teal-700 hover:underline whitespace-nowrap"
+                  >
+                    <span>Semua</span>
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </button>
+                ) : (
+                  <span className="text-xs text-slate-500 tabular-nums">
+                    {pengelolaBreakdown.totalCoordinators} pengelola
+                  </span>
+                )}
               </div>
               <div className="divide-y divide-slate-100">
                 {pengelolaBreakdown.top.map((row) => {

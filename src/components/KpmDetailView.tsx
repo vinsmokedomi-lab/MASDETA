@@ -1,4 +1,4 @@
-import { ChangeEvent, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Archive,
@@ -46,6 +46,7 @@ import {
   CouponPrintConfig,
   DEFAULT_BAST_TEMPLATE,
   DEFAULT_COUPON_CONFIG,
+  DEFAULT_SPTJM_TEMPLATE,
   InternalUser,
   ItemBantuan,
   KpmAuditLogEntry,
@@ -60,6 +61,7 @@ import {
   SharedKpmCard,
   SingleDocumentKey,
   SlotRemovalMode,
+  SptjmTemplateConfig,
   ValidationStatus,
   WilayahKabKota,
 } from '../types/kpm';
@@ -80,13 +82,19 @@ import {
   uploadImageDocumentToDrive,
 } from '../utils/imageProcessor';
 import {
+  SPTJM_DAY_OPTIONS,
   exportKpmBastToPdf,
+  exportKpmSptjmToPdf,
   exportKuponPdf,
   exportSingleKpmToPdf,
   formatBastProposalLocation,
+  formatIndonesianDDMonthYYYY,
   formatIndonesianDateWords,
+  formatSptjmFullDate,
+  getSptjmAutoDayFromIso,
   resolveCouponScheduleForRecord,
   resolveEffectiveBastConfig,
+  resolveQrBaseUrlPreview,
 } from '../utils/pdfExporter';
 import { openCekBansosWithNik } from '../services/cekBansos';
 import { isNativeAppPlatform, useIsDesktopWeb } from '../utils/platform';
@@ -139,6 +147,8 @@ interface KpmDetailViewProps {
   onSaveCouponConfig?: (next: CouponPrintConfig) => void;
   bastTemplate?: BastTemplateConfig;
   onSaveBastTemplate?: (next: BastTemplateConfig) => void;
+  sptjmTemplate?: SptjmTemplateConfig;
+  onSaveSptjmTemplate?: (next: SptjmTemplateConfig) => void;
   proposalBastMap?: ProposalBastMap;
   onSaveProposalBastConfig?: (
     proposalId: string,
@@ -184,6 +194,8 @@ export function KpmDetailView({
   onSaveCouponConfig,
   bastTemplate,
   onSaveBastTemplate,
+  sptjmTemplate,
+  onSaveSptjmTemplate,
   proposalBastMap = {},
   onSaveProposalBastConfig,
   onSaveBast,
@@ -200,6 +212,7 @@ export function KpmDetailView({
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const [isDownloadingKuponPdf, setIsDownloadingKuponPdf] = useState(false);
   const [isDownloadingBastPdf, setIsDownloadingBastPdf] = useState(false);
+  const [isDownloadingSptjmPdf, setIsDownloadingSptjmPdf] = useState(false);
   const [isKuponModalOpen, setIsKuponModalOpen] = useState(false);
   const [couponDraft, setCouponDraft] = useState<CouponPrintConfig>(
     () => couponConfig ?? DEFAULT_COUPON_CONFIG
@@ -211,6 +224,11 @@ export function KpmDetailView({
     () => bastTemplate ?? DEFAULT_BAST_TEMPLATE
   );
   const [saveBastDefault, setSaveBastDefault] = useState(true);
+  const [isSptjmModalOpen, setIsSptjmModalOpen] = useState(false);
+  const [sptjmDraft, setSptjmDraft] = useState<SptjmTemplateConfig>(
+    () => sptjmTemplate ?? DEFAULT_SPTJM_TEMPLATE
+  );
+  const [saveSptjmDefault, setSaveSptjmDefault] = useState(true);
   const [isQrCardOpen, setIsQrCardOpen] = useState(false);
   const [isSignatureOpen, setIsSignatureOpen] = useState(false);
   const [isProposalPickerOpen, setIsProposalPickerOpen] = useState(false);
@@ -233,7 +251,37 @@ export function KpmDetailView({
     doc: KpmDocumentFile;
   } | null>(null);
   const detailFileInputRef = useRef<HTMLInputElement>(null);
+  const heroCardRef = useRef<HTMLElement | null>(null);
+  const [isHeroScrolledOut, setIsHeroScrolledOut] = useState(false);
   const [cekBansosStatus, setCekBansosStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isDesktopWeb) {
+      setIsHeroScrolledOut(false);
+      return;
+    }
+    const target = heroCardRef.current;
+    if (!target || typeof IntersectionObserver === 'undefined') {
+      setIsHeroScrolledOut(false);
+      return;
+    }
+    setIsHeroScrolledOut(false);
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (!entry) return;
+        const scrolledPastTop =
+          !entry.isIntersecting && entry.boundingClientRect.bottom < 72;
+        setIsHeroScrolledOut(scrolledPastTop);
+      },
+      {
+        rootMargin: '-64px 0px 0px 0px',
+        threshold: 0,
+      }
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [record.id, isDesktopWeb]);
 
   const handleCheckNikAtKemensos = async () => {
     try {
@@ -649,6 +697,7 @@ export function KpmDetailView({
       jadwal: resolved.jadwal,
       lokasi: resolved.lokasi,
       footerText: resolved.footerText,
+      qrBaseUrl: fallback.qrBaseUrl || '',
     });
     setMatchedKuponScheduleTitle(resolved.matchedSchedule?.title || null);
     setSaveCouponDefault(!resolved.matchedSchedule);
@@ -741,6 +790,57 @@ export function KpmDetailView({
     }
   };
 
+  const handleOpenSptjmModal = () => {
+    setSptjmDraft({
+      ...DEFAULT_SPTJM_TEMPLATE,
+      ...(sptjmTemplate || {}),
+    });
+    setSaveSptjmDefault(true);
+    setIsSptjmModalOpen(true);
+  };
+
+  const handleDownloadSptjmPdf = async () => {
+    if (isDownloadingSptjmPdf) return;
+    setPdfNotice(null);
+    setIsDownloadingSptjmPdf(true);
+    try {
+      if (saveSptjmDefault && onSaveSptjmTemplate) {
+        onSaveSptjmTemplate(sptjmDraft);
+      }
+      const effectiveKopBast = resolveEffectiveBastConfig(
+        bastTemplate,
+        proposalBastMap,
+        matchingProposal?.id,
+        reportTemplate
+      );
+      const res = await exportKpmSptjmToPdf({
+        record,
+        allRecords,
+        proposals,
+        items,
+        wilayahList,
+        proposalSlotMap,
+        reportTemplate,
+        bastConfig: effectiveKopBast,
+        sptjmConfig: sptjmDraft,
+      });
+      setIsSptjmModalOpen(false);
+      setPdfNotice({
+        type: 'success',
+        message: res.openedNative
+          ? `SPTJM "${res.savedFileName}" berhasil dibuat dan dibuka.`
+          : `SPTJM "${res.savedFileName}" berhasil diunduh.`,
+      });
+    } catch (err) {
+      setPdfNotice({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Gagal mencetak PDF SPTJM.',
+      });
+    } finally {
+      setIsDownloadingSptjmPdf(false);
+    }
+  };
+
   const lockedBannerBlock = isProposalLocked ? (
     <div className="flex items-center gap-2 rounded-2xl border border-slate-300 bg-slate-100 px-3.5 py-2.5 text-xs font-medium text-slate-700">
       <Lock className="h-4 w-4 shrink-0 text-slate-700" />
@@ -754,7 +854,10 @@ export function KpmDetailView({
   const identityAndDupBlock = (
     <>
       {/* Hero Identity Card: Foto, Nama, Item, Proposal, Nomor HP */}
-      <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xs">
+      <section
+        ref={heroCardRef}
+        className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xs"
+      >
           {/* Card Top Bar */}
           <div className="flex items-center justify-between gap-2 border-b border-slate-100 bg-slate-50/70 px-4 py-2.5">
             <p className="truncate text-xs font-medium text-teal-800 tabular-nums">
@@ -1184,7 +1287,7 @@ export function KpmDetailView({
           )}
         </section>
 
-        {/* Tanda Terima Digital (BAST) */}
+        {/* Tanda Terima Digital (BAST) & Berkas Penyerahan */}
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
           <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
             <div className="flex items-start gap-2.5 min-w-0">
@@ -1192,9 +1295,9 @@ export function KpmDetailView({
                 <PenTool className="h-4 w-4" />
               </div>
               <div className="min-w-0">
-                <h3 className="text-sm font-bold text-slate-900">Tanda Terima Digital (BAST)</h3>
+                <h3 className="text-sm font-bold text-slate-900">Tanda Terima &amp; Berkas Penyerahan</h3>
                 <p className="text-xs text-slate-500">
-                  Berita Acara Serah Terima bantuan beserta tanda tangan &amp; koordinat GPS
+                  Tanda tangan BAST lapangan serta cetak PDF BAST &amp; SPTJM ukuran F4
                 </p>
               </div>
             </div>
@@ -1251,39 +1354,76 @@ export function KpmDetailView({
               </p>
             )}
 
-            <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-2">
               {onSaveBast && (
                 <button
                   type="button"
                   disabled={isProposalLocked || !canUpdate}
                   onClick={() => setIsSignatureOpen(true)}
-                  className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <PenTool className="h-3.5 w-3.5 shrink-0" />
                   <span className="truncate">
-                    {record.bast ? 'Ulangi Tanda Tangan' : 'Tanda Tangan BAST'}
+                    {record.bast ? 'Ulangi Tanda Tangan BAST' : 'Tanda Tangan BAST'}
                   </span>
                 </button>
               )}
 
-              <button
-                type="button"
-                disabled={isDownloadingBastPdf}
-                onClick={handleOpenBastModal}
-                className={`inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50/70 px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100 disabled:opacity-60 ${
-                  onSaveBast ? '' : 'col-span-2'
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  disabled={isDownloadingBastPdf}
+                  onClick={handleOpenBastModal}
+                  className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50/70 px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100 disabled:opacity-60"
+                >
+                  {isDownloadingBastPdf ? (
+                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                  ) : (
+                    <FileCheck2 className="h-3.5 w-3.5 shrink-0" />
+                  )}
+                  <span className="truncate">
+                    {isDownloadingBastPdf ? 'Mencetak...' : 'Cetak BAST PDF'}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isDownloadingSptjmPdf}
+                  onClick={handleOpenSptjmModal}
+                  className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-800 transition-colors hover:bg-slate-100 disabled:opacity-60"
+                >
+                  {isDownloadingSptjmPdf ? (
+                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                  ) : (
+                    <FileText className="h-3.5 w-3.5 shrink-0 text-teal-700" />
+                  )}
+                  <span className="truncate">
+                    {isDownloadingSptjmPdf ? 'Mencetak...' : 'Cetak SPTJM PDF'}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {pdfNotice && (
+              <div
+                role="status"
+                className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-xs ${
+                  pdfNotice.type === 'success'
+                    ? 'border-teal-200 bg-teal-50 text-teal-900'
+                    : 'border-rose-200 bg-rose-50 text-rose-900'
                 }`}
               >
-                {isDownloadingBastPdf ? (
-                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
-                ) : (
-                  <FileCheck2 className="h-3.5 w-3.5 shrink-0" />
-                )}
-                <span className="truncate">
-                  {isDownloadingBastPdf ? 'Mencetak...' : 'Cetak BAST PDF'}
-                </span>
-              </button>
-            </div>
+                <span className="font-medium leading-snug">{pdfNotice.message}</span>
+                <button
+                  type="button"
+                  onClick={() => setPdfNotice(null)}
+                  className="shrink-0 rounded p-0.5 text-current/70 hover:text-current"
+                  aria-label="Tutup notifikasi"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
           </div>
         </section>
     </>
@@ -1781,7 +1921,7 @@ export function KpmDetailView({
     <div className="min-h-screen pb-24">
       {/* Sub-Screen Header (Android View: APK & Phone Browser) */}
       {!isDesktopWeb && (
-      <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
+      <header className="sticky top-0 z-20 relative flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
         <div className="flex min-w-0 items-center gap-1.5">
           <button
             type="button"
@@ -1791,7 +1931,7 @@ export function KpmDetailView({
           >
             <ArrowLeft className="h-5 w-5" />
           </button>
-          <h1 className="truncate text-base font-bold text-slate-900">Detail Calon KPM</h1>
+          <h1 className="truncate text-base font-bold text-slate-900">Detail KPM</h1>
         </div>
 
         {canDelete && (
@@ -1804,6 +1944,39 @@ export function KpmDetailView({
             title={isProposalLocked ? 'Proposal Terkunci' : 'Hapus Data KPM'}
           >
             <Trash2 className="h-4.5 w-4.5" />
+          </button>
+        )}
+
+        {isHeroScrolledOut && (
+          <button
+            type="button"
+            onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+            aria-label={`Kembali ke ringkasan ${record.nama}`}
+            className="absolute top-full left-0 right-0 flex w-full items-center gap-2.5 border-b border-slate-200 bg-white/95 px-3 py-2 text-left shadow-xs backdrop-blur-md transition-colors hover:bg-slate-50 active:bg-slate-100"
+          >
+            {heroPhotoDoc ? (
+              <span className="relative h-8 w-7 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
+                <DriveImage
+                  doc={heroPhotoDoc}
+                  alt={record.nama}
+                  className="h-full w-full object-cover"
+                />
+              </span>
+            ) : (
+              <span className="flex h-8 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-100 text-slate-400">
+                <User className="h-4 w-4" />
+              </span>
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center justify-between gap-2">
+                <p className="truncate text-xs font-bold text-slate-900">{record.nama}</p>
+                <div className="shrink-0">{renderStatusIndicator(record.validasi)}</div>
+              </div>
+              <p className="truncate text-[11px] font-medium text-slate-500 tabular-nums">
+                {record.registerCode} · {itemName} ·{' '}
+                {!isStandalone && record.proposal ? record.proposal : standaloneContainerLabel}
+              </p>
+            </div>
           </button>
         )}
       </header>
@@ -1823,7 +1996,7 @@ export function KpmDetailView({
                 <span>Kembali</span>
               </button>
               <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
-                Detail Calon KPM
+                Detail KPM
               </h1>
             </div>
 
@@ -1843,7 +2016,7 @@ export function KpmDetailView({
           </div>
           {lockedBannerBlock}
           <div className="grid grid-cols-12 items-start gap-5">
-            <div className="col-span-5 space-y-5">
+            <div className="col-span-5 space-y-5 md:sticky md:top-6 self-start md:max-h-[calc(100vh-3rem)] md:overflow-y-auto md:pr-1">
               {identityAndDupBlock}
               {pengajuanAndDomisiliBlock}
             </div>
@@ -2225,6 +2398,53 @@ export function KpmDetailView({
                   className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
                 />
               </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600">
+                  URL Web Publik untuk Scan QR (Opsional)
+                </label>
+                <input
+                  type="url"
+                  value={couponDraft.qrBaseUrl || ''}
+                  onChange={(e) =>
+                    setCouponDraft((prev) => ({ ...prev, qrBaseUrl: e.target.value }))
+                  }
+                  placeholder="https://vinsmokedomi-lab.github.io/MASDETA"
+                  className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                />
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCouponDraft((prev) => ({
+                        ...prev,
+                        qrBaseUrl: 'https://vinsmokedomi-lab.github.io/MASDETA',
+                      }))
+                    }
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-medium text-slate-700 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-800"
+                  >
+                    GitHub Pages (Gratis)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCouponDraft((prev) => ({
+                        ...prev,
+                        qrBaseUrl: 'https://masdeta.pages.dev',
+                      }))
+                    }
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-medium text-slate-700 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-800"
+                  >
+                    Cloudflare Pages
+                  </button>
+                </div>
+                <p className="mt-1 text-[10px] text-slate-500">
+                  Link QR:{' '}
+                  <span className="font-mono text-slate-700">
+                    {resolveQrBaseUrlPreview(couponDraft.qrBaseUrl).baseUrl}/?kpm=...
+                  </span>{' '}
+                  (bebas login, pastikan domain sudah terpublikasi)
+                </p>
+              </div>
             </div>
 
             {onSaveCouponConfig && (
@@ -2442,6 +2662,189 @@ export function KpmDetailView({
                 <Check className="h-4 w-4" />
               )}
               <span>{isDownloadingBastPdf ? 'Menyiapkan BAST PDF...' : 'Download BAST PDF F4'}</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Single SPTJM Print Modal */}
+      {isSptjmModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-[1px]"
+          onClick={() => !isDownloadingSptjmPdf && setIsSptjmModalOpen(false)}
+        >
+          <div
+            className="max-h-[90vh] w-full max-w-md space-y-3 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Cetak SPTJM PDF F4</h3>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  {record.nama} · No. Bantuan{' '}
+                  {String(currentSlotNumber || getAbsenSeq(record.registerCode) || 1).padStart(
+                    2,
+                    '0'
+                  )}{' '}
+                  · 1 Halaman F4
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={isDownloadingSptjmPdf}
+                onClick={() => setIsSptjmModalOpen(false)}
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-700">
+              <p>
+                <span className="font-semibold text-slate-900">Lokasi:</span>{' '}
+                {formatBastProposalLocation(record, proposals, wilayahList)}
+              </p>
+              <p className="mt-0.5">
+                <span className="font-semibold text-slate-900">Tempat &amp; Tanggal:</span>{' '}
+                {(sptjmDraft.tempat || DEFAULT_SPTJM_TEMPLATE.tempat).trim()},{' '}
+                {formatSptjmFullDate(sptjmDraft)}
+              </p>
+            </div>
+
+            <div className="space-y-2.5">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600">
+                  Tempat Penandatanganan
+                </label>
+                <input
+                  type="text"
+                  value={sptjmDraft.tempat}
+                  onChange={(e) =>
+                    setSptjmDraft((prev) => ({ ...prev, tempat: e.target.value }))
+                  }
+                  placeholder="Pontianak"
+                  className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600">
+                    1. Pilih Hari
+                  </label>
+                  <select
+                    value={sptjmDraft.hari || ''}
+                    onChange={(e) =>
+                      setSptjmDraft((prev) => ({
+                        ...prev,
+                        hari: e.target.value,
+                        tanggalCustomText: '',
+                      }))
+                    }
+                    className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 bg-white px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                  >
+                    <option value="">
+                      Otomatis ({getSptjmAutoDayFromIso(sptjmDraft.tanggalIso)})
+                    </option>
+                    {SPTJM_DAY_OPTIONS.map((day) => (
+                      <option key={day} value={day}>
+                        {day}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600">
+                    2. Pilih Tanggal (00 Bulan 0000)
+                  </label>
+                  <input
+                    type="date"
+                    value={sptjmDraft.tanggalIso}
+                    onChange={(e) =>
+                      setSptjmDraft((prev) => ({
+                        ...prev,
+                        tanggalIso: e.target.value,
+                        tanggalCustomText: '',
+                      }))
+                    }
+                    className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                  />
+                  <p className="mt-0.5 text-[10px] text-slate-500 tabular-nums">
+                    Format: {formatIndonesianDDMonthYYYY(sptjmDraft.tanggalIso)}
+                  </p>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600">
+                  Jabatan Pejabat (Mengetahui)
+                </label>
+                <input
+                  type="text"
+                  value={sptjmDraft.pejabatJabatan}
+                  onChange={(e) =>
+                    setSptjmDraft((prev) => ({ ...prev, pejabatJabatan: e.target.value }))
+                  }
+                  className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600">
+                    Nama Pejabat
+                  </label>
+                  <input
+                    type="text"
+                    value={sptjmDraft.pejabatNama}
+                    onChange={(e) =>
+                      setSptjmDraft((prev) => ({ ...prev, pejabatNama: e.target.value }))
+                    }
+                    className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600">
+                    NIP Pejabat
+                  </label>
+                  <input
+                    type="text"
+                    value={sptjmDraft.pejabatNip}
+                    onChange={(e) =>
+                      setSptjmDraft((prev) => ({ ...prev, pejabatNip: e.target.value }))
+                    }
+                    className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {onSaveSptjmTemplate ? (
+              <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={saveSptjmDefault}
+                  onChange={(e) => setSaveSptjmDefault(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-600"
+                />
+                <span>Simpan perubahan ini sebagai template SPTJM default</span>
+              </label>
+            ) : null}
+
+            <button
+              type="button"
+              disabled={isDownloadingSptjmPdf}
+              onClick={() => void handleDownloadSptjmPdf()}
+              className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-60"
+            >
+              {isDownloadingSptjmPdf ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Check className="h-4 w-4" />
+              )}
+              <span>
+                {isDownloadingSptjmPdf ? 'Menyiapkan SPTJM PDF...' : 'Download SPTJM PDF F4'}
+              </span>
             </button>
           </div>
         </div>

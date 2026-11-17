@@ -54,18 +54,28 @@ export const QrScannerLookupModal: React.FC<QrScannerLookupModalProps> = ({
     const prefixMatch = clean.match(/^MASDETA:(?:KPM|BAST):(.+)$/i);
     if (prefixMatch) {
       extracted = prefixMatch[1].trim();
-    } else if (/^https?:\/\//i.test(clean) || clean.includes('?')) {
+    } else if (/^https?:\/\//i.test(clean) || clean.includes('?') || clean.includes('/kpm/')) {
       try {
         const parsedUrl = new URL(clean, window.location.origin);
         const paramToken =
           parsedUrl.searchParams.get('kpm') || parsedUrl.searchParams.get('kpmQr');
         if (paramToken) {
           extracted = paramToken.trim();
+        } else {
+          const pathMatch = parsedUrl.pathname.match(/^\/kpm\/([^/]+)/i);
+          if (pathMatch) {
+            extracted = decodeURIComponent(pathMatch[1]).trim();
+          }
         }
       } catch {
         const qpMatch = clean.match(/[?&](?:kpm|kpmQr)=([^&#]+)/i);
         if (qpMatch) {
           extracted = decodeURIComponent(qpMatch[1]).trim();
+        } else {
+          const pathFallback = clean.match(/\/kpm\/([^/?#]+)/i);
+          if (pathFallback) {
+            extracted = decodeURIComponent(pathFallback[1]).trim();
+          }
         }
       }
     }

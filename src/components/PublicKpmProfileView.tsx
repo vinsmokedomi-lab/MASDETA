@@ -5,10 +5,7 @@ import {
   CheckCircle2,
   Clock,
   Download,
-  FileText,
   Loader2,
-  MapPin,
-  Package,
   ShieldCheck,
   User,
 } from 'lucide-react';
@@ -226,7 +223,7 @@ export function PublicKpmProfileView({
                 Verifikasi QR Kupon MASDETA
               </p>
               <h1 className="truncate text-sm font-bold text-slate-900">
-                Profil Data Calon KPM
+                Profil Data KPM
               </h1>
             </div>
           </div>
@@ -266,315 +263,269 @@ export function PublicKpmProfileView({
         )}
 
         {!loading && record && (
-          <>
-            {/* Hero Identity */}
-            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
-              <div className="flex items-center justify-between gap-2 border-b border-slate-100 bg-slate-50 px-4 py-2.5">
-                <span className="text-xs font-bold text-teal-800 tabular-nums">
-                  {record.registerCode || record.id} · Tahun {record.tahun || 'Tanpa Tahun'}
-                </span>
-                <span
-                  className={`inline-flex items-center gap-1 text-xs font-bold ${
-                    record.validasi === 'accepted'
-                      ? 'text-teal-700'
-                      : record.validasi === 'rejected'
-                        ? 'text-rose-700'
-                        : 'text-amber-700'
-                  }`}
-                >
-                  {formatValidationLabel(record.validasi)}
-                </span>
-              </div>
-
-              <div className="p-4 flex items-start gap-3.5">
-                {heroPhoto ? (
-                  <button
-                    type="button"
-                    onClick={() => setPreviewDoc({ file: heroPhoto, title: record.nama })}
-                    className="relative h-24 w-20 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100"
-                  >
-                    <DriveImage
-                      doc={heroPhoto}
-                      alt={record.nama}
-                      className="h-full w-full object-cover"
-                    />
-                  </button>
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
+            {/* Bar Aksi Atas */}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-4 py-3">
+              <p className="text-xs font-medium text-slate-600">
+                Hasil verifikasi resmi QR Kupon · Data terhubung MASDETA
+              </p>
+              <button
+                type="button"
+                disabled={isDownloadingPdf}
+                onClick={() => void handleDownloadPdf()}
+                className="inline-flex min-h-[40px] items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-60"
+              >
+                {isDownloadingPdf ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
-                  <div className="flex h-24 w-20 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-slate-400">
-                    <User className="h-8 w-8" />
-                  </div>
+                  <Download className="h-4 w-4" />
                 )}
-
-                <div className="min-w-0 flex-1 space-y-1">
-                  <h2 className="text-base font-bold text-slate-900 leading-snug">{record.nama}</h2>
-                  <p className="text-xs font-semibold text-teal-800 flex items-center gap-1.5">
-                    <Package className="h-3.5 w-3.5 shrink-0" />
-                    <span>
-                      {record.item
-                        ? `${record.item}${itemPkg?.name ? ` - ${itemPkg.name}` : ''}`
-                        : '-'}
-                    </span>
-                  </p>
-                  <p className="text-xs text-slate-600 flex items-start gap-1.5">
-                    <FileText className="h-3.5 w-3.5 shrink-0 mt-0.5 text-slate-500" />
-                    <span>
-                      {record.proposal
-                        ? record.proposal
-                        : record.validasi === 'rejected'
-                          ? 'Standalone · Arsip Berkas Ditolak'
-                          : 'Standalone · Database KPM'}
-                    </span>
-                  </p>
-                  <p className="text-xs text-slate-600 flex items-start gap-1.5">
-                    <MapPin className="h-3.5 w-3.5 shrink-0 mt-0.5 text-slate-500" />
-                    <span>
-                      {[domicile?.kelurahan, domicile?.kecamatan, domicile?.kabKota]
-                        .filter(Boolean)
-                        .join(', ') || '-'}
-                    </span>
-                  </p>
-                </div>
-              </div>
-
-              <div className="border-t border-slate-100 px-4 py-3 bg-slate-50/70 space-y-2">
-                <button
-                  type="button"
-                  disabled={isDownloadingPdf}
-                  onClick={() => void handleDownloadPdf()}
-                  className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-60"
-                >
-                  {isDownloadingPdf ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Download className="h-4 w-4" />
-                  )}
-                  <span>
-                    {isDownloadingPdf ? 'Menyiapkan PDF...' : 'Download PDF Profil KPM (F4)'}
-                  </span>
-                </button>
-                {pdfMessage && (
-                  <p className="text-center text-[11px] font-medium text-teal-800">{pdfMessage}</p>
-                )}
-              </div>
-            </section>
-
-            {/* 01 Identitas & Domisili */}
-            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
-              <div className="border-b border-slate-100 px-4 py-3">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-teal-800">
-                  01 · Identitas &amp; Domisili
-                </h3>
-              </div>
-              <dl className="divide-y divide-slate-100 text-xs">
-                <div className="flex justify-between gap-4 px-4 py-2.5">
-                  <dt className="text-slate-500 shrink-0">Nama Lengkap</dt>
-                  <dd className="text-right font-semibold text-slate-900">{record.nama || '-'}</dd>
-                </div>
-                <div className="flex justify-between gap-4 px-4 py-2.5">
-                  <dt className="text-slate-500 shrink-0">NIK KTP</dt>
-                  <dd className="text-right font-medium text-slate-900 tabular-nums">
-                    {formatNikDisplay(record.nikKtp)}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-4 px-4 py-2.5">
-                  <dt className="text-slate-500 shrink-0">Nomor KK</dt>
-                  <dd className="text-right font-medium text-slate-900 tabular-nums">
-                    {formatNikDisplay(record.nikKk)}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-4 px-4 py-2.5">
-                  <dt className="text-slate-500 shrink-0">Pekerjaan</dt>
-                  <dd className="text-right font-medium text-slate-900">
-                    {record.pekerjaan || '-'}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-4 px-4 py-2.5">
-                  <dt className="text-slate-500 shrink-0">No. HP / WhatsApp</dt>
-                  <dd className="text-right font-medium text-slate-900 tabular-nums">
-                    {record.kontak || '-'}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-4 px-4 py-2.5">
-                  <dt className="text-slate-500 shrink-0">Alamat Lengkap</dt>
-                  <dd className="text-right font-medium text-slate-900">
-                    {record.alamat || '-'}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-4 px-4 py-2.5">
-                  <dt className="text-slate-500 shrink-0">RT / RW</dt>
-                  <dd className="text-right font-medium text-slate-900 tabular-nums">
-                    RT {record.rt || '-'} / RW {record.rw || '-'}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-4 px-4 py-2.5">
-                  <dt className="text-slate-500 shrink-0">Kelurahan / Desa</dt>
-                  <dd className="text-right font-medium text-slate-900">
-                    {domicile?.kelurahan || '-'}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-4 px-4 py-2.5">
-                  <dt className="text-slate-500 shrink-0">Kecamatan</dt>
-                  <dd className="text-right font-medium text-slate-900">
-                    {domicile?.kecamatan || '-'}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-4 px-4 py-2.5">
-                  <dt className="text-slate-500 shrink-0">Kabupaten / Kota</dt>
-                  <dd className="text-right font-medium text-slate-900">
-                    {domicile?.kabKota || '-'}
-                  </dd>
-                </div>
-              </dl>
-            </section>
-
-            {/* 02 Data Pengajuan & Bantuan */}
-            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
-              <div className="border-b border-slate-100 px-4 py-3">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-teal-800">
-                  02 · Data Pengajuan &amp; Bantuan
-                </h3>
-              </div>
-              <dl className="divide-y divide-slate-100 text-xs">
-                <div className="flex justify-between gap-4 px-4 py-2.5">
-                  <dt className="text-slate-500 shrink-0">Tahun</dt>
-                  <dd className="text-right font-medium text-slate-900">
-                    {record.tahun || 'Tanpa Tahun'}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-4 px-4 py-2.5">
-                  <dt className="text-slate-500 shrink-0">Proposal / Sumber</dt>
-                  <dd className="text-right font-medium text-slate-900">
-                    {record.proposal ||
-                      (record.validasi === 'rejected'
-                        ? 'Standalone · Arsip Berkas Ditolak'
-                        : 'Standalone · Database KPM')}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-4 px-4 py-2.5">
-                  <dt className="text-slate-500 shrink-0">Item Bantuan</dt>
-                  <dd className="text-right font-semibold text-slate-900">
-                    {record.item
-                      ? `${record.item}${itemPkg?.name ? ` - ${itemPkg.name}` : ''}`
-                      : '-'}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-4 px-4 py-2.5">
-                  <dt className="text-slate-500 shrink-0">Kategori DTSEN</dt>
-                  <dd className="text-right font-medium text-slate-900">{dtsenLabel}</dd>
-                </div>
-                <div className="flex justify-between gap-4 px-4 py-2.5">
-                  <dt className="text-slate-500 shrink-0">Pengelola</dt>
-                  <dd className="text-right font-medium text-slate-900">
-                    {record.pengelola || '-'}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-4 px-4 py-2.5">
-                  <dt className="text-slate-500 shrink-0">Status Validasi</dt>
-                  <dd className="text-right font-semibold text-slate-900">
-                    {formatValidationLabel(record.validasi)}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-4 px-4 py-2.5">
-                  <dt className="text-slate-500 shrink-0">Administrasi</dt>
-                  <dd className="text-right font-medium text-slate-900 tabular-nums">
-                    {record.payment > 0
-                      ? `Sudah Bayar · ${formatRupiah(record.payment)}`
-                      : 'Belum Bayar'}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-4 px-4 py-2.5">
-                  <dt className="text-slate-500 shrink-0">Catatan Petugas</dt>
-                  <dd className="text-right font-medium text-slate-900">
-                    {record.catatan || '-'}
-                  </dd>
-                </div>
-              </dl>
-            </section>
-
-            {/* 03 Rincian Sub-Item Bantuan */}
-            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
-              <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-teal-800">
-                  03 · Rincian Sub-Item Bantuan
-                </h3>
-                <span className="text-[11px] font-bold text-slate-700 tabular-nums">
-                  {deliveredCount}/{subItemStatuses.length} Diterima
+                <span>
+                  {isDownloadingPdf ? 'Menyiapkan PDF...' : 'Download PDF Profil KPM (A4)'}
                 </span>
+              </button>
+            </div>
+            {pdfMessage && (
+              <div className="border-b border-teal-100 bg-teal-50/70 px-4 py-2 text-center text-[11px] font-medium text-teal-800">
+                {pdfMessage}
               </div>
-              {subItemStatuses.length === 0 ? (
-                <p className="px-4 py-4 text-xs text-slate-500">
-                  Paket item bantuan belum memiliki rincian sub-item.
-                </p>
-              ) : (
-                <div className="divide-y divide-slate-100">
-                  {subItemStatuses.map((sub, idx) => (
-                    <div
-                      key={sub.key}
-                      className="flex items-center justify-between gap-3 px-4 py-2.5 text-xs"
+            )}
+
+            {/* Lembar Resmi PROFIL DATA KPM (Selaras dengan Hasil PDF Detail KPM) */}
+            <div className="p-4 sm:p-6 space-y-5">
+              {/* Header Dokumen */}
+              <div className="flex flex-wrap items-start justify-between gap-3 border-b-2 border-teal-700 pb-3.5">
+                <div>
+                  <h2 className="text-lg font-extrabold tracking-tight text-slate-900">
+                    PROFIL DATA KPM
+                  </h2>
+                  <p className="mt-0.5 text-xs text-slate-600 tabular-nums">
+                    Kode Register: {record.registerCode || record.id} &nbsp;·&nbsp; Tahun Anggaran:{' '}
+                    {record.tahun || '-'}
+                  </p>
+                </div>
+                <div className="text-left sm:text-right">
+                  <p
+                    className={`text-xs font-extrabold tracking-wide uppercase ${
+                      record.validasi === 'accepted'
+                        ? 'text-teal-700'
+                        : record.validasi === 'rejected'
+                          ? 'text-rose-700'
+                          : 'text-amber-700'
+                    }`}
+                  >
+                    STATUS: {formatValidationLabel(record.validasi).toUpperCase()}
+                  </p>
+                  <p className="mt-0.5 text-[11px] font-bold tracking-wider text-slate-500">
+                    MASDETA
+                  </p>
+                </div>
+              </div>
+
+              {/* Blok Foto + 01. IDENTITAS & DOMISILI */}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-12">
+                <div className="sm:col-span-4 flex flex-col items-center">
+                  {heroPhoto ? (
+                    <button
+                      type="button"
+                      onClick={() => setPreviewDoc({ file: heroPhoto, title: record.nama })}
+                      className="relative aspect-[3/4] w-40 sm:w-full overflow-hidden rounded-lg border border-slate-300 bg-slate-50"
                     >
-                      <div className="min-w-0">
-                        <p className="font-medium text-slate-900">
-                          {idx + 1}. {sub.name}
-                        </p>
-                        {sub.updatedAt && (
-                          <p className="text-[11px] text-slate-500">
-                            Diperbarui {formatUploadDateTime(sub.updatedAt)}
-                          </p>
-                        )}
-                      </div>
-                      <span
-                        className={`inline-flex shrink-0 items-center gap-1 font-semibold ${
-                          sub.delivered ? 'text-teal-700' : 'text-amber-700'
-                        }`}
-                      >
-                        {sub.delivered ? (
-                          <>
-                            <CheckCircle2 className="h-3.5 w-3.5" />
-                            <span>Sudah Diterima</span>
-                          </>
-                        ) : (
-                          <>
-                            <Clock className="h-3.5 w-3.5" />
-                            <span>Belum Diterima</span>
-                          </>
-                        )}
-                      </span>
+                      <DriveImage
+                        doc={heroPhoto}
+                        alt={record.nama}
+                        className="h-full w-full object-cover"
+                      />
+                    </button>
+                  ) : (
+                    <div className="flex aspect-[3/4] w-40 sm:w-full items-center justify-center rounded-lg border border-slate-300 bg-slate-50 text-slate-400">
+                      <User className="h-10 w-10" />
+                    </div>
+                  )}
+                  <span className="mt-1.5 text-[11px] text-slate-500">Foto Survey / Penerima</span>
+                </div>
+
+                <div className="sm:col-span-8 overflow-hidden rounded-lg border border-slate-300">
+                  <table className="w-full border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-teal-700 text-white">
+                        <th className="w-[42%] px-3 py-2 text-left font-bold">
+                          01. IDENTITAS &amp; DOMISILI
+                        </th>
+                        <th className="px-3 py-2 text-left font-bold">KETERANGAN</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200">
+                      {[
+                        ['Nama Lengkap', (record.nama || '-').toUpperCase()],
+                        ['NIK KTP', formatNikDisplay(record.nikKtp)],
+                        ['Nomor Kartu Keluarga', formatNikDisplay(record.nikKk)],
+                        ['Pekerjaan', record.pekerjaan || '-'],
+                        ['No. HP / Kontak', record.kontak || '-'],
+                        [
+                          'RT / RW',
+                          `${record.rt ? record.rt.padStart(3, '0') : '-'} / ${record.rw ? record.rw.padStart(3, '0') : '-'}`,
+                        ],
+                        ['Kelurahan / Desa', domicile?.kelurahan || '-'],
+                        ['Kecamatan', domicile?.kecamatan || '-'],
+                      ].map(([label, val]) => (
+                        <tr key={label}>
+                          <td className="bg-slate-50 px-3 py-1.5 font-semibold text-slate-700 border-r border-slate-200">
+                            {label}
+                          </td>
+                          <td className="px-3 py-1.5 text-slate-900 tabular-nums break-words">
+                            {val}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* 02. DATA ALAMAT, USULAN & VALIDASI */}
+              <div className="overflow-hidden rounded-lg border border-slate-300">
+                <table className="w-full border-collapse text-xs">
+                  <thead>
+                    <tr className="bg-slate-100 text-slate-900 border-b border-slate-300">
+                      <th className="w-[34%] px-3 py-2 text-left font-bold">
+                        02. DATA ALAMAT, USULAN &amp; VALIDASI
+                      </th>
+                      <th className="px-3 py-2 text-left font-bold">KETERANGAN</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200">
+                    {[
+                      ['Alamat Lengkap', record.alamat || '-'],
+                      [
+                        'Proposal Pengajuan',
+                        record.proposal
+                          ? `${record.proposal}${record.tahun ? ` (Tahun ${record.tahun})` : ''}`
+                          : record.validasi === 'rejected'
+                            ? 'Standalone · Arsip Berkas Ditolak'
+                            : 'Standalone · Database KPM',
+                      ],
+                      [
+                        'Item Bantuan',
+                        record.item
+                          ? `${record.item}${itemPkg?.name ? ` — ${itemPkg.name}` : ''}`
+                          : '-',
+                      ],
+                      ['Klasifikasi DTSEN', dtsenLabel],
+                      ['Pengelola Lapangan', record.pengelola || '-'],
+                      ['Status Validasi Berkas', formatValidationLabel(record.validasi)],
+                      [
+                        'Administrasi',
+                        record.payment > 0
+                          ? `Sudah Bayar · ${formatRupiah(record.payment)}`
+                          : 'Belum Bayar',
+                      ],
+                      ['Catatan Petugas', record.catatan || '-'],
+                    ].map(([label, val]) => (
+                      <tr key={label}>
+                        <td className="bg-slate-50 px-3 py-2 font-semibold text-slate-700 border-r border-slate-200">
+                          {label}
+                        </td>
+                        <td className="px-3 py-2 text-slate-900 break-words">{val}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* 03. RINCIAN SUB-ITEM BANTUAN */}
+              <div className="overflow-hidden rounded-lg border border-slate-300">
+                <table className="w-full border-collapse text-xs">
+                  <thead>
+                    <tr className="bg-slate-100 text-slate-900 border-b border-slate-300">
+                      <th className="w-10 px-2 py-2 text-center font-bold border-r border-slate-300">
+                        NO
+                      </th>
+                      <th className="px-3 py-2 text-left font-bold border-r border-slate-300">
+                        03. RINCIAN SUB-ITEM BANTUAN ({deliveredCount}/{subItemStatuses.length})
+                      </th>
+                      <th className="w-32 px-2 py-2 text-center font-bold border-r border-slate-300">
+                        STATUS PENYALURAN
+                      </th>
+                      <th className="hidden sm:table-cell w-36 px-2 py-2 text-center font-bold">
+                        PEMBARUAN
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200">
+                    {subItemStatuses.length === 0 ? (
+                      <tr>
+                        <td colSpan={4} className="px-3 py-3 text-center text-slate-500">
+                          Paket item bantuan belum memiliki rincian sub-item.
+                        </td>
+                      </tr>
+                    ) : (
+                      subItemStatuses.map((sub, idx) => (
+                        <tr key={sub.key}>
+                          <td className="px-2 py-2 text-center font-medium text-slate-700 border-r border-slate-200 tabular-nums">
+                            {String(idx + 1).padStart(2, '0')}
+                          </td>
+                          <td className="px-3 py-2 text-slate-900 border-r border-slate-200">
+                            {sub.name}
+                          </td>
+                          <td className="px-2 py-2 text-center border-r border-slate-200">
+                            <span
+                              className={`inline-flex items-center gap-1 font-semibold ${
+                                sub.delivered ? 'text-teal-700' : 'text-amber-700'
+                              }`}
+                            >
+                              {sub.delivered ? (
+                                <>
+                                  <CheckCircle2 className="h-3.5 w-3.5" />
+                                  <span>Sudah Diterima</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Clock className="h-3.5 w-3.5" />
+                                  <span>Belum Diterima</span>
+                                </>
+                              )}
+                            </span>
+                          </td>
+                          <td className="hidden sm:table-cell px-2 py-2 text-center text-slate-500 tabular-nums">
+                            {sub.updatedAt ? formatUploadDateTime(sub.updatedAt) : '-'}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* 04. KELENGKAPAN DOKUMEN */}
+              <div className="overflow-hidden rounded-lg border border-slate-300">
+                <div className="bg-slate-100 border-b border-slate-300 px-3 py-2">
+                  <h3 className="text-xs font-bold text-slate-900">04. KELENGKAPAN DOKUMEN</h3>
+                </div>
+                <div className="divide-y divide-slate-200 text-xs">
+                  {documentRows.map((row) => (
+                    <div
+                      key={row.label}
+                      className="flex items-center justify-between gap-3 px-3 py-2"
+                    >
+                      <span className="font-medium text-slate-800">{row.label}</span>
+                      {row.doc ? (
+                        <button
+                          type="button"
+                          onClick={() => setPreviewDoc({ file: row.doc!, title: row.label })}
+                          className="text-xs font-semibold text-teal-700 hover:underline"
+                        >
+                          Tersimpan · Lihat Foto
+                        </button>
+                      ) : (
+                        <span className="text-slate-400">Belum diunggah</span>
+                      )}
                     </div>
                   ))}
                 </div>
-              )}
-            </section>
-
-            {/* 04 Kelengkapan Dokumen */}
-            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
-              <div className="border-b border-slate-100 px-4 py-3">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-teal-800">
-                  04 · Kelengkapan Dokumen
-                </h3>
               </div>
-              <div className="divide-y divide-slate-100 text-xs">
-                {documentRows.map((row) => (
-                  <div
-                    key={row.label}
-                    className="flex items-center justify-between gap-3 px-4 py-2.5"
-                  >
-                    <span className="font-medium text-slate-800">{row.label}</span>
-                    {row.doc ? (
-                      <button
-                        type="button"
-                        onClick={() => setPreviewDoc({ file: row.doc!, title: row.label })}
-                        className="text-xs font-semibold text-teal-700 hover:underline"
-                      >
-                        Tersimpan · Lihat Foto
-                      </button>
-                    ) : (
-                      <span className="text-slate-400">Belum diunggah</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </section>
-          </>
+            </div>
+          </div>
         )}
       </div>
 

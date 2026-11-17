@@ -181,13 +181,13 @@ export function SlotHandlingConfirmModal({
                 <p className="mt-1 text-xs leading-relaxed text-slate-600">
                   {isDelete ? (
                     <>
-                      Data calon KPM <strong>&ldquo;{kpmName}&rdquo;</strong>
+                      Data KPM <strong>&ldquo;{kpmName}&rdquo;</strong>
                       {registerCode ? ` (${registerCode})` : ''} akan dihapus dari daftar aktif dan
                       dipindahkan ke Tempat Sampah (tersimpan 30 hari).
                     </>
                   ) : (
                     <>
-                      Data calon KPM <strong>&ldquo;{kpmName}&rdquo;</strong> akan disimpan dan
+                      Data KPM <strong>&ldquo;{kpmName}&rdquo;</strong> akan disimpan dan
                       dipindahkan dari <strong>{originProposalName}</strong> ke{' '}
                       <strong>{destinationLabel || 'tujuan baru'}</strong>.
                     </>

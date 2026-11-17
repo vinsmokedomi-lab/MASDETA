@@ -384,12 +384,14 @@ export interface CouponPrintConfig {
   jadwal: string;
   lokasi: string;
   footerText: string;
+  qrBaseUrl?: string;
 }
 
 export const DEFAULT_COUPON_CONFIG: CouponPrintConfig = {
   jadwal: '',
   lokasi: '',
   footerText: 'Wajib membawa Kupon dan KTP asli saat pembagian.',
+  qrBaseUrl: '',
 };
 
 export interface BastTemplateConfig {
@@ -436,6 +438,7 @@ export type ProposalBastMap = Record<string, Partial<BastTemplateConfig>>;
 
 export interface SptjmTemplateConfig {
   tempat: string;
+  hari?: string;
   tanggalIso: string;
   tanggalCustomText?: string;
   pejabatJabatan: string;
@@ -445,6 +448,7 @@ export interface SptjmTemplateConfig {
 
 export const DEFAULT_SPTJM_TEMPLATE: SptjmTemplateConfig = {
   tempat: 'Pontianak',
+  hari: '',
   tanggalIso: '',
   tanggalCustomText: '',
   pejabatJabatan: 'Kepala Bidang Pemberdayaan Fakir Miskin Dinas Sosial Provinsi Kalbar',

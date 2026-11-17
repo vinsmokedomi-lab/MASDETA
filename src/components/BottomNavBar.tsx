@@ -50,7 +50,7 @@ export function BottomNavBar({
           </span>
         </button>
 
-        {/* Tab 2: Calon KPM */}
+        {/* Tab 2: KPM */}
         <button
           type="button"
           onClick={() => onSelectTab('kpm')}
@@ -183,7 +183,7 @@ export function QuickAddSheet({
               <UserPlus className="h-5 w-5" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-bold text-slate-900">Pendaftaran Calon KPM</p>
+              <p className="text-sm font-bold text-slate-900">Pendaftaran KPM</p>
               <p className="mt-0.5 text-xs text-slate-500">
                 Input biodata KPM, DTSEN, KTP/KK, dan foto lapangan
               </p>

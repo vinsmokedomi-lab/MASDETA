@@ -67,6 +67,7 @@ import {
   DEFAULT_BAST_TEMPLATE,
   DEFAULT_COUPON_CONFIG,
   DEFAULT_REPORT_TEMPLATE,
+  DEFAULT_SPTJM_TEMPLATE,
   DirectChatMessage,
   InternalUser,
   InternalUserRole,
@@ -92,6 +93,7 @@ import {
   ScheduleEventItem,
   SharedKpmCard,
   SlotRemovalMode,
+  SptjmTemplateConfig,
   TrashRecordItem,
   UserPermissions,
   UserPresenceStatus,
@@ -574,13 +576,28 @@ export default function App() {
   const [reportTemplate, setReportTemplate] = useState<ReportTemplateConfig>(DEFAULT_REPORT_TEMPLATE);
   const [couponConfig, setCouponConfig] = useState<CouponPrintConfig>(DEFAULT_COUPON_CONFIG);
   const [bastTemplate, setBastTemplate] = useState<BastTemplateConfig>(DEFAULT_BAST_TEMPLATE);
+  const [sptjmTemplate, setSptjmTemplate] = useState<SptjmTemplateConfig>(DEFAULT_SPTJM_TEMPLATE);
   const [proposalBastMap, setProposalBastMap] = useState<ProposalBastMap>({});
   const [publicKpmToken, setPublicKpmToken] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
     try {
       const params = new URLSearchParams(window.location.search);
       const val = params.get('kpm') || params.get('kpmQr');
-      return val && val.trim() ? val.trim() : null;
+      if (val && val.trim()) return val.trim();
+      const pathMatch = window.location.pathname.match(/\/kpm\/([^/]+)/i);
+      if (pathMatch && pathMatch[1]) {
+        return decodeURIComponent(pathMatch[1]).trim();
+      }
+      const rawHash = window.location.hash || '';
+      const hashParamMatch = rawHash.match(/[?#&]?kpm=([^&]+)/i);
+      if (hashParamMatch && hashParamMatch[1]) {
+        return decodeURIComponent(hashParamMatch[1]).trim();
+      }
+      const hashPathMatch = rawHash.match(/^#\/?kpm\/([^/?]+)/i);
+      if (hashPathMatch && hashPathMatch[1]) {
+        return decodeURIComponent(hashPathMatch[1]).trim();
+      }
+      return null;
     } catch {
       return null;
     }
@@ -1430,6 +1447,7 @@ export default function App() {
         fetchedTemplate,
         fetchedCouponConfig,
         fetchedBastTemplate,
+        fetchedSptjmTemplate,
         fetchedBastMap,
         fetchedWatermarks,
         fetchedAliases,
@@ -1449,6 +1467,10 @@ export default function App() {
         fetchAppStateSlice<BastTemplateConfig>(
           'masdeta_bast_template_v1',
           DEFAULT_BAST_TEMPLATE
+        ),
+        fetchAppStateSlice<SptjmTemplateConfig>(
+          'masdeta_sptjm_template_v1',
+          DEFAULT_SPTJM_TEMPLATE
         ),
         fetchAppStateSlice<Record<string, KpmBastInfo>>('masdeta_kpm_bast_v1', {}),
         fetchChatDeliveryWatermarks(),
@@ -1517,6 +1539,11 @@ export default function App() {
         fetchedBastTemplate && typeof fetchedBastTemplate === 'object'
           ? { ...DEFAULT_BAST_TEMPLATE, ...fetchedBastTemplate }
           : DEFAULT_BAST_TEMPLATE
+      );
+      setSptjmTemplate(
+        fetchedSptjmTemplate && typeof fetchedSptjmTemplate === 'object'
+          ? { ...DEFAULT_SPTJM_TEMPLATE, ...fetchedSptjmTemplate }
+          : DEFAULT_SPTJM_TEMPLATE
       );
       setKpmBastMap(safeBastMap);
       setProposalSlotMap(safeSlotMap);
@@ -3775,9 +3802,9 @@ export default function App() {
     } | null = null
   ) => {
     if (record) {
-      if (!requirePermission('update', 'mengubah data calon KPM')) return;
+      if (!requirePermission('update', 'mengubah data KPM')) return;
     } else {
-      if (!requirePermission('add', 'mendaftarkan calon KPM baru')) return;
+      if (!requirePermission('add', 'mendaftarkan KPM baru')) return;
     }
     navigateForwardScroll();
     setFeedback(null);
@@ -4032,9 +4059,9 @@ export default function App() {
     oldSlotHandling: SlotRemovalMode = 'vacate'
   ): Promise<boolean> => {
     if (editingId) {
-      if (!requirePermission('update', 'memperbarui data calon KPM')) return false;
+      if (!requirePermission('update', 'memperbarui data KPM')) return false;
     } else {
-      if (!requirePermission('add', 'menyimpan calon KPM baru')) return false;
+      if (!requirePermission('add', 'menyimpan KPM baru')) return false;
     }
 
     const targetStatus: ValidationStatus = values.validasi || 'pending';
@@ -4058,7 +4085,7 @@ export default function App() {
     if (isAcceptedTarget && !matchingProposal && !values.proposal?.trim()) {
       setFeedback({
         type: 'error',
-        message: 'Calon KPM berstatus Diterima wajib memilih Proposal tujuan (Murni / Perubahan).',
+        message: 'KPM berstatus Diterima wajib memilih Proposal tujuan (Murni / Perubahan).',
       });
       return false;
     }
@@ -4115,7 +4142,7 @@ export default function App() {
         if (prevProp?.status === 'locked') {
           setFeedback({
             type: 'error',
-            message: `Proposal "${prevProp.namaProposal}" berstatus Terkunci. Calon KPM tidak dapat dipindahkan atau diubah.`,
+            message: `Proposal "${prevProp.namaProposal}" berstatus Terkunci. Data KPM tidak dapat dipindahkan atau diubah.`,
           });
           return false;
         }
@@ -4351,7 +4378,7 @@ export default function App() {
       }
       setFeedback({
         type: 'success',
-        message: `Data calon KPM "${normalizedValues.nama}" berhasil diperbarui.`,
+        message: `Data KPM "${normalizedValues.nama}" berhasil diperbarui.`,
       });
       return true;
     }
@@ -4512,7 +4539,7 @@ export default function App() {
               historyEntries: enteredHistory ? [enteredHistory] : [],
               includeDeliveries: true,
             }),
-          'Gagal menyimpan calon KPM ke Supabase'
+          'Gagal menyimpan KPM ke Supabase'
         )
       : await syncOperationalData(
           {
@@ -4549,13 +4576,13 @@ export default function App() {
     setSubView('kpm-detail');
     setFeedback({
       type: 'success',
-      message: `Calon KPM "${savedNewRecord.nama}" (${savedNewRecord.registerCode}) disimpan ke ${containerLabel}.`,
+      message: `KPM "${savedNewRecord.nama}" (${savedNewRecord.registerCode}) disimpan ke ${containerLabel}.`,
     });
     return true;
   };
 
   const handleDeleteKpm = (id: string, slotHandling: SlotRemovalMode = 'vacate') => {
-    if (!requirePermission('delete', 'menghapus data calon KPM')) return;
+    if (!requirePermission('delete', 'menghapus data KPM')) return;
     const target = records.find((r) => r.id === id);
     if (!target) return;
     const prop =
@@ -4658,7 +4685,7 @@ export default function App() {
             pengelolaList,
             historyEntries: [removedHistory],
           }),
-        'Gagal menghapus calon KPM dari Supabase'
+        'Gagal menghapus KPM dari Supabase'
       );
     } else {
       void syncOperationalData({ records: nextRecords, proposalHistory: nextHistory }, 'delete');
@@ -4671,7 +4698,7 @@ export default function App() {
     }
     setFeedback({
       type: 'success',
-      message: `Data calon KPM "${target.nama}" dipindahkan ke Tempat Sampah (tersimpan 30 hari).`,
+      message: `Data KPM "${target.nama}" dipindahkan ke Tempat Sampah (tersimpan 30 hari).`,
     });
   };
 
@@ -4680,7 +4707,7 @@ export default function App() {
     nextDocuments: KpmDocuments,
     auditChange: { field: string; before: string; after: string }
   ) => {
-    if (!requirePermission('update', 'mengubah foto/dokumen calon KPM')) return;
+    if (!requirePermission('update', 'mengubah foto/dokumen KPM')) return;
     const target = records.find((r) => r.id === kpmId);
     if (!target) return;
 
@@ -5790,7 +5817,7 @@ export default function App() {
     if (ok) {
       setFeedback({
         type: 'success',
-        message: `${updatedCount} calon KPM berhasil diperbarui secara massal.`,
+        message: `${updatedCount} KPM berhasil diperbarui secara massal.`,
       });
     }
   };
@@ -6074,7 +6101,7 @@ export default function App() {
       }
       setFeedback({
         type: 'success',
-        message: `Calon KPM "${kpm.nama}" berhasil dipulihkan beserta foto terkait.`,
+        message: `KPM "${kpm.nama}" berhasil dipulihkan beserta foto terkait.`,
       });
       return;
     }
@@ -6293,6 +6320,15 @@ export default function App() {
     setFeedback({
       type: 'success',
       message: 'Template BAST resmi Dinas Sosial berhasil disimpan.',
+    });
+  };
+
+  const handleSaveSptjmTemplate = (next: SptjmTemplateConfig) => {
+    setSptjmTemplate(next);
+    void saveAppStateSlice('masdeta_sptjm_template_v1', next);
+    setFeedback({
+      type: 'success',
+      message: 'Template SPTJM berhasil disimpan.',
     });
   };
 
@@ -7605,7 +7641,7 @@ export default function App() {
           setActiveKpmId(null);
           setFeedback({
             type: 'success',
-            message: 'Seluruh data calon KPM dan log audit KPM telah dihapus.',
+            message: 'Seluruh data KPM dan log audit KPM telah dihapus.',
           });
         } else if (action === 'delete_all_proposal') {
           persistProposalSlotMap({});
@@ -7685,7 +7721,7 @@ export default function App() {
         setActiveKpmId(null);
         setFeedback({
           type: 'success',
-          message: 'Seluruh data calon KPM dan log audit KPM telah dihapus.',
+          message: 'Seluruh data KPM dan log audit KPM telah dihapus.',
         });
       } else if (action === 'delete_all_proposal') {
         persistProposalSlotMap({});
@@ -8012,7 +8048,7 @@ export default function App() {
       setFeedback({
         type: 'error',
         message:
-          'Tidak ada calon KPM yang dapat ditransfer (pastikan proposal asal dan tujuan berstatus Terbuka).',
+          'Tidak ada KPM yang dapat ditransfer (pastikan proposal asal dan tujuan berstatus Terbuka).',
       });
       return false;
     }
@@ -8170,7 +8206,7 @@ export default function App() {
     setRecords(nextRecords);
     setFeedback({
       type: 'success',
-      message: `${eligibleTargets.length} calon KPM berhasil ditransfer ke "${targetProposal.namaProposal}" (${targetProposal.tahun}).`,
+      message: `${eligibleTargets.length} KPM berhasil ditransfer ke "${targetProposal.namaProposal}" (${targetProposal.tahun}).`,
     });
     return true;
   };
@@ -8713,6 +8749,31 @@ export default function App() {
     );
   }
 
+  if (publicKpmToken) {
+    return (
+      <PublicKpmProfileView
+        kpmToken={publicKpmToken}
+        inMemoryRecords={records}
+        inMemoryProposals={proposals}
+        inMemoryItems={items}
+        inMemoryWilayah={wilayahList}
+        onOpenMainApp={() => {
+          setPublicKpmToken(null);
+          if (typeof window !== 'undefined') {
+            const url = new URL(window.location.href);
+            url.searchParams.delete('kpm');
+            url.searchParams.delete('kpmQr');
+            const cleanPath = /\/kpm\//i.test(url.pathname)
+              ? ((import.meta.env?.BASE_URL as string | undefined) || '/')
+              : url.pathname;
+            const cleanHash = /^#\/?kpm[=/]/i.test(url.hash) ? '' : url.hash;
+            window.history.replaceState({}, '', cleanPath + url.search + cleanHash);
+          }
+        }}
+      />
+    );
+  }
+
   if ((sessionToken || supabaseReady) && !authReady && !currentUser) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-100 p-4">
@@ -8736,27 +8797,6 @@ export default function App() {
     );
   }
 
-  if (publicKpmToken) {
-    return (
-      <PublicKpmProfileView
-        kpmToken={publicKpmToken}
-        inMemoryRecords={records}
-        inMemoryProposals={proposals}
-        inMemoryItems={items}
-        inMemoryWilayah={wilayahList}
-        onOpenMainApp={() => {
-          setPublicKpmToken(null);
-          if (typeof window !== 'undefined') {
-            const url = new URL(window.location.href);
-            url.searchParams.delete('kpm');
-            url.searchParams.delete('kpmQr');
-            window.history.replaceState({}, '', url.pathname + url.search + url.hash);
-          }
-        }}
-      />
-    );
-  }
-
   if (!currentUser) {
     return (
       <div className={isNativeApp ? 'min-h-screen bg-slate-200/70 sm:py-3' : 'min-h-screen bg-slate-100'}>
@@ -8768,7 +8808,7 @@ export default function App() {
         <div
           className={
             isNativeApp
-              ? 'mx-auto min-h-screen w-full max-w-md overflow-x-hidden bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm'
+              ? 'mx-auto min-h-screen w-full max-w-md overflow-x-clip bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm'
               : 'min-h-screen w-full bg-slate-100'
           }
         >
@@ -9075,8 +9115,8 @@ export default function App() {
         <div
           className={
             isNativeApp
-              ? 'mx-auto min-h-screen w-full max-w-md overflow-x-hidden bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm'
-              : 'min-h-screen w-full overflow-x-hidden bg-slate-100 md:overflow-x-visible md:pl-64'
+              ? 'mx-auto min-h-screen w-full max-w-md overflow-x-clip bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm'
+              : 'min-h-screen w-full overflow-x-clip bg-slate-100 md:overflow-x-visible md:pl-64'
           }
         >
         {/* Sub-Views */}
@@ -9246,6 +9286,8 @@ export default function App() {
             onSaveCouponConfig={handleSaveCouponConfig}
             bastTemplate={bastTemplate}
             onSaveBastTemplate={handleSaveBastTemplate}
+            sptjmTemplate={sptjmTemplate}
+            onSaveSptjmTemplate={handleSaveSptjmTemplate}
             proposalBastMap={proposalBastMap}
             onSaveProposalBastConfig={handleSaveProposalBastConfig}
             onSaveBast={handleSaveKpmBast}
@@ -9569,6 +9611,13 @@ export default function App() {
               setMenuSection('dtsen');
               setActiveTab('menu');
             }}
+            onOpenPengelolaList={() => {
+              navigateForwardScroll();
+              setMenuOpenedFromDashboard(true);
+              setSelectedPengelolaDrill(null);
+              setMenuSection('pengelola');
+              setActiveTab('menu');
+            }}
           />
         </div>
 
@@ -9804,6 +9853,8 @@ export default function App() {
             onSaveCouponConfig={handleSaveCouponConfig}
             bastTemplate={bastTemplate}
             onSaveBastTemplate={handleSaveBastTemplate}
+            sptjmTemplate={sptjmTemplate}
+            onSaveSptjmTemplate={handleSaveSptjmTemplate}
             proposalBastMap={proposalBastMap}
             onSaveProposalBastConfig={handleSaveProposalBastConfig}
             onOpenCreateStandaloneDatabaseKpm={() =>

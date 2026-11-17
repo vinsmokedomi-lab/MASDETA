@@ -5,7 +5,10 @@ import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig(() => {
+  const rawBase = (process.env.VITE_BASE_PATH || '/').trim();
+  const basePath = rawBase.endsWith('/') ? rawBase : `${rawBase}/`;
   return {
+    base: basePath,
     plugins: [
       react(),
       tailwindcss(),
@@ -13,7 +16,7 @@ export default defineConfig(() => {
         registerType: 'autoUpdate',
         includeAssets: ['masdeta-icon.svg', 'icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png', 'sw-push.js'],
         manifest: {
-          id: '/',
+          id: basePath,
           name: 'MASDETA — Pendaftaran & Manajemen Bantuan',
           short_name: 'MASDETA',
           description:
@@ -22,23 +25,23 @@ export default defineConfig(() => {
           background_color: '#F8FAFC',
           display: 'standalone',
           orientation: 'portrait',
-          start_url: '/',
-          scope: '/',
+          start_url: basePath,
+          scope: basePath,
           icons: [
             {
-              src: '/pwa-192x192.png',
+              src: `${basePath}pwa-192x192.png`,
               sizes: '192x192',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/pwa-512x512.png',
+              src: `${basePath}pwa-512x512.png`,
               sizes: '512x512',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/pwa-maskable-512x512.png',
+              src: `${basePath}pwa-maskable-512x512.png`,
               sizes: '512x512',
               type: 'image/png',
               purpose: 'maskable',
@@ -46,7 +49,7 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
-          importScripts: ['/sw-push.js'],
+          importScripts: [`${basePath}sw-push.js`],
           cleanupOutdatedCaches: true,
           clientsClaim: true,
           skipWaiting: true,

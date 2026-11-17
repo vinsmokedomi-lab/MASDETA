@@ -1738,13 +1738,16 @@ export function formatSubItemSpec(baseName: string, volume: number, satuan: stri
     : `${cleanBase} (${cleanVol} ${cleanSatuan})`;
 }
 
+const SELANG_REGULATOR_COMBO_RE =
+  /^(?:selang(?:\s+(?:gas|kompor))?\s*(?:&|\+|\/|,|-|dan|\s)\s*regulato?r?(?:\s+(?:gas|kompor))?|regulato?r?(?:\s+(?:gas|kompor))?\s*(?:&|\+|\/|,|-|dan|\s)\s*selang(?:\s+(?:gas|kompor))?)$/i;
+
 export function parseSubItemSpec(
   raw: string,
   context?: { itemCode?: string; itemName?: string }
 ): ParsedSubItemSpec {
   const trimmed = (raw || '').trim();
   const match = trimmed.match(SUB_ITEM_SUFFIX_RE);
-  const baseName = (match && match.index !== undefined
+  let baseName = (match && match.index !== undefined
     ? trimmed.slice(0, match.index)
     : trimmed
   ).trim();
@@ -1758,6 +1761,14 @@ export function parseSubItemSpec(
     if (!match || volume === 1 || (volume === 6 && /^pcs$/i.test(match[2] || ''))) {
       volume = 6;
       satuan = 'Unit';
+    }
+  }
+
+  if (SELANG_REGULATOR_COMBO_RE.test(baseName.replace(/\s+/g, ' '))) {
+    baseName = 'Selang Gas & Regulator';
+    if (!match || !match[2] || /^unit$/i.test(match[2].trim())) {
+      volume = match ? volume : 1;
+      satuan = 'Set';
     }
   }
 
@@ -1780,24 +1791,30 @@ export function upgradeCatalogTendaKursi(catalog: ItemBantuan[]): {
   const isSelangOrRegulatorSub = (raw: string): boolean => {
     const base = normalizeSubItemKey(raw);
     return (
-      /^selang(\s+gas)?$/.test(base) ||
-      /^regulator(\s+gas)?$/.test(base) ||
-      /^selang(\s+gas)?\s*(?:&|\+|\/|,|-|dan)\s*regulator(\s+gas)?$/.test(base)
+      /^selang(\s+(gas|kompor))?$/.test(base) ||
+      /^regulato?r?(\s+(gas|kompor))?$/.test(base) ||
+      SELANG_REGULATOR_COMBO_RE.test(base)
     );
   };
 
   const nextItems = catalog.map((item) => {
-    const isTenda =
-      (item.code || '').trim().toUpperCase() === 'TND' ||
-      /\btenda\b/i.test(item.name || '');
+    const codeUpper = (item.code || '').trim().toUpperCase();
+    const isTenda = codeUpper === 'TND' || /\btenda\b/i.test(item.name || '');
+    const subs = item.subItems || [];
+    const hasSplitSelangAndRegulator =
+      subs.some((s) => /^selang(\s+(gas|kompor))?$/i.test(normalizeSubItemKey(s))) &&
+      subs.some((s) => /^regulato?r?(\s+(gas|kompor))?$/i.test(normalizeSubItemKey(s)));
     const isKomporGas =
-      (item.code || '').trim().toUpperCase() === 'KPR' ||
-      /\bkompor\s*gas\b/i.test(item.name || '');
+      codeUpper === 'KPR' ||
+      codeUpper === 'KG' ||
+      /\bkompor\s*gas\b/i.test(item.name || '') ||
+      hasSplitSelangAndRegulator ||
+      subs.some((s) => SELANG_REGULATOR_COMBO_RE.test(normalizeSubItemKey(s)));
 
     if (!isTenda && !isKomporGas) return item;
 
     let itemChanged = false;
-    let nextSubItems = [...(item.subItems || [])];
+    let nextSubItems = [...subs];
 
     if (isTenda) {
       nextSubItems = nextSubItems.map((sub) => {
@@ -1995,13 +2012,26 @@ export function getKpmSubItemStatusList(
 
   return pkg.subItems.map((subName) => {
     const parsed = parseSubItemSpec(subName, { itemCode: pkg.code, itemName: pkg.name });
-    const key = normalizeSubItemKey(subName);
-    let state = deliveries[key] ?? deliveries[subName] ?? deliveries[parsed.baseName];
+    const key = normalizeSubItemKey(parsed.baseName || subName);
+    let state =
+      deliveries[key] ??
+      deliveries[normalizeSubItemKey(subName)] ??
+      deliveries[subName] ??
+      deliveries[parsed.baseName];
     if (!state && key === 'selang gas & regulator') {
-      const legacySelang = deliveries['selang gas'];
-      const legacyReg = deliveries['regulator'];
-      if (legacySelang?.delivered && legacyReg?.delivered) {
-        state = legacySelang;
+      const legacyCombo =
+        deliveries['selang & regulator'] ??
+        deliveries['regulator + selang'] ??
+        deliveries['regulator & selang'] ??
+        deliveries['selang regulator'];
+      if (legacyCombo) {
+        state = legacyCombo;
+      } else {
+        const legacySelang = deliveries['selang gas'] ?? deliveries['selang'];
+        const legacyReg = deliveries['regulator'] ?? deliveries['regulator gas'];
+        if (legacySelang?.delivered && legacyReg?.delivered) {
+          state = legacySelang;
+        }
       }
     }
     return {

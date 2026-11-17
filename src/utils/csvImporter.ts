@@ -514,7 +514,7 @@ export function importProposalKpmFromCsv({
       error:
         skippedCount > 0
           ? `Semua ${skippedCount} baris di file CSV sudah terdaftar sebelumnya.`
-          : 'Tidak ada baris data calon KPM yang valid di dalam CSV.',
+          : 'Tidak ada baris data KPM yang valid di dalam CSV.',
     };
   }
 

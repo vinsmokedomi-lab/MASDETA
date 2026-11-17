@@ -76,6 +76,7 @@ import {
   ReportTemplateConfig,
   ScheduleCategory,
   ScheduleEventItem,
+  SptjmTemplateConfig,
   TrashRecordItem,
   UserPermissions,
   WilayahKabKota,
@@ -233,6 +234,8 @@ interface MenuHubViewProps {
   onSaveCouponConfig?: (next: CouponPrintConfig) => void;
   bastTemplate?: BastTemplateConfig;
   onSaveBastTemplate?: (next: BastTemplateConfig) => void;
+  sptjmTemplate?: SptjmTemplateConfig;
+  onSaveSptjmTemplate?: (next: SptjmTemplateConfig) => void;
   proposalBastMap?: ProposalBastMap;
   onSaveProposalBastConfig?: (
     proposalId: string,
@@ -316,6 +319,8 @@ export function MenuHubView({
   onSaveCouponConfig,
   bastTemplate,
   onSaveBastTemplate,
+  sptjmTemplate,
+  onSaveSptjmTemplate,
   proposalBastMap = {},
   onSaveProposalBastConfig,
   onOpenCreateStandaloneDatabaseKpm,
@@ -551,7 +556,7 @@ export function MenuHubView({
           category: 'kpm',
           badge,
           tone,
-          title: h.kpmName || h.registerCode || 'Calon KPM',
+          title: h.kpmName || h.registerCode || 'KPM',
           detail,
           actorName: h.actorName || 'Petugas Internal',
           tahun: h.tahun || '',
@@ -1280,7 +1285,7 @@ export function MenuHubView({
                         </span>
                       </div>
                       <p className="mt-0.5 truncate text-xs text-slate-500">
-                        Calon KPM standalone berstatus menunggu (berbasis domisili)
+                        KPM standalone berstatus menunggu (berbasis domisili)
                       </p>
                     </div>
                     <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -1659,9 +1664,9 @@ export function MenuHubView({
     > = {
       delete_all_kpm: {
         title: 'Hapus Semua KPM',
-        subtitle: `Menghapus seluruh calon KPM dan log auditnya (${records.length} tercatat)`,
+        subtitle: `Menghapus seluruh data KPM dan log auditnya (${records.length} tercatat)`,
         confirmMessage:
-          'Seluruh data calon KPM beserta riwayat audit KPM dan keluar-masuk proposal akan dihapus permanen. Data master proposal dan katalog item tetap dipertahankan.',
+          'Seluruh data KPM beserta riwayat audit KPM dan keluar-masuk proposal akan dihapus permanen. Data master proposal dan katalog item tetap dipertahankan.',
         buttonLabel: 'Hapus Semua KPM',
         dangerLevel: 'medium',
       },
@@ -3357,7 +3362,7 @@ export function MenuHubView({
               <p className="text-sm font-bold text-slate-900">Data Bersih dari Duplikasi</p>
               <p className="mt-1 text-xs text-slate-500">
                 {duplikasiYearFilter === 'all'
-                  ? 'Tidak ditemukan NIK KTP atau Nomor KK yang sama di seluruh data calon KPM.'
+                  ? 'Tidak ditemukan NIK KTP atau Nomor KK yang sama di seluruh data KPM.'
                   : `Tidak ditemukan NIK KTP atau Nomor KK ganda yang melibatkan data tahun ${duplikasiYearFilter}.`}
               </p>
             </div>
@@ -3713,7 +3718,7 @@ export function MenuHubView({
               proposals={proposals}
               wilayahList={wilayahList}
               emptyTitle={`Belum ada KPM di kategori ${drillLabel}`}
-              emptySubtitle={`Tidak ada data calon KPM dengan status klasifikasi ${drillLabel}.`}
+              emptySubtitle={`Tidak ada data KPM dengan status klasifikasi ${drillLabel}.`}
               onSelectRecord={onSelectKpm}
             />
           </div>
@@ -3812,7 +3817,7 @@ export function MenuHubView({
               proposals={proposals}
               wilayahList={wilayahList}
               emptyTitle="Belum ada KPM untuk pengelola ini"
-              emptySubtitle={`Pengelola ${pengelolaTitle} belum memiliki data calon KPM yang terdaftar.`}
+              emptySubtitle={`Pengelola ${pengelolaTitle} belum memiliki data KPM yang terdaftar.`}
               onSelectRecord={onSelectKpm}
               headerCard={
                 <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-3.5">
@@ -4330,7 +4335,7 @@ export function MenuHubView({
               proposals={proposals}
               wilayahList={wilayahList}
               emptyTitle="Belum ada KPM untuk pekerjaan ini"
-              emptySubtitle={`Belum ada calon KPM dengan profesi/pekerjaan ${activePekerjaanDrill}.`}
+              emptySubtitle={`Belum ada KPM dengan profesi/pekerjaan ${activePekerjaanDrill}.`}
               onSelectRecord={onSelectKpm}
               headerCard={
                 <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-3.5">
@@ -5606,7 +5611,7 @@ export function MenuHubView({
                               : 'bg-amber-50 text-amber-800'
                           }`}
                         >
-                          {item.kind === 'kpm' ? 'Calon KPM' : 'Proposal'}
+                          {item.kind === 'kpm' ? 'KPM' : 'Proposal'}
                         </span>
                         <p className="mt-1 truncate text-sm font-bold text-slate-900">
                           {item.title}
@@ -5708,6 +5713,8 @@ export function MenuHubView({
         onSaveCouponConfig={onSaveCouponConfig}
         bastTemplate={bastTemplate}
         onSaveBastTemplate={onSaveBastTemplate}
+        sptjmTemplate={sptjmTemplate}
+        onSaveSptjmTemplate={onSaveSptjmTemplate}
         proposalBastMap={proposalBastMap}
         onSaveProposalBastConfig={onSaveProposalBastConfig}
         onBack={() => onChangeSection('root')}

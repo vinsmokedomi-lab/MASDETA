@@ -892,7 +892,7 @@ export function ProposalDetailView({
                   className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white transition-colors hover:bg-teal-800 whitespace-nowrap"
                 >
                   <UserPlus className="h-4 w-4" />
-                  <span>Tambah Calon KPM</span>
+                  <span>Tambah KPM</span>
                 </button>
               )}
               {emptySlotsCount > 0 && (
@@ -915,7 +915,7 @@ export function ProposalDetailView({
                   className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800"
                 >
                   <Users className="h-4 w-4 shrink-0" />
-                  <span className="truncate">Lihat Daftar Calon KPM ({kpmCounts.total})</span>
+                  <span className="truncate">Lihat Daftar KPM ({kpmCounts.total})</span>
                 </button>
 
                 {proposal.status !== 'locked' && canUpdate && onTransferKpm && (
@@ -949,12 +949,12 @@ export function ProposalDetailView({
         <section className="rounded-2xl border border-slate-200 bg-white p-4">
           <h2 className="text-sm font-bold text-slate-900">Klasifikasi DTSEN</h2>
           <p className="mt-0.5 text-xs text-slate-500">
-            Sebaran kategori desil calon KPM yang terdaftar
+            Sebaran kategori desil KPM yang terdaftar
           </p>
 
           {dtsenBreakdown.total === 0 ? (
             <p className="mt-4 py-4 text-center text-xs text-slate-400">
-              Belum ada data calon KPM pada proposal ini.
+              Belum ada data KPM pada proposal ini.
             </p>
           ) : (
             <div className="mt-4 flex items-center gap-4">
@@ -1153,7 +1153,7 @@ export function ProposalDetailView({
 
             {kelurahanBreakdown.length === 0 ? (
               <p className="px-4 py-6 text-center text-xs text-slate-400">
-                Belum ada calon KPM pada proposal ini.
+                Belum ada KPM pada proposal ini.
               </p>
             ) : (
               <div className="divide-y divide-slate-100">
@@ -1578,7 +1578,7 @@ export function ProposalDetailView({
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-5 py-4">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <h2 className="text-base font-bold text-slate-900">Daftar Calon KPM</h2>
+            <h2 className="text-base font-bold text-slate-900">Daftar KPM</h2>
             <span className="rounded-lg bg-teal-50 px-2 py-0.5 text-xs font-bold text-teal-800 tabular-nums">
               {proposalRecords.length} KPM
             </span>
@@ -1662,7 +1662,7 @@ export function ProposalDetailView({
           </p>
           <p className="mt-1 text-xs text-slate-500">
             {proposalRecords.length === 0
-              ? 'Tambahkan calon KPM baru atau terima dari Database KPM ke proposal ini.'
+              ? 'Tambahkan KPM baru atau terima dari Database KPM ke proposal ini.'
               : 'Coba ubah kata kunci pencarian atau pilih filter item lain.'}
           </p>
         </div>
