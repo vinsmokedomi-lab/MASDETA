@@ -14,6 +14,7 @@ import { ItemBantuan, KpmRecord, ReportTemplateConfig } from '../types/kpm';
 import {
   computeSubItemRecap,
   getItemHierarchyRank,
+  normalizeSubItemKey,
   resolvePackageForKpm,
 } from '../utils/imageProcessor';
 import { exportSubItemRecapToPdf } from '../utils/pdfExporter';
@@ -171,11 +172,11 @@ export function SubItemRecapView({
     );
     const catalogOrder = new Map<string, number>();
     pkg.subItems.forEach((subName, idx) => {
-      catalogOrder.set(subName.trim().toLowerCase(), idx);
+      catalogOrder.set(normalizeSubItemKey(subName), idx);
     });
     const sortedAggregates = [...computed.aggregates].sort((a, b) => {
-      const ordA = catalogOrder.get(a.name.trim().toLowerCase()) ?? 9999;
-      const ordB = catalogOrder.get(b.name.trim().toLowerCase()) ?? 9999;
+      const ordA = catalogOrder.get(normalizeSubItemKey(a.key || a.name)) ?? 9999;
+      const ordB = catalogOrder.get(normalizeSubItemKey(b.key || b.name)) ?? 9999;
       if (ordA !== ordB) return ordA - ordB;
       return a.name.localeCompare(b.name, 'id');
     });
@@ -638,7 +639,7 @@ export function SubItemRecapView({
                         <div className="flex shrink-0 items-center gap-2 text-right">
                           <div>
                             <p className="text-sm font-semibold text-slate-900 tabular-nums">
-                              {row.totalNeeded} Unit
+                              {row.totalNeeded} {row.satuan || 'Unit'}
                             </p>
                             <p
                               className={`text-xs font-semibold tabular-nums ${
@@ -825,8 +826,8 @@ export function SubItemRecapView({
               </section>
             </div>
 
-            {/* Kolom Kanan: Listing Sub-Item dari Item yang diklik (default OV) */}
-            <div className="col-span-7">
+            {/* Kolom Kanan: Listing Sub-Item dari Item yang diklik (sticky di viewport desktop) */}
+            <div className="col-span-7 md:sticky md:top-6 self-start">
               <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
                 {!activeItemRow ? (
                   <div className="px-6 py-14 text-center">
@@ -885,7 +886,7 @@ export function SubItemRecapView({
                         </p>
                       </div>
                     ) : (
-                      <div className="divide-y divide-slate-100">
+                      <div className="divide-y divide-slate-100 md:max-h-[calc(100vh-14rem)] md:overflow-y-auto">
                         {activeItemSubRecap.aggregates.map((row) => (
                           <button
                             key={row.key}
@@ -918,7 +919,7 @@ export function SubItemRecapView({
                             <div className="flex shrink-0 items-center gap-2.5 text-right">
                               <div>
                                 <p className="text-sm font-semibold text-slate-900 tabular-nums">
-                                  {row.totalNeeded} Unit
+                                  {row.totalNeeded} {row.satuan || 'Unit'}
                                 </p>
                                 <p
                                   className={`text-xs font-semibold tabular-nums ${

@@ -37,7 +37,6 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Trash2,
-  Upload,
   User,
   UserCheck,
   UserPlus,
@@ -45,7 +44,6 @@ import {
   X,
 } from 'lucide-react';
 import { DriveImage } from './DriveImage';
-import { ExcelImportWizardModal } from './ExcelImportWizardModal';
 import { FilterSelect, SegmentedTabs } from './FormControls';
 import { ItemManagerView } from './ItemManagerView';
 import { MenuDownloadView } from './MenuDownloadView';
@@ -193,17 +191,6 @@ interface MenuHubViewProps {
     role: InternalUserRole;
     password?: string;
   }) => Promise<{ ok: boolean; error?: string }> | void;
-  onImportCsv?: (
-    csvText: string,
-    fileName: string,
-    skipDuplicates?: boolean
-  ) => {
-    importedRecords: number;
-    importedProposals: number;
-    addedPengelola: number;
-    skipped: number;
-    error?: string;
-  };
   onSelectKpm?: (record: KpmRecord) => void;
   onToggleBerkasDikembalikan?: (kpmId: string, nextValue: boolean) => void;
   onSelectKpmFromDuplicate: (record: KpmRecord) => void;
@@ -310,7 +297,6 @@ export function MenuHubView({
   onAdminDataAction,
   onVerifySuperAdminPassword,
   onRegisterInternalUser,
-  onImportCsv,
   onSelectKpm,
   onToggleBerkasDikembalikan,
   onSelectKpmFromDuplicate,
@@ -734,9 +720,6 @@ export function MenuHubView({
     name: string;
     kpmCount: number;
   } | null>(null);
-
-  // Excel / CSV Import Wizard modal
-  const [isImportWizardOpen, setIsImportWizardOpen] = useState(false);
 
   // Matriks Kelengkapan Berkas KPM state
   const [matrixQuery, setMatrixQuery] = useState('');
@@ -1197,479 +1180,465 @@ export function MenuHubView({
                 : 'space-y-5'
             }
           >
-          {/* Group 1: Komunikasi & Koordinasi */}
-          <section className={!isNativeApp ? 'md:col-start-1' : ''}>
-            <h2 className="mb-2 px-1 text-xs font-bold tracking-wide text-slate-500">
-              Komunikasi Tim
-            </h2>
-            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
-              <button
-                type="button"
-                onClick={() => onOpenChat()}
-                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-              >
-                <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-700 text-white">
-                  <MessageSquare className="h-5 w-5" />
-                  {unreadChatCount > 0 && (
-                    <span
-                      aria-label={`${unreadChatCount} pesan belum dibaca`}
-                      className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full bg-rose-600 ring-2 ring-white"
-                    />
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-semibold text-slate-900">Obrolan</p>
-                    {unreadChatCount > 0 && (
-                      <span className="flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
-                        {unreadChatCount}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-              </button>
-            </div>
-          </section>
-
-          {/* Group 2: Audit & Rekapitulasi */}
-          <section className={!isNativeApp ? 'md:col-start-2 md:row-span-3' : ''}>
-            <h2 className="mb-2 px-1 text-xs font-bold tracking-wide text-slate-500">
-              Audit &amp; Rekapitulasi
-            </h2>
-            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
-              <button
-                type="button"
-                onClick={onOpenSubItemRecap}
-                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
-                  <Package className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">Rekapitulasi Item &amp; Sub-Item</p>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">
-                    Akumulasi barang dan hutang penyaluran
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => onChangeSection('dtsen')}
-                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
-                  <Layers className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">Klasifikasi DTSEN</p>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">
-                    Sebaran Desil 1–10 Kemensos
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => onChangeSection('duplikasi')}
-                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-              >
-                <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
-                  <CopyCheck className="h-5 w-5" />
-                  {activeDuplicateBadgeCount > 0 && (
-                    <span
-                      aria-label={`${activeDuplicateBadgeCount} duplikasi terdeteksi`}
-                      className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full bg-rose-600 ring-2 ring-white"
-                    />
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-semibold text-slate-900">Duplikasi NIK / KK</p>
-                    {activeDuplicateBadgeCount > 0 && (
-                      <span className="flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
-                        {activeDuplicateBadgeCount}
-                      </span>
-                    )}
-                  </div>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">
-                    Deteksi NIK atau KK ganda
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => onChangeSection('database-kpm')}
-                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
-                  <Database className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-semibold text-slate-900">Database KPM</p>
-                    <span className="text-xs font-bold text-amber-700 tabular-nums">
-                      {databaseKpmRecords.length}
-                    </span>
-                  </div>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">
-                    Calon KPM standalone berstatus menunggu (berbasis domisili)
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => onChangeSection('arsip')}
-                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-700">
-                  <Archive className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-semibold text-slate-900">Arsip Berkas Ditolak</p>
-                    <span className="text-xs font-bold text-rose-700 tabular-nums">
-                      {archivedRecords.length}
-                    </span>
-                  </div>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">
-                    Daftar berkas KPM standalone berstatus ditolak
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => onChangeSection('kelengkapan')}
-                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
-                  <ClipboardCheck className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">Matriks Kelengkapan Berkas</p>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">
-                    Audit NIK, KK, foto lapangan &amp; DTSEN per KPM
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => onChangeSection('jadwal')}
-                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-              >
-                <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
-                  <CalendarClock className="h-5 w-5" />
-                  {urgentSchedulesCount > 0 && (
-                    <span
-                      aria-label={`${urgentSchedulesCount} jadwal mendesak`}
-                      className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full bg-rose-600 ring-2 ring-white"
-                    />
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-semibold text-slate-900">Jadwal &amp; Target Proposal</p>
-                    {schedules.filter((s) => !s.completed).length > 0 && (
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-[10px] font-bold tabular-nums ${
-                          urgentSchedulesCount > 0
-                            ? 'bg-rose-600 text-white'
-                            : 'bg-amber-100 text-amber-800'
-                        }`}
-                      >
-                        {schedules.filter((s) => !s.completed).length}
-                      </span>
-                    )}
-                  </div>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">
-                    {urgentSchedulesCount > 0
-                      ? `${urgentSchedulesCount} agenda jatuh tempo / mendekati target`
-                      : 'Agenda survey, antar Dinas & penyaluran'}
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => onChangeSection('download')}
-                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
-                  <Download className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">Download</p>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">
-                    Unduh PDF F4 &amp; ekspor Excel (.xlsx)
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => onChangeSection('activity')}
-                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
-                  <History className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">Log Aktivitas Umum</p>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">
-                    Rekam pergerakan proposal, KPM &amp; pelaku
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => onChangeSection('laporan')}
-                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
-                  <FileSpreadsheet className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <p className="text-sm font-semibold text-slate-900">Laporan</p>
-                    <span className="rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800">
-                      Coming Soon
-                    </span>
-                  </div>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">
-                    Laporan &amp; rekapitulasi analitik berkala
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-              </button>
-            </div>
-          </section>
-
-          {/* Group 3: Basis Data Lapangan */}
-          <section className={!isNativeApp ? 'md:col-start-1' : ''}>
-            <h2 className="mb-2 px-1 text-xs font-bold tracking-wide text-slate-500">
-              Basis Data Lapangan
-            </h2>
-            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
-              <button
-                type="button"
-                onClick={() => onChangeSection('pengelola')}
-                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
-                  <Users className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">Pengelola Lapangan</p>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">
-                    Daftar pengelola dan koordinator
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => onChangeSection('pekerjaan')}
-                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
-                  <Briefcase className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">Profesi &amp; Pekerjaan</p>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">
-                    Daftar profesi dan sebaran KPM
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => onChangeSection('wilayah')}
-                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
-                  <MapPin className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">Wilayah</p>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">
-                    Kabupaten / Kota, Kecamatan, dan Desa / Kelurahan
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => onChangeSection('items')}
-                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
-                  <PackagePlus className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">Kelola Item &amp; Sub-Item</p>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">
-                    Katalog paket dan sub-item per tahun
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-              </button>
-
-              {onImportCsv && canAdd && (
-                <button
-                  type="button"
-                  onClick={() => setIsImportWizardOpen(true)}
-                  className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-                >
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700">
-                    <Upload className="h-5 w-5" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-slate-900">Impor Data Excel / CSV</p>
-                    <p className="mt-0.5 truncate text-xs text-slate-500">
-                      Pratinjau &amp; cek duplikasi otomatis sebelum impor massal
-                    </p>
-                  </div>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-                </button>
-              )}
-            </div>
-          </section>
-
-          {/* Group 4: Administrasi Sistem & Pengaturan */}
-          <section className={!isNativeApp ? 'md:col-start-1' : ''}>
-            <h2 className="mb-2 px-1 text-xs font-bold tracking-wide text-slate-500">
-              Sistem &amp; Pengaturan
-            </h2>
-            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
-              {currentUser.role === 'SuperAdmin' && (
-                <button
-                  type="button"
-                  onClick={() => onChangeSection('superadmin')}
-                  className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-                >
-                  <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-700">
-                    <ShieldAlert className="h-5 w-5" />
-                    {(pendingUsersCount > 0 || expiringTrashCount > 0) && (
-                      <span
-                        aria-label={`${pendingUsersCount + expiringTrashCount} notifikasi Super Admin`}
-                        className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full bg-rose-600 ring-2 ring-white"
-                      />
-                    )}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-sm font-semibold text-slate-900">Kontrol Super Admin</p>
-                      {pendingUsersCount > 0 && (
-                        <span className="flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
-                          {pendingUsersCount}
-                        </span>
-                      )}
+            {/* Kolom 1: Operasional & Penyaluran + Komunikasi & Sistem */}
+            <div className="space-y-5">
+              {/* Group 1: Operasional & Penyaluran */}
+              <section>
+                <h2 className="mb-2 px-1 text-xs font-bold tracking-wide text-slate-500">
+                  Operasional &amp; Penyaluran
+                </h2>
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+                  <button
+                    type="button"
+                    onClick={onOpenSubItemRecap}
+                    className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                      <Package className="h-5 w-5" />
                     </div>
-                    <p className="mt-0.5 truncate text-xs text-slate-500">
-                      {pendingUsersCount > 0
-                        ? `${pendingUsersCount} pendaftar menunggu persetujuan`
-                        : 'Reset data & kendali penuh admin'}
-                    </p>
-                  </div>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-                </button>
-              )}
-
-              {onCheckAppUpdate && (
-                <button
-                  type="button"
-                  disabled={checkingAppUpdate}
-                  onClick={onCheckAppUpdate}
-                  className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 disabled:opacity-60"
-                >
-                  <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
-                    <RefreshCw
-                      className={`h-5 w-5 ${checkingAppUpdate ? 'animate-spin' : ''}`}
-                    />
-                    {hasAppUpdate && (
-                      <span
-                        aria-label="Pembaruan aplikasi tersedia"
-                        className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full bg-rose-600 ring-2 ring-white"
-                      />
-                    )}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0 flex-1">
                       <p className="text-sm font-semibold text-slate-900">
-                        {checkingAppUpdate ? 'Memeriksa Pembaruan...' : 'Cek Pembaruan Aplikasi'}
+                        Rekapitulasi Item &amp; Sub-Item
                       </p>
-                      {hasAppUpdate && !checkingAppUpdate && (
-                        <span className="shrink-0 rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-bold text-white">
-                          Update
-                        </span>
+                      <p className="mt-0.5 truncate text-xs text-slate-500">
+                        Akumulasi barang dan hutang penyaluran
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onChangeSection('jadwal')}
+                    className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                      <CalendarClock className="h-5 w-5" />
+                      {urgentSchedulesCount > 0 && (
+                        <span
+                          aria-label={`${urgentSchedulesCount} jadwal mendesak`}
+                          className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full bg-rose-600 ring-2 ring-white"
+                        />
                       )}
                     </div>
-                    <p className="mt-0.5 truncate text-xs text-slate-500">
-                      {hasAppUpdate
-                        ? `Tersedia versi v${availableUpdateVersion || 'terbaru'} · Ketuk untuk perbarui`
-                        : `Versi terpasang v${APP_VERSION} · Unduh rilis terbaru`}
-                    </p>
-                  </div>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-                </button>
-              )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-slate-900">
+                          Jadwal &amp; Target Proposal
+                        </p>
+                        {schedules.filter((s) => !s.completed).length > 0 && (
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[10px] font-bold tabular-nums ${
+                              urgentSchedulesCount > 0
+                                ? 'bg-rose-600 text-white'
+                                : 'bg-amber-100 text-amber-800'
+                            }`}
+                          >
+                            {schedules.filter((s) => !s.completed).length}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-0.5 truncate text-xs text-slate-500">
+                        {urgentSchedulesCount > 0
+                          ? `${urgentSchedulesCount} agenda jatuh tempo / mendekati target`
+                          : 'Agenda survey, antar Dinas & penyaluran'}
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
 
-              <button
-                type="button"
-                onClick={() => onChangeSection('changelog')}
-                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
-                  <ScrollText className="h-5 w-5" />
+                  <button
+                    type="button"
+                    onClick={() => onChangeSection('download')}
+                    className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                      <Download className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-slate-900">Download</p>
+                      <p className="mt-0.5 truncate text-xs text-slate-500">
+                        Unduh PDF F4, Kupon &amp; BAST
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onChangeSection('database-kpm')}
+                    className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                      <Database className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-slate-900">Database KPM</p>
+                        <span className="text-xs font-bold text-amber-700 tabular-nums">
+                          {databaseKpmRecords.length}
+                        </span>
+                      </div>
+                      <p className="mt-0.5 truncate text-xs text-slate-500">
+                        Calon KPM standalone berstatus menunggu (berbasis domisili)
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onChangeSection('arsip')}
+                    className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-700">
+                      <Archive className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-slate-900">Arsip Berkas Ditolak</p>
+                        <span className="text-xs font-bold text-rose-700 tabular-nums">
+                          {archivedRecords.length}
+                        </span>
+                      </div>
+                      <p className="mt-0.5 truncate text-xs text-slate-500">
+                        Daftar berkas KPM standalone berstatus ditolak
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-semibold text-slate-900">Riwayat Pembaruan</p>
-                    <span className="shrink-0 rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-bold text-teal-700 ring-1 ring-inset ring-teal-200 tabular-nums">
-                      v{effectiveVersion}
-                    </span>
-                  </div>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">
-                    Changelog lengkap dari v1.0.0 hingga v{effectiveVersion}
-                  </p>
+              </section>
+
+              {/* Group 2: Komunikasi & Sistem */}
+              <section>
+                <h2 className="mb-2 px-1 text-xs font-bold tracking-wide text-slate-500">
+                  Komunikasi &amp; Sistem
+                </h2>
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => onOpenChat()}
+                    className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-700 text-white">
+                      <MessageSquare className="h-5 w-5" />
+                      {unreadChatCount > 0 && (
+                        <span
+                          aria-label={`${unreadChatCount} pesan belum dibaca`}
+                          className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full bg-rose-600 ring-2 ring-white"
+                        />
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-slate-900">Obrolan</p>
+                        {unreadChatCount > 0 && (
+                          <span className="flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
+                            {unreadChatCount}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-0.5 truncate text-xs text-slate-500">
+                        Koordinasi pesan langsung tim internal
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+
+                  {currentUser.role === 'SuperAdmin' && (
+                    <button
+                      type="button"
+                      onClick={() => onChangeSection('superadmin')}
+                      className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                    >
+                      <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-700">
+                        <ShieldAlert className="h-5 w-5" />
+                        {(pendingUsersCount > 0 || expiringTrashCount > 0) && (
+                          <span
+                            aria-label={`${pendingUsersCount + expiringTrashCount} notifikasi Super Admin`}
+                            className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full bg-rose-600 ring-2 ring-white"
+                          />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-semibold text-slate-900">Kontrol Super Admin</p>
+                          {pendingUsersCount > 0 && (
+                            <span className="flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
+                              {pendingUsersCount}
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-0.5 truncate text-xs text-slate-500">
+                          {pendingUsersCount > 0
+                            ? `${pendingUsersCount} pendaftar menunggu persetujuan`
+                            : 'Reset data & kendali penuh admin'}
+                        </p>
+                      </div>
+                      <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                    </button>
+                  )}
+
+                  {onCheckAppUpdate && (
+                    <button
+                      type="button"
+                      disabled={checkingAppUpdate}
+                      onClick={onCheckAppUpdate}
+                      className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 disabled:opacity-60"
+                    >
+                      <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                        <RefreshCw
+                          className={`h-5 w-5 ${checkingAppUpdate ? 'animate-spin' : ''}`}
+                        />
+                        {hasAppUpdate && (
+                          <span
+                            aria-label="Pembaruan aplikasi tersedia"
+                            className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full bg-rose-600 ring-2 ring-white"
+                          />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-semibold text-slate-900">
+                            {checkingAppUpdate ? 'Memeriksa Pembaruan...' : 'Cek Pembaruan Aplikasi'}
+                          </p>
+                          {hasAppUpdate && !checkingAppUpdate && (
+                            <span className="shrink-0 rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-bold text-white">
+                              Update
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-0.5 truncate text-xs text-slate-500">
+                          {hasAppUpdate
+                            ? `Tersedia versi v${availableUpdateVersion || 'terbaru'} · Ketuk untuk perbarui`
+                            : `Versi terpasang v${APP_VERSION} · Unduh rilis terbaru`}
+                        </p>
+                      </div>
+                      <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => onChangeSection('changelog')}
+                    className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+                      <ScrollText className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-slate-900">Riwayat Pembaruan</p>
+                        <span className="shrink-0 rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-bold text-teal-700 ring-1 ring-inset ring-teal-200 tabular-nums">
+                          v{effectiveVersion}
+                        </span>
+                      </div>
+                      <p className="mt-0.5 truncate text-xs text-slate-500">
+                        Changelog lengkap dari v1.0.0 hingga v{effectiveVersion}
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
                 </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
-              </button>
+              </section>
             </div>
-          </section>
+
+            {/* Kolom 2: Audit & Validasi Data + Master Data & Katalog */}
+            <div className="space-y-5">
+              {/* Group 3: Audit & Validasi Data */}
+              <section>
+                <h2 className="mb-2 px-1 text-xs font-bold tracking-wide text-slate-500">
+                  Audit &amp; Validasi Data
+                </h2>
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => onChangeSection('dtsen')}
+                    className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                      <Layers className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-slate-900">Klasifikasi DTSEN</p>
+                      <p className="mt-0.5 truncate text-xs text-slate-500">
+                        Sebaran Desil 1–10 Kemensos
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onChangeSection('duplikasi')}
+                    className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
+                      <CopyCheck className="h-5 w-5" />
+                      {activeDuplicateBadgeCount > 0 && (
+                        <span
+                          aria-label={`${activeDuplicateBadgeCount} duplikasi terdeteksi`}
+                          className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full bg-rose-600 ring-2 ring-white"
+                        />
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-slate-900">Duplikasi NIK / KK</p>
+                        {activeDuplicateBadgeCount > 0 && (
+                          <span className="flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
+                            {activeDuplicateBadgeCount}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-0.5 truncate text-xs text-slate-500">
+                        Deteksi NIK atau KK ganda
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onChangeSection('kelengkapan')}
+                    className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                      <ClipboardCheck className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-slate-900">
+                        Matriks Kelengkapan Berkas
+                      </p>
+                      <p className="mt-0.5 truncate text-xs text-slate-500">
+                        Audit NIK, KK, foto lapangan &amp; DTSEN per KPM
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onChangeSection('activity')}
+                    className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+                      <History className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-slate-900">Log Aktivitas Umum</p>
+                      <p className="mt-0.5 truncate text-xs text-slate-500">
+                        Rekam pergerakan proposal, KPM &amp; pelaku
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onChangeSection('laporan')}
+                    className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
+                      <FileSpreadsheet className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-semibold text-slate-900">Laporan</p>
+                        <span className="rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800">
+                          Coming Soon
+                        </span>
+                      </div>
+                      <p className="mt-0.5 truncate text-xs text-slate-500">
+                        Laporan &amp; rekapitulasi analitik berkala
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+                </div>
+              </section>
+
+              {/* Group 4: Master Data & Katalog */}
+              <section>
+                <h2 className="mb-2 px-1 text-xs font-bold tracking-wide text-slate-500">
+                  Master Data &amp; Katalog
+                </h2>
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => onChangeSection('items')}
+                    className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+                      <PackagePlus className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-slate-900">
+                        Kelola Item &amp; Sub-Item
+                      </p>
+                      <p className="mt-0.5 truncate text-xs text-slate-500">
+                        Katalog paket, sub-item, volume &amp; satuan per tahun
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onChangeSection('wilayah')}
+                    className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                      <MapPin className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-slate-900">Wilayah</p>
+                      <p className="mt-0.5 truncate text-xs text-slate-500">
+                        Kabupaten / Kota, Kecamatan, dan Desa / Kelurahan
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onChangeSection('pengelola')}
+                    className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+                      <Users className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-slate-900">Pengelola Lapangan</p>
+                      <p className="mt-0.5 truncate text-xs text-slate-500">
+                        Daftar pengelola dan koordinator
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onChangeSection('pekerjaan')}
+                    className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+                      <Briefcase className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-slate-900">Profesi &amp; Pekerjaan</p>
+                      <p className="mt-0.5 truncate text-xs text-slate-500">
+                        Daftar profesi dan sebaran KPM
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+                </div>
+              </section>
+            </div>
           </div>
         </div>
-
-        {onImportCsv && (
-          <ExcelImportWizardModal
-            isOpen={isImportWizardOpen}
-            existingRecords={records}
-            existingProposals={proposals}
-            onClose={() => setIsImportWizardOpen(false)}
-            onConfirmImport={async (csvText, skipDuplicates) => {
-              onImportCsv(csvText, 'Wizard Impor', skipDuplicates);
-            }}
-          />
-        )}
       </div>
     );
   }

@@ -5,7 +5,6 @@ import {
   Check,
   ChevronDown,
   FileCheck2,
-  FileSpreadsheet,
   FileText,
   ImagePlus,
   Loader2,
@@ -36,7 +35,6 @@ import {
   resolveProposalKecamatanCategory,
   sortKecamatanCategoryNames,
 } from '../utils/imageProcessor';
-import { exportKpmRecordsToExcel } from '../utils/excelExporter';
 import {
   ADDON_PDF_COLUMN_DEFINITIONS,
   DEFAULT_ADDON_PDF_COLUMN_KEYS,
@@ -166,7 +164,6 @@ export function MenuDownloadView({
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [isGeneratingKupon, setIsGeneratingKupon] = useState(false);
   const [isGeneratingBast, setIsGeneratingBast] = useState(false);
-  const [isGeneratingExcel, setIsGeneratingExcel] = useState(false);
   const [limitNotice, setLimitNotice] = useState(false);
 
   const [pdfFeedback, setPdfFeedback] = useState<{
@@ -178,10 +175,6 @@ export function MenuDownloadView({
     message: string;
   } | null>(null);
   const [bastFeedback, setBastFeedback] = useState<{
-    type: 'success' | 'error';
-    message: string;
-  } | null>(null);
-  const [excelFeedback, setExcelFeedback] = useState<{
     type: 'success' | 'error';
     message: string;
   } | null>(null);
@@ -418,7 +411,6 @@ export function MenuDownloadView({
     setPdfFeedback(null);
     setKuponFeedback(null);
     setBastFeedback(null);
-    setExcelFeedback(null);
   };
 
   const handleSelectProposal = (nextProp: string) => {
@@ -427,7 +419,6 @@ export function MenuDownloadView({
     setPdfFeedback(null);
     setKuponFeedback(null);
     setBastFeedback(null);
-    setExcelFeedback(null);
   };
 
   const buildScopeTitleAndFileName = (prefix?: string) => {
@@ -557,36 +548,6 @@ export function MenuDownloadView({
       });
     } finally {
       setIsGeneratingBast(false);
-    }
-  };
-
-  const handleDownloadExcel = async () => {
-    if (filteredRecords.length === 0 || isGeneratingExcel) return;
-    setExcelFeedback(null);
-    setIsGeneratingExcel(true);
-    try {
-      const { fileName } = buildScopeTitleAndFileName();
-      const res = await exportKpmRecordsToExcel({
-        records: filteredRecords,
-        proposals,
-        items,
-        wilayahList,
-        fileName,
-        reportTemplate: templateDraft,
-      });
-      setExcelFeedback({
-        type: 'success',
-        message: res.openedNative
-          ? `Excel "${res.savedFileName}" (${res.count} KPM) berhasil dibuat dan dibuka.`
-          : `Excel "${res.savedFileName}" (${res.count} KPM) berhasil diunduh.`,
-      });
-    } catch (err) {
-      setExcelFeedback({
-        type: 'error',
-        message: err instanceof Error ? err.message : 'Gagal membuat file Excel.',
-      });
-    } finally {
-      setIsGeneratingExcel(false);
     }
   };
 
@@ -741,52 +702,8 @@ export function MenuDownloadView({
             </div>
           </section>
 
-          {/* Card 3: Ekspor Excel (.xlsx) */}
-          <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2.5 md:p-4">
-            <div className="flex items-center gap-2">
-              <FileSpreadsheet className="h-4 w-4 text-teal-700" />
-              <h2 className="text-sm font-bold text-slate-900">Ekspor Excel (.xlsx)</h2>
-            </div>
-
-            {excelFeedback && (
-              <div
-                role="status"
-                className={`flex items-start gap-2 rounded-xl border px-3 py-2 text-xs ${
-                  excelFeedback.type === 'success'
-                    ? 'border-teal-200 bg-teal-50 text-teal-900'
-                    : 'border-rose-200 bg-rose-50 text-rose-900'
-                }`}
-              >
-                {excelFeedback.type === 'success' ? (
-                  <Check className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
-                ) : (
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
-                )}
-                <p className="font-medium leading-snug">{excelFeedback.message}</p>
-              </div>
-            )}
-
-            <button
-              type="button"
-              disabled={filteredRecords.length === 0 || isGeneratingExcel}
-              onClick={() => void handleDownloadExcel()}
-              className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl border border-teal-200 bg-teal-50/70 px-4 text-sm font-semibold text-teal-800 transition-colors hover:bg-teal-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-            >
-              {isGeneratingExcel ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  <span>Menyiapkan Excel...</span>
-                </>
-              ) : (
-                <>
-                  <FileSpreadsheet className="h-4 w-4" />
-                  <span>Download Excel (.xlsx) ({filteredRecords.length} KPM)</span>
-                </>
-              )}
-            </button>
-          </section>
-
-          {/* Card 4: Template Kop Surat & Penandatangan Resmi (untuk Print KPM & Excel) */}
+          {/* Template Kop Surat & Penandatangan (khusus mode Print KPM) */}
+          {printMode === 'kpm' && (
           <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
             <button
               type="button"
@@ -797,12 +714,12 @@ export function MenuDownloadView({
                 <FileText className="h-4 w-4 shrink-0 text-teal-700" />
                 <div className="min-w-0">
                   <p className="text-sm font-bold text-slate-900">
-                    Template Kop &amp; Penandatangan Laporan
+                    Template Kop &amp; Penandatangan (Print KPM)
                   </p>
                   <p className="truncate text-[11px] text-slate-500">
                     {templateDraft.enabled
-                      ? `${templateDraft.orgHeaderLine2} · Aktif pada Tabel PDF & Excel`
-                      : 'Nonaktif · Ketuk untuk mengaktifkan kop laporan'}
+                      ? `${templateDraft.orgHeaderLine2} · Aktif pada Tabel PDF Print KPM`
+                      : 'Nonaktif · Ketuk untuk mengaktifkan kop Print KPM'}
                   </p>
                 </div>
               </div>
@@ -1027,6 +944,7 @@ export function MenuDownloadView({
               </div>
             )}
           </section>
+          )}
         </div>
 
         {/* Kolom Kanan (Desktop) / Bawah (Mobile): Panel sesuai Mode Cetak */}
@@ -1875,7 +1793,6 @@ export function MenuDownloadView({
           setPdfFeedback(null);
           setKuponFeedback(null);
           setBastFeedback(null);
-          setExcelFeedback(null);
         }}
         searchable
         searchPlaceholder="Pencarian..."

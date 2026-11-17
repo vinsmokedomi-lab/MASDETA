@@ -15,9 +15,15 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { TAHUN_OPTIONS } from '../data/kpmOptions';
+import { SUB_ITEM_SATUAN_OPTIONS, TAHUN_OPTIONS } from '../data/kpmOptions';
 import { ItemBantuan, KpmRecord } from '../types/kpm';
-import { capitalizeWords, getItemsForYear, normalizeSubItemKey } from '../utils/imageProcessor';
+import {
+  capitalizeWords,
+  formatSubItemSpec,
+  getItemsForYear,
+  normalizeSubItemKey,
+  parseSubItemSpec,
+} from '../utils/imageProcessor';
 import { FilterSelect } from './FormControls';
 import { useIsDesktopWeb } from '../utils/platform';
 
@@ -35,7 +41,7 @@ interface ItemManagerViewProps {
   onCopyItemsFromYear: (fromYear: string, toYear: string) => void;
 }
 
-type SatuanOption = 'Unit' | 'Set' | 'Pcs';
+type SatuanOption = string;
 
 interface DeleteLayerState {
   layer: 1 | 2;
@@ -67,6 +73,8 @@ export function ItemManagerView({
   const [selectedYear, setSelectedYear] = useState<string>('2026');
   const [expandedCode, setExpandedCode] = useState<string | null>(null);
   const [inlineSubItemInput, setInlineSubItemInput] = useState('');
+  const [inlineSubItemVolume, setInlineSubItemVolume] = useState<number>(1);
+  const [inlineSubItemSatuan, setInlineSubItemSatuan] = useState<SatuanOption>('Unit');
 
   // Form Sub-Screen state ('list' vs 'form')
   const [mode, setMode] = useState<'list' | 'form'>('list');
@@ -216,7 +224,7 @@ export function ItemManagerView({
     const map = new Map<string, string>();
     for (const pkg of items) {
       for (const s of pkg.subItems) {
-        const clean = s.replace(/\s*\(\d+\s*(unit|set|pcs)\)\s*$/i, '').trim();
+        const clean = parseSubItemSpec(s, { itemCode: pkg.code, itemName: pkg.name }).baseName;
         const key = normalizeSubItemKey(clean);
         if (key && !map.has(key)) {
           map.set(key, capitalizeWords(clean));
@@ -281,16 +289,14 @@ export function ItemManagerView({
   };
 
   const handleAddSubItemFromModal = () => {
-    const baseName = capitalizeWords(
-      (selectedSubItemDraft || subItemSearch).trim()
-    );
+    const parsedDraft = parseSubItemSpec((selectedSubItemDraft || subItemSearch).trim(), {
+      itemCode: formCode,
+      itemName: formName,
+    });
+    const baseName = capitalizeWords(parsedDraft.baseName);
     if (!baseName) return;
 
-    const formatted =
-      subItemVolume === 1 && subItemSatuan === 'Unit'
-        ? baseName
-        : `${baseName} (${subItemVolume} ${subItemSatuan})`;
-
+    const formatted = formatSubItemSpec(baseName, subItemVolume, subItemSatuan);
     const key = normalizeSubItemKey(formatted);
     if (!formSubItems.some((s) => normalizeSubItemKey(s) === key)) {
       setFormSubItems((prev) => [...prev, formatted]);
@@ -352,16 +358,24 @@ export function ItemManagerView({
   const handleInlineAddSubItem = (pkg: ItemBantuan) => {
     const raw = inlineSubItemInput.trim();
     if (!raw) return;
-    const key = normalizeSubItemKey(raw);
-    const existingCanonical =
+    const parsed = parseSubItemSpec(raw, { itemCode: pkg.code, itemName: pkg.name });
+    const key = normalizeSubItemKey(parsed.baseName);
+    const canonicalBase =
       canonicalSubItemSuggestions.find((s) => normalizeSubItemKey(s) === key) ||
-      capitalizeWords(raw);
+      capitalizeWords(parsed.baseName);
+    const formatted = formatSubItemSpec(
+      canonicalBase,
+      inlineSubItemVolume > 0 ? inlineSubItemVolume : parsed.volume,
+      inlineSubItemSatuan || parsed.satuan
+    );
     if (pkg.subItems.some((s) => normalizeSubItemKey(s) === key)) {
       setInlineSubItemInput('');
       return;
     }
-    onUpdateItemSubItems(pkg.tahun, pkg.code, [...pkg.subItems, existingCanonical]);
+    onUpdateItemSubItems(pkg.tahun, pkg.code, [...pkg.subItems, formatted]);
     setInlineSubItemInput('');
+    setInlineSubItemVolume(1);
+    setInlineSubItemSatuan('Unit');
   };
 
   // RENDER FORM SCREEN (TAMBAH / EDIT ITEM)
@@ -529,25 +543,66 @@ export function ItemManagerView({
 
               {formSubItems.length > 0 && (
                 <div className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200">
-                  {formSubItems.map((sub, idx) => (
-                    <div
-                      key={`${sub}-${idx}`}
-                      className="flex items-center justify-between gap-2 bg-slate-50/50 px-3 py-2.5"
-                    >
-                      <span className="text-xs font-semibold text-slate-800">
-                        {idx + 1}. {sub}
-                      </span>
-                      <button
-                        type="button"
-                        disabled={Boolean(editingOriginalCode) && !canDelete}
-                        onClick={() => requestDeleteFormSubItem(idx, sub)}
-                        aria-label={`Hapus sub-item ${sub}`}
-                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
+                  {formSubItems.map((sub, idx) => {
+                    const spec = parseSubItemSpec(sub, { itemCode: formCode, itemName: formName });
+                    return (
+                      <div
+                        key={`${sub}-${idx}`}
+                        className="flex flex-wrap items-center justify-between gap-2 bg-slate-50/50 px-3 py-2.5"
                       >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  ))}
+                        <span className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-800">
+                          {idx + 1}. {spec.baseName}
+                        </span>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <input
+                            type="number"
+                            min={1}
+                            max={999}
+                            aria-label={`Jumlah ${spec.baseName}`}
+                            value={spec.volume}
+                            onChange={(e) => {
+                              const vol = Math.max(1, Number(e.target.value) || 1);
+                              const nextStr = formatSubItemSpec(spec.baseName, vol, spec.satuan);
+                              setFormSubItems((prev) =>
+                                prev.map((itemStr, i) => (i === idx ? nextStr : itemStr))
+                              );
+                            }}
+                            className="h-8 w-14 rounded-lg border border-slate-200 bg-white px-2 text-center text-xs font-bold text-slate-900 tabular-nums focus:border-teal-700 focus:outline-none"
+                          />
+                          <select
+                            aria-label={`Satuan ${spec.baseName}`}
+                            value={spec.satuan}
+                            onChange={(e) => {
+                              const nextStr = formatSubItemSpec(
+                                spec.baseName,
+                                spec.volume,
+                                e.target.value
+                              );
+                              setFormSubItems((prev) =>
+                                prev.map((itemStr, i) => (i === idx ? nextStr : itemStr))
+                              );
+                            }}
+                            className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 focus:border-teal-700 focus:outline-none"
+                          >
+                            {SUB_ITEM_SATUAN_OPTIONS.map((opt) => (
+                              <option key={opt} value={opt}>
+                                {opt}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            disabled={Boolean(editingOriginalCode) && !canDelete}
+                            onClick={() => requestDeleteFormSubItem(idx, sub)}
+                            aria-label={`Hapus sub-item ${sub}`}
+                            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
 
@@ -728,7 +783,9 @@ export function ItemManagerView({
                 {/* Volume & Satuan */}
                 <div className="grid grid-cols-2 gap-2.5">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700">Jumlah</label>
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Volume / Jumlah
+                    </label>
                     <div className="mt-1.5 flex min-h-[42px] items-center justify-between rounded-xl border border-slate-300 bg-white px-2">
                       <button
                         type="button"
@@ -738,9 +795,15 @@ export function ItemManagerView({
                       >
                         <Minus className="h-3.5 w-3.5" />
                       </button>
-                      <span className="text-sm font-bold text-slate-900 tabular-nums">
-                        {subItemVolume}
-                      </span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={999}
+                        aria-label="Volume sub-item"
+                        value={subItemVolume}
+                        onChange={(e) => setSubItemVolume(Math.max(1, Number(e.target.value) || 1))}
+                        className="w-14 bg-transparent text-center text-sm font-bold text-slate-900 tabular-nums focus:outline-none"
+                      />
                       <button
                         type="button"
                         onClick={() => setSubItemVolume((v) => v + 1)}
@@ -757,12 +820,14 @@ export function ItemManagerView({
                     <FilterSelect
                       ariaLabel="Pilih satuan sub-item"
                       value={subItemSatuan}
-                      onChange={(val) => setSubItemSatuan(val as SatuanOption)}
+                      onChange={(val) => setSubItemSatuan(val)}
                       className="mt-1.5"
                     >
-                      <option value="Unit">Unit</option>
-                      <option value="Set">Set</option>
-                      <option value="Pcs">Pcs</option>
+                      {SUB_ITEM_SATUAN_OPTIONS.map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
                     </FilterSelect>
                   </div>
                 </div>
@@ -1074,6 +1139,8 @@ export function ItemManagerView({
                       onClick={() => {
                         setExpandedCode(isExpanded ? null : item.code);
                         setInlineSubItemInput('');
+                        setInlineSubItemVolume(1);
+                        setInlineSubItemSatuan('Unit');
                       }}
                       className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
                     >
@@ -1154,40 +1221,127 @@ export function ItemManagerView({
 
                       {item.subItems.length > 0 && (
                         <div className="divide-y divide-slate-200/70 overflow-hidden rounded-xl border border-slate-200 bg-white">
-                          {item.subItems.map((sub, subIdx) => (
-                            <div
-                              key={`${sub}-${subIdx}`}
-                              className="flex items-center justify-between gap-2 px-3 py-2"
-                            >
-                              <span className="text-xs font-medium text-slate-800">
-                                {subIdx + 1}. {sub}
-                              </span>
-                              {canDelete && (
-                                <button
-                                  type="button"
-                                  onClick={() => requestDeleteExpandedSubItem(item, subIdx, sub)}
-                                  aria-label={`Hapus sub-item ${sub}`}
-                                  className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
-                                >
-                                  <X className="h-3.5 w-3.5" />
-                                </button>
-                              )}
-                            </div>
-                          ))}
+                          {item.subItems.map((sub, subIdx) => {
+                            const spec = parseSubItemSpec(sub, {
+                              itemCode: item.code,
+                              itemName: item.name,
+                            });
+                            return (
+                              <div
+                                key={`${sub}-${subIdx}`}
+                                className="flex flex-wrap items-center justify-between gap-2 px-3 py-2"
+                              >
+                                <span className="min-w-0 flex-1 truncate text-xs font-medium text-slate-800">
+                                  {subIdx + 1}. {spec.baseName}
+                                </span>
+                                <div className="flex shrink-0 items-center gap-1.5">
+                                  {canUpdate ? (
+                                    <>
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        max={999}
+                                        aria-label={`Volume ${spec.baseName}`}
+                                        value={spec.volume}
+                                        onChange={(e) => {
+                                          const vol = Math.max(1, Number(e.target.value) || 1);
+                                          const updatedSub = formatSubItemSpec(
+                                            spec.baseName,
+                                            vol,
+                                            spec.satuan
+                                          );
+                                          onUpdateItemSubItems(
+                                            item.tahun,
+                                            item.code,
+                                            item.subItems.map((s, idx2) =>
+                                              idx2 === subIdx ? updatedSub : s
+                                            )
+                                          );
+                                        }}
+                                        className="h-7 w-13 rounded-lg border border-slate-200 bg-slate-50 px-1.5 text-center text-xs font-bold text-slate-900 tabular-nums focus:border-teal-700 focus:bg-white focus:outline-none"
+                                      />
+                                      <select
+                                        aria-label={`Satuan ${spec.baseName}`}
+                                        value={spec.satuan}
+                                        onChange={(e) => {
+                                          const updatedSub = formatSubItemSpec(
+                                            spec.baseName,
+                                            spec.volume,
+                                            e.target.value
+                                          );
+                                          onUpdateItemSubItems(
+                                            item.tahun,
+                                            item.code,
+                                            item.subItems.map((s, idx2) =>
+                                              idx2 === subIdx ? updatedSub : s
+                                            )
+                                          );
+                                        }}
+                                        className="h-7 rounded-lg border border-slate-200 bg-slate-50 px-1.5 text-[11px] font-semibold text-slate-700 focus:border-teal-700 focus:bg-white focus:outline-none"
+                                      >
+                                        {SUB_ITEM_SATUAN_OPTIONS.map((opt) => (
+                                          <option key={opt} value={opt}>
+                                            {opt}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </>
+                                  ) : (
+                                    <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 tabular-nums">
+                                      {spec.volume} {spec.satuan}
+                                    </span>
+                                  )}
+                                  {canDelete && (
+                                    <button
+                                      type="button"
+                                      onClick={() => requestDeleteExpandedSubItem(item, subIdx, sub)}
+                                      aria-label={`Hapus sub-item ${sub}`}
+                                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                                    >
+                                      <X className="h-3.5 w-3.5" />
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
 
                       {canUpdate && (
-                        <div className="flex gap-2">
+                        <div className="flex flex-wrap gap-1.5">
                           <input
                             type="text"
                             autoCapitalize="words"
                             list="canonical-subitem-suggestions"
                             value={inlineSubItemInput}
                             onChange={(e) => setInlineSubItemInput(capitalizeWords(e.target.value))}
-                            placeholder="Tambah sub-item cepat..."
-                            className="min-h-[38px] flex-1 rounded-xl border border-slate-300 bg-white px-3 text-xs focus:border-teal-700 focus:outline-none"
+                            placeholder="Nama sub-item..."
+                            className="min-h-[38px] min-w-[140px] flex-1 rounded-xl border border-slate-300 bg-white px-3 text-xs focus:border-teal-700 focus:outline-none"
                           />
+                          <input
+                            type="number"
+                            min={1}
+                            max={999}
+                            aria-label="Volume sub-item baru"
+                            value={inlineSubItemVolume}
+                            onChange={(e) =>
+                              setInlineSubItemVolume(Math.max(1, Number(e.target.value) || 1))
+                            }
+                            className="min-h-[38px] w-14 rounded-xl border border-slate-300 bg-white px-2 text-center text-xs font-bold text-slate-900 tabular-nums focus:border-teal-700 focus:outline-none"
+                          />
+                          <select
+                            aria-label="Satuan sub-item baru"
+                            value={inlineSubItemSatuan}
+                            onChange={(e) => setInlineSubItemSatuan(e.target.value)}
+                            className="min-h-[38px] rounded-xl border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 focus:border-teal-700 focus:outline-none"
+                          >
+                            {SUB_ITEM_SATUAN_OPTIONS.map((opt) => (
+                              <option key={opt} value={opt}>
+                                {opt}
+                              </option>
+                            ))}
+                          </select>
                           <button
                             type="button"
                             onClick={() => handleInlineAddSubItem(item)}

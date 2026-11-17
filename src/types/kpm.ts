@@ -434,5 +434,20 @@ export const DEFAULT_BAST_TEMPLATE: BastTemplateConfig = {
 
 export type ProposalBastMap = Record<string, Partial<BastTemplateConfig>>;
 
+export interface SptjmTemplateConfig {
+  tempat: string;
+  tanggalIso: string;
+  tanggalCustomText?: string;
+  pejabatJabatan: string;
+  pejabatNama: string;
+  pejabatNip: string;
+}
 
-
+export const DEFAULT_SPTJM_TEMPLATE: SptjmTemplateConfig = {
+  tempat: 'Pontianak',
+  tanggalIso: '',
+  tanggalCustomText: '',
+  pejabatJabatan: 'Kepala Bidang Pemberdayaan Fakir Miskin Dinas Sosial Provinsi Kalbar',
+  pejabatNama: 'TATIK GESTYANINGSIH, A.Ks., M.Si',
+  pejabatNip: 'NIP. 19680514 198901 2 002',
+};

@@ -102,6 +102,23 @@ export const ITEM_BANTUAN_OPTIONS = [
   'LE',
 ];
 
+export const SUB_ITEM_SATUAN_OPTIONS = [
+  'Unit',
+  'Set',
+  'Pcs',
+  'Buah',
+  'Paket',
+  'Box',
+  'Lusin',
+  'Kg',
+  'Liter',
+  'Meter',
+  'Roll',
+  'Botol',
+] as const;
+
+export type SubItemSatuanOption = (typeof SUB_ITEM_SATUAN_OPTIONS)[number];
+
 export const KAB_KOTA_OPTIONS = ['Kota Pontianak'];
 
 export const INITIAL_WILAYAH_LIST: WilayahKabKota[] = [
@@ -269,7 +286,7 @@ const CORE_ITEM_TEMPLATES: { code: string; name: string; subItems: string[] }[] 
   {
     code: 'KPR',
     name: 'Paket Kompor Gas',
-    subItems: ['Kompor Gas', 'Selang Gas & Regulator', 'Rice Cooker', 'Dispenser', 'Blender'],
+    subItems: ['Kompor Gas', 'Selang Gas & Regulator (1 Set)', 'Rice Cooker', 'Dispenser', 'Blender'],
   },
   {
     code: 'JHT',
@@ -310,7 +327,7 @@ const CORE_ITEM_TEMPLATES: { code: string; name: string; subItems: string[] }[] 
   {
     code: 'TND',
     name: 'Paket Tenda & Kursi',
-    subItems: ['Tenda Lipat', 'Kursi Plastik (6 pcs)'],
+    subItems: ['Tenda Lipat', 'Kursi Plastik (6 Unit)'],
   },
   {
     code: 'MSK',

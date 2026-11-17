@@ -45,9 +45,12 @@ import {
 } from '../types/kpm';
 import {
   computeSubItemRecap,
+  formatNikDisplay,
   formatUploadDateTime,
+  getAbsenSeq,
   getDocumentDownloadHref,
   getItemHierarchyRank,
+  getKpmSlotNumberInProposal,
   removeDocumentFromDrive,
   resolvePackageForKpm,
   resolveProposalSlotStateForGroup,
@@ -85,6 +88,7 @@ interface ProposalDetailViewProps {
   onEditProposal: (proposalId: string) => void;
   onAddKpmInProposal: (proposalName: string, tahun: string) => void;
   onViewKpmInProposal: (proposalName: string, tahun: string) => void;
+  onSelectKpm?: (record: KpmRecord) => void;
   onAcceptAllKpm?: (proposalName: string, tahun: string) => void;
   onTransferKpm?: (kpmIds: string[], targetProposalId: string) => Promise<boolean> | boolean;
   onOpenFullHistory: () => void;
@@ -114,6 +118,7 @@ export function ProposalDetailView({
   onEditProposal,
   onAddKpmInProposal,
   onViewKpmInProposal,
+  onSelectKpm,
   onTransferKpm,
   onOpenFullHistory,
   onPreviewDocument,
@@ -145,6 +150,8 @@ export function ProposalDetailView({
   const titleRef = useRef<HTMLHeadingElement>(null);
   const [titleFontPx, setTitleFontPx] = useState<number>(16);
   const [allowTitleWrap, setAllowTitleWrap] = useState(false);
+  const [kpmListQuery, setKpmListQuery] = useState('');
+  const [kpmListItemFilter, setKpmListItemFilter] = useState<string>('all');
 
   const effectiveBastConfig = useMemo(
     () => resolveEffectiveBastConfig(bastTemplate, proposalBastMap, proposal.id, reportTemplate),
@@ -440,6 +447,48 @@ export function ProposalDetailView({
       return a.code.localeCompare(b.code, 'id');
     });
   }, [proposalRecords, items, proposal.tahun]);
+
+  const orderedProposalRecords = useMemo(() => {
+    return [...proposalRecords]
+      .map((rec) => {
+        const slotNumber = getKpmSlotNumberInProposal(
+          rec,
+          records,
+          allProposals,
+          items,
+          undefined,
+          proposalSlotMap
+        );
+        const absen = getAbsenSeq(rec.registerCode);
+        return {
+          record: rec,
+          displaySeq: slotNumber ?? (absen < 999999 ? absen : 999999),
+        };
+      })
+      .sort((a, b) => {
+        if (a.displaySeq !== b.displaySeq) return a.displaySeq - b.displaySeq;
+        return a.record.nama.localeCompare(b.record.nama, 'id');
+      });
+  }, [proposalRecords, records, allProposals, items, proposalSlotMap]);
+
+  const filteredProposalRecords = useMemo(() => {
+    const q = kpmListQuery.trim().toLowerCase();
+    return orderedProposalRecords.filter(({ record: rec }) => {
+      if (kpmListItemFilter !== 'all' && (rec.item || '').trim() !== kpmListItemFilter) {
+        return false;
+      }
+      if (!q) return true;
+      return (
+        rec.nama.toLowerCase().includes(q) ||
+        rec.nikKtp.toLowerCase().includes(q) ||
+        rec.nikKk.toLowerCase().includes(q) ||
+        rec.alamat.toLowerCase().includes(q) ||
+        rec.kelurahan.toLowerCase().includes(q) ||
+        rec.item.toLowerCase().includes(q) ||
+        rec.pengelola.toLowerCase().includes(q)
+      );
+    });
+  }, [orderedProposalRecords, kpmListQuery, kpmListItemFilter]);
 
   // Pengelola Breakdown
   const pengelolaBreakdown = useMemo(() => {
@@ -1195,7 +1244,9 @@ export function ProposalDetailView({
                     </p>
                   </div>
                   <div className="shrink-0 text-right tabular-nums">
-                    <p className="text-sm font-medium text-slate-800">{sub.totalNeeded} Unit</p>
+                    <p className="text-sm font-medium text-slate-800">
+                      {sub.totalNeeded} {sub.satuan || 'Unit'}
+                    </p>
                     <p
                       className={`text-[11px] font-medium ${
                         sub.pendingCount > 0 ? 'text-amber-700' : 'text-teal-700'
@@ -1522,6 +1573,153 @@ export function ProposalDetailView({
     </>
   );
 
+  const proposalKpmListBlock = (
+    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-5 py-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <h2 className="text-base font-bold text-slate-900">Daftar Calon KPM</h2>
+            <span className="rounded-lg bg-teal-50 px-2 py-0.5 text-xs font-bold text-teal-800 tabular-nums">
+              {proposalRecords.length} KPM
+            </span>
+          </div>
+          <p className="mt-0.5 truncate text-xs text-slate-500">
+            Klik baris KPM untuk membuka detail lengkap, sub-item, dan cetak kupon/BAST
+          </p>
+        </div>
+        {proposal.status !== 'locked' && canAdd && (
+          <button
+            type="button"
+            onClick={() => onAddKpmInProposal(proposal.namaProposal, proposal.tahun)}
+            className="inline-flex min-h-[38px] shrink-0 items-center gap-1.5 rounded-xl bg-teal-700 px-3.5 text-xs font-semibold text-white transition-colors hover:bg-teal-800"
+          >
+            <UserPlus className="h-3.5 w-3.5" />
+            <span>Tambah KPM</span>
+          </button>
+        )}
+      </div>
+
+      <div className="space-y-2.5 border-b border-slate-100 bg-slate-50/70 px-5 py-3">
+        <div className="relative">
+          <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            value={kpmListQuery}
+            onChange={(e) => setKpmListQuery(e.target.value)}
+            placeholder="Cari nama, NIK, alamat, kelurahan, atau pengelola..."
+            className="min-h-[40px] w-full rounded-xl border border-slate-200 bg-white py-2 pr-9 pl-9 text-xs text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none"
+          />
+          {kpmListQuery && (
+            <button
+              type="button"
+              onClick={() => setKpmListQuery('')}
+              aria-label="Hapus pencarian"
+              className="absolute top-1/2 right-2.5 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+
+        {itemBreakdown.length > 1 && (
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              onClick={() => setKpmListItemFilter('all')}
+              className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+                kpmListItemFilter === 'all'
+                  ? 'bg-teal-700 text-white'
+                  : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              Semua ({proposalRecords.length})
+            </button>
+            {itemBreakdown.map((it) => (
+              <button
+                key={it.code}
+                type="button"
+                onClick={() => setKpmListItemFilter(it.code)}
+                className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-colors tabular-nums ${
+                  kpmListItemFilter === it.code
+                    ? 'bg-teal-700 text-white'
+                    : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                {it.code} ({it.total})
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {filteredProposalRecords.length === 0 ? (
+        <div className="px-6 py-14 text-center">
+          <Users className="mx-auto h-9 w-9 text-slate-300" />
+          <p className="mt-2.5 text-sm font-semibold text-slate-900">
+            {proposalRecords.length === 0
+              ? 'Belum ada KPM terdaftar di proposal ini'
+              : 'Tidak ada KPM yang cocok dengan pencarian'}
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            {proposalRecords.length === 0
+              ? 'Tambahkan calon KPM baru atau terima dari Database KPM ke proposal ini.'
+              : 'Coba ubah kata kunci pencarian atau pilih filter item lain.'}
+          </p>
+        </div>
+      ) : (
+        <div className="max-h-[calc(100vh-16rem)] divide-y divide-slate-100 overflow-y-auto">
+          {filteredProposalRecords.map(({ record: rec, displaySeq }, idx) => {
+            const seqLabel =
+              displaySeq < 999999
+                ? String(displaySeq).padStart(2, '0')
+                : String(idx + 1).padStart(2, '0');
+            return (
+              <button
+                key={rec.id}
+                type="button"
+                onClick={() =>
+                  onSelectKpm
+                    ? onSelectKpm(rec)
+                    : onViewKpmInProposal(proposal.namaProposal, proposal.tahun)
+                }
+                className="flex min-h-[68px] w-full items-center justify-between gap-3 px-5 py-3 text-left transition-colors hover:bg-slate-50"
+              >
+                <div className="flex min-w-0 flex-1 items-center gap-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-teal-50 font-mono text-xs font-bold text-teal-800 tabular-nums">
+                    {seqLabel}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <p className="truncate text-sm font-semibold text-slate-900">{rec.nama}</p>
+                      {rec.item && (
+                        <span className="shrink-0 rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-slate-700">
+                          {rec.item}
+                        </span>
+                      )}
+                      {rec.dtsen && (
+                        <span className="shrink-0 rounded-md bg-teal-50 px-1.5 py-0.5 text-[10px] font-semibold text-teal-800">
+                          {['1', '2', '3', '4', '5'].includes(rec.dtsen.trim())
+                            ? `Desil ${rec.dtsen}`
+                            : rec.dtsen}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-0.5 truncate text-xs text-slate-500 tabular-nums">
+                      {formatNikDisplay(rec.nikKtp)}
+                      {rec.kelurahan ? ` · ${rec.kelurahan}` : ''}
+                      {rec.pengelola ? ` · ${rec.pengelola}` : ''}
+                    </p>
+                  </div>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+
   return (
     <div className="min-h-screen pb-24">
       {/* Sub-Screen Header (Android View: APK & Phone Browser) */}
@@ -1555,10 +1753,11 @@ export function ProposalDetailView({
           </div>
           <div className="col-span-5 space-y-5">
             {overviewAndDtsenBlock}
+            {breakdownsBlock}
             {historyBlock}
           </div>
-          <div className="col-span-7 space-y-5">
-            {breakdownsBlock}
+          <div className="col-span-7 space-y-5 md:sticky md:top-6 self-start">
+            {proposalKpmListBlock}
           </div>
         </main>
       ) : (

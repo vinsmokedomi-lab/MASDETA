@@ -171,234 +171,244 @@ export function DesktopSidebar({
         )}
 
         {/* Navigation Sections */}
-        <div className="flex-1 space-y-5 overflow-y-auto px-3 py-3.5">
-          <div className="space-y-1">
-            <p className="px-2.5 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-              Menu Utama
-            </p>
+        <div className="flex-1 space-y-1 overflow-y-auto px-3 py-3.5">
+          <p className="px-2.5 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            Menu Utama
+          </p>
 
-            <button
-              type="button"
-              onClick={() => onSelectTab('dashboard')}
-              className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
-                isDashboardActive
-                  ? 'bg-teal-50 text-teal-800'
-                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-              }`}
-            >
-              <Home
-                className={`h-4 w-4 shrink-0 ${isDashboardActive ? 'text-teal-700' : 'text-slate-400'}`}
-              />
-              <span className="flex-1 truncate">Beranda</span>
-            </button>
+          <button
+            type="button"
+            onClick={() => onSelectTab('dashboard')}
+            className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
+              isDashboardActive
+                ? 'bg-teal-50 text-teal-800'
+                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+            }`}
+          >
+            <Home
+              className={`h-4 w-4 shrink-0 ${isDashboardActive ? 'text-teal-700' : 'text-slate-400'}`}
+            />
+            <span className="flex-1 truncate">Beranda</span>
+          </button>
 
-            <button
-              type="button"
-              onClick={() => onSelectTab('kpm')}
-              className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
-                isKpmActive
-                  ? 'bg-teal-50 text-teal-800'
-                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-              }`}
-            >
-              <Users
-                className={`h-4 w-4 shrink-0 ${isKpmActive ? 'text-teal-700' : 'text-slate-400'}`}
-              />
-              <span className="flex-1 truncate">Calon KPM</span>
-              <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600 tabular-nums">
-                {kpmCount}
-              </span>
-            </button>
+          <button
+            type="button"
+            onClick={() => onSelectTab('proposal')}
+            className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
+              isProposalActive
+                ? 'bg-teal-50 text-teal-800'
+                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+            }`}
+          >
+            <FolderOpen
+              className={`h-4 w-4 shrink-0 ${isProposalActive ? 'text-teal-700' : 'text-slate-400'}`}
+            />
+            <span className="flex-1 truncate">Proposal</span>
+            <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600 tabular-nums">
+              {proposalCount}
+            </span>
+          </button>
 
-            <button
-              type="button"
-              onClick={() => onSelectTab('proposal')}
-              className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
-                isProposalActive
-                  ? 'bg-teal-50 text-teal-800'
-                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-              }`}
-            >
-              <FolderOpen
-                className={`h-4 w-4 shrink-0 ${isProposalActive ? 'text-teal-700' : 'text-slate-400'}`}
-              />
-              <span className="flex-1 truncate">Proposal</span>
-              <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600 tabular-nums">
-                {proposalCount}
-              </span>
-            </button>
+          <button
+            type="button"
+            onClick={() => onSelectTab('kpm')}
+            className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
+              isKpmActive
+                ? 'bg-teal-50 text-teal-800'
+                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+            }`}
+          >
+            <Users
+              className={`h-4 w-4 shrink-0 ${isKpmActive ? 'text-teal-700' : 'text-slate-400'}`}
+            />
+            <span className="flex-1 truncate">KPM</span>
+            <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600 tabular-nums">
+              {kpmCount}
+            </span>
+          </button>
 
-            <button
-              type="button"
-              onClick={() => onOpenMenuSection('database-kpm')}
-              className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
-                isDatabaseKpmActive
-                  ? 'bg-teal-50 text-teal-800'
-                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-              }`}
-            >
-              <Database
-                className={`h-4 w-4 shrink-0 ${isDatabaseKpmActive ? 'text-teal-700' : 'text-slate-400'}`}
-              />
-              <span className="flex-1 truncate">Database</span>
-              <span className="rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-800 tabular-nums">
-                {databaseKpmCount}
-              </span>
-            </button>
+          <button
+            type="button"
+            onClick={onOpenSubItemRecap}
+            className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
+              isRecapActive
+                ? 'bg-teal-50 text-teal-800'
+                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+            }`}
+          >
+            <Package
+              className={`h-4 w-4 shrink-0 ${isRecapActive ? 'text-teal-700' : 'text-slate-400'}`}
+            />
+            <span className="flex-1 truncate">Rekap Item</span>
+          </button>
 
-            <button
-              type="button"
-              onClick={() => onOpenMenuSection('arsip')}
-              className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
-                isArsipActive
-                  ? 'bg-teal-50 text-teal-800'
-                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-              }`}
-            >
-              <Archive
-                className={`h-4 w-4 shrink-0 ${isArsipActive ? 'text-teal-700' : 'text-slate-400'}`}
-              />
-              <span className="flex-1 truncate">Arsip Ditolak</span>
-              <span className="rounded-md bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold text-rose-700 tabular-nums">
-                {archivedKpmCount}
-              </span>
-            </button>
+          <button
+            type="button"
+            onClick={() => onOpenMenuSection('database-kpm')}
+            className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
+              isDatabaseKpmActive
+                ? 'bg-teal-50 text-teal-800'
+                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+            }`}
+          >
+            <Database
+              className={`h-4 w-4 shrink-0 ${isDatabaseKpmActive ? 'text-teal-700' : 'text-slate-400'}`}
+            />
+            <span className="flex-1 truncate">Database</span>
+            <span className="rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-800 tabular-nums">
+              {databaseKpmCount}
+            </span>
+          </button>
 
-            <button
-              type="button"
-              onClick={onOpenSubItemRecap}
-              className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
-                isRecapActive
-                  ? 'bg-teal-50 text-teal-800'
-                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-              }`}
-            >
-              <Package
-                className={`h-4 w-4 shrink-0 ${isRecapActive ? 'text-teal-700' : 'text-slate-400'}`}
-              />
-              <span className="flex-1 truncate">Rekap Item</span>
-            </button>
+          <button
+            type="button"
+            onClick={() => onOpenMenuSection('arsip')}
+            className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
+              isArsipActive
+                ? 'bg-teal-50 text-teal-800'
+                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+            }`}
+          >
+            <Archive
+              className={`h-4 w-4 shrink-0 ${isArsipActive ? 'text-teal-700' : 'text-slate-400'}`}
+            />
+            <span className="flex-1 truncate">Arsip Ditolak</span>
+            <span className="rounded-md bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold text-rose-700 tabular-nums">
+              {archivedKpmCount}
+            </span>
+          </button>
 
-            <button
-              type="button"
-              onClick={onOpenChat}
-              className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
-                isChatActive
-                  ? 'bg-teal-50 text-teal-800'
-                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-              }`}
-            >
-              <MessageSquare
-                className={`h-4 w-4 shrink-0 ${isChatActive ? 'text-teal-700' : 'text-slate-400'}`}
-              />
-              <span className="flex-1 truncate">Obrolan Tim</span>
-              {unreadChatCount > 0 && (
-                <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
-                  {unreadChatCount > 99 ? '99+' : unreadChatCount}
-                </span>
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={onOpenNotifications}
-              aria-current={isNotificationsActive ? 'page' : undefined}
-              className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
-                isNotificationsActive
-                  ? 'bg-teal-50 text-teal-800'
-                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-              }`}
-            >
-              <Bell
-                className={`h-4 w-4 shrink-0 ${
-                  isNotificationsActive ? 'text-teal-700' : 'text-slate-400'
-                }`}
-              />
-              <span className="flex-1 truncate">Notifikasi</span>
-              {totalNotifCount > 0 ? (
-                <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
-                  {totalNotifCount > 99 ? '99+' : totalNotifCount}
-                </span>
-              ) : (
-                showBellRedDot && <span className="h-2 w-2 rounded-full bg-rose-600" />
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => onSelectTab('menu')}
-              className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
-                isMenuActive
-                  ? 'bg-teal-50 text-teal-800'
-                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-              }`}
-            >
-              <LayoutGrid
-                className={`h-4 w-4 shrink-0 ${isMenuActive ? 'text-teal-700' : 'text-slate-400'}`}
-              />
-              <span className="flex-1 truncate">Menu</span>
-              {menuBadgeCount > 0 && (
-                <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
-                  {menuBadgeCount > 99 ? '99+' : menuBadgeCount}
-                </span>
-              )}
-            </button>
-          </div>
-
-          <div className="space-y-1 border-t border-slate-100 pt-3">
-            <p className="px-2.5 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-              Akses Cepat
-            </p>
-
-            <button
-              type="button"
-              onClick={() => onOpenMenuSection('jadwal')}
-              className={`flex min-h-[38px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-medium transition-colors ${
+          <button
+            type="button"
+            onClick={() => onOpenMenuSection('jadwal')}
+            className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
+              activeSubView === 'none' && activeTab === 'menu' && activeMenuSection === 'jadwal'
+                ? 'bg-teal-50 text-teal-800'
+                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+            }`}
+          >
+            <CalendarClock
+              className={`h-4 w-4 shrink-0 ${
                 activeSubView === 'none' && activeTab === 'menu' && activeMenuSection === 'jadwal'
-                  ? 'bg-teal-50 font-semibold text-teal-800'
-                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                  ? 'text-teal-700'
+                  : 'text-slate-400'
               }`}
-            >
-              <CalendarClock className="h-4 w-4 shrink-0 text-amber-600" />
-              <span className="flex-1 truncate">Jadwal &amp; Target</span>
-              {urgentSchedulesCount > 0 && (
-                <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800 tabular-nums">
-                  {urgentSchedulesCount}
-                </span>
-              )}
-            </button>
+            />
+            <span className="flex-1 truncate">Jadwal &amp; Target</span>
+            {urgentSchedulesCount > 0 && (
+              <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800 tabular-nums">
+                {urgentSchedulesCount}
+              </span>
+            )}
+          </button>
 
-            <button
-              type="button"
-              onClick={() => onOpenMenuSection('duplikasi')}
-              className={`flex min-h-[38px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-medium transition-colors ${
-                activeSubView === 'none' && activeTab === 'menu' && activeMenuSection === 'duplikasi'
-                  ? 'bg-teal-50 font-semibold text-teal-800'
-                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-              }`}
-            >
-              <CopyCheck className="h-4 w-4 shrink-0 text-rose-600" />
-              <span className="flex-1 truncate">Duplikasi NIK/KK</span>
-              {duplicateNikCount > 0 && (
-                <span className="rounded-full bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-700 tabular-nums">
-                  {duplicateNikCount}
-                </span>
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => onOpenMenuSection('download')}
-              className={`flex min-h-[38px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-medium transition-colors ${
+          <button
+            type="button"
+            onClick={() => onOpenMenuSection('download')}
+            className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
+              activeSubView === 'none' && activeTab === 'menu' && activeMenuSection === 'download'
+                ? 'bg-teal-50 text-teal-800'
+                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+            }`}
+          >
+            <Download
+              className={`h-4 w-4 shrink-0 ${
                 activeSubView === 'none' && activeTab === 'menu' && activeMenuSection === 'download'
-                  ? 'bg-teal-50 font-semibold text-teal-800'
-                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                  ? 'text-teal-700'
+                  : 'text-slate-400'
               }`}
-            >
-              <Download className="h-4 w-4 shrink-0 text-teal-700" />
-              <span className="flex-1 truncate">Download PDF / Excel</span>
-            </button>
-          </div>
+            />
+            <span className="flex-1 truncate">Download PDF</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onOpenMenuSection('duplikasi')}
+            className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
+              activeSubView === 'none' && activeTab === 'menu' && activeMenuSection === 'duplikasi'
+                ? 'bg-teal-50 text-teal-800'
+                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+            }`}
+          >
+            <CopyCheck
+              className={`h-4 w-4 shrink-0 ${
+                activeSubView === 'none' && activeTab === 'menu' && activeMenuSection === 'duplikasi'
+                  ? 'text-teal-700'
+                  : 'text-slate-400'
+              }`}
+            />
+            <span className="flex-1 truncate">Duplikasi NIK/KK</span>
+            {duplicateNikCount > 0 && (
+              <span className="rounded-full bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-700 tabular-nums">
+                {duplicateNikCount}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={onOpenChat}
+            className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
+              isChatActive
+                ? 'bg-teal-50 text-teal-800'
+                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+            }`}
+          >
+            <MessageSquare
+              className={`h-4 w-4 shrink-0 ${isChatActive ? 'text-teal-700' : 'text-slate-400'}`}
+            />
+            <span className="flex-1 truncate">Obrolan Tim</span>
+            {unreadChatCount > 0 && (
+              <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
+                {unreadChatCount > 99 ? '99+' : unreadChatCount}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={onOpenNotifications}
+            aria-current={isNotificationsActive ? 'page' : undefined}
+            className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
+              isNotificationsActive
+                ? 'bg-teal-50 text-teal-800'
+                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+            }`}
+          >
+            <Bell
+              className={`h-4 w-4 shrink-0 ${
+                isNotificationsActive ? 'text-teal-700' : 'text-slate-400'
+              }`}
+            />
+            <span className="flex-1 truncate">Notifikasi</span>
+            {totalNotifCount > 0 ? (
+              <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
+                {totalNotifCount > 99 ? '99+' : totalNotifCount}
+              </span>
+            ) : (
+              showBellRedDot && <span className="h-2 w-2 rounded-full bg-rose-600" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onSelectTab('menu')}
+            className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
+              isMenuActive
+                ? 'bg-teal-50 text-teal-800'
+                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+            }`}
+          >
+            <LayoutGrid
+              className={`h-4 w-4 shrink-0 ${isMenuActive ? 'text-teal-700' : 'text-slate-400'}`}
+            />
+            <span className="flex-1 truncate">Menu</span>
+            {menuBadgeCount > 0 && (
+              <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
+                {menuBadgeCount > 99 ? '99+' : menuBadgeCount}
+              </span>
+            )}
+          </button>
         </div>
 
         {/* Bottom User Card */}

@@ -33,6 +33,7 @@ import {
   getKpmSubItemStatusList,
   getPrimaryKpmPhotoWithMeta,
   isKecamatanProposal,
+  normalizeSubItemKey,
   resolveKpmDomicile,
   resolvePackageForKpm,
   resolveProposalDomicile,
@@ -1915,25 +1916,48 @@ function renderSingleBastPage(
     doc.text(bastConfig.orgAddress3.trim(), kopCenterX, cursorY + 22.2, { align: 'center' });
   }
 
-  cursorY += 24.5;
+  cursorY += 25.2;
   doc.setDrawColor(15, 23, 42);
   doc.setLineWidth(0.75);
   doc.line(left, cursorY, right, cursorY);
   doc.setLineWidth(0.25);
   doc.line(left, cursorY + 1.1, right, cursorY + 1.1);
-  cursorY += 6.5;
+  cursorY += 7.8;
+
+  // Hitung rincian barang lebih dulu untuk menyesuaikan kepadatan vertikal agar selalu pas 1 halaman F4
+  const subStatuses = getKpmSubItemStatusList(record, items);
+  const pkg = resolvePackageForKpm(items, record.tahun, record.item);
+  const tableRows: string[][] =
+    subStatuses.length > 0
+      ? subStatuses.map((s, i) => [
+          `${i + 1}.`,
+          s.baseName || s.name,
+          s.satuan || 'Unit',
+          String(s.volume > 0 ? s.volume : 1),
+          'Berfungsi Dengan Baik dan Lengkap',
+        ])
+      : [
+          [
+            '1.',
+            pkg.name && pkg.name !== pkg.code ? pkg.name : record.item || 'Paket Bantuan',
+            'Unit',
+            '1',
+            'Berfungsi Dengan Baik dan Lengkap',
+          ],
+        ];
+  const isCompactBast = tableRows.length > 5;
 
   // 2. JUDUL & NOMOR BAST (#1)
   const titleText = 'BERITA ACARA SERAH TERIMA BARANG';
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10.8);
+  doc.setFontSize(11);
   doc.setTextColor(15, 23, 42);
   doc.text(titleText, centerX, cursorY, { align: 'center' });
   const titleW = doc.getTextWidth(titleText);
   doc.setLineWidth(0.35);
   doc.line(centerX - titleW / 2, cursorY + 0.8, centerX + titleW / 2, cursorY + 0.8);
 
-  cursorY += 4.8;
+  cursorY += isCompactBast ? 5.0 : 5.5;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(10);
   doc.text(
@@ -1942,7 +1966,7 @@ function renderSingleBastPage(
     cursorY,
     { align: 'center' }
   );
-  cursorY += 6.8;
+  cursorY += isCompactBast ? 7.0 : 9.0;
 
   // 3. PARAGRAF PEMBUKA (#2, #3, #4, #5; tanpa kata merah "dan penampungan air hujan")
   const dateWords = bastConfig.tanggalSerahTerimaCustomText?.trim()
@@ -1968,32 +1992,36 @@ function renderSingleBastPage(
     `kesejahteraan keluarga provinsi kalimantan barat tahun anggaran ${tahunAnggaran}. ` +
     `Berdasarkan surat pesanan (SP) nomor : ${nomorPesanan} tanggal ${tanggalPemesanan}.`;
 
+  const bodyLineFactor = isCompactBast ? 1.42 : 1.54;
+  const bodyLineStep = isCompactBast ? 4.95 : 5.45;
+
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9.8);
+  doc.setFontSize(10);
   doc.setTextColor(15, 23, 42);
   const p1Lines = doc.splitTextToSize(p1, PRINTABLE_WIDTH_MM) as string[];
   doc.text(p1, left, cursorY, {
     maxWidth: PRINTABLE_WIDTH_MM,
     align: 'justify',
-    lineHeightFactor: 1.38,
+    lineHeightFactor: bodyLineFactor,
   });
-  cursorY += p1Lines.length * 4.75 + 4.5;
+  cursorY += p1Lines.length * bodyLineStep + (isCompactBast ? 4.8 : 6.8);
 
   // 4. IDENTITAS PIHAK PERTAMA & PIHAK KEDUA (#6, #7, #8, #9)
   doc.text('Kami yang bertanda tangan dibawah ini :', left, cursorY);
-  cursorY += 5.5;
+  cursorY += isCompactBast ? 5.8 : 6.8;
 
   const idLabelX = left + 9;
   const idColonX = left + 35;
   const idValX = left + 38;
   const idMaxW = right - idValX;
+  const idRowStep = isCompactBast ? 5.2 : 5.8;
 
   doc.setFont('helvetica', 'normal');
   doc.text('Nama', idLabelX, cursorY);
   doc.text(':', idColonX, cursorY);
   doc.setFont('helvetica', 'bold');
   doc.text(bastConfig.pejabatNama?.trim() || DEFAULT_BAST_TEMPLATE.pejabatNama, idValX, cursorY);
-  cursorY += 5.0;
+  cursorY += idRowStep;
 
   doc.setFont('helvetica', 'normal');
   doc.text('Jabatan', idLabelX, cursorY);
@@ -2003,13 +2031,13 @@ function renderSingleBastPage(
     idMaxW
   ) as string[];
   doc.text(jabatanLines, idValX, cursorY);
-  cursorY += jabatanLines.length * 4.6 + 0.6;
+  cursorY += jabatanLines.length * (isCompactBast ? 4.8 : 5.2) + 1.0;
 
   doc.text('selanjutnya disebut sebagai ', idLabelX, cursorY);
   const p1PrefixW = doc.getTextWidth('selanjutnya disebut sebagai ');
   doc.setFont('helvetica', 'bold');
   doc.text('PIHAK PERTAMA', idLabelX + p1PrefixW, cursorY);
-  cursorY += 7.0;
+  cursorY += isCompactBast ? 7.2 : 8.8;
 
   const slotNo = getKpmSlotNumberInProposal(
     record,
@@ -2030,24 +2058,24 @@ function renderSingleBastPage(
   doc.text(':', idColonX, cursorY);
   doc.setFont('helvetica', 'bold');
   doc.text(kpmFullName, idValX, cursorY);
-  cursorY += 5.0;
+  cursorY += idRowStep;
 
   doc.setFont('helvetica', 'normal');
   doc.text('No. Bantuan', idLabelX, cursorY);
   doc.text(':', idColonX, cursorY);
   doc.text(noBantuanStr, idValX, cursorY);
-  cursorY += 5.0;
+  cursorY += idRowStep;
 
   doc.text('Jabatan', idLabelX, cursorY);
   doc.text(':', idColonX, cursorY);
   doc.text('sebagai Keluarga Penerima Manfaat (KPM)', idValX, cursorY);
-  cursorY += 5.0;
+  cursorY += idRowStep;
 
   doc.text('selanjutnya disebut sebagai ', idLabelX, cursorY);
   const p2PrefixW = doc.getTextWidth('selanjutnya disebut sebagai ');
   doc.setFont('helvetica', 'bold');
   doc.text('PIHAK KEDUA', idLabelX + p2PrefixW, cursorY);
-  cursorY += 7.0;
+  cursorY += isCompactBast ? 7.2 : 8.8;
 
   // 5. PARAGRAF PENYERAHAN BARANG + GARIS NOMINAL SEDIKIT TURUN (#10)
   const nominalRaw =
@@ -2063,9 +2091,9 @@ function renderSingleBastPage(
     doc.text(p2Lead, left, cursorY, {
       maxWidth: PRINTABLE_WIDTH_MM,
       align: 'justify',
-      lineHeightFactor: 1.38,
+      lineHeightFactor: bodyLineFactor,
     });
-    cursorY += leadLines.length * 4.75 + 2.4;
+    cursorY += leadLines.length * bodyLineStep + 2.8;
 
     const prefixNominal = 'dengan nilai sebesar ';
     doc.text(prefixNominal, left, cursorY);
@@ -2075,7 +2103,7 @@ function renderSingleBastPage(
     doc.text(nominalRaw, left + prefixW + 1, cursorY + 1.4);
     const suffixX = Math.min(left + prefixW + Math.max(doc.getTextWidth(nominalRaw), dotWidth) + 3, right - 58);
     doc.text('dengan rincian barang sebagai berikut :', suffixX, cursorY);
-    cursorY += 5.2;
+    cursorY += isCompactBast ? 5.6 : 6.8;
   } else {
     const p2 =
       `Dengan ini PIHAK PERTAMA secara sah telah menyerahkan barang berupa 1 (satu) paket bantuan berupa peralatan kerja ` +
@@ -2085,27 +2113,12 @@ function renderSingleBastPage(
     doc.text(p2, left, cursorY, {
       maxWidth: PRINTABLE_WIDTH_MM,
       align: 'justify',
-      lineHeightFactor: 1.38,
+      lineHeightFactor: bodyLineFactor,
     });
-    cursorY += p2Lines.length * 4.75 + 3.0;
+    cursorY += p2Lines.length * bodyLineStep + (isCompactBast ? 3.5 : 4.8);
   }
 
   // 6. TABEL RINCIAN BARANG DARI SUB-ITEM KPM (#11)
-  const subStatuses = getKpmSubItemStatusList(record, items);
-  const pkg = resolvePackageForKpm(items, record.tahun, record.item);
-  const barangNames =
-    subStatuses.length > 0
-      ? subStatuses.map((s) => s.name)
-      : [pkg.name && pkg.name !== pkg.code ? pkg.name : record.item || 'Paket Bantuan'];
-
-  const tableRows: string[][] = barangNames.map((name, i) => [
-    `${i + 1}.`,
-    name,
-    'Unit',
-    '1',
-    'Berfungsi Dengan Baik dan Lengkap',
-  ]);
-
   // Tambahkan minimal beberapa baris kosong bila barang sangat sedikit agar proporsi formulir resmi terjaga
   while (tableRows.length < 4) {
     tableRows.push(['', '', '', '', '']);
@@ -2125,19 +2138,21 @@ function renderSingleBastPage(
     theme: 'grid',
     styles: {
       font: 'helvetica',
-      fontSize: 9.2,
-      minCellHeight: 6.8,
+      fontSize: isCompactBast ? 9.1 : 9.4,
+      minCellHeight: isCompactBast ? 7.0 : 8.5,
       textColor: [15, 23, 42],
       lineColor: [30, 41, 59],
       lineWidth: 0.25,
       valign: 'middle',
-      cellPadding: { top: 1.6, right: 2.2, bottom: 1.6, left: 2.2 },
+      cellPadding: isCompactBast
+        ? { top: 1.7, right: 2.2, bottom: 1.7, left: 2.2 }
+        : { top: 2.3, right: 2.2, bottom: 2.3, left: 2.2 },
     },
     headStyles: {
       fillColor: [255, 255, 255],
       textColor: [15, 23, 42],
       fontStyle: 'bold',
-      fontSize: 9.5,
+      fontSize: 9.6,
       halign: 'center',
       lineColor: [30, 41, 59],
       lineWidth: 0.28,
@@ -2151,24 +2166,25 @@ function renderSingleBastPage(
     },
   });
 
-  cursorY = (doc.lastAutoTable?.finalY ?? cursorY + 34) + 5.5;
+  cursorY = (doc.lastAutoTable?.finalY ?? cursorY + 38) + (isCompactBast ? 5.8 : 7.8);
 
   // 7. PARAGRAF PENUTUP
   const pClose =
     'Maka PIHAK KEDUA menyatakan telah menerima bantuan diatas dalam keadaan sadar dengan kondisi barang bantuan yang di berikan “berfungsi dengan baik dan lengkap”. Demikian berita acara ini dibuat untuk digunakan sebagaimana mestinya.';
   const pCloseLines = doc.splitTextToSize(pClose, PRINTABLE_WIDTH_MM) as string[];
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9.8);
+  doc.setFontSize(10);
   doc.setTextColor(15, 23, 42);
   doc.text(pClose, left, cursorY, {
     maxWidth: PRINTABLE_WIDTH_MM,
     align: 'justify',
-    lineHeightFactor: 1.38,
+    lineHeightFactor: bodyLineFactor,
   });
-  cursorY += pCloseLines.length * 4.75 + 7.5;
+  cursorY += pCloseLines.length * bodyLineStep + (isCompactBast ? 7.5 : 10.5);
 
   // 8. BLOK TANDA TANGAN (#12, #13 + MATERAI RP. 10.000)
-  if (cursorY + 46 > F4_PAPER_HEIGHT_MM - F4_PDF_MARGINS.bottom) {
+  const sigBlockHeight = isCompactBast ? 46 : 52;
+  if (cursorY + sigBlockHeight > F4_PAPER_HEIGHT_MM - F4_PDF_MARGINS.bottom) {
     doc.addPage([F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM], 'portrait');
     cursorY = F4_PDF_MARGINS.top + 8;
   }
@@ -2178,7 +2194,7 @@ function renderSingleBastPage(
   const sigColMaxW = PRINTABLE_WIDTH_MM * 0.44;
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.6);
+  doc.setFontSize(9.7);
   doc.text('PIHAK PERTAMA', leftSigX, cursorY, { align: 'center' });
   doc.text('PIHAK KEDUA', rightSigX, cursorY, { align: 'center' });
 
@@ -2188,14 +2204,14 @@ function renderSingleBastPage(
     bastConfig.pejabatJabatan?.trim() || DEFAULT_BAST_TEMPLATE.pejabatJabatan,
     sigColMaxW
   ) as string[];
-  doc.text(leftJabLines, leftSigX, cursorY + 4.8, { align: 'center' });
-  doc.text('Keluarga Penerima Manfaat (KPM)', rightSigX, cursorY + 4.8, { align: 'center' });
+  doc.text(leftJabLines, leftSigX, cursorY + 5.2, { align: 'center' });
+  doc.text('Keluarga Penerima Manfaat (KPM)', rightSigX, cursorY + 5.2, { align: 'center' });
 
   // Kotak Materai Rp. 10.000 di antara dua tanda tangan
   const materaiW = 16.5;
   const materaiH = 10.5;
   const materaiX = left + PRINTABLE_WIDTH_MM * 0.54 - materaiW / 2;
-  const materaiY = cursorY + 13;
+  const materaiY = cursorY + (isCompactBast ? 13 : 15);
   doc.setDrawColor(15, 23, 42);
   doc.setLineWidth(0.28);
   doc.rect(materaiX, materaiY, materaiW, materaiH);
@@ -2220,13 +2236,13 @@ function renderSingleBastPage(
       loadedSig.dataUrl,
       loadedSig.format,
       rightSigX - drawW / 2,
-      cursorY + 9 + (boxH - drawH) / 2,
+      cursorY + (isCompactBast ? 9.5 : 11.5) + (boxH - drawH) / 2,
       drawW,
       drawH
     );
   }
 
-  const nameY = cursorY + 29.5;
+  const nameY = cursorY + (isCompactBast ? 29.5 : 34.5);
   const pejabatNama = bastConfig.pejabatNama?.trim() || DEFAULT_BAST_TEMPLATE.pejabatNama;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.8);
@@ -2240,19 +2256,19 @@ function renderSingleBastPage(
   doc.text(
     bastConfig.pejabatPangkat?.trim() || DEFAULT_BAST_TEMPLATE.pejabatPangkat,
     leftSigX,
-    nameY + 4.8,
+    nameY + 5.2,
     { align: 'center' }
   );
   doc.text(
     bastConfig.pejabatNip?.trim() || DEFAULT_BAST_TEMPLATE.pejabatNip,
     leftSigX,
-    nameY + 9.2,
+    nameY + 9.8,
     { align: 'center' }
   );
 
   // Garis tanda tangan & nama lengkap PIHAK KEDUA (#13)
   doc.setLineWidth(0.3);
-  doc.line(rightSigX - 28, nameY - 4.2, rightSigX + 28, nameY - 4.2);
+  doc.line(rightSigX - 28, nameY - 4.4, rightSigX + 28, nameY - 4.4);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.8);
   doc.text(kpmFullName, rightSigX, nameY, { align: 'center' });
@@ -2481,11 +2497,11 @@ export async function exportSubItemRecapToPdf({
     // Urutkan sub-item sesuai urutan katalog item jika tersedia
     const catalogOrder = new Map<string, number>();
     pkg.subItems.forEach((subName, idx) => {
-      catalogOrder.set(subName.trim().toLowerCase(), idx);
+      catalogOrder.set(normalizeSubItemKey(subName), idx);
     });
     const sortedSubAggregates = [...itemRecap.aggregates].sort((a, b) => {
-      const ordA = catalogOrder.get(a.name.trim().toLowerCase()) ?? 9999;
-      const ordB = catalogOrder.get(b.name.trim().toLowerCase()) ?? 9999;
+      const ordA = catalogOrder.get(normalizeSubItemKey(a.key || a.name)) ?? 9999;
+      const ordB = catalogOrder.get(normalizeSubItemKey(b.key || b.name)) ?? 9999;
       if (ordA !== ordB) return ordA - ordB;
       return a.name.localeCompare(b.name, 'id');
     });
@@ -2737,7 +2753,7 @@ export async function exportSubItemRecapToPdf({
           subIdx === 0 ? itemEntry.code : '',
           subIdx === 0 ? `${itemEntry.name} (${itemEntry.totalKpm} Paket)` : '',
           sub.name,
-          sub.totalNeeded,
+          `${sub.totalNeeded} ${sub.satuan || 'Unit'}`,
           sub.deliveredCount,
           sub.pendingCount,
           `${pct}%`,
@@ -2752,7 +2768,7 @@ export async function exportSubItemRecapToPdf({
       'TOTAL',
       'Seluruh Item & Sub-Item',
       `${overallRecap.aggregates.length} Sub-Item`,
-      overallRecap.totalUnits,
+      `${overallRecap.totalUnits} Unit`,
       overallRecap.totalDelivered,
       overallRecap.totalPending,
       `${pctUnits}%`,
@@ -2770,7 +2786,7 @@ export async function exportSubItemRecapToPdf({
       left: F4_PDF_MARGINS.left,
     },
     tableWidth: PRINTABLE_WIDTH_MM,
-    head: [['NO', 'KODE', 'PAKET ITEM', 'SUB-ITEM', 'UNIT', 'DITERIMA', 'BELUM', 'PROGRES']],
+    head: [['NO', 'KODE', 'PAKET ITEM', 'SUB-ITEM', 'JUMLAH', 'DITERIMA', 'BELUM', 'PROGRES']],
     body: subDetailBody,
     theme: 'grid',
     showHead: 'everyPage',
@@ -2795,8 +2811,8 @@ export async function exportSubItemRecapToPdf({
       0: { cellWidth: 10, halign: 'center' },
       1: { cellWidth: 15, halign: 'center', fontStyle: 'bold' },
       2: { cellWidth: 44, halign: 'left', fontStyle: 'bold' },
-      3: { cellWidth: PRINTABLE_WIDTH_MM - 135, halign: 'left' },
-      4: { cellWidth: 16, halign: 'center' },
+      3: { cellWidth: PRINTABLE_WIDTH_MM - 138, halign: 'left' },
+      4: { cellWidth: 19, halign: 'center' },
       5: { cellWidth: 18, halign: 'center' },
       6: { cellWidth: 16, halign: 'center' },
       7: { cellWidth: 16, halign: 'center' },

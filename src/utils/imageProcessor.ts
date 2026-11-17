@@ -3,6 +3,7 @@ import {
   INITIAL_ITEM_LIST,
   INITIAL_WILAYAH_LIST,
   KELURAHAN_BY_KECAMATAN,
+  SUB_ITEM_SATUAN_OPTIONS,
 } from '../data/kpmOptions';
 import {
   buildDriveDownloadUrl,
@@ -1707,8 +1708,151 @@ export function recalculateProposalRegisterCodes(
   return changed ? updated : normalizedRecords;
 }
 
+export interface ParsedSubItemSpec {
+  baseName: string;
+  volume: number;
+  satuan: string;
+  formatted: string;
+}
+
+const SUB_ITEM_SUFFIX_RE = /\s*\(\s*(\d+(?:[.,]\d+)?)\s*([a-zA-Z]+)?\s*\)\s*$/;
+
+export function normalizeSubItemSatuan(raw?: string): string {
+  const clean = (raw || '').trim();
+  if (!clean) return 'Unit';
+  const matched = SUB_ITEM_SATUAN_OPTIONS.find(
+    (opt) => opt.toLowerCase() === clean.toLowerCase()
+  );
+  if (matched) return matched;
+  return clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase();
+}
+
+export function formatSubItemSpec(baseName: string, volume: number, satuan: string): string {
+  const cleanBase = baseName.replace(SUB_ITEM_SUFFIX_RE, '').trim();
+  if (!cleanBase) return '';
+  const cleanVol =
+    Number.isFinite(volume) && volume > 0 ? Math.round(volume * 100) / 100 : 1;
+  const cleanSatuan = normalizeSubItemSatuan(satuan);
+  return cleanVol === 1 && cleanSatuan === 'Unit'
+    ? cleanBase
+    : `${cleanBase} (${cleanVol} ${cleanSatuan})`;
+}
+
+export function parseSubItemSpec(
+  raw: string,
+  context?: { itemCode?: string; itemName?: string }
+): ParsedSubItemSpec {
+  const trimmed = (raw || '').trim();
+  const match = trimmed.match(SUB_ITEM_SUFFIX_RE);
+  const baseName = (match && match.index !== undefined
+    ? trimmed.slice(0, match.index)
+    : trimmed
+  ).trim();
+  let volume = match ? Number((match[1] || '1').replace(',', '.')) || 1 : 1;
+  let satuan = match ? normalizeSubItemSatuan(match[2] || 'Unit') : 'Unit';
+
+  const isTendaContext =
+    (context?.itemCode || '').trim().toUpperCase() === 'TND' ||
+    /\btenda\b/i.test(context?.itemName || '');
+  if (isTendaContext && /\bkursi\b/i.test(baseName)) {
+    if (!match || volume === 1 || (volume === 6 && /^pcs$/i.test(match[2] || ''))) {
+      volume = 6;
+      satuan = 'Unit';
+    }
+  }
+
+  return {
+    baseName: baseName || trimmed,
+    volume,
+    satuan,
+    formatted: formatSubItemSpec(baseName || trimmed, volume, satuan),
+  };
+}
+
+export function upgradeCatalogTendaKursi(catalog: ItemBantuan[]): {
+  nextItems: ItemBantuan[];
+  changedItems: ItemBantuan[];
+  changed: boolean;
+} {
+  let changed = false;
+  const changedItems: ItemBantuan[] = [];
+
+  const isSelangOrRegulatorSub = (raw: string): boolean => {
+    const base = normalizeSubItemKey(raw);
+    return (
+      /^selang(\s+gas)?$/.test(base) ||
+      /^regulator(\s+gas)?$/.test(base) ||
+      /^selang(\s+gas)?\s*(?:&|\+|\/|,|-|dan)\s*regulator(\s+gas)?$/.test(base)
+    );
+  };
+
+  const nextItems = catalog.map((item) => {
+    const isTenda =
+      (item.code || '').trim().toUpperCase() === 'TND' ||
+      /\btenda\b/i.test(item.name || '');
+    const isKomporGas =
+      (item.code || '').trim().toUpperCase() === 'KPR' ||
+      /\bkompor\s*gas\b/i.test(item.name || '');
+
+    if (!isTenda && !isKomporGas) return item;
+
+    let itemChanged = false;
+    let nextSubItems = [...(item.subItems || [])];
+
+    if (isTenda) {
+      nextSubItems = nextSubItems.map((sub) => {
+        if (!/\bkursi\b/i.test(sub)) return sub;
+        const parsed = parseSubItemSpec(sub, { itemCode: item.code, itemName: item.name });
+        const target = formatSubItemSpec(parsed.baseName, parsed.volume, parsed.satuan);
+        if (target && target !== sub.trim()) {
+          itemChanged = true;
+          return target;
+        }
+        return sub;
+      });
+    }
+
+    if (isKomporGas) {
+      let insertedCombined = false;
+      const mergedList: string[] = [];
+      for (const sub of nextSubItems) {
+        if (isSelangOrRegulatorSub(sub)) {
+          if (!insertedCombined) {
+            insertedCombined = true;
+            const target = 'Selang Gas & Regulator (1 Set)';
+            if (sub.trim() !== target) {
+              itemChanged = true;
+            }
+            mergedList.push(target);
+          } else {
+            itemChanged = true;
+          }
+        } else {
+          mergedList.push(sub);
+        }
+      }
+      if (mergedList.length !== nextSubItems.length) {
+        itemChanged = true;
+      }
+      nextSubItems = mergedList;
+    }
+
+    if (!itemChanged) return item;
+    changed = true;
+    const updatedItem: ItemBantuan = {
+      ...item,
+      subItems: nextSubItems,
+    };
+    changedItems.push(updatedItem);
+    return updatedItem;
+  });
+
+  return { nextItems, changedItems, changed };
+}
+
 export function normalizeSubItemKey(name: string): string {
-  return name.trim().toLowerCase().replace(/\s+/g, ' ');
+  const withoutSpec = (name || '').replace(SUB_ITEM_SUFFIX_RE, '');
+  return withoutSpec.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 export function loadItemList(fallback: ItemBantuan[]): ItemBantuan[] {
@@ -1717,7 +1861,7 @@ export function loadItemList(fallback: ItemBantuan[]): ItemBantuan[] {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        return parsed.map((item: Partial<ItemBantuan>) => ({
+        const mapped: ItemBantuan[] = parsed.map((item: Partial<ItemBantuan>) => ({
           id: item.id || `${item.tahun || '2026'}-${item.code || 'ITEM'}`,
           tahun: String(item.tahun || '2026'),
           code: String(item.code || '').toUpperCase(),
@@ -1726,6 +1870,7 @@ export function loadItemList(fallback: ItemBantuan[]): ItemBantuan[] {
             ? item.subItems.map((s) => String(s).trim()).filter(Boolean)
             : [],
         }));
+        return upgradeCatalogTendaKursi(mapped).nextItems;
       }
     }
 
@@ -1749,13 +1894,13 @@ export function loadItemList(fallback: ItemBantuan[]): ItemBantuan[] {
             });
           }
         }
-        return [...fallback, ...extraItems];
+        return upgradeCatalogTendaKursi([...fallback, ...extraItems]).nextItems;
       }
     }
 
-    return fallback;
+    return upgradeCatalogTendaKursi(fallback).nextItems;
   } catch {
-    return fallback;
+    return upgradeCatalogTendaKursi(fallback).nextItems;
   }
 }
 
@@ -1833,6 +1978,9 @@ export function resolvePackageForKpm(
 export interface ResolvedKpmSubItem {
   key: string;
   name: string;
+  baseName: string;
+  volume: number;
+  satuan: string;
   delivered: boolean;
   updatedAt?: string;
   updatedBy?: string;
@@ -1846,11 +1994,22 @@ export function getKpmSubItemStatusList(
   const deliveries = record.subItemDeliveries || {};
 
   return pkg.subItems.map((subName) => {
+    const parsed = parseSubItemSpec(subName, { itemCode: pkg.code, itemName: pkg.name });
     const key = normalizeSubItemKey(subName);
-    const state = deliveries[key] ?? deliveries[subName];
+    let state = deliveries[key] ?? deliveries[subName] ?? deliveries[parsed.baseName];
+    if (!state && key === 'selang gas & regulator') {
+      const legacySelang = deliveries['selang gas'];
+      const legacyReg = deliveries['regulator'];
+      if (legacySelang?.delivered && legacyReg?.delivered) {
+        state = legacySelang;
+      }
+    }
     return {
       key,
-      name: subName,
+      name: parsed.formatted || subName,
+      baseName: parsed.baseName,
+      volume: parsed.volume,
+      satuan: parsed.satuan,
       delivered: Boolean(state?.delivered),
       updatedAt: state?.updatedAt,
       updatedBy: state?.updatedBy,
@@ -1869,6 +2028,7 @@ export interface SubItemPackageSource {
 export interface SubItemAggregateRow {
   key: string;
   name: string;
+  satuan: string;
   totalNeeded: number;
   deliveredCount: number;
   pendingCount: number;
@@ -1900,6 +2060,7 @@ export function computeSubItemRecap(
     {
       key: string;
       name: string;
+      satuan: string;
       totalNeeded: number;
       deliveredCount: number;
       pendingCount: number;
@@ -1936,13 +2097,15 @@ export function computeSubItemRecap(
     });
 
     for (const sub of statuses) {
-      totalUnits += 1;
-      if (sub.delivered) totalDelivered += 1;
-      else totalPending += 1;
+      const qty = sub.volume > 0 ? sub.volume : 1;
+      totalUnits += qty;
+      if (sub.delivered) totalDelivered += qty;
+      else totalPending += qty;
 
       const existing = aggMap.get(sub.key) ?? {
         key: sub.key,
-        name: sub.name,
+        name: sub.baseName || sub.name,
+        satuan: sub.satuan || 'Unit',
         totalNeeded: 0,
         deliveredCount: 0,
         pendingCount: 0,
@@ -1950,11 +2113,11 @@ export function computeSubItemRecap(
         owedKpmIds: [],
       };
 
-      existing.totalNeeded += 1;
+      existing.totalNeeded += qty;
       if (sub.delivered) {
-        existing.deliveredCount += 1;
+        existing.deliveredCount += qty;
       } else {
-        existing.pendingCount += 1;
+        existing.pendingCount += qty;
         existing.owedKpmIds.push(rec.id);
       }
 
@@ -1965,9 +2128,9 @@ export function computeSubItemRecap(
         delivered: 0,
         pending: 0,
       };
-      pkgEntry.total += 1;
-      if (sub.delivered) pkgEntry.delivered += 1;
-      else pkgEntry.pending += 1;
+      pkgEntry.total += qty;
+      if (sub.delivered) pkgEntry.delivered += qty;
+      else pkgEntry.pending += qty;
       existing.packageMap.set(pkg.code, pkgEntry);
 
       aggMap.set(sub.key, existing);
@@ -1978,6 +2141,7 @@ export function computeSubItemRecap(
     .map((entry) => ({
       key: entry.key,
       name: entry.name,
+      satuan: entry.satuan,
       totalNeeded: entry.totalNeeded,
       deliveredCount: entry.deliveredCount,
       pendingCount: entry.pendingCount,

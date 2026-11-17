@@ -18,7 +18,6 @@ import {
   fetchAppStateSlice,
   fetchChatDeliveryWatermarks,
   fetchOperationalDataFromSupabase,
-  importOperationalDeltaToSupabase,
   isSchemaMissingError,
   runAdminDataActionInSupabase,
   saveAppStateSlice,
@@ -138,6 +137,7 @@ import {
   saveProposalHistory,
   saveProposals,
   saveWilayahList,
+  upgradeCatalogTendaKursi,
   uploadImageDocumentToDrive,
   vacateKpmSlotsInMap,
 } from './utils/imageProcessor';
@@ -622,6 +622,7 @@ export default function App() {
   const desiredAutoPresenceRef = useRef<UserPresenceStatus>('online');
   const isManualRefreshingRef = useRef<boolean>(false);
   const hasAppliedRemoteRef = useRef<boolean>(false);
+  const hasSyncedTendaKursiFixRef = useRef<boolean>(false);
   const lastUpdateCheckAtRef = useRef<number>(0);
   const lastWebChangelogSyncAtRef = useRef<number>(0);
   const internalUsersRef = useRef<InternalUser[]>(internalUsers);
@@ -1154,7 +1155,7 @@ export default function App() {
           );
         }
         if (snapshot.items && snapshot.items.length > 0) {
-          setItems(snapshot.items);
+          setItems(upgradeCatalogTendaKursi(snapshot.items).nextItems);
         }
         if (snapshot.pengelolaList && snapshot.pengelolaList.length > 0) {
           setPengelolaList(snapshot.pengelolaList);
@@ -1558,7 +1559,9 @@ export default function App() {
         ? state.proposals
         : latestDataRef.current.proposals;
       const nextProposals = rawProposals.filter((p) => !isLegacyDummyProposal(p));
-      const nextItems = Array.isArray(state.items) ? state.items : latestDataRef.current.items;
+      const nextItems = upgradeCatalogTendaKursi(
+        Array.isArray(state.items) ? state.items : latestDataRef.current.items
+      ).nextItems;
       const nextWilayah = Array.isArray(state.wilayahList)
         ? state.wilayahList
         : latestDataRef.current.wilayahList;
@@ -1600,10 +1603,11 @@ export default function App() {
         if (useSupabase) {
           try {
             const snapshot = await fetchOperationalDataFromSupabase();
+            const upgradedCatalog = upgradeCatalogTendaKursi(snapshot.items);
             applyRemoteOperationalState({
               records: snapshot.records,
               proposals: snapshot.proposals,
-              items: snapshot.items,
+              items: upgradedCatalog.nextItems,
               pekerjaanList: snapshot.pekerjaanList,
               wilayahList:
                 snapshot.wilayahList.length > 0
@@ -1613,6 +1617,25 @@ export default function App() {
               proposalHistory: snapshot.proposalHistory,
               kpmAuditLogs: snapshot.kpmAuditLogs,
             });
+            const canAutoPersist =
+              currentUserRoleRef.current === 'SuperAdmin' ||
+              Boolean(
+                internalUsersRef.current.find((u) => u.id === currentUserIdRef.current)?.permissions
+                  ?.update
+              );
+            if (upgradedCatalog.changed && canAutoPersist && !hasSyncedTendaKursiFixRef.current) {
+              hasSyncedTendaKursiFixRef.current = true;
+              const changedYears = Array.from(
+                new Set(upgradedCatalog.changedItems.map((c) => c.tahun))
+              );
+              changedYears.forEach((yr) => {
+                void upsertCatalogItemsInSupabase({
+                  itemsToSync: upgradedCatalog.nextItems.filter((it) => it.tahun === yr),
+                  proposals: snapshot.proposals,
+                  pengelolaList: snapshot.pengelolaList,
+                }).catch(() => {});
+              });
+            }
             return;
           } catch (err) {
             if (isSchemaMissingError(err)) {
@@ -3711,157 +3734,18 @@ export default function App() {
     );
   }, [proposals, items, wilayahList]);
 
-  const latestImportStateRef = useRef({
-    records,
-    proposals,
-    pengelolaList,
-    pekerjaanList,
-    items,
-    wilayahList,
-    currentActor,
-  });
-
-  latestImportStateRef.current = {
-    records,
-    proposals,
-    pengelolaList,
-    pekerjaanList,
-    items,
-    wilayahList,
-    currentActor,
-  };
-
-  const handleImportCsv = (
-    csvText: string,
-    sourceLabel?: string,
-    skipDuplicates = true
-  ): {
-    importedRecords: number;
-    importedProposals: number;
-    addedPengelola: number;
-    skipped: number;
-    error?: string;
-  } => {
-    if (
-      sourceLabel !== 'Kecamatan Pontianak Kota 2026.csv' &&
-      !requirePermission('add', 'mengimpor data CSV')
-    ) {
-      return {
-        importedRecords: 0,
-        importedProposals: 0,
-        addedPengelola: 0,
-        skipped: 0,
-        error: 'Izin ADD dinonaktifkan oleh SuperAdmin.',
-      };
-    }
-    const state = latestImportStateRef.current;
-    const result = importProposalKpmFromCsv({
-      csvText,
-      existingRecords: state.records,
-      existingProposals: state.proposals,
-      existingPengelolaList: state.pengelolaList,
-      existingPekerjaanList: state.pekerjaanList,
-      items: state.items,
-      wilayahList: state.wilayahList,
-      actorName: state.currentActor.nama,
-      actorEmail: state.currentActor.email,
-      skipDuplicates,
-    });
-
-    if (result.importedRecordsCount > 0) {
-      const importSummaryLog = createActivityHistoryEntry('csv_imported', {
-        proposalName: sourceLabel || 'Import CSV Massal',
-        detail: `Mengimpor ${result.importedRecordsCount} KPM (${result.importedProposalsCount} proposal baru${result.skippedCount > 0 ? `, ${result.skippedCount} dilewati` : ''}).`,
-        tahun: result.nextRecords[0]?.tahun || selectedYear,
-        action: 'entered',
-        actorName: state.currentActor.nama,
-      });
-      const nextAuditLogs = [...result.newAuditLogs, ...kpmAuditLogs];
-      const nextProposalHistory = [importSummaryLog, ...result.newProposalHistory, ...proposalHistory];
-
-      const prevRecById = new Map(state.records.map((r) => [r.id, r]));
-      const existingPropIds = new Set(state.proposals.map((p) => p.id));
-      const existingPengelolaIds = new Set(state.pengelolaList.map((p) => p.id));
-      const existingPekerjaanLower = new Set(
-        state.pekerjaanList.map((p) => p.trim().toLowerCase())
-      );
-
-      const recordsToSave = result.nextRecords.filter((r) => {
-        const old = prevRecById.get(r.id);
-        return !old || old.registerCode !== r.registerCode || old.updatedAt !== r.updatedAt;
-      });
-      const proposalsToSave = result.nextProposals.filter((p) => !existingPropIds.has(p.id));
-      const pengelolaToSave = result.nextPengelolaList.filter((p) => !existingPengelolaIds.has(p.id));
-      const pekerjaanToAdd = result.nextPekerjaanList.filter(
-        (j) => !existingPekerjaanLower.has(j.trim().toLowerCase())
-      );
-
-      setProposals(result.nextProposals);
-      setPengelolaList(result.nextPengelolaList);
-      setPekerjaanList(result.nextPekerjaanList);
-      setRecords(result.nextRecords);
-      if (result.newAuditLogs.length > 0) {
-        setKpmAuditLogs(nextAuditLogs);
-      }
-      setProposalHistory(nextProposalHistory);
-      if (supabaseReadyRef.current) {
-        void runSupabaseMutation(
-          () =>
-            importOperationalDeltaToSupabase({
-              recordsToSave,
-              proposalsToSave,
-              pengelolaToSave,
-              pekerjaanToAdd,
-              allProposals: result.nextProposals,
-              allPengelolaList: result.nextPengelolaList,
-              auditLogs: result.newAuditLogs,
-              historyEntries: [importSummaryLog, ...result.newProposalHistory],
-            }),
-          'Gagal menyinkronkan impor CSV ke Supabase'
-        );
-      } else {
-        void syncOperationalData(
-          {
-            records: result.nextRecords,
-            proposals: result.nextProposals,
-            pengelolaList: result.nextPengelolaList,
-            pekerjaanList: result.nextPekerjaanList,
-            kpmAuditLogs: nextAuditLogs,
-            proposalHistory: nextProposalHistory,
-          },
-          'add'
-        );
-      }
-      setFeedback({
-        type: 'success',
-        message: `${result.importedRecordsCount} calon KPM${
-          sourceLabel ? ` dari "${sourceLabel}"` : ''
-        } berhasil diimpor otomatis.${
-          result.skippedCount > 0 ? ` (${result.skippedCount} duplikat dilewati)` : ''
-        }`,
-      });
-    }
-
-    return {
-      importedRecords: result.importedRecordsCount,
-      importedProposals: result.importedProposalsCount,
-      addedPengelola: result.addedPengelolaCount,
-      skipped: result.skippedCount,
-      error: result.error,
-    };
-  };
-
   const openKpmDetail = (
     record: KpmRecord,
     fromTab: MainTab = activeTab,
     fromRecap = false,
-    fromChatPeerId: string | null = null
+    fromChatPeerId: string | null = null,
+    fromProposalDetail = false
   ) => {
     navigateForwardScroll();
     setFeedback(null);
     setReturnToTab(fromTab);
     setKpmDetailReturnToRecap(fromRecap);
-    setKpmDetailReturnToProposalDetail(false);
+    setKpmDetailReturnToProposalDetail(fromProposalDetail);
     setKpmDetailReturnToChatPeerId(fromChatPeerId);
     setActiveKpmId(record.id);
     setSubView('kpm-detail');
@@ -9551,6 +9435,7 @@ export default function App() {
               }}
               onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
               onUpdateProposalDocuments={handleQuickSyncProposalDocuments}
+              onSelectKpm={(rec) => openKpmDetail(rec, returnToTab, false, null, true)}
             />
           </div>
         )}
@@ -9900,7 +9785,6 @@ export default function App() {
             onAdminDataAction={handleAdminDataAction}
             onVerifySuperAdminPassword={handleVerifySuperAdminPassword}
             onRegisterInternalUser={handleRegisterInternalUser}
-            onImportCsv={handleImportCsv}
             onSelectKpm={(rec) => openKpmDetail(rec, 'menu')}
             onToggleBerkasDikembalikan={handleToggleBerkasDikembalikan}
             onSelectKpmFromDuplicate={(rec) => openKpmDetail(rec, 'menu')}
