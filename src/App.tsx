@@ -169,6 +169,8 @@ import {
   syncNativeChatNotifierConfig,
 } from './services/nativeChatNotifier';
 import { APP_VERSION } from './config/appVersion';
+import { DesktopSidebar } from './components/DesktopSidebar';
+import { isNativeAppPlatform, useIsDesktopWeb } from './utils/platform';
 
 type SubView =
   | 'none'
@@ -389,6 +391,8 @@ export function MasdetaLogo() {
 }
 
 export default function App() {
+  const isNativeApp = isNativeAppPlatform();
+  const isDesktopWeb = useIsDesktopWeb();
   const [activeTab, setActiveTab] = useState<MainTab>('dashboard');
   const [subView, setSubView] = useState<SubView>('none');
   const [returnToTab, setReturnToTab] = useState<MainTab>('dashboard');
@@ -7457,15 +7461,21 @@ export default function App() {
 
   if (!currentUser) {
     return (
-      <div className="min-h-screen bg-slate-200/70 sm:py-3">
+      <div className={`min-h-screen bg-slate-200/70 sm:py-3 ${!isNativeApp ? 'lg:bg-slate-100 lg:py-0' : ''}`}>
         <OfflineIndicator
           isOnline={isOnline}
           isChecking={checkingInternet}
           onRetry={checkConnection}
         />
-        <div className="mx-auto min-h-screen w-full max-w-md overflow-x-hidden bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm">
+        <div
+          className={`mx-auto min-h-screen w-full max-w-md overflow-x-hidden bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm ${
+            !isNativeApp
+              ? 'lg:min-h-screen lg:max-w-none lg:rounded-none lg:border-0 lg:bg-transparent lg:shadow-none'
+              : ''
+          }`}
+        >
           {supabaseSchemaMissing && !dismissedSchemaNotice && (
-            <div className="mx-4 mt-3 flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+            <div className={`mx-4 mt-3 flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 ${!isNativeApp ? 'lg:mx-auto lg:max-w-5xl' : ''}`}>
               <Database className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
               <div className="min-w-0 flex-1">
                 <p className="font-bold">Tabel Supabase belum dibuat</p>
@@ -7501,15 +7511,74 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-200/70 sm:py-3">
+    <div className={`min-h-screen bg-slate-200/70 sm:py-3 ${!isNativeApp ? 'lg:bg-slate-100 lg:py-0' : ''}`}>
       <OfflineIndicator
         isOnline={isOnline}
         isChecking={checkingInternet}
         onRetry={checkConnection}
       />
 
+      {!isNativeApp && (
+        <DesktopSidebar
+          logo={<MasdetaLogo />}
+          currentUser={currentUser}
+          activeTab={activeTab}
+          activeSubView={subView}
+          activeMenuSection={menuSection}
+          kpmCount={records.length}
+          proposalCount={proposals.length}
+          unreadChatCount={unreadChatCount}
+          pendingUsersCount={currentUser.role === 'SuperAdmin' ? pendingUsersCount : 0}
+          urgentSchedulesCount={urgentSchedulesCount}
+          duplicateNikCount={duplicateNikCount}
+          hasAppUpdate={Boolean(appUpdateInfo?.hasUpdate)}
+          canAdd={hasPermission('add')}
+          onSelectTab={(tab) => {
+            setFeedback(null);
+            setMenuOpenedFromDashboard(false);
+            const isSameActiveRootTab =
+              subView === 'none' &&
+              activeTab === tab &&
+              !(tab === 'menu' && menuSection !== 'root');
+            if (isSameActiveRootTab) {
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+              return;
+            }
+            navigateForwardScroll();
+            setSubView('none');
+            if (tab === 'menu') {
+              setMenuSection('root');
+              setUsersOpenedFromSuperAdmin(false);
+              setSelectedPengelolaDrill(null);
+              setSelectedPekerjaanDrill(null);
+              setSelectedDtsenDrill(null);
+            }
+            setActiveTab(tab);
+          }}
+          onOpenSubItemRecap={() => openSubItemRecap(activeTab)}
+          onOpenChat={() => openChatView()}
+          onOpenMenuSection={(section) => {
+            navigateForwardScroll();
+            setSubView('none');
+            setMenuOpenedFromDashboard(false);
+            setUsersOpenedFromSuperAdmin(false);
+            setSelectedPengelolaDrill(null);
+            setSelectedPekerjaanDrill(null);
+            setSelectedDtsenDrill(null);
+            setMenuSection(section);
+            setActiveTab('menu');
+          }}
+          onOpenQuickAdd={() => {
+            if (!requirePermission('add', 'menambah data KPM atau proposal baru')) return;
+            setIsQuickAddOpen(true);
+          }}
+          onOpenProfile={openProfileView}
+          onLogout={handleLogout}
+        />
+      )}
+
       {supabaseSchemaMissing && !dismissedSchemaNotice && (
-        <div className="mx-auto mb-2 w-full max-w-md px-3 sm:px-0">
+        <div className={`mx-auto mb-2 w-full max-w-md px-3 sm:px-0 ${!isNativeApp ? 'lg:max-w-none lg:pl-64 lg:pr-6 lg:pt-3' : ''}`}>
           <div className="flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 shadow-xs">
             <Database className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
             <div className="min-w-0 flex-1">
@@ -7541,6 +7610,8 @@ export default function App() {
             subView === 'edit-proposal'
               ? 'bottom-24'
               : 'bottom-5'
+          } ${
+            !isNativeApp ? 'lg:left-auto lg:right-6 lg:bottom-6 lg:w-96 lg:translate-x-0' : ''
           }`}
         >
           <div
@@ -7573,7 +7644,11 @@ export default function App() {
 
       {/* Interactive In-App Push Toast for Incoming 1-on-1 Direct Message */}
       {incomingToast && (
-        <div className="fixed top-3 left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2">
+        <div
+          className={`fixed top-3 left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2 ${
+            !isNativeApp ? 'lg:top-4 lg:right-6 lg:left-auto lg:w-96 lg:translate-x-0' : ''
+          }`}
+        >
           <div className="flex items-start gap-3 rounded-2xl border border-teal-200 bg-white p-3 shadow-lg shadow-slate-900/10">
             <button
               type="button"
@@ -7611,7 +7686,11 @@ export default function App() {
       {appAlertToast &&
         !incomingToast &&
         (appAlertToast.type !== 'user_registered' || currentUser.role === 'SuperAdmin') && (
-        <div className="fixed top-3 left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2">
+        <div
+          className={`fixed top-3 left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2 ${
+            !isNativeApp ? 'lg:top-4 lg:right-6 lg:left-auto lg:w-96 lg:translate-x-0' : ''
+          }`}
+        >
           <div
             className={`flex items-start gap-3 rounded-2xl border bg-white p-3 shadow-lg shadow-slate-900/10 ${
               appAlertToast.type === 'proposal_deleted'
@@ -7678,6 +7757,7 @@ export default function App() {
       <PullToRefresh
         onRefresh={handleManualRefresh}
         disabled={
+          isDesktopWeb ||
           !isOnline ||
           subView === 'kpm-form' ||
           subView === 'add-proposal' ||
@@ -7688,7 +7768,13 @@ export default function App() {
           isUpdateModalOpen
         }
       >
-        <div className="mx-auto min-h-screen w-full max-w-md overflow-x-hidden bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm">
+        <div
+          className={`mx-auto min-h-screen w-full max-w-md overflow-x-hidden bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm ${
+            !isNativeApp
+              ? 'lg:min-h-screen lg:max-w-none lg:overflow-x-visible lg:rounded-none lg:border-0 lg:bg-slate-100 lg:pl-64 lg:shadow-none'
+              : ''
+          }`}
+        >
         {/* Sub-Views */}
         {(subView === 'chat' ||
           (Boolean(kpmDetailReturnToChatPeerId) &&

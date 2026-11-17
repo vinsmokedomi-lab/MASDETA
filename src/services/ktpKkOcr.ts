@@ -176,42 +176,66 @@ export async function scanKtpAndKkDocuments(params: {
 
   const apiBase = String(import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
   let raw: RawOcrResponse | null = null;
+  let shouldTrySupabaseEdge = false;
 
   if (apiBase || !Capacitor.isNativePlatform()) {
     const endpoint = apiBase ? `${apiBase}/api/ocr/ktp-kk` : '/api/ocr/ktp-kk';
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-    });
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      });
 
-    const json = (await response.json().catch(() => ({}))) as RawOcrResponse;
-    if (!response.ok) {
-      throw new Error(
-        typeof json.error === 'string' && json.error
-          ? json.error
-          : `Gagal memindai foto KTP & KK (${response.status}).`
-      );
+      const contentType = response.headers.get('content-type') || '';
+      const isJson = contentType.includes('application/json');
+      const json = (isJson ? await response.json().catch(() => ({})) : {}) as RawOcrResponse;
+
+      if (response.ok && isJson) {
+        raw = json;
+      } else if (
+        !apiBase &&
+        isSupabaseConfigured &&
+        (response.status === 404 || response.status === 405 || !isJson)
+      ) {
+        shouldTrySupabaseEdge = true;
+      } else {
+        throw new Error(
+          typeof json.error === 'string' && json.error
+            ? json.error
+            : `Gagal memindai foto KTP & KK (${response.status}).`
+        );
+      }
+    } catch (fetchErr) {
+      if (!apiBase && isSupabaseConfigured) {
+        shouldTrySupabaseEdge = true;
+      } else {
+        throw fetchErr;
+      }
     }
-    raw = json;
-  } else if (isSupabaseConfigured) {
+  } else {
+    shouldTrySupabaseEdge = true;
+  }
+
+  if (!raw && shouldTrySupabaseEdge) {
+    if (!isSupabaseConfigured) {
+      throw new Error('Endpoint pemindaian KTP & KK belum tersedia pada lingkungan ini.');
+    }
     const { data, error } = await supabase.functions.invoke<RawOcrResponse>('ocr-ktp-kk', {
       body: requestBody,
     });
     if (error) {
       throw new Error(
         error.message ||
-          'Layanan scan KTP & KK untuk APK membutuhkan endpoint server (VITE_API_BASE_URL) atau Supabase Edge Function "ocr-ktp-kk".'
+          'Layanan scan KTP & KK membutuhkan endpoint server (VITE_API_BASE_URL) atau Supabase Edge Function "ocr-ktp-kk".'
       );
     }
     if (data && typeof data.error === 'string' && data.error) {
       throw new Error(data.error);
     }
     raw = data;
-  } else {
-    throw new Error('Endpoint pemindaian KTP & KK belum tersedia pada lingkungan ini.');
   }
 
   if (!raw) {

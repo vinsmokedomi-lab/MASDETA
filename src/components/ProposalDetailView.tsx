@@ -43,6 +43,7 @@ import {
   uploadProposalDocumentToDrive,
 } from '../utils/imageProcessor';
 import { DriveImage } from './DriveImage';
+import { isNativeAppPlatform, useIsDesktopWeb } from '../utils/platform';
 
 interface ProposalDetailViewProps {
   proposal: ProposalRecord;
@@ -85,6 +86,8 @@ export function ProposalDetailView({
   onPreviewDocument,
   onUpdateProposalDocuments,
 }: ProposalDetailViewProps) {
+  const isNativeApp = isNativeAppPlatform();
+  const isDesktopWeb = useIsDesktopWeb();
   const [confirmAcceptAll, setConfirmAcceptAll] = useState(false);
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
   const [transferYear, setTransferYear] = useState<string>(proposal.tahun);
@@ -567,22 +570,8 @@ export function ProposalDetailView({
   const ringCircumference = 2 * Math.PI * ringRadius;
   let runningOffset = 0;
 
-  return (
-    <div className="min-h-screen pb-24">
-      {/* Sub-Screen Header: hanya panah kembali + judul */}
-      <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
-        <button
-          type="button"
-          onClick={onBack}
-          className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
-          aria-label="Kembali"
-        >
-          <ArrowLeft className="h-5 w-5" />
-        </button>
-        <h1 className="truncate text-base font-bold text-slate-900">Proposal</h1>
-      </header>
-
-      <main className="space-y-4 px-4 pt-4">
+  const overviewAndDtsenBlock = (
+    <>
         {/* Hero Overview Card */}
         <section className="rounded-3xl border border-slate-200 bg-white p-5">
           <div className="space-y-2">
@@ -851,7 +840,11 @@ export function ProposalDetailView({
             </div>
           )}
         </section>
+    </>
+  );
 
+  const breakdownsBlock = (
+    <>
         {/* Conditional Listing: Kelurahan (Tampil selain proposal dengan judul kelurahan) */}
         {showKelurahanCard && (
           <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
@@ -1064,7 +1057,7 @@ export function ProposalDetailView({
                 </div>
               )}
 
-              <div className="mt-3 grid grid-cols-2 gap-2.5">
+              <div className={`mt-3 grid grid-cols-2 gap-2.5 ${!isNativeApp ? 'lg:grid-cols-3' : ''}`}>
                 {uploadedDocSlots.map((slot) => {
                   const doc = proposal.documents?.[slot.key];
                   if (!doc) return null;
@@ -1187,7 +1180,11 @@ export function ProposalDetailView({
             </section>
           );
         })()}
+    </>
+  );
 
+  const historyBlock = (
+    <>
         {/* Paling Bawah: Rekam Jejak (Ringkas + Lihat selengkapnya) */}
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
           <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
@@ -1275,11 +1272,53 @@ export function ProposalDetailView({
             </>
           )}
         </section>
-      </main>
+    </>
+  );
+
+  return (
+    <div className="min-h-screen pb-24">
+      {/* Sub-Screen Header: hanya panah kembali + judul */}
+      <header
+        className={`sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md ${
+          !isNativeApp ? 'lg:px-6' : ''
+        }`}
+      >
+        <button
+          type="button"
+          onClick={onBack}
+          className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
+          aria-label="Kembali"
+        >
+          <ArrowLeft className="h-5 w-5" />
+        </button>
+        <h1 className="truncate text-base font-bold text-slate-900">Proposal</h1>
+      </header>
+
+      {isDesktopWeb ? (
+        <main className="mx-auto grid max-w-[1440px] grid-cols-12 items-start gap-5 px-6 pt-6">
+          <div className="col-span-5 space-y-5">
+            {overviewAndDtsenBlock}
+            {historyBlock}
+          </div>
+          <div className="col-span-7 space-y-5">
+            {breakdownsBlock}
+          </div>
+        </main>
+      ) : (
+        <main className="space-y-4 px-4 pt-4">
+          {overviewAndDtsenBlock}
+          {breakdownsBlock}
+          {historyBlock}
+        </main>
+      )}
 
       {/* Persistent Bottom-Right Floating Pencil Edit Proposal Button */}
       {canUpdate && (
-        <div className="pointer-events-none fixed bottom-6 left-1/2 z-30 flex w-full max-w-md -translate-x-1/2 justify-end px-4">
+        <div
+          className={`pointer-events-none fixed bottom-6 left-1/2 z-30 flex w-full max-w-md -translate-x-1/2 justify-end px-4 ${
+            !isNativeApp ? 'lg:left-auto lg:right-6 lg:w-auto lg:max-w-none lg:translate-x-0 lg:px-0' : ''
+          }`}
+        >
           <button
             type="button"
             onClick={() => onEditProposal(proposal.id)}
@@ -1302,7 +1341,9 @@ export function ProposalDetailView({
           onClick={() => !isTransferring && setIsTransferModalOpen(false)}
         >
           <div
-            className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-t-3xl border border-slate-200 bg-white shadow-2xl sm:rounded-3xl"
+            className={`flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-t-3xl border border-slate-200 bg-white shadow-2xl sm:rounded-3xl ${
+              !isNativeApp ? 'lg:max-w-xl' : ''
+            }`}
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}

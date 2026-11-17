@@ -18,6 +18,7 @@ import {
   sanitizeDigits,
 } from '../utils/imageProcessor';
 import { PlaceholderSelect } from './FormControls';
+import { isNativeAppPlatform } from '../utils/platform';
 
 interface AddProposalFormProps {
   existingProposals: ProposalRecord[];
@@ -40,6 +41,7 @@ export function AddProposalForm({
   onBack,
   onSaveNewProposal,
 }: AddProposalFormProps) {
+  const isNativeApp = isNativeAppPlatform();
   const resolvedYearOptions = useMemo(() => {
     const set = new Set<string>(TAHUN_OPTIONS);
     (yearOptions || []).forEach((y) => {
@@ -153,7 +155,11 @@ export function AddProposalForm({
   return (
     <div className="min-h-screen pb-24">
       {/* Native Mobile Sub-Screen Header (Back + Title Only) */}
-      <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
+      <header
+        className={`sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md ${
+          !isNativeApp ? 'lg:px-6' : ''
+        }`}
+      >
         <button
           type="button"
           onClick={onBack}
@@ -167,8 +173,14 @@ export function AddProposalForm({
         </h1>
       </header>
 
-      <form onSubmit={handleSubmit} noValidate className="space-y-4 px-4 pt-4">
-        <section className="rounded-2xl border border-slate-200 bg-white p-4">
+      <form
+        onSubmit={handleSubmit}
+        noValidate
+        className={`space-y-4 px-4 pt-4 ${
+          !isNativeApp ? 'lg:mx-auto lg:max-w-3xl lg:px-6 lg:pt-6' : ''
+        }`}
+      >
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 lg:p-6">
           <h2 className="text-sm font-bold text-slate-900">
             Data Proposal Baru
           </h2>
@@ -176,7 +188,11 @@ export function AddProposalForm({
             Lengkapi Tahun, Tipe, Kab / Kota, dan Kecamatan. Kelurahan dan Jalan bersifat opsional untuk membentuk judul proposal otomatis.
           </p>
 
-          <div className="mt-4 space-y-4">
+          <div
+            className={`mt-4 space-y-4 ${
+              !isNativeApp ? 'lg:grid lg:grid-cols-2 lg:gap-4 lg:space-y-0' : ''
+            }`}
+          >
             {/* Tahun * */}
             <div>
               <label htmlFor="add-prop-tahun" className="block text-xs font-semibold text-slate-700">
@@ -359,7 +375,7 @@ export function AddProposalForm({
             </div>
 
             {/* Proposal Combined Name Display (Read-Only) */}
-            <div>
+            <div className={!isNativeApp ? 'lg:col-span-2' : ''}>
               <div className="flex items-center justify-between gap-2">
                 <label htmlFor="add-prop-display" className="block text-xs font-semibold text-slate-700">
                   Proposal
@@ -387,8 +403,16 @@ export function AddProposalForm({
         </section>
 
         {/* Sticky Bottom Action Bar */}
-        <div className="fixed bottom-0 left-1/2 z-30 w-full max-w-md -translate-x-1/2 border-t border-slate-200 bg-white/95 px-4 py-2.5 backdrop-blur-md">
-          <div className="flex items-center gap-2.5">
+        <div
+          className={`fixed bottom-0 left-1/2 z-30 w-full max-w-md -translate-x-1/2 border-t border-slate-200 bg-white/95 px-4 py-2.5 backdrop-blur-md ${
+            !isNativeApp ? 'lg:left-64 lg:right-0 lg:w-auto lg:max-w-none lg:translate-x-0 lg:px-6' : ''
+          }`}
+        >
+          <div
+            className={`flex items-center gap-2.5 ${
+              !isNativeApp ? 'lg:mx-auto lg:max-w-3xl lg:justify-end' : ''
+            }`}
+          >
             <button
               type="button"
               onClick={onBack}
@@ -401,7 +425,9 @@ export function AddProposalForm({
             <button
               type="submit"
               disabled={isDuplicateProposal}
-              className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-5 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 whitespace-nowrap"
+              className={`inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-5 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 whitespace-nowrap ${
+                !isNativeApp ? 'lg:flex-none lg:min-w-[180px]' : ''
+              }`}
             >
               <Save className="h-4 w-4" />
               <span>Simpan</span>

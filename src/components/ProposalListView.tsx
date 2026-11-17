@@ -26,6 +26,7 @@ import {
 } from '../utils/imageProcessor';
 import { FilterSelect, SegmentedTabs } from './FormControls';
 import { SwipeAction, SwipeableRow } from './SwipeableRow';
+import { isNativeAppPlatform } from '../utils/platform';
 
 interface ProposalListViewProps {
   proposals: ProposalRecord[];
@@ -160,11 +161,20 @@ export function ProposalListView({
     return records.filter((r) => keySet.has(`${r.tahun}::${r.proposal}`)).length;
   };
 
+  const isNativeApp = isNativeAppPlatform();
+
   return (
-    <div className="min-h-screen pb-24">
+    <div className={`min-h-screen pb-24 ${!isNativeApp ? 'lg:pb-12' : ''}`}>
       {/* Sticky Header */}
-      <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md">
-        <h1 className="truncate text-base font-bold text-slate-900">Daftar Proposal</h1>
+      <header className={`sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md ${!isNativeApp ? 'lg:px-6' : ''}`}>
+        <div className="flex min-w-0 items-center gap-2.5">
+          <h1 className="truncate text-base font-bold text-slate-900">Daftar Proposal</h1>
+          {!isNativeApp && (
+            <span className="hidden lg:inline-flex items-center rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-700 tabular-nums">
+              {filteredProposals.length} Proposal
+            </span>
+          )}
+        </div>
         {canUpdate && onBulkSetProposalLock && proposals.length > 0 && (
           <button
             type="button"
@@ -182,7 +192,7 @@ export function ProposalListView({
         )}
       </header>
 
-      <div className="space-y-4 px-4 pt-4">
+      <div className={`space-y-4 px-4 pt-4 ${!isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:px-6 lg:pt-6' : ''}`}>
         {/* Search + Tahun, lalu tab Tipe */}
         <div className="space-y-2">
           <div className="flex items-center gap-2">
@@ -270,7 +280,128 @@ export function ProposalListView({
                   </button>
 
                   {!isCollapsed && (
-                    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+                    <>
+                    {!isNativeApp && (
+                      <div className="hidden lg:grid lg:grid-cols-2 xl:grid-cols-3 lg:gap-3">
+                        {group.proposals.map((prop) => {
+                          const matchingRecords = records.filter(
+                            (r) =>
+                              r.proposal === prop.namaProposal &&
+                              (selectedYear === 'all'
+                                ? r.tahun === prop.tahun
+                                : r.tahun === selectedYear)
+                          );
+                          const isLocked = prop.status === 'locked';
+                          const targetQuota = prop.jumlahKpm ?? 66;
+                          const pctQuota =
+                            targetQuota > 0
+                              ? Math.min(100, Math.round((matchingRecords.length / targetQuota) * 100))
+                              : 0;
+
+                          return (
+                            <div
+                              key={`dt-prop-${prop.id}`}
+                              className="group flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 transition-colors hover:border-teal-600/50 hover:bg-slate-50/40"
+                            >
+                              <button
+                                type="button"
+                                onClick={() => onOpenProposalDetail(prop.id)}
+                                className="w-full text-left"
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <p className="line-clamp-2 text-sm font-bold text-slate-900">
+                                    {prop.namaProposal}
+                                  </p>
+                                  <span
+                                    className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg ${
+                                      isLocked
+                                        ? 'bg-rose-50 text-rose-600'
+                                        : 'bg-slate-100 text-slate-400'
+                                    }`}
+                                    title={isLocked ? 'Proposal Terkunci' : 'Proposal Terbuka'}
+                                  >
+                                    {isLocked ? (
+                                      <Lock className="h-3.5 w-3.5" />
+                                    ) : (
+                                      <Unlock className="h-3.5 w-3.5" />
+                                    )}
+                                  </span>
+                                </div>
+
+                                <div className="mt-2.5 flex items-center justify-between text-xs text-slate-500 tabular-nums">
+                                  <span>
+                                    {prop.tipe} · {prop.tahun}
+                                  </span>
+                                  <span className="font-bold text-slate-900">
+                                    {matchingRecords.length}/{targetQuota} KPM
+                                  </span>
+                                </div>
+
+                                <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                                  <div
+                                    className="h-full rounded-full bg-teal-700 transition-all"
+                                    style={{ width: `${pctQuota}%` }}
+                                  />
+                                </div>
+                              </button>
+
+                              <div className="mt-3 flex items-center justify-between gap-2 border-t border-slate-100 pt-2.5">
+                                <span
+                                  className={`text-xs font-medium ${
+                                    prop.checklist.dinas ? 'text-teal-700' : 'text-amber-700'
+                                  }`}
+                                >
+                                  {prop.checklist.dinas
+                                    ? 'Sudah diantar ke Dinas'
+                                    : 'Belum diantar ke Dinas'}
+                                </span>
+
+                                <div className="flex items-center gap-1">
+                                  {canUpdate && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setPendingAction({
+                                          type: 'lock',
+                                          proposal: prop,
+                                          kpmCount: matchingRecords.length,
+                                        })
+                                      }
+                                      title={isLocked ? 'Buka Kunci' : 'Kunci Proposal'}
+                                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
+                                    >
+                                      {isLocked ? (
+                                        <Unlock className="h-3.5 w-3.5" />
+                                      ) : (
+                                        <Lock className="h-3.5 w-3.5" />
+                                      )}
+                                    </button>
+                                  )}
+                                  {canDelete && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setPendingAction({
+                                          type: 'delete',
+                                          proposal: prop,
+                                          kpmCount: matchingRecords.length,
+                                        })
+                                      }
+                                      title="Hapus Proposal"
+                                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    <div className={`overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100 ${!isNativeApp ? 'lg:hidden' : ''}`}>
                       {group.proposals.map((prop) => {
                         const matchingRecords = records.filter(
                           (r) =>
@@ -362,6 +493,7 @@ export function ProposalListView({
                         );
                       })}
                     </div>
+                    </>
                   )}
                 </section>
               );

@@ -64,6 +64,7 @@ import {
 } from '../utils/imageProcessor';
 import { exportKpmBastToPdf, exportSingleKpmToPdf } from '../utils/pdfExporter';
 import { openCekBansosWithNik } from '../services/cekBansos';
+import { isNativeAppPlatform, useIsDesktopWeb } from '../utils/platform';
 
 interface KpmDetailViewProps {
   record: KpmRecord;
@@ -140,6 +141,8 @@ export function KpmDetailView({
   feedback,
   onDismissFeedback,
 }: KpmDetailViewProps) {
+  const isNativeApp = isNativeAppPlatform();
+  const isDesktopWeb = useIsDesktopWeb();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [shareRecipientId, setShareRecipientId] = useState<string>('');
@@ -557,49 +560,20 @@ export function KpmDetailView({
     }
   };
 
-  return (
-    <div className="min-h-screen pb-24">
-      {/* Sub-Screen Header: tombol kembali + judul + aksi hapus aman di kanan atas */}
-      <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <button
-            type="button"
-            onClick={onBack}
-            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
-            aria-label="Kembali ke daftar KPM"
-          >
-            <ArrowLeft className="h-5 w-5" />
-          </button>
-          <h1 className="truncate text-base font-bold text-slate-900">Detail Calon KPM</h1>
-        </div>
+  const lockedBannerBlock = isProposalLocked ? (
+    <div className="flex items-center gap-2 rounded-2xl border border-slate-300 bg-slate-100 px-3.5 py-2.5 text-xs font-medium text-slate-700">
+      <Lock className="h-4 w-4 shrink-0 text-slate-700" />
+      <span>
+        Proposal <strong>{record.proposal}</strong> berstatus Terkunci. Data KPM ini tidak
+        dapat diubah, dipindahkan, atau dihapus.
+      </span>
+    </div>
+  ) : null;
 
-        {canDelete && (
-          <button
-            type="button"
-            disabled={isProposalLocked}
-            onClick={() => setConfirmDelete(true)}
-            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-200 bg-rose-50 text-rose-600 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-            aria-label="Hapus Data KPM"
-            title={isProposalLocked ? 'Proposal Terkunci' : 'Hapus Data KPM'}
-          >
-            <Trash2 className="h-4.5 w-4.5" />
-          </button>
-        )}
-      </header>
-
-      <main className="space-y-4 px-4 pt-4">
-        {isProposalLocked && (
-          <div className="flex items-center gap-2 rounded-2xl border border-slate-300 bg-slate-100 px-3.5 py-2.5 text-xs font-medium text-slate-700">
-            <Lock className="h-4 w-4 shrink-0 text-slate-700" />
-            <span>
-              Proposal <strong>{record.proposal}</strong> berstatus Terkunci. Data KPM ini tidak
-              dapat diubah, dipindahkan, atau dihapus.
-            </span>
-          </div>
-        )}
-
-        {/* Hero Identity Card: Foto, Nama, Item, Proposal, Nomor HP */}
-        <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xs">
+  const identityAndDupBlock = (
+    <>
+      {/* Hero Identity Card: Foto, Nama, Item, Proposal, Nomor HP */}
+      <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xs">
           {/* Card Top Bar */}
           <div className="flex items-center justify-between gap-2 border-b border-slate-100 bg-slate-50/70 px-4 py-2.5">
             <p className="truncate text-xs font-medium text-teal-800 tabular-nums">
@@ -859,7 +833,11 @@ export function KpmDetailView({
             </div>
           </section>
         )}
+    </>
+  );
 
+  const subItemAndBastBlock = (
+    <>
         {/* Penyaluran Sub-Item Bantuan (Interactive Toggles & Hutang Tracking) */}
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
           <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
@@ -1089,7 +1067,11 @@ export function KpmDetailView({
             </div>
           </div>
         </section>
+    </>
+  );
 
+  const pengajuanAndDomisiliBlock = (
+    <>
         {/* Pengajuan & Bantuan */}
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
           <div className="border-b border-slate-100 px-4 py-3">
@@ -1231,7 +1213,11 @@ export function KpmDetailView({
             </div>
           </dl>
         </section>
+    </>
+  );
 
+  const docsAndHistoryBlock = (
+    <>
         {/* Dokumentasi */}
         <section className="rounded-2xl border border-slate-200 bg-white p-4">
           <div className="flex items-center justify-between gap-2">
@@ -1267,7 +1253,7 @@ export function KpmDetailView({
             </div>
           )}
 
-          <div className="mt-3 grid grid-cols-2 gap-2.5">
+          <div className={`mt-3 grid grid-cols-2 gap-2.5 ${!isNativeApp ? 'lg:grid-cols-3' : ''}`}>
             {(
               [
                 { key: 'penerima', label: 'Foto Penerima', icon: User },
@@ -1544,10 +1530,73 @@ export function KpmDetailView({
             </button>
           )}
         </section>
-      </main>
+    </>
+  );
+
+  return (
+    <div className="min-h-screen pb-24">
+      {/* Sub-Screen Header: tombol kembali + judul + aksi hapus aman di kanan atas */}
+      <header
+        className={`sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md ${
+          !isNativeApp ? 'lg:px-6' : ''
+        }`}
+      >
+        <div className="flex min-w-0 items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onBack}
+            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
+            aria-label="Kembali ke daftar KPM"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </button>
+          <h1 className="truncate text-base font-bold text-slate-900">Detail Calon KPM</h1>
+        </div>
+
+        {canDelete && (
+          <button
+            type="button"
+            disabled={isProposalLocked}
+            onClick={() => setConfirmDelete(true)}
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-200 bg-rose-50 text-rose-600 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+            aria-label="Hapus Data KPM"
+            title={isProposalLocked ? 'Proposal Terkunci' : 'Hapus Data KPM'}
+          >
+            <Trash2 className="h-4.5 w-4.5" />
+          </button>
+        )}
+      </header>
+
+      {isDesktopWeb ? (
+        <main className="mx-auto max-w-[1440px] space-y-5 px-6 pt-6">
+          {lockedBannerBlock}
+          <div className="grid grid-cols-12 items-start gap-5">
+            <div className="col-span-5 space-y-5">
+              {identityAndDupBlock}
+              {pengajuanAndDomisiliBlock}
+            </div>
+            <div className="col-span-7 space-y-5">
+              {subItemAndBastBlock}
+              {docsAndHistoryBlock}
+            </div>
+          </div>
+        </main>
+      ) : (
+        <main className="space-y-4 px-4 pt-4">
+          {lockedBannerBlock}
+          {identityAndDupBlock}
+          {subItemAndBastBlock}
+          {pengajuanAndDomisiliBlock}
+          {docsAndHistoryBlock}
+        </main>
+      )}
 
       {/* Persistent Bottom-Right Floating Pencil Edit KPM Button */}
-      <div className="pointer-events-none fixed bottom-6 left-1/2 z-30 flex w-full max-w-md -translate-x-1/2 justify-end px-4">
+      <div
+        className={`pointer-events-none fixed bottom-6 left-1/2 z-30 flex w-full max-w-md -translate-x-1/2 justify-end px-4 ${
+          !isNativeApp ? 'lg:left-auto lg:right-6 lg:w-auto lg:max-w-none lg:translate-x-0 lg:px-0' : ''
+        }`}
+      >
         <button
           type="button"
           onClick={() => onEditRecord(record)}

@@ -3,8 +3,10 @@ import {
   AlertTriangle,
   Check,
   CheckSquare,
+  Eye,
   Lock,
   Package,
+  Plus,
   QrCode,
   Search,
   SlidersHorizontal,
@@ -22,6 +24,7 @@ import {
   WilayahKabKota,
 } from '../types/kpm';
 import {
+  formatNikDisplay,
   getAbsenSeq,
   getItemHierarchyRank,
   getItemsForYear,
@@ -29,6 +32,7 @@ import {
   isKecamatanProposal,
   resolveProposalDomicile,
 } from '../utils/imageProcessor';
+import { isNativeAppPlatform } from '../utils/platform';
 import { DriveImage } from './DriveImage';
 import { FilterSelect, SegmentedTabs } from './FormControls';
 import { QrScannerLookupModal } from './QrScannerLookupModal';
@@ -83,6 +87,7 @@ export function KpmListView({
   canUpdate = true,
   canDelete = true,
   isLoading = false,
+  onCreateNew,
   onSelectRecord,
   onDeleteRecord,
   onBulkUpdateKpms,
@@ -383,38 +388,59 @@ export function KpmListView({
     setPekerjaanFilter('all');
   };
 
+  const isNativeApp = isNativeAppPlatform();
+
   return (
-    <div className="min-h-screen pb-28">
+    <div className={`min-h-screen pb-28 ${!isNativeApp ? 'lg:pb-12' : ''}`}>
       {/* Sticky Header */}
-      <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md">
-        <h1 className="truncate text-base font-bold text-slate-900">
-          Keluarga Penerima Manfaat
-        </h1>
-        {canUpdate && onBulkUpdateKpms && (
-          <button
-            type="button"
-            onClick={() => {
-              setBulkMode((prev) => {
-                if (prev) {
-                  setSelectedIds([]);
-                  setBulkSheet('none');
-                }
-                return !prev;
-              });
-            }}
-            className={`inline-flex min-h-[34px] shrink-0 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-semibold transition-colors ${
-              bulkMode
-                ? 'border-teal-700 bg-teal-700 text-white'
-                : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-            }`}
-          >
-            <CheckSquare className="h-3.5 w-3.5" />
-            <span>{bulkMode ? 'Selesai' : 'Pilih Banyak'}</span>
-          </button>
-        )}
+      <header className={`sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md ${!isNativeApp ? 'lg:px-6' : ''}`}>
+        <div className="flex min-w-0 items-center gap-2.5">
+          <h1 className="truncate text-base font-bold text-slate-900">
+            Keluarga Penerima Manfaat
+          </h1>
+          {!isNativeApp && (
+            <span className="hidden lg:inline-flex items-center rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-700 tabular-nums">
+              {filteredRecords.length} KPM
+            </span>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {!isNativeApp && (
+            <button
+              type="button"
+              onClick={onCreateNew}
+              className="hidden lg:inline-flex min-h-[36px] items-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white transition-colors hover:bg-teal-800"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>Daftarkan KPM</span>
+            </button>
+          )}
+          {canUpdate && onBulkUpdateKpms && (
+            <button
+              type="button"
+              onClick={() => {
+                setBulkMode((prev) => {
+                  if (prev) {
+                    setSelectedIds([]);
+                    setBulkSheet('none');
+                  }
+                  return !prev;
+                });
+              }}
+              className={`inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-semibold transition-colors ${
+                bulkMode
+                  ? 'border-teal-700 bg-teal-700 text-white'
+                  : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              <CheckSquare className="h-3.5 w-3.5" />
+              <span>{bulkMode ? 'Selesai' : 'Pilih Banyak'}</span>
+            </button>
+          )}
+        </div>
       </header>
 
-      <div className="space-y-4 px-4 pt-4">
+      <div className={`space-y-4 px-4 pt-4 ${!isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:px-6 lg:pt-6' : ''}`}>
         {proposalFilter !== 'all' && onChangeProposalFilter && (
           <div className="flex items-center justify-between gap-2 rounded-2xl border border-teal-200 bg-teal-50 px-3.5 py-2.5 text-xs text-teal-900">
             <span className="truncate font-semibold">Proposal: {proposalFilter}</span>
@@ -488,8 +514,8 @@ export function KpmListView({
           </div>
 
           {showExtraFilters && (
-            <div className="rounded-2xl border border-slate-200 bg-white p-3 space-y-2.5">
-              <div className="grid grid-cols-2 gap-2">
+            <div className={`rounded-2xl border border-slate-200 bg-white p-3 space-y-2.5 ${!isNativeApp ? 'lg:p-4' : ''}`}>
+              <div className={!isNativeApp ? 'grid grid-cols-2 gap-2 lg:grid-cols-6 lg:gap-2.5' : 'grid grid-cols-2 gap-2'}>
                 <FilterSelect
                   ariaLabel="Filter item bantuan"
                   value={itemFilter}
@@ -516,9 +542,7 @@ export function KpmListView({
                   <option value="pekerjaan">Urut: Pekerjaan</option>
                   <option value="kelurahan">Urut: Kelurahan</option>
                 </FilterSelect>
-              </div>
 
-              <div className="grid grid-cols-2 gap-2 border-t border-slate-100 pt-2.5">
                 <FilterSelect
                   ariaLabel="Filter kelurahan"
                   value={kelurahanFilter}
@@ -634,11 +658,210 @@ export function KpmListView({
           <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
             <p className="text-sm font-semibold text-slate-900">Tidak ada data calon KPM ditemukan</p>
             <p className="mt-1 text-xs text-slate-500">
-              Ubah filter pencarian, atau daftarkan calon KPM lewat tombol + di bawah.
+              Ubah filter pencarian, atau daftarkan calon KPM lewat tombol tambah data.
             </p>
           </div>
         ) : (
-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+          <>
+          {/* Desktop SaaS High-Density Data Table */}
+          {!isNativeApp && (
+            <div className="hidden lg:block overflow-hidden rounded-2xl border border-slate-200 bg-white">
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50/90 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                      <th className="w-12 px-3 py-3 text-center">No</th>
+                      <th className="px-3 py-3">Calon KPM</th>
+                      <th className="px-3 py-3">NIK KTP / KK</th>
+                      <th className="px-3 py-3">Proposal &amp; Wilayah</th>
+                      <th className="px-3 py-3">Item &amp; Desil</th>
+                      <th className="px-3 py-3">Pengelola</th>
+                      <th className="px-3 py-3">Status</th>
+                      <th className="px-3 py-3 text-right">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredRecords.slice(0, visibleLimit).map((rec) => {
+                      const thumb = getPrimaryKpmPhoto(rec.documents);
+                      const locked = isRecordProposalLocked(rec);
+                      const absenSeq = getAbsenSeq(rec.registerCode);
+                      const absenLabel =
+                        absenSeq < 999999 ? String(absenSeq).padStart(2, '0') : '--';
+                      const desilNumeric =
+                        rec.dtsen && /^\d/.test(rec.dtsen.trim())
+                          ? rec.dtsen.trim().replace(/\s*-\s*/g, '-')
+                          : '';
+                      const kelurahanName = isKecamatanProposal(rec.proposal)
+                        ? getCompactKelurahan(getRecordKelurahan(rec))
+                        : '';
+                      const isSelected = selectedIds.includes(rec.id);
+
+                      return (
+                        <tr
+                          key={`dt-${rec.id}`}
+                          onClick={() => {
+                            if (bulkMode) {
+                              if (locked) {
+                                setLockedNoticeRecord(rec);
+                              } else {
+                                toggleSelectRecord(rec.id);
+                              }
+                              return;
+                            }
+                            onSelectRecord(rec);
+                          }}
+                          className={`cursor-pointer transition-colors ${
+                            isSelected ? 'bg-teal-50/70' : 'hover:bg-slate-50'
+                          }`}
+                        >
+                          <td className="px-3 py-2.5 text-center font-mono text-[11px] font-bold text-slate-500 tabular-nums">
+                            {bulkMode ? (
+                              <span className="inline-flex items-center justify-center">
+                                {locked ? (
+                                  <Lock className="h-3.5 w-3.5 text-slate-400" />
+                                ) : isSelected ? (
+                                  <CheckSquare className="h-4 w-4 text-teal-700" />
+                                ) : (
+                                  <Square className="h-4 w-4 text-slate-300" />
+                                )}
+                              </span>
+                            ) : (
+                              absenLabel
+                            )}
+                          </td>
+                          <td className="px-3 py-2.5">
+                            <div className="flex items-center gap-2.5">
+                              <div className="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-100 text-slate-400">
+                                {thumb ? (
+                                  <DriveImage
+                                    doc={thumb}
+                                    alt={rec.nama}
+                                    className="absolute inset-0 h-full w-full object-cover"
+                                  />
+                                ) : (
+                                  <User className="h-4 w-4" />
+                                )}
+                              </div>
+                              <div className="min-w-0 max-w-[220px]">
+                                <div className="flex items-center gap-1">
+                                  <span className="truncate font-semibold text-slate-900">
+                                    {rec.nama}
+                                  </span>
+                                  {locked && (
+                                    <Lock className="h-3 w-3 shrink-0 text-rose-600" />
+                                  )}
+                                </div>
+                                <p className="truncate text-[11px] text-slate-500">
+                                  {rec.alamat || rec.kontak || '-'}
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-3 py-2.5 font-mono text-[11px] text-slate-700 tabular-nums">
+                            <div>{formatNikDisplay(rec.nikKtp) || '-'}</div>
+                            <div className="text-slate-400">
+                              KK {formatNikDisplay(rec.nikKk) || '-'}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2.5 max-w-[220px]">
+                            <p className="truncate font-medium text-slate-800">{rec.proposal}</p>
+                            <p className="truncate text-[11px] text-slate-500 tabular-nums">
+                              {rec.tahun}
+                              {kelurahanName ? ` · ${kelurahanName}` : ''}
+                              {rec.rt || rec.rw ? ` · RT ${rec.rt || '-'}/RW ${rec.rw || '-'}` : ''}
+                            </p>
+                          </td>
+                          <td className="px-3 py-2.5 whitespace-nowrap">
+                            <span
+                              className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-bold tabular-nums ${
+                                rec.item?.trim()
+                                  ? 'bg-slate-100 text-slate-700'
+                                  : 'bg-amber-50 text-amber-800'
+                              }`}
+                            >
+                              {rec.item?.trim() || 'Tanpa Item'}
+                              {desilNumeric ? ` · D${desilNumeric}` : ''}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2.5 max-w-[140px] truncate text-slate-700">
+                            {rec.pengelola?.trim() || '-'}
+                          </td>
+                          <td className="px-3 py-2.5 whitespace-nowrap">
+                            <span
+                              className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-semibold ${
+                                rec.validasi === 'accepted'
+                                  ? 'bg-teal-50 text-teal-800'
+                                  : rec.validasi === 'rejected'
+                                    ? 'bg-rose-50 text-rose-700'
+                                    : 'bg-amber-50 text-amber-800'
+                              }`}
+                            >
+                              {rec.validasi === 'accepted'
+                                ? 'Diterima'
+                                : rec.validasi === 'rejected'
+                                  ? 'Ditolak'
+                                  : 'Menunggu'}
+                            </span>
+                          </td>
+                          <td
+                            className="px-3 py-2.5 text-right whitespace-nowrap"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <div className="inline-flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => onSelectRecord(rec)}
+                                title="Lihat Detail KPM"
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 hover:text-teal-700"
+                              >
+                                <Eye className="h-3.5 w-3.5" />
+                              </button>
+                              {canDelete && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    locked
+                                      ? setLockedNoticeRecord(rec)
+                                      : setPendingDeleteRecord(rec)
+                                  }
+                                  title={locked ? 'Proposal Terkunci' : 'Hapus KPM'}
+                                  className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition-colors ${
+                                    locked
+                                      ? 'border-slate-200 bg-slate-50 text-slate-400'
+                                      : 'border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100'
+                                  }`}
+                                >
+                                  {locked ? (
+                                    <Lock className="h-3.5 w-3.5" />
+                                  ) : (
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  )}
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {filteredRecords.length > visibleLimit && (
+                <div className="border-t border-slate-100 bg-slate-50/70 p-3">
+                  <button
+                    type="button"
+                    onClick={() => setVisibleLimit((prev) => prev + 40)}
+                    className="inline-flex min-h-[40px] w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-50"
+                  >
+                    Muat Lebih Banyak ({filteredRecords.length - visibleLimit} tersisa)
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Mobile & Native APK Swipeable Cards */}
+          <div className={`overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100 ${!isNativeApp ? 'lg:hidden' : ''}`}>
             {filteredRecords.slice(0, visibleLimit).map((rec) => {
               const thumb = getPrimaryKpmPhoto(rec.documents);
               const locked = isRecordProposalLocked(rec);
@@ -792,6 +1015,7 @@ export function KpmListView({
               </div>
             )}
           </div>
+          </>
         )}
       </div>
 
@@ -894,7 +1118,11 @@ export function KpmListView({
 
       {/* Sticky Bulk Action Bar */}
       {bulkMode && selectedIds.length > 0 && (
-        <div className="fixed bottom-20 left-1/2 z-40 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2 rounded-2xl border border-slate-700 bg-slate-900 p-3 text-white shadow-2xl">
+        <div
+          className={`fixed bottom-20 left-1/2 z-40 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2 rounded-2xl border border-slate-700 bg-slate-900 p-3 text-white shadow-2xl ${
+            !isNativeApp ? 'lg:bottom-6 lg:left-[calc(50%+8rem)] lg:max-w-xl' : ''
+          }`}
+        >
           <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-800">
             <span className="text-xs font-bold tabular-nums">
               {selectedIds.length} KPM Dipilih

@@ -19,6 +19,7 @@ import { TAHUN_OPTIONS } from '../data/kpmOptions';
 import { ItemBantuan, KpmRecord } from '../types/kpm';
 import { capitalizeWords, getItemsForYear, normalizeSubItemKey } from '../utils/imageProcessor';
 import { FilterSelect } from './FormControls';
+import { isNativeAppPlatform } from '../utils/platform';
 
 interface ItemManagerViewProps {
   items: ItemBantuan[];
@@ -61,6 +62,7 @@ export function ItemManagerView({
   onUpdateItemSubItems,
   onCopyItemsFromYear,
 }: ItemManagerViewProps) {
+  const isNativeApp = isNativeAppPlatform();
   const [selectedYear, setSelectedYear] = useState<string>('2026');
   const [expandedCode, setExpandedCode] = useState<string | null>(null);
   const [inlineSubItemInput, setInlineSubItemInput] = useState('');
@@ -383,7 +385,11 @@ export function ItemManagerView({
 
     return (
       <div className="min-h-screen pb-24">
-        <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
+        <header
+          className={`sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md ${
+            !isNativeApp ? 'lg:px-6' : ''
+          }`}
+        >
           <button
             type="button"
             onClick={() => setMode('list')}
@@ -397,7 +403,13 @@ export function ItemManagerView({
           </h1>
         </header>
 
-        <form onSubmit={handleFormSubmit} noValidate className="space-y-4 px-4 pt-4">
+        <form
+          onSubmit={handleFormSubmit}
+          noValidate
+          className={`space-y-4 px-4 pt-4 ${
+            !isNativeApp ? 'lg:mx-auto lg:max-w-4xl lg:px-6 lg:pt-6' : ''
+          }`}
+        >
           <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-4">
             {/* 1. Tahun */}
             <div>
@@ -917,7 +929,11 @@ export function ItemManagerView({
   // RENDER MAIN LIST SCREEN (PILIH TAHUN + TOMBOL TAMBAH ITEM + DAFTAR ITEM)
   return (
     <div className="min-h-screen pb-24">
-      <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
+      <header
+        className={`sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md ${
+          !isNativeApp ? 'lg:px-6' : ''
+        }`}
+      >
         <button
           type="button"
           onClick={onBack}
@@ -929,9 +945,13 @@ export function ItemManagerView({
         <h1 className="truncate text-base font-bold text-slate-900">Kelola Item &amp; Sub-Item</h1>
       </header>
 
-      <div className="space-y-4 px-4 pt-4">
+      <div
+        className={`space-y-4 px-4 pt-4 ${
+          !isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:px-6 lg:pt-6' : ''
+        }`}
+      >
         {/* Top Bar: Pilih Tahun + Tombol Tambah Item */}
-        <div className="flex items-center gap-2">
+        <div className={`flex items-center gap-2 ${!isNativeApp ? 'lg:justify-between' : ''}`}>
           <FilterSelect
             ariaLabel="Pilih tahun katalog item"
             value={selectedYear}
@@ -952,7 +972,9 @@ export function ItemManagerView({
             <button
               type="button"
               onClick={openCreateForm}
-              className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.99]"
+              className={`inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.99] ${
+                !isNativeApp ? 'lg:flex-none lg:px-5' : ''
+              }`}
             >
               <PackagePlus className="h-4 w-4 shrink-0" />
               <span>Tambah Item</span>
@@ -962,7 +984,11 @@ export function ItemManagerView({
 
         {/* Item List for Selected Year */}
         {yearCatalogItems.length === 0 ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 text-center space-y-3">
+          <div
+            className={`rounded-2xl border border-slate-200 bg-white p-6 text-center space-y-3 ${
+              !isNativeApp ? 'lg:mx-auto lg:max-w-xl' : ''
+            }`}
+          >
             <p className="text-sm font-bold text-slate-900">
               Belum ada master item untuk tahun {selectedYear}
             </p>
@@ -984,7 +1010,13 @@ export function ItemManagerView({
             )}
           </div>
         ) : (
-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+          <div
+            className={`overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100 ${
+              !isNativeApp
+                ? 'lg:grid lg:grid-cols-2 lg:items-start lg:gap-4 lg:divide-y-0 lg:overflow-visible lg:rounded-none lg:border-0 lg:bg-transparent'
+                : ''
+            }`}
+          >
             <datalist id="canonical-subitem-suggestions">
               {canonicalSubItemSuggestions.map((s) => (
                 <option key={s} value={s} />
@@ -994,7 +1026,14 @@ export function ItemManagerView({
             {yearCatalogItems.map((item, idx) => {
               const isExpanded = expandedCode === item.code;
               return (
-                <div key={`${item.tahun}-${item.code}`} className="bg-white">
+                <div
+                  key={`${item.tahun}-${item.code}`}
+                  className={`bg-white ${
+                    !isNativeApp
+                      ? 'lg:overflow-hidden lg:rounded-2xl lg:border lg:border-slate-200 lg:shadow-xs'
+                      : ''
+                  }`}
+                >
                   <div className="flex items-center justify-between gap-1.5 px-3 py-3">
                     <span className="w-5 shrink-0 text-center font-mono text-xs font-bold text-slate-400 tabular-nums">
                       {idx + 1}

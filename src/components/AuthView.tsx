@@ -21,6 +21,7 @@ import {
   uploadMediaToDrive,
 } from '../services/driveManager';
 import { capitalizeWords, validateImageUploadFile } from '../utils/imageProcessor';
+import { isNativeAppPlatform } from '../utils/platform';
 
 const REMEMBER_LOGIN_KEY = 'masdeta_remember_login_v1';
 
@@ -229,6 +230,9 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
       return;
     }
 
+    const defaultResetGuide =
+      'Hubungi SuperAdmin internal untuk mereset kata sandi akun Anda melalui Kontrol Super Admin.';
+
     setSubmitting(true);
     try {
       const res = await fetch('/api/auth/forgot-password', {
@@ -236,38 +240,102 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: forgotEmail.trim().toLowerCase() }),
       });
+      const contentType = res.headers.get('content-type') || '';
+      if (res.status === 404 || res.status === 405 || !contentType.includes('application/json')) {
+        setForgotNotice(defaultResetGuide);
+        return;
+      }
       const data = await res.json();
       if (!res.ok) {
         setError(data?.error || 'Gagal memproses permintaan.');
-        setSubmitting(false);
         return;
       }
-      setForgotNotice(
-        data?.message ||
-          'Hubungi SuperAdmin internal untuk mereset kata sandi akun Anda melalui Kontrol Super Admin.'
-      );
+      setForgotNotice(data?.message || defaultResetGuide);
     } catch {
-      setError('Gagal terhubung ke server.');
+      setForgotNotice(defaultResetGuide);
     } finally {
       setSubmitting(false);
     }
   };
 
+  const isNativeApp = isNativeAppPlatform();
+
   return (
-    <div className="flex min-h-screen flex-col justify-between bg-slate-50 px-5 py-7 sm:min-h-[calc(100vh-1.5rem)]">
-      <div className="space-y-6">
-        {/* Centered Elegant Brand Hero */}
-        <div className="flex flex-col items-center pt-3 text-center">
-          <div className="flex h-20 w-20 items-center justify-center rounded-3xl border border-slate-200/80 bg-white shadow-sm [&>svg]:h-14 [&>svg]:w-14">
-            {logo}
+    <div
+      className={`flex min-h-screen flex-col justify-between bg-slate-50 px-5 py-7 sm:min-h-[calc(100vh-1.5rem)] ${
+        !isNativeApp
+          ? 'lg:min-h-screen lg:justify-center lg:bg-slate-100 lg:px-8 lg:py-10'
+          : ''
+      }`}
+    >
+      <div
+        className={
+          !isNativeApp
+            ? 'mx-auto w-full lg:grid lg:max-w-5xl lg:grid-cols-12 lg:overflow-hidden lg:rounded-3xl lg:border lg:border-slate-200 lg:bg-white lg:shadow-sm'
+            : ''
+        }
+      >
+        {!isNativeApp && (
+          <aside className="hidden lg:col-span-5 lg:flex lg:flex-col lg:justify-between lg:bg-slate-900 lg:p-10 lg:text-white">
+            <div className="space-y-6">
+              <div className="flex items-center gap-3.5">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-white p-2 shadow-sm [&>svg]:h-full [&>svg]:w-full">
+                  {logo}
+                </div>
+                <div>
+                  <h1 className="text-xl font-extrabold tracking-tight text-white">MASDETA</h1>
+                  <p className="text-xs font-medium text-teal-300">Web Workspace Operasional</p>
+                </div>
+              </div>
+
+              <div className="space-y-2 border-t border-slate-800 pt-6">
+                <h2 className="text-lg font-bold leading-snug text-white">
+                  Sistem Manajemen Data &amp; Bantuan KPM
+                </h2>
+                <p className="text-xs leading-relaxed text-slate-300">
+                  Kelola usulan proposal, verifikasi berkas KTP/KK, pengawasan klasifikasi DTSEN, hingga pencetakan laporan resmi F4 dan Excel dari desktop Anda.
+                </p>
+              </div>
+
+              <ul className="space-y-3 pt-2 text-xs text-slate-200">
+                <li className="flex items-start gap-2.5">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-teal-400" />
+                  <span>Sinkronisasi cloud real-time dengan tim lapangan Android</span>
+                </li>
+                <li className="flex items-start gap-2.5">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-teal-400" />
+                  <span>Deteksi otomatis duplikasi NIK KTP, KK &amp; kelengkapan berkas</span>
+                </li>
+                <li className="flex items-start gap-2.5">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-teal-400" />
+                  <span>Ekspor dokumen PDF F4, BAST, dan Excel (.xlsx) siap cetak</span>
+                </li>
+              </ul>
+            </div>
+
+            <p className="text-[11px] text-slate-400">
+              MASDETA Operasional · Akses Terkendali SuperAdmin
+            </p>
+          </aside>
+        )}
+
+        <div
+          className={`space-y-6 ${
+            !isNativeApp ? 'lg:col-span-7 lg:flex lg:flex-col lg:justify-center lg:p-10' : ''
+          }`}
+        >
+          {/* Centered Brand Hero (mobile & native only) */}
+          <div className={`flex flex-col items-center pt-3 text-center ${!isNativeApp ? 'lg:hidden' : ''}`}>
+            <div className="flex h-20 w-20 items-center justify-center rounded-3xl border border-slate-200/80 bg-white shadow-sm [&>svg]:h-14 [&>svg]:w-14">
+              {logo}
+            </div>
+            <h1 className="mt-3.5 text-2xl font-extrabold tracking-tight text-slate-900">
+              MASDETA
+            </h1>
+            <p className="mt-1 text-xs font-medium text-slate-500">
+              Sistem Manajemen Data &amp; Bantuan KPM
+            </p>
           </div>
-          <h1 className="mt-3.5 text-2xl font-extrabold tracking-tight text-slate-900">
-            MASDETA
-          </h1>
-          <p className="mt-1 text-xs font-medium text-slate-500">
-            Sistem Manajemen Data &amp; Bantuan KPM
-          </p>
-        </div>
 
         {error && (
           <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-medium text-rose-700">
@@ -644,9 +712,10 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
             </div>
           </form>
         )}
+        </div>
       </div>
 
-      <p className="pt-6 text-center text-[11px] text-slate-400">
+      <p className={`pt-6 text-center text-[11px] text-slate-400 ${!isNativeApp ? 'lg:hidden' : ''}`}>
         MASDETA Operasional · Akses Terkendali SuperAdmin
       </p>
 

@@ -39,6 +39,7 @@ import {
   getItemHierarchyRank,
   resolvePackageForKpm,
 } from '../utils/imageProcessor';
+import { isNativeAppPlatform } from '../utils/platform';
 import { DriveImage } from './DriveImage';
 import { PresenceDot } from './PresenceDot';
 
@@ -412,14 +413,17 @@ export function DashboardView({
       ? bellHasUnread
       : unreadChatCount > 0 || unreadAppNotifCount > 0;
 
+  const isNativeApp = isNativeAppPlatform();
+
   return (
-    <div className="min-h-screen pb-24">
+    <div className={`min-h-screen pb-24 ${!isNativeApp ? 'lg:pb-10' : ''}`}>
       {/* Main Brand Top Bar */}
-      <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md">
+      <header className={`sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md ${!isNativeApp ? 'lg:px-6' : ''}`}>
         <div className="flex min-w-0 items-center gap-2.5">
-          {logo}
+          <div className={!isNativeApp ? 'lg:hidden' : ''}>{logo}</div>
           <h1 className="text-base font-bold tracking-tight text-slate-900 whitespace-nowrap">
-            MASDETA
+            <span className={!isNativeApp ? 'lg:hidden' : ''}>MASDETA</span>
+            {!isNativeApp && <span className="hidden lg:inline">Beranda Operasional</span>}
           </h1>
         </div>
 
@@ -675,7 +679,7 @@ export function DashboardView({
         </div>
       </header>
 
-      <main className="space-y-5 px-4 pt-4">
+      <main className={`space-y-5 px-4 pt-4 ${!isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:px-6 lg:pt-6' : ''}`}>
         {(!isOnline || offlineQueueCount > 0) && (
           <section className="flex items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs text-amber-950">
             <div className="flex min-w-0 items-center gap-2.5">
@@ -721,8 +725,10 @@ export function DashboardView({
           </div>
         ) : (
           <>
+        {/* 1 & 2. TOP COMMAND HERO + BENTO KPI ROW */}
+        <div className={!isNativeApp ? 'space-y-5 lg:grid lg:grid-cols-12 lg:items-stretch lg:gap-5 lg:space-y-0' : 'space-y-5'}>
         {/* 1. EXECUTIVE COMMAND HERO */}
-        <section className="rounded-3xl bg-[#29384D] p-5 text-white">
+        <section className={`rounded-3xl bg-[#29384D] p-5 text-white ${!isNativeApp ? 'lg:col-span-7 lg:flex lg:flex-col lg:justify-between' : ''}`}>
           <div className="min-w-0">
             <p className="break-words text-lg leading-snug font-bold tracking-tight text-white">
               Halo, {currentUser.nama}
@@ -815,7 +821,7 @@ export function DashboardView({
         </section>
 
         {/* 2. STATUS ITEM DIBAGIKAN & KELAYAKAN DTSEN (2-COLUMN BENTO) */}
-        <section className="grid grid-cols-2 gap-3">
+        <section className={`grid grid-cols-2 gap-3 ${!isNativeApp ? 'lg:col-span-5 lg:gap-4' : ''}`}>
           <button
             type="button"
             onClick={() => onOpenSubItemRecap?.()}
@@ -881,7 +887,11 @@ export function DashboardView({
             </div>
           </button>
         </section>
+        </div>
 
+        {/* DESKTOP 2-COLUMN OPERATIONAL BODY */}
+        <div className={!isNativeApp ? 'space-y-5 lg:grid lg:grid-cols-12 lg:items-start lg:gap-5 lg:space-y-0' : 'space-y-5'}>
+        <div className={!isNativeApp ? 'space-y-5 lg:col-span-7' : 'space-y-5'}>
         {/* 3. PERLU TINDAKAN / PENGINGAT OPERASIONAL */}
         {hasAttentionItems && (
           <section>
@@ -1136,7 +1146,9 @@ export function DashboardView({
             </div>
           )}
         </section>
+        </div>
 
+        <div className={!isNativeApp ? 'space-y-5 lg:col-span-5' : 'space-y-5'}>
         {/* 5. DISTRIBUSI PAKET BANTUAN */}
         <section>
           <div className="mb-2 flex items-center justify-between px-0.5">
@@ -1287,6 +1299,8 @@ export function DashboardView({
             </div>
           </section>
         )}
+        </div>
+        </div>
           </>
         )}
       </main>

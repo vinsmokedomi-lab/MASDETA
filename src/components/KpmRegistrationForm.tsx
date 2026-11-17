@@ -65,6 +65,7 @@ import { MultiDocumentUploadCard } from './MultiDocumentUploadCard';
 import { PengelolaSelectorModal } from './PengelolaSelectorModal';
 import { SelectionPickerModal, SelectionPickerOption } from './SelectionPickerModal';
 import { PlaceholderSelect } from './FormControls';
+import { isNativeAppPlatform } from '../utils/platform';
 
 interface KpmRegistrationFormProps {
   editingRecord: KpmRecord | null;
@@ -117,6 +118,7 @@ export function KpmRegistrationForm({
   onCancelEdit,
   onPreviewDocument,
 }: KpmRegistrationFormProps) {
+  const isNativeApp = isNativeAppPlatform();
   const isProposalScopeLocked = Boolean(lockedProposalScope && !editingRecord);
 
   const [values, setValues] = useState<KpmFormValues>(() => {
@@ -771,7 +773,11 @@ export function KpmRegistrationForm({
     <>
       <form onSubmit={handleSubmit} noValidate className="min-h-screen pb-24">
         {/* Native Mobile Sub-Screen Header (Back + Title Only) */}
-        <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
+        <header
+          className={`sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md ${
+            !isNativeApp ? 'lg:px-6' : ''
+          }`}
+        >
           <button
             type="button"
             onClick={() => {
@@ -793,7 +799,11 @@ export function KpmRegistrationForm({
           </h1>
         </header>
 
-        <div className="space-y-4 px-4 pt-4">
+        <div
+          className={`space-y-4 px-4 pt-4 ${
+            !isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:px-6 lg:pt-6' : ''
+          }`}
+        >
           {editingProposalLocked && (
             <div
               role="alert"
@@ -826,8 +836,23 @@ export function KpmRegistrationForm({
             </div>
           )}
 
-          {/* Dedicated Single-Column Mobile Stack */}
-          <div className="space-y-4">
+          {/* Mobile Single-Column / Desktop Web 2-Column Split */}
+          <div
+            className={
+              !isNativeApp
+                ? 'space-y-4 lg:grid lg:grid-cols-12 lg:items-start lg:gap-6 lg:space-y-0'
+                : 'space-y-4'
+            }
+          >
+            <div
+              className={
+                !isNativeApp
+                  ? hasProposalSelected
+                    ? 'space-y-4 lg:col-span-7 lg:space-y-5'
+                    : 'space-y-4 lg:col-span-5'
+                  : 'space-y-4'
+              }
+            >
           {/* Section 1: Data Usulan & Proposal */}
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
             <h2 className="text-sm font-bold text-slate-900">
@@ -932,16 +957,7 @@ export function KpmRegistrationForm({
             </div>
           </section>
 
-          {!hasProposalSelected ? (
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-white/80 px-4 py-6 text-center">
-              <p className="text-sm font-semibold text-slate-800">
-                Pilih Tahun dan Proposal Terlebih Dahulu
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                Kolom pengisian profil calon KPM, bantuan, dan dokumen akan tampil otomatis setelah tahun anggaran dan proposal dipilih.
-              </p>
-            </div>
-          ) : (
+          {hasProposalSelected && (
             <>
           {/* Section 2: Profil Calon KPM */}
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -953,7 +969,7 @@ export function KpmRegistrationForm({
             </p>
 
             <div className="mt-4 grid grid-cols-2 gap-3.5">
-                <div id="field-nikKk" className="col-span-2">
+                <div id="field-nikKk" className={!isNativeApp ? 'col-span-2 lg:col-span-1' : 'col-span-2'}>
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <label htmlFor="input-nik-kk" className="text-xs font-semibold text-slate-700">
@@ -1021,7 +1037,7 @@ export function KpmRegistrationForm({
                   )}
                 </div>
 
-                <div id="field-nikKtp" className="col-span-2">
+                <div id="field-nikKtp" className={!isNativeApp ? 'col-span-2 lg:col-span-1' : 'col-span-2'}>
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <label htmlFor="input-nik-ktp" className="text-xs font-semibold text-slate-700">
@@ -1214,7 +1230,7 @@ export function KpmRegistrationForm({
                   {errors.rw && <p className="mt-1 text-xs text-rose-600">{errors.rw}</p>}
                 </div>
 
-                <div id="field-pekerjaan" className="col-span-2">
+                <div id="field-pekerjaan" className={!isNativeApp ? 'col-span-2 lg:col-span-1' : 'col-span-2'}>
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span className="block text-xs font-semibold text-slate-700">
                       Pekerjaan <span className="text-rose-600">*</span>
@@ -1245,7 +1261,7 @@ export function KpmRegistrationForm({
                   {errors.pekerjaan && <p className="mt-1 text-xs text-rose-600">{errors.pekerjaan}</p>}
                 </div>
 
-                <div id="field-kontak" className="col-span-2">
+                <div id="field-kontak" className={!isNativeApp ? 'col-span-2 lg:col-span-1' : 'col-span-2'}>
                   <div className="flex items-center justify-between gap-2">
                     <label htmlFor="input-kontak" className="block text-xs font-semibold text-slate-700">
                       Nomor HP
@@ -1277,7 +1293,11 @@ export function KpmRegistrationForm({
                 Item Bantuan, Pengelola, DTSEN, dan Validasi Berkas wajib diisi sebelum menyimpan.
               </p>
 
-              <div className="mt-4 space-y-4">
+              <div
+                className={`mt-4 space-y-4 ${
+                  !isNativeApp ? 'lg:grid lg:grid-cols-2 lg:gap-4 lg:space-y-0' : ''
+                }`}
+              >
                 <div id="field-item">
                   <span className="block text-xs font-semibold text-slate-700">
                     Item Bantuan <span className="text-rose-600">*</span>
@@ -1396,7 +1416,7 @@ export function KpmRegistrationForm({
                   {errors.dtsen && <p className="mt-1 text-xs text-rose-600">{errors.dtsen}</p>}
                 </div>
 
-                <div id="field-validasi">
+                <div id="field-validasi" className={!isNativeApp ? 'lg:col-span-2' : ''}>
                   <span className="block text-xs font-semibold text-slate-700">
                     Validasi Berkas <span className="text-rose-600">*</span>
                   </span>
@@ -1490,7 +1510,25 @@ export function KpmRegistrationForm({
                 </div>
               </div>
             </section>
+                </>
+              )}
+            </div>
 
+            {!hasProposalSelected ? (
+              <div
+                className={`rounded-2xl border border-dashed border-slate-300 bg-white/80 px-4 py-6 text-center ${
+                  !isNativeApp ? 'lg:col-span-7 lg:py-12' : ''
+                }`}
+              >
+                <p className="text-sm font-semibold text-slate-800">
+                  Pilih Tahun dan Proposal Terlebih Dahulu
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Kolom pengisian profil calon KPM, bantuan, dan dokumen akan tampil otomatis setelah tahun anggaran dan proposal dipilih.
+                </p>
+              </div>
+            ) : (
+              <div className={!isNativeApp ? 'space-y-4 lg:col-span-5 lg:space-y-5' : 'space-y-4'}>
           {/* 04. Dokumen KTP & KK */}
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
             <h2 className="text-sm font-bold text-slate-900">
@@ -1698,15 +1736,23 @@ export function KpmRegistrationForm({
               />
             </div>
           </section>
-            </>
-          )}
+            </div>
+            )}
           </div>
         </div>
 
         {/* Sticky Bottom Action Bar constrained to Mobile Screen */}
         {hasProposalSelected && (
-        <div className="fixed bottom-0 left-1/2 z-30 w-full max-w-md -translate-x-1/2 border-t border-slate-200 bg-white/95 px-4 py-2.5 backdrop-blur-md">
-          <div className="flex items-center gap-2.5">
+        <div
+          className={`fixed bottom-0 left-1/2 z-30 w-full max-w-md -translate-x-1/2 border-t border-slate-200 bg-white/95 px-4 py-2.5 backdrop-blur-md ${
+            !isNativeApp ? 'lg:left-64 lg:right-0 lg:w-auto lg:max-w-none lg:translate-x-0 lg:px-6' : ''
+          }`}
+        >
+          <div
+            className={`flex items-center gap-2.5 ${
+              !isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:justify-end' : ''
+            }`}
+          >
             <button
               type="button"
               onClick={handleReset}
@@ -1719,7 +1765,9 @@ export function KpmRegistrationForm({
             <button
               type="submit"
               disabled={editingProposalLocked || isSubmitting}
-              className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-5 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 whitespace-nowrap"
+              className={`inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-5 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 whitespace-nowrap ${
+                !isNativeApp ? 'lg:flex-none lg:min-w-[200px]' : ''
+              }`}
             >
               {editingProposalLocked ? (
                 <>

@@ -23,6 +23,7 @@ import { InternalUser, UserPresenceStatus } from '../types/kpm';
 import { capitalizeWords, validateImageUploadFile } from '../utils/imageProcessor';
 import { PresenceDot, getPresenceMeta } from './PresenceDot';
 import { APP_VERSION } from '../config/appVersion';
+import { isNativeAppPlatform, useIsDesktopWeb } from '../utils/platform';
 
 interface UserProfileViewProps {
   user: InternalUser;
@@ -59,6 +60,8 @@ export function UserProfileView({
   onCheckAppUpdate,
   checkingAppUpdate = false,
 }: UserProfileViewProps) {
+  const isNativeApp = isNativeAppPlatform();
+  const isDesktopWeb = useIsDesktopWeb();
   const [nama, setNama] = useState(user.nama);
   const [kontak, setKontak] = useState(user.kontak || '');
   const [fotoDataUrl, setFotoDataUrl] = useState<string | undefined>(user.fotoDataUrl);
@@ -208,21 +211,8 @@ export function UserProfileView({
 
   const presenceMeta = getPresenceMeta(user.presenceStatus);
 
-  return (
-    <div className="min-h-screen pb-24">
-      <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
-        <button
-          type="button"
-          onClick={onBack}
-          className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
-          aria-label="Kembali"
-        >
-          <ArrowLeft className="h-5 w-5" />
-        </button>
-        <h1 className="truncate text-base font-bold text-slate-900">Atur Profil User</h1>
-      </header>
-
-      <div className="space-y-4 px-4 pt-4">
+  const leftColumnBlocks = (
+    <>
         {/* Centered Profile Hero Summary */}
         <section className="flex flex-col items-center rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center">
           <label className="relative flex h-24 w-24 cursor-pointer items-center justify-center overflow-visible">
@@ -422,7 +412,11 @@ export function UserProfileView({
             </p>
           </section>
         )}
+    </>
+  );
 
+  const rightColumnBlocks = (
+    <>
         {/* Edit Profile Form */}
         <form
           onSubmit={handleSubmit}
@@ -503,10 +497,45 @@ export function UserProfileView({
           <LogOut className="h-4 w-4" />
           <span>Keluar dari Akun</span>
         </button>
-      </div>
+    </>
+  );
+
+  return (
+    <div className="min-h-screen pb-24">
+      <header
+        className={`sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md ${
+          !isNativeApp ? 'lg:px-6' : ''
+        }`}
+      >
+        <button
+          type="button"
+          onClick={onBack}
+          className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
+          aria-label="Kembali"
+        >
+          <ArrowLeft className="h-5 w-5" />
+        </button>
+        <h1 className="truncate text-base font-bold text-slate-900">Atur Profil User</h1>
+      </header>
+
+      {isDesktopWeb ? (
+        <div className="mx-auto grid max-w-5xl grid-cols-12 items-start gap-5 px-6 pt-6">
+          <div className="col-span-5 space-y-5">{leftColumnBlocks}</div>
+          <div className="col-span-7 space-y-5">{rightColumnBlocks}</div>
+        </div>
+      ) : (
+        <div className="space-y-4 px-4 pt-4">
+          {leftColumnBlocks}
+          {rightColumnBlocks}
+        </div>
+      )}
 
       {feedback && (
-        <div className="fixed bottom-5 left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2 animate-[toastSlideUp_0.22s_ease-out]">
+        <div
+          className={`fixed bottom-5 left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2 animate-[toastSlideUp_0.22s_ease-out] ${
+            !isNativeApp ? 'lg:left-auto lg:right-6 lg:w-96 lg:translate-x-0' : ''
+          }`}
+        >
           <div
             role="status"
             className={`flex items-center justify-between gap-2.5 rounded-2xl border px-3.5 py-3 text-xs shadow-xl ${

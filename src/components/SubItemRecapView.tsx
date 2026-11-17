@@ -16,6 +16,7 @@ import {
   resolvePackageForKpm,
 } from '../utils/imageProcessor';
 import { SegmentedTabs } from './FormControls';
+import { isNativeAppPlatform } from '../utils/platform';
 
 export type RecapDrillTarget =
   | { kind: 'item'; code: string; name: string }
@@ -46,6 +47,7 @@ export function SubItemRecapView({
   onBack,
   onSelectKpm,
 }: SubItemRecapViewProps) {
+  const isNativeApp = isNativeAppPlatform();
   const [activeTab, setActiveTab] = useState<RecapMainTab>('item');
   const [internalDrillTarget, setInternalDrillTarget] = useState<RecapDrillTarget>(null);
   const drillTarget =
@@ -174,7 +176,11 @@ export function SubItemRecapView({
 
     return (
       <div className="min-h-screen pb-24">
-        <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
+        <header
+          className={`sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md ${
+            !isNativeApp ? 'lg:px-6' : ''
+          }`}
+        >
           <button
             type="button"
             onClick={() => setDrillTarget(null)}
@@ -191,7 +197,7 @@ export function SubItemRecapView({
           </span>
         </header>
 
-        <main className="px-4 pt-4">
+        <main className={`px-4 pt-4 ${!isNativeApp ? 'lg:mx-auto lg:max-w-5xl lg:px-6 lg:pt-6' : ''}`}>
           {drillKpmRows.length === 0 ? (
             <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
               <p className="text-sm font-semibold text-slate-900">
@@ -259,7 +265,11 @@ export function SubItemRecapView({
 
   return (
     <div className="min-h-screen pb-24">
-      <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
+      <header
+        className={`sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md ${
+          !isNativeApp ? 'lg:px-6' : ''
+        }`}
+      >
         <button
           type="button"
           onClick={onBack}
@@ -273,22 +283,29 @@ export function SubItemRecapView({
         </h1>
       </header>
 
-      <main className="space-y-4 px-4 pt-4">
+      <main
+        className={`space-y-4 px-4 pt-4 ${
+          !isNativeApp ? 'lg:mx-auto lg:max-w-[1440px] lg:space-y-5 lg:px-6 lg:pt-6' : ''
+        }`}
+      >
         {/* 2 Tab Navigasi: Item vs Sub-Item */}
-        <SegmentedTabs<RecapMainTab>
-          value={activeTab}
-          onChange={(tab) => {
-            setActiveTab(tab);
-            setDrillTarget(null);
-          }}
-          tabs={[
-            { key: 'item', label: 'Item' },
-            { key: 'subitem', label: 'Sub-Item' },
-          ]}
-        />
+        <div className={!isNativeApp ? 'lg:max-w-md' : ''}>
+          <SegmentedTabs<RecapMainTab>
+            value={activeTab}
+            onChange={(tab) => {
+              setActiveTab(tab);
+              setDrillTarget(null);
+            }}
+            tabs={[
+              { key: 'item', label: 'Item' },
+              { key: 'subitem', label: 'Sub-Item' },
+            ]}
+          />
+        </div>
 
+        <div className={!isNativeApp ? 'space-y-4 lg:grid lg:grid-cols-12 lg:items-start lg:gap-5 lg:space-y-0' : 'space-y-4'}>
         {/* Hero Heading Container (identik dengan Dashboard) */}
-        <section className="rounded-3xl bg-slate-900 p-5 text-white">
+        <section className={`rounded-3xl bg-slate-900 p-5 text-white ${!isNativeApp ? 'lg:col-span-5' : ''}`}>
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0 flex-1">
               <p className="truncate text-lg font-bold tracking-tight text-white leading-snug">
@@ -368,7 +385,7 @@ export function SubItemRecapView({
 
         {/* LISTING ITEM */}
         {activeTab === 'item' && (
-          <section className="space-y-3">
+          <section className={`space-y-3 ${!isNativeApp ? 'lg:col-span-7' : ''}`}>
             {itemRows.length === 0 ? (
               <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
                 <p className="text-sm font-semibold text-slate-900">
@@ -427,7 +444,7 @@ export function SubItemRecapView({
 
         {/* LISTING SUB-ITEM */}
         {activeTab === 'subitem' && (
-          <section className="space-y-3">
+          <section className={`space-y-3 ${!isNativeApp ? 'lg:col-span-7' : ''}`}>
             {recap.aggregates.length === 0 ? (
               <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
                 <p className="text-sm font-semibold text-slate-900">
@@ -500,6 +517,7 @@ export function SubItemRecapView({
             )}
           </section>
         )}
+        </div>
       </main>
     </div>
   );

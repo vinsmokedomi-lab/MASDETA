@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ArrowUp } from 'lucide-react';
+import { isNativeAppPlatform } from '../utils/platform';
 
 interface ScrollToTopButtonProps {
   hasBottomNav?: boolean;
@@ -11,6 +12,7 @@ export function ScrollToTopButton({
   hasFloatingAction = false,
 }: ScrollToTopButtonProps) {
   const [visible, setVisible] = useState(false);
+  const isNativeApp = isNativeAppPlatform();
 
   useEffect(() => {
     const updateVisibility = () => {
@@ -40,6 +42,12 @@ export function ScrollToTopButton({
     <div
       className={`pointer-events-none fixed left-1/2 z-30 flex w-full max-w-md -translate-x-1/2 justify-end px-4 transition-all ${
         hasBottomNav || hasFloatingAction ? 'bottom-22' : 'bottom-6'
+      } ${
+        !isNativeApp
+          ? `lg:left-auto lg:right-6 lg:w-auto lg:max-w-none lg:translate-x-0 lg:px-0 ${
+              hasFloatingAction ? 'lg:bottom-22' : 'lg:bottom-6'
+            }`
+          : ''
       }`}
     >
       <button
