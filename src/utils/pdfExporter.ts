@@ -14,6 +14,7 @@ import {
   WilayahKabKota,
 } from '../types/kpm';
 import {
+  computeSubItemRecap,
   formatRupiah,
   formatUploadDateTime,
   getAbsenSeq,
@@ -1454,5 +1455,412 @@ export async function exportKpmBastToPdf({
 
   const safeName = `BAST_${record.tahun}_${record.nama}_${record.registerCode || 'kpm'}`;
   return saveOrOpenPdfDocument(doc, safeName);
+}
+
+export interface SubItemRecapPdfOptions {
+  records: KpmRecord[];
+  items: ItemBantuan[];
+  selectedYear: string;
+  reportTemplate?: ReportTemplateConfig;
+  fileName?: string;
+}
+
+export async function exportSubItemRecapToPdf({
+  records,
+  items,
+  selectedYear,
+  reportTemplate,
+  fileName,
+}: SubItemRecapPdfOptions): Promise<{ savedFileName: string; openedNative: boolean }> {
+  const scopedRecords = records.filter(
+    (rec) => rec.validasi === 'accepted' && (selectedYear === 'all' || rec.tahun === selectedYear)
+  );
+
+  const overallRecap = computeSubItemRecap(scopedRecords, items);
+  const yearLabel = selectedYear === 'all' ? 'Semua Tahun' : selectedYear || 'Tanpa Tahun';
+
+  // Kelompokkan per kode item utama
+  const byItemCode = new Map<string, KpmRecord[]>();
+  for (const rec of scopedRecords) {
+    const code = (rec.item || '').trim() || 'TANPA-ITEM';
+    const arr = byItemCode.get(code) ?? [];
+    arr.push(rec);
+    byItemCode.set(code, arr);
+  }
+
+  const sortedItemCodes = Array.from(byItemCode.keys()).sort((a, b) => {
+    const rankA = getItemHierarchyRank(a, selectedYear, items);
+    const rankB = getItemHierarchyRank(b, selectedYear, items);
+    if (rankA !== rankB) return rankA - rankB;
+    return a.localeCompare(b, 'id');
+  });
+
+  const itemSummaryEntries = sortedItemCodes.map((code) => {
+    const itemRecs = byItemCode.get(code) ?? [];
+    const refYear = selectedYear !== 'all' ? selectedYear : itemRecs[0]?.tahun || '';
+    const pkg = resolvePackageForKpm(items, refYear, code);
+    const itemRecap = computeSubItemRecap(itemRecs, items);
+    const completeKpm = itemRecap.kpmRows.filter((r) => r.debtStatus === 'complete').length;
+    const totalKpm = itemRecs.length;
+    const pendingKpm = totalKpm - completeKpm;
+
+    // Urutkan sub-item sesuai urutan katalog item jika tersedia
+    const catalogOrder = new Map<string, number>();
+    pkg.subItems.forEach((subName, idx) => {
+      catalogOrder.set(subName.trim().toLowerCase(), idx);
+    });
+    const sortedSubAggregates = [...itemRecap.aggregates].sort((a, b) => {
+      const ordA = catalogOrder.get(a.name.trim().toLowerCase()) ?? 9999;
+      const ordB = catalogOrder.get(b.name.trim().toLowerCase()) ?? 9999;
+      if (ordA !== ordB) return ordA - ordB;
+      return a.name.localeCompare(b.name, 'id');
+    });
+
+    return {
+      code,
+      name: pkg.name && pkg.name !== code ? pkg.name : code,
+      subItemCount: pkg.subItems.length,
+      totalKpm,
+      completeKpm,
+      pendingKpm,
+      totalUnits: itemRecap.totalUnits,
+      totalDelivered: itemRecap.totalDelivered,
+      totalPending: itemRecap.totalPending,
+      subAggregates: sortedSubAggregates,
+    };
+  });
+
+  const totalPackages = overallRecap.kpmRows.length;
+  const deliveredPackages = overallRecap.kpmRows.filter((r) => r.debtStatus === 'complete').length;
+  const pendingPackages = totalPackages - deliveredPackages;
+  const pctPackages = totalPackages > 0 ? Math.round((deliveredPackages / totalPackages) * 100) : 0;
+  const pctUnits =
+    overallRecap.totalUnits > 0
+      ? Math.round((overallRecap.totalDelivered / overallRecap.totalUnits) * 100)
+      : 0;
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: [F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM],
+    compress: true,
+  }) as AutoTableDoc;
+
+  let cursorY = F4_PDF_MARGINS.top;
+  const centerX = F4_PDF_MARGINS.left + PRINTABLE_WIDTH_MM / 2;
+
+  if (reportTemplate?.enabled) {
+    if (reportTemplate.orgHeaderLine1?.trim()) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11.5);
+      doc.setTextColor(15, 23, 42);
+      doc.text(reportTemplate.orgHeaderLine1.trim().toUpperCase(), centerX, cursorY + 4.5, {
+        align: 'center',
+      });
+      cursorY += 5.2;
+    }
+    if (reportTemplate.orgHeaderLine2?.trim()) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(15, 118, 110);
+      doc.text(reportTemplate.orgHeaderLine2.trim(), centerX, cursorY + 4, { align: 'center' });
+      cursorY += 4.8;
+    }
+    if (reportTemplate.orgAddress?.trim()) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.2);
+      doc.setTextColor(71, 85, 105);
+      doc.text(reportTemplate.orgAddress.trim(), centerX, cursorY + 3.5, { align: 'center' });
+      cursorY += 4.5;
+    }
+    doc.setDrawColor(15, 23, 42);
+    doc.setLineWidth(0.5);
+    doc.line(F4_PDF_MARGINS.left, cursorY + 1, F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right, cursorY + 1);
+    doc.setLineWidth(0.2);
+    doc.line(
+      F4_PDF_MARGINS.left,
+      cursorY + 2.1,
+      F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right,
+      cursorY + 2.1
+    );
+    cursorY += 6;
+  }
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text('REKAPITULASI ITEM & SUB-ITEM BANTUAN', F4_PDF_MARGINS.left, cursorY + 4);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.8);
+  doc.setTextColor(71, 85, 105);
+  doc.text(
+    `Tahun Anggaran: ${yearLabel}   ·   KPM Diterima   ·   Dicetak: ${formatUploadDateTime(new Date().toISOString())}`,
+    F4_PDF_MARGINS.left,
+    cursorY + 9.2
+  );
+  cursorY += 13;
+
+  // Ringkasan Eksekutif
+  autoTable(doc, {
+    startY: cursorY,
+    margin: {
+      top: F4_PDF_MARGINS.top,
+      right: F4_PDF_MARGINS.right,
+      bottom: F4_PDF_MARGINS.bottom + 8,
+      left: F4_PDF_MARGINS.left,
+    },
+    tableWidth: PRINTABLE_WIDTH_MM,
+    head: [['TOTAL PAKET KPM', 'PAKET LENGKAP', 'TOTAL UNIT SUB-ITEM', 'UNIT DITERIMA', 'UNIT BELUM']],
+    body: [
+      [
+        `${totalPackages} Paket`,
+        `${deliveredPackages} Paket (${pctPackages}%)`,
+        `${overallRecap.totalUnits} Unit`,
+        `${overallRecap.totalDelivered} Unit (${pctUnits}%)`,
+        `${overallRecap.totalPending} Unit`,
+      ],
+    ],
+    theme: 'grid',
+    styles: {
+      font: 'helvetica',
+      fontSize: 8.8,
+      fontStyle: 'bold',
+      halign: 'center',
+      valign: 'middle',
+      textColor: [15, 23, 42],
+      lineColor: [203, 213, 225],
+      lineWidth: 0.22,
+      cellPadding: { top: 2.2, right: 2, bottom: 2.2, left: 2 },
+    },
+    headStyles: {
+      fillColor: [15, 23, 42],
+      textColor: [255, 255, 255],
+      fontSize: 7.8,
+      fontStyle: 'bold',
+    },
+  });
+
+  cursorY = (doc.lastAutoTable?.finalY ?? cursorY + 18) + 6;
+
+  // Bagian 1: Rekapitulasi per Paket Item
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(15, 23, 42);
+  doc.text('1. Rekapitulasi Paket Item Utama', F4_PDF_MARGINS.left, cursorY);
+  cursorY += 2.5;
+
+  const itemTableBody: (string | number)[][] = itemSummaryEntries.map((row, idx) => [
+    String(idx + 1).padStart(2, '0'),
+    row.code,
+    row.name,
+    row.subItemCount,
+    row.totalKpm,
+    row.completeKpm,
+    row.pendingKpm,
+  ]);
+
+  if (itemSummaryEntries.length > 0) {
+    itemTableBody.push([
+      '',
+      'TOTAL',
+      `${itemSummaryEntries.length} Jenis Item`,
+      itemSummaryEntries.reduce((s, r) => s + r.subItemCount, 0),
+      totalPackages,
+      deliveredPackages,
+      pendingPackages,
+    ]);
+  } else {
+    itemTableBody.push(['-', '-', 'Belum ada data item diterima pada tahun ini', 0, 0, 0, 0]);
+  }
+
+  autoTable(doc, {
+    startY: cursorY,
+    margin: {
+      top: F4_PDF_MARGINS.top,
+      right: F4_PDF_MARGINS.right,
+      bottom: F4_PDF_MARGINS.bottom + 8,
+      left: F4_PDF_MARGINS.left,
+    },
+    tableWidth: PRINTABLE_WIDTH_MM,
+    head: [['NO', 'KODE', 'NAMA PAKET ITEM', 'SUB-ITEM', 'TOTAL PAKET', 'LENGKAP', 'BELUM']],
+    body: itemTableBody,
+    theme: 'grid',
+    showHead: 'everyPage',
+    rowPageBreak: 'avoid',
+    styles: {
+      font: 'helvetica',
+      fontSize: 8.4,
+      textColor: [15, 23, 42],
+      lineColor: [203, 213, 225],
+      lineWidth: 0.22,
+      valign: 'middle',
+      cellPadding: { top: 2, right: 2.2, bottom: 2, left: 2.2 },
+    },
+    headStyles: {
+      fillColor: [15, 118, 110],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      fontSize: 8,
+      halign: 'center',
+    },
+    columnStyles: {
+      0: { cellWidth: 11, halign: 'center' },
+      1: { cellWidth: 18, halign: 'center', fontStyle: 'bold' },
+      2: { cellWidth: PRINTABLE_WIDTH_MM - 109, halign: 'left' },
+      3: { cellWidth: 19, halign: 'center' },
+      4: { cellWidth: 23, halign: 'center', fontStyle: 'bold' },
+      5: { cellWidth: 19, halign: 'center' },
+      6: { cellWidth: 19, halign: 'center' },
+    },
+    didParseCell: (data) => {
+      if (
+        itemSummaryEntries.length > 0 &&
+        data.section === 'body' &&
+        data.row.index === itemTableBody.length - 1
+      ) {
+        data.cell.styles.fillColor = [241, 245, 249];
+        data.cell.styles.fontStyle = 'bold';
+      }
+    },
+  });
+
+  cursorY = (doc.lastAutoTable?.finalY ?? cursorY + 30) + 7;
+  if (cursorY > F4_PAPER_HEIGHT_MM - 38) {
+    doc.addPage([F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM], 'portrait');
+    cursorY = F4_PDF_MARGINS.top + 2;
+  }
+
+  // Bagian 2: Rincian Lengkap Sub-Item per Item
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(15, 23, 42);
+  doc.text('2. Rincian Sub-Item per Paket Item', F4_PDF_MARGINS.left, cursorY);
+  cursorY += 2.5;
+
+  const subDetailBody: (string | number)[][] = [];
+  let rowCounter = 1;
+  for (const itemEntry of itemSummaryEntries) {
+    if (itemEntry.subAggregates.length === 0) {
+      subDetailBody.push([
+        String(rowCounter++).padStart(2, '0'),
+        itemEntry.code,
+        itemEntry.name,
+        '(Belum ada sub-item terdaftar)',
+        itemEntry.totalKpm,
+        itemEntry.completeKpm,
+        itemEntry.pendingKpm,
+        itemEntry.totalKpm > 0
+          ? `${Math.round((itemEntry.completeKpm / itemEntry.totalKpm) * 100)}%`
+          : '0%',
+      ]);
+    } else {
+      itemEntry.subAggregates.forEach((sub, subIdx) => {
+        const pct =
+          sub.totalNeeded > 0 ? Math.round((sub.deliveredCount / sub.totalNeeded) * 100) : 0;
+        subDetailBody.push([
+          String(rowCounter++).padStart(2, '0'),
+          subIdx === 0 ? itemEntry.code : '',
+          subIdx === 0 ? `${itemEntry.name} (${itemEntry.totalKpm} Paket)` : '',
+          sub.name,
+          sub.totalNeeded,
+          sub.deliveredCount,
+          sub.pendingCount,
+          `${pct}%`,
+        ]);
+      });
+    }
+  }
+
+  if (itemSummaryEntries.length > 0) {
+    subDetailBody.push([
+      '',
+      'TOTAL',
+      'Seluruh Item & Sub-Item',
+      `${overallRecap.aggregates.length} Sub-Item`,
+      overallRecap.totalUnits,
+      overallRecap.totalDelivered,
+      overallRecap.totalPending,
+      `${pctUnits}%`,
+    ]);
+  } else {
+    subDetailBody.push(['-', '-', '-', 'Belum ada rincian sub-item tersedia', 0, 0, 0, '0%']);
+  }
+
+  autoTable(doc, {
+    startY: cursorY,
+    margin: {
+      top: F4_PDF_MARGINS.top,
+      right: F4_PDF_MARGINS.right,
+      bottom: F4_PDF_MARGINS.bottom + 8,
+      left: F4_PDF_MARGINS.left,
+    },
+    tableWidth: PRINTABLE_WIDTH_MM,
+    head: [['NO', 'KODE', 'PAKET ITEM', 'SUB-ITEM', 'UNIT', 'DITERIMA', 'BELUM', 'PROGRES']],
+    body: subDetailBody,
+    theme: 'grid',
+    showHead: 'everyPage',
+    rowPageBreak: 'avoid',
+    styles: {
+      font: 'helvetica',
+      fontSize: 8.2,
+      textColor: [15, 23, 42],
+      lineColor: [203, 213, 225],
+      lineWidth: 0.22,
+      valign: 'middle',
+      cellPadding: { top: 1.9, right: 2, bottom: 1.9, left: 2 },
+    },
+    headStyles: {
+      fillColor: [15, 118, 110],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      fontSize: 7.8,
+      halign: 'center',
+    },
+    columnStyles: {
+      0: { cellWidth: 10, halign: 'center' },
+      1: { cellWidth: 15, halign: 'center', fontStyle: 'bold' },
+      2: { cellWidth: 44, halign: 'left', fontStyle: 'bold' },
+      3: { cellWidth: PRINTABLE_WIDTH_MM - 135, halign: 'left' },
+      4: { cellWidth: 16, halign: 'center' },
+      5: { cellWidth: 18, halign: 'center' },
+      6: { cellWidth: 16, halign: 'center' },
+      7: { cellWidth: 16, halign: 'center' },
+    },
+    didParseCell: (data) => {
+      if (
+        itemSummaryEntries.length > 0 &&
+        data.section === 'body' &&
+        data.row.index === subDetailBody.length - 1
+      ) {
+        data.cell.styles.fillColor = [241, 245, 249];
+        data.cell.styles.fontStyle = 'bold';
+      }
+    },
+  });
+
+  // Nomor halaman pada footer
+  const totalPages = doc.getNumberOfPages();
+  for (let i = 1; i <= totalPages; i += 1) {
+    doc.setPage(i);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      `MASDETA · Rekapitulasi Item & Sub-Item (${yearLabel})`,
+      F4_PDF_MARGINS.left,
+      F4_PAPER_HEIGHT_MM - 5.5
+    );
+    doc.text(
+      `Halaman ${i} dari ${totalPages}`,
+      F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right,
+      F4_PAPER_HEIGHT_MM - 5.5,
+      { align: 'right' }
+    );
+  }
+
+  const resolvedFileName =
+    fileName || `masdeta-rekap-item-subitem-${selectedYear === 'all' ? 'semua-tahun' : selectedYear}`;
+  return saveOrOpenPdfDocument(doc, resolvedFileName);
 }
 

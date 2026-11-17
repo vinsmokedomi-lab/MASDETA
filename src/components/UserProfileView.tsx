@@ -47,6 +47,7 @@ interface UserProfileViewProps {
   onBack: () => void;
   onCheckAppUpdate?: () => void;
   checkingAppUpdate?: boolean;
+  appVersion?: string;
 }
 
 export function UserProfileView({
@@ -60,6 +61,7 @@ export function UserProfileView({
   onBack,
   onCheckAppUpdate,
   checkingAppUpdate = false,
+  appVersion,
 }: UserProfileViewProps) {
   const isDesktopWeb = useIsDesktopWeb();
   const [nama, setNama] = useState(user.nama);
@@ -491,7 +493,7 @@ export function UserProfileView({
           </button>
         </form>
 
-        {onCheckAppUpdate && (
+        {onCheckAppUpdate ? (
           <button
             type="button"
             disabled={checkingAppUpdate}
@@ -507,9 +509,16 @@ export function UserProfileView({
               </span>
             </span>
             <span className="text-[11px] font-bold tabular-nums text-teal-700">
-              v{APP_VERSION}
+              v{appVersion || APP_VERSION}
             </span>
           </button>
+        ) : (
+          <div className="flex min-h-[46px] w-full items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 text-xs">
+            <span className="font-semibold text-slate-700">Versi Aplikasi Web</span>
+            <span className="font-bold tabular-nums text-teal-700">
+              v{appVersion || APP_VERSION} · Otomatis Terkini
+            </span>
+          </div>
         )}
 
         <button

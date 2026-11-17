@@ -26,6 +26,62 @@ jobs:
       - name: Install dependencies
         run: npm install --legacy-peer-deps --no-audit --no-fund
 
+      - name: Sync Web App Version from Latest Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const https = require("https");
+            const repo = process.env.GITHUB_REPOSITORY || "vinsmokedomi-lab/MASDETA";
+            const token = process.env.GITHUB_TOKEN || "";
+
+            function fetchJson(url) {
+              return new Promise((resolve, reject) => {
+                const headers = { "User-Agent": "masdeta-pages-deploy", Accept: "application/vnd.github+json" };
+                if (token) headers.Authorization = `Bearer ${token}`;
+                https.get(url, { headers }, (res) => {
+                  let data = "";
+                  res.on("data", (chunk) => (data += chunk));
+                  res.on("end", () => {
+                    if (res.statusCode >= 200 && res.statusCode < 300) {
+                      try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
+                    } else {
+                      reject(new Error(`HTTP ${res.statusCode}`));
+                    }
+                  });
+                }).on("error", reject);
+              });
+            }
+
+            (async () => {
+              let current = "1.1.20";
+              try {
+                const raw = fs.readFileSync("src/config/appVersion.ts", "utf8");
+                const m = raw.match(/APP_VERSION\s*=\s*"([^"]+)"/);
+                if (m) current = m[1];
+              } catch {}
+              let resolved = current;
+              try {
+                const rel = await fetchJson(`https://api.github.com/repos/${repo}/releases/latest`);
+                const tag = String(rel?.tag_name || "").replace(/^v/i, "").trim();
+                if (/^\d+\.\d+\.\d+$/.test(tag)) {
+                  resolved = tag;
+                }
+              } catch (err) {
+                console.warn("Skip release version lookup:", err.message);
+              }
+              const parts = resolved.split(".").map((n) => parseInt(n, 10) || 0);
+              const code = (parts[0] || 1) * 10000 + (parts[1] || 0) * 100 + (parts[2] || 0);
+              fs.mkdirSync("src/config", { recursive: true });
+              fs.writeFileSync(
+                "src/config/appVersion.ts",
+                `export const APP_VERSION = "${resolved}";\nexport const APP_VERSION_CODE = ${code};\nexport const GITHUB_REPO = "${repo}";\n`
+              );
+              console.log(`Synced web APP_VERSION=${resolved} (${code})`);
+            })();
+          '
+
       - name: Build production web bundle
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}

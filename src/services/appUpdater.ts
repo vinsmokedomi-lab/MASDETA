@@ -2,10 +2,12 @@ import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
 import { Directory, Filesystem } from '@capacitor/filesystem';
 import { FileOpener } from '@capawesome-team/capacitor-file-opener';
 import { APP_VERSION, GITHUB_REPO } from '../config/appVersion';
+import type { ChangelogRelease } from '../data/changelogData';
 
 const UPDATE_APK_FILENAME = 'masdeta-update.apk';
 const APK_MIME_TYPE = 'application/vnd.android.package-archive';
 const REQUIRED_UPDATE_CACHE_KEY = 'masdeta_required_update_info_v1';
+const GITHUB_RELEASES_CACHE_KEY = 'masdeta_github_releases_cache_v1';
 
 export interface GitHubReleaseAsset {
   name: string;
@@ -91,6 +93,115 @@ export function formatBytes(bytes?: number | null): string {
   if (mb >= 1) return `${mb.toFixed(1)} MB`;
   const kb = bytes / 1024;
   return `${Math.round(kb)} KB`;
+}
+
+function parseGithubReleaseHighlights(body: string, fallbackTitle: string): string[] {
+  const lines = body
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^[-*•]\s+/.test(line) || /^\d+\.\s+/.test(line))
+    .map((line) =>
+      line
+        .replace(/^[-*•]\s+/, '')
+        .replace(/^\d+\.\s+/, '')
+        .replace(/\*\*(.*?)\*\*/g, '$1')
+        .trim()
+    )
+    .filter((line) => line.length > 0 && !line.toLowerCase().startsWith('file apk:'));
+  if (lines.length > 0) return lines.slice(0, 12);
+  const cleanBody = body
+    .replace(/#+\s*/g, '')
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .trim();
+  return cleanBody ? [cleanBody.slice(0, 260)] : [fallbackTitle];
+}
+
+function formatGithubReleaseWib(iso?: string): string {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '-';
+  return `${d.toLocaleString('id-ID', {
+    timeZone: 'Asia/Jakarta',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })} WIB`;
+}
+
+export function getCachedGithubReleasesChangelog(): ChangelogRelease[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(GITHUB_RELEASES_CACHE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (item): item is ChangelogRelease =>
+        Boolean(item) &&
+        typeof item === 'object' &&
+        typeof (item as ChangelogRelease).version === 'string' &&
+        typeof (item as ChangelogRelease).title === 'string' &&
+        Array.isArray((item as ChangelogRelease).highlights)
+    );
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchGithubReleasesChangelog(): Promise<ChangelogRelease[]> {
+  const response = await fetch(
+    `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=30`,
+    { headers: { Accept: 'application/vnd.github+json' } }
+  );
+  if (!response.ok) {
+    throw new Error(`Gagal memuat changelog GitHub (${response.status}).`);
+  }
+  const data = (await response.json()) as unknown;
+  if (!Array.isArray(data)) return [];
+
+  const parsed: ChangelogRelease[] = [];
+  for (const rel of data) {
+    if (!rel || typeof rel !== 'object') continue;
+    const r = rel as Record<string, unknown>;
+    if (r.draft) continue;
+    const ver = normalizeSemver(String(r.tag_name || ''));
+    if (!/^\d+\.\d+\.\d+$/.test(ver)) continue;
+    const title =
+      String(r.name || `Rilis v${ver}`)
+        .replace(/^MASDETA\s*/i, '')
+        .trim() || `Rilis v${ver}`;
+    const body = String(r.body || '');
+    parsed.push({
+      version: ver,
+      title,
+      releasedAt: formatGithubReleaseWib(String(r.published_at || r.created_at || '')),
+      highlights: parseGithubReleaseHighlights(body, title),
+    });
+  }
+
+  if (typeof window !== 'undefined' && parsed.length > 0) {
+    try {
+      window.localStorage.setItem(GITHUB_RELEASES_CACHE_KEY, JSON.stringify(parsed));
+    } catch {
+      // Abaikan jika penyimpanan lokal dibatasi
+    }
+  }
+  return parsed;
+}
+
+export function resolveEffectiveAppVersion(releases: ChangelogRelease[] = []): string {
+  if (Capacitor.isNativePlatform()) {
+    return APP_VERSION;
+  }
+  let best = APP_VERSION;
+  for (const rel of releases) {
+    if (rel?.version && compareSemver(rel.version, best) > 0) {
+      best = normalizeSemver(rel.version);
+    }
+  }
+  return best;
 }
 
 export async function checkForAppUpdate(): Promise<AppUpdateInfo> {

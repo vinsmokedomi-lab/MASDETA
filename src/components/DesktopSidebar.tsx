@@ -25,6 +25,7 @@ import { PresenceDot, getPresenceMeta } from './PresenceDot';
 
 interface DesktopSidebarProps {
   logo: React.ReactNode;
+  appVersion?: string;
   currentUser: InternalUser;
   activeTab: MainTab;
   activeSubView: string;
@@ -53,6 +54,7 @@ interface DesktopSidebarProps {
 
 export function DesktopSidebar({
   logo,
+  appVersion,
   currentUser,
   activeTab,
   activeSubView,
@@ -146,7 +148,7 @@ export function DesktopSidebar({
                   MASDETA
                 </span>
                 <span className="rounded bg-teal-50 px-1.5 py-0.5 text-[10px] font-bold text-teal-700 tabular-nums">
-                  v{APP_VERSION}
+                  v{appVersion || APP_VERSION}
                 </span>
               </div>
               <p className="truncate text-[11px] font-medium text-slate-500">Web Workspace</p>

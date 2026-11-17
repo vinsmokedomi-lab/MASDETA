@@ -162,8 +162,12 @@ import { PullToRefresh } from './components/PullToRefresh';
 import {
   AppUpdateInfo,
   checkForAppUpdate,
+  fetchGithubReleasesChangelog,
+  getCachedGithubReleasesChangelog,
   getCachedMandatoryUpdate,
+  resolveEffectiveAppVersion,
 } from './services/appUpdater';
+import type { ChangelogRelease } from './data/changelogData';
 import {
   clearNativeChatNotifier,
   consumePendingNotificationSender,
@@ -526,13 +530,20 @@ export default function App() {
   const [supabaseSchemaMissing, setSupabaseSchemaMissing] = useState<boolean>(false);
   const [dismissedSchemaNotice, setDismissedSchemaNotice] = useState<boolean>(false);
   const [appUpdateInfo, setAppUpdateInfo] = useState<AppUpdateInfo | null>(() =>
-    getCachedMandatoryUpdate()
+    Capacitor.isNativePlatform() ? getCachedMandatoryUpdate() : null
   );
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState<boolean>(() =>
-    Boolean(getCachedMandatoryUpdate())
+    Capacitor.isNativePlatform() ? Boolean(getCachedMandatoryUpdate()) : false
   );
   const [dismissedUpdateVersion, setDismissedUpdateVersion] = useState<string | null>(null);
   const [checkingAppUpdate, setCheckingAppUpdate] = useState(false);
+  const [githubReleases, setGithubReleases] = useState<ChangelogRelease[]>(() =>
+    getCachedGithubReleasesChangelog()
+  );
+  const effectiveAppVersion = useMemo(
+    () => resolveEffectiveAppVersion(githubReleases),
+    [githubReleases]
+  );
   const [recapDrillTarget, setRecapDrillTarget] = useState<RecapDrillTarget>(null);
   const [chatBaselineReady, setChatBaselineReady] = useState<boolean>(false);
   const [isOperationalLoading, setIsOperationalLoading] = useState<boolean>(true);
@@ -569,6 +580,7 @@ export default function App() {
   const isManualRefreshingRef = useRef<boolean>(false);
   const hasAppliedRemoteRef = useRef<boolean>(false);
   const lastUpdateCheckAtRef = useRef<number>(0);
+  const lastWebChangelogSyncAtRef = useRef<number>(0);
   const internalUsersRef = useRef<InternalUser[]>(internalUsers);
   const proposalsRef = useRef<ProposalRecord[]>(proposals);
   const proposalHistoryRef = useRef<ProposalKpmHistoryEntry[]>(proposalHistory);
@@ -650,7 +662,56 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (Capacitor.isNativePlatform()) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const syncWebReleases = async (force = false) => {
+      const now = Date.now();
+      if (!force && now - lastWebChangelogSyncAtRef.current < 120_000) return;
+      lastWebChangelogSyncAtRef.current = now;
+      try {
+        const latest = await fetchGithubReleasesChangelog();
+        if (!cancelled && latest.length > 0) {
+          setGithubReleases(latest);
+        }
+      } catch {
+        // Gunakan cache lokal / fallback changelog bawaan jika offline
+      }
+    };
+
+    void syncWebReleases(true);
+
+    const handleOnline = () => {
+      void syncWebReleases(true);
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void syncWebReleases(false);
+      }
+    };
+
+    window.addEventListener('online', handleOnline);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener('online', handleOnline);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, []);
+
   const handleManualCheckAppUpdate = async () => {
+    if (!Capacitor.isNativePlatform()) {
+      setFeedback({
+        type: 'success',
+        message: `Versi Web MASDETA otomatis mengikuti rilis terbaru (v${effectiveAppVersion}).`,
+      });
+      return;
+    }
     if (checkingAppUpdate) return;
     setCheckingAppUpdate(true);
     setDismissedUpdateVersion(null);
@@ -7872,7 +7933,7 @@ export default function App() {
         />
         <AppUpdateModal
           updateInfo={appUpdateInfo}
-          open={isUpdateModalOpen}
+          open={isNativeApp && isUpdateModalOpen}
           onDismissLater={
             appUpdateInfo && !appUpdateInfo.isMandatory ? handleDismissUpdateLater : undefined
           }
@@ -7895,7 +7956,7 @@ export default function App() {
         />
         <AppUpdateModal
           updateInfo={appUpdateInfo}
-          open={isUpdateModalOpen}
+          open={isNativeApp && isUpdateModalOpen}
           onDismissLater={
             appUpdateInfo && !appUpdateInfo.isMandatory ? handleDismissUpdateLater : undefined
           }
@@ -7945,7 +8006,7 @@ export default function App() {
           />
           <AppUpdateModal
             updateInfo={appUpdateInfo}
-            open={isUpdateModalOpen}
+            open={isNativeApp && isUpdateModalOpen}
             onDismissLater={
               appUpdateInfo && !appUpdateInfo.isMandatory ? handleDismissUpdateLater : undefined
             }
@@ -7966,6 +8027,7 @@ export default function App() {
       {isDesktopWeb && (
         <DesktopSidebar
           logo={<MasdetaLogo />}
+          appVersion={effectiveAppVersion}
           currentUser={currentUser}
           activeTab={activeTab}
           activeSubView={subView}
@@ -7978,7 +8040,7 @@ export default function App() {
           pendingUsersCount={currentUser.role === 'SuperAdmin' ? pendingUsersCount : 0}
           urgentSchedulesCount={urgentSchedulesCount}
           duplicateNikCount={duplicateNikCount}
-          hasAppUpdate={Boolean(appUpdateInfo?.hasUpdate)}
+          hasAppUpdate={isNativeApp && Boolean(appUpdateInfo?.hasUpdate)}
           canAdd={hasPermission('add')}
           appNotifications={appNotifications}
           bellHasUnread={bellHasUnread}
@@ -8312,13 +8374,14 @@ export default function App() {
         {subView === 'profile' && (
           <UserProfileView
             user={currentUser}
+            appVersion={effectiveAppVersion}
             pushEnabled={pushEnabled}
             pushPermission={pushPermission}
             onRequestPushPermission={handleRequestPushPermission}
             onTogglePushEnabled={handleTogglePushEnabled}
             onUpdateProfile={handleUpdateProfile}
             onLogout={handleLogout}
-            onCheckAppUpdate={() => void handleManualCheckAppUpdate()}
+            onCheckAppUpdate={isNativeApp ? () => void handleManualCheckAppUpdate() : undefined}
             checkingAppUpdate={checkingAppUpdate}
             onBack={() => {
               navigateRestoreScroll();
@@ -8411,6 +8474,7 @@ export default function App() {
               records={records}
               items={items}
               selectedYear={selectedYear}
+              reportTemplate={reportTemplate}
               onChangeYear={setSelectedYear}
               drillTarget={recapDrillTarget}
               onChangeDrillTarget={(next) => {
@@ -8822,10 +8886,13 @@ export default function App() {
             kpmAuditLogs={kpmAuditLogs}
             onOpenChat={(peerId) => openChatView(peerId)}
             onOpenProfile={openProfileView}
-            onCheckAppUpdate={() => void handleManualCheckAppUpdate()}
+            onCheckAppUpdate={isNativeApp ? () => void handleManualCheckAppUpdate() : undefined}
             checkingAppUpdate={checkingAppUpdate}
-            hasAppUpdate={Boolean(appUpdateInfo?.hasUpdate)}
-            availableUpdateVersion={appUpdateInfo?.latestVersion}
+            hasAppUpdate={isNativeApp && Boolean(appUpdateInfo?.hasUpdate)}
+            availableUpdateVersion={isNativeApp ? appUpdateInfo?.latestVersion : undefined}
+            appVersion={effectiveAppVersion}
+            githubReleases={githubReleases}
+            onGithubReleasesUpdated={setGithubReleases}
             onSaveItem={handleSaveCatalogItem}
             onDeleteItem={handleDeleteCatalogItem}
             onMoveItemOrder={handleMoveItemOrder}
@@ -8925,7 +8992,7 @@ export default function App() {
           pendingUsersCount={currentUser.role === 'SuperAdmin' ? pendingUsersCount : 0}
           unreadChatCount={unreadChatCount}
           urgentSchedulesCount={urgentSchedulesCount}
-          hasAppUpdate={Boolean(appUpdateInfo?.hasUpdate)}
+          hasAppUpdate={isNativeApp && Boolean(appUpdateInfo?.hasUpdate)}
           onSelectTab={(tab) => {
             setFeedback(null);
             setMenuOpenedFromDashboard(false);
@@ -8972,7 +9039,7 @@ export default function App() {
       {/* In-App Android APK Auto-Updater Modal (Update Wajib / Patch Opsional) */}
       <AppUpdateModal
         updateInfo={appUpdateInfo}
-        open={isUpdateModalOpen}
+        open={isNativeApp && isUpdateModalOpen}
         onDismissLater={
           appUpdateInfo && !appUpdateInfo.isMandatory ? handleDismissUpdateLater : undefined
         }

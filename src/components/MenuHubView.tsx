@@ -51,8 +51,9 @@ import { MenuDownloadView } from './MenuDownloadView';
 import { AddPengelolaModal } from './PengelolaSelectorModal';
 import { PresenceDot, getPresenceMeta } from './PresenceDot';
 import { SwipeAction, SwipeableRow } from './SwipeableRow';
-import { APP_VERSION, GITHUB_REPO } from '../config/appVersion';
+import { APP_VERSION } from '../config/appVersion';
 import { APP_CHANGELOG, ChangelogRelease } from '../data/changelogData';
+import { fetchGithubReleasesChangelog } from '../services/appUpdater';
 import { CorrespondentKpmListPanel } from './CorrespondentKpmListPanel';
 import { StandaloneKpmView } from './StandaloneKpmView';
 import { DTSEN_OPTION_ITEMS } from '../data/kpmOptions';
@@ -145,6 +146,9 @@ interface MenuHubViewProps {
   checkingAppUpdate?: boolean;
   hasAppUpdate?: boolean;
   availableUpdateVersion?: string;
+  appVersion?: string;
+  githubReleases?: ChangelogRelease[];
+  onGithubReleasesUpdated?: (releases: ChangelogRelease[]) => void;
   onSaveItem: (item: ItemBantuan, orderIndex: number, originalCode?: string) => void;
   onDeleteItem: (tahun: string, code: string) => void;
   onMoveItemOrder: (tahun: string, code: string, direction: 'up' | 'down') => void;
@@ -250,6 +254,9 @@ export function MenuHubView({
   checkingAppUpdate = false,
   hasAppUpdate = false,
   availableUpdateVersion,
+  appVersion,
+  githubReleases: controlledGithubReleases,
+  onGithubReleasesUpdated,
   onSaveItem,
   onDeleteItem,
   onMoveItemOrder,
@@ -363,8 +370,13 @@ export function MenuHubView({
   // SuperAdmin drill flag (lifted when provided)
   const [localUsersOpenedFromSuperAdmin, setLocalUsersOpenedFromSuperAdmin] = useState(false);
   const [changelogSortNewestFirst, setChangelogSortNewestFirst] = useState(true);
-  const [githubReleases, setGithubReleases] = useState<ChangelogRelease[]>([]);
+  const [localGithubReleases, setLocalGithubReleases] = useState<ChangelogRelease[]>([]);
   const [loadingGithubReleases, setLoadingGithubReleases] = useState(false);
+  const effectiveVersion = appVersion || APP_VERSION;
+  const githubReleases =
+    controlledGithubReleases && controlledGithubReleases.length > 0
+      ? controlledGithubReleases
+      : localGithubReleases;
   const usersOpenedFromSuperAdmin =
     controlledUsersFromSuperAdmin !== undefined
       ? controlledUsersFromSuperAdmin
@@ -570,73 +582,29 @@ export function MenuHubView({
     }
   }, [activeSection, usersOpenedFromSuperAdmin, selectedYear, dtsenDrill]);
 
+  const refreshGithubReleases = async () => {
+    setLoadingGithubReleases(true);
+    try {
+      const parsed = await fetchGithubReleasesChangelog();
+      setLocalGithubReleases(parsed);
+      onGithubReleasesUpdated?.(parsed);
+    } catch {
+      // Fallback ke APP_CHANGELOG lokal
+    } finally {
+      setLoadingGithubReleases(false);
+    }
+  };
+
   useEffect(() => {
     if (activeSection !== 'changelog' || githubReleases.length > 0) return;
     let cancelled = false;
     setLoadingGithubReleases(true);
 
-    const normalizeVer = (raw: string) =>
-      raw.trim().replace(/^v/i, '').split('-')[0] || '0.0.0';
-    const parseHighlights = (body: string, fallbackTitle: string): string[] => {
-      const lines = body
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(
-          (line) =>
-            /^[-*•]\s+/.test(line) || /^\d+\.\s+/.test(line)
-        )
-        .map((line) =>
-          line
-            .replace(/^[-*•]\s+/, '')
-            .replace(/^\d+\.\s+/, '')
-            .replace(/\*\*(.*?)\*\*/g, '$1')
-            .trim()
-        )
-        .filter((line) => line.length > 0 && !line.toLowerCase().startsWith('file apk:'));
-      if (lines.length > 0) return lines.slice(0, 12);
-      const cleanBody = body
-        .replace(/#+\s*/g, '')
-        .replace(/\*\*(.*?)\*\*/g, '$1')
-        .trim();
-      return cleanBody ? [cleanBody.slice(0, 260)] : [fallbackTitle];
-    };
-    const formatWib = (iso?: string): string => {
-      if (!iso) return '-';
-      const d = new Date(iso);
-      if (Number.isNaN(d.getTime())) return '-';
-      return `${d.toLocaleString('id-ID', {
-        timeZone: 'Asia/Jakarta',
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      })} WIB`;
-    };
-
-    void fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=25`, {
-      headers: { Accept: 'application/vnd.github+json' },
-    })
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('Gagal'))))
-      .then((data: unknown) => {
-        if (cancelled || !Array.isArray(data)) return;
-        const parsed: ChangelogRelease[] = [];
-        for (const rel of data) {
-          if (!rel || typeof rel !== 'object') continue;
-          const r = rel as Record<string, unknown>;
-          if (r.draft) continue;
-          const ver = normalizeVer(String(r.tag_name || ''));
-          if (!/^\d+\.\d+\.\d+$/.test(ver)) continue;
-          const title = String(r.name || `Rilis v${ver}`).replace(/^MASDETA\s*/i, '').trim() || `Rilis v${ver}`;
-          const body = String(r.body || '');
-          parsed.push({
-            version: ver,
-            title,
-            releasedAt: formatWib(String(r.published_at || r.created_at || '')),
-            highlights: parseHighlights(body, title),
-          });
-        }
-        setGithubReleases(parsed);
+    void fetchGithubReleasesChangelog()
+      .then((parsed) => {
+        if (cancelled) return;
+        setLocalGithubReleases(parsed);
+        onGithubReleasesUpdated?.(parsed);
       })
       .catch(() => {
         // Fallback ke APP_CHANGELOG lokal
@@ -648,7 +616,7 @@ export function MenuHubView({
     return () => {
       cancelled = true;
     };
-  }, [activeSection, githubReleases.length]);
+  }, [activeSection, githubReleases.length, onGithubReleasesUpdated]);
 
   const [duplikasiYearFilter, setDuplikasiYearFilter] = useState<string>(selectedYear || 'all');
   const seenDuplicatesStorageKey = useMemo(
@@ -1617,11 +1585,11 @@ export function MenuHubView({
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-sm font-semibold text-slate-900">Riwayat Pembaruan</p>
                     <span className="shrink-0 rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-bold text-teal-700 ring-1 ring-inset ring-teal-200 tabular-nums">
-                      v{APP_VERSION}
+                      v{effectiveVersion}
                     </span>
                   </div>
                   <p className="mt-0.5 truncate text-xs text-slate-500">
-                    Changelog lengkap dari v1.0.0 hingga v{APP_VERSION}
+                    Changelog lengkap dari v1.0.0 hingga v{effectiveVersion}
                   </p>
                 </div>
                 <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -5503,11 +5471,15 @@ export function MenuHubView({
       sortedNewest[0] = {
         ...sortedNewest[0],
         badge:
-          sortedNewest[0].version === APP_VERSION ? 'Versi Terpasang' : 'Versi Terbaru GitHub',
+          sortedNewest[0].version === effectiveVersion
+            ? isNativeApp
+              ? 'Versi Terpasang'
+              : 'Versi Aktif'
+            : 'Versi Terbaru GitHub',
       };
     }
 
-    const latestVersionLabel = sortedNewest[0]?.version || APP_VERSION;
+    const latestVersionLabel = sortedNewest[0]?.version || effectiveVersion;
     const orderedReleases = changelogSortNewestFirst
       ? sortedNewest
       : [...sortedNewest].reverse();
@@ -5527,7 +5499,7 @@ export function MenuHubView({
                   Changelog Aplikasi
                 </p>
                 <h2 className="mt-0.5 text-base font-bold text-slate-900">
-                  Versi Terpasang v{APP_VERSION}
+                  {isNativeApp ? `Versi Terpasang v${effectiveVersion}` : `Versi Web Aktif v${effectiveVersion}`}
                 </h2>
                 <p className="mt-1 text-xs leading-relaxed text-slate-500">
                   Daftar lengkap pembaruan dari versi 1.0.0 hingga versi {latestVersionLabel}
@@ -5539,22 +5511,33 @@ export function MenuHubView({
               </div>
             </div>
 
-            <div className="mt-3 flex items-center justify-between gap-2 border-t border-slate-100 pt-3">
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
               <span className="text-xs font-medium text-slate-500 tabular-nums">
                 Total {sortedNewest.length} rilis tercatat
               </span>
-              <button
-                type="button"
-                onClick={() => setChangelogSortNewestFirst((prev) => !prev)}
-                className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
-              >
-                <History className="h-3.5 w-3.5 text-teal-700" />
-                <span>
-                  {changelogSortNewestFirst
-                    ? `Urutan: v${latestVersionLabel} → v1.0.0`
-                    : `Urutan: v1.0.0 → v${latestVersionLabel}`}
-                </span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={loadingGithubReleases}
+                  onClick={() => void refreshGithubReleases()}
+                  className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-60"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 text-teal-700 ${loadingGithubReleases ? 'animate-spin' : ''}`} />
+                  <span>Sinkronkan</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setChangelogSortNewestFirst((prev) => !prev)}
+                  className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+                >
+                  <History className="h-3.5 w-3.5 text-teal-700" />
+                  <span>
+                    {changelogSortNewestFirst
+                      ? `Urutan: v${latestVersionLabel} → v1.0.0`
+                      : `Urutan: v1.0.0 → v${latestVersionLabel}`}
+                  </span>
+                </button>
+              </div>
             </div>
           </div>
 
