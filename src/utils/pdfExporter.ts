@@ -4019,32 +4019,25 @@ export async function exportSchedulesToPdf({
 
   const tableBody: string[][] =
     sorted.length === 0
-      ? [['-', '-', '-', '-', '-', 'Belum ada agenda terjadwal.', '-']]
+      ? [['-', '-', '-', '-', '-', '-', '-']]
       : sorted.map((ev, idx) => {
           const isOverdue = !ev.completed && ev.targetDate < todayStr;
           const statusText = ev.completed ? 'Selesai' : isOverdue ? 'Terlambat' : 'Terjadwal';
           const formattedDate = formatScheduleIndonesianDate(ev.targetDate, ev.targetDay);
           const dateTimeStr = ev.targetTime ? `${formattedDate}\nPukul ${ev.targetTime}` : formattedDate;
           const categoryLabel = catLabelMap[ev.category] || ev.category;
-          const trimmedTitle = (ev.title || '').trim();
-          const legacyTitle =
-            trimmedTitle && trimmedTitle.toLowerCase() !== categoryLabel.toLowerCase()
-              ? trimmedTitle
-              : '';
-          const agendaDesc = [
-            legacyTitle,
-            ev.location ? `Lokasi: ${ev.location}` : '',
-            ev.notes ? `Catatan: ${ev.notes}` : '',
-          ]
-            .filter(Boolean)
-            .join('\n') || '-';
+          const cleanLocation =
+            (ev.location || '')
+              .trim()
+              .replace(/^lokasi\s*:\s*/i, '')
+              .trim() || '-';
           return [
             String(idx + 1).padStart(2, '0'),
             dateTimeStr,
             categoryLabel,
             ev.tahun || '-',
             ev.proposalName?.trim() || 'Umum / Tanpa Proposal',
-            agendaDesc,
+            cleanLocation,
             statusText,
           ];
         });
@@ -4058,7 +4051,7 @@ export async function exportSchedulesToPdf({
       left: F4_PDF_MARGINS.left,
     },
     tableWidth: PRINTABLE_WIDTH_MM,
-    head: [['NO', 'HARI, TANGGAL & JAM', 'KATEGORI / JUDUL', 'TAHUN', 'PROPOSAL', 'LOKASI & CATATAN', 'STATUS']],
+    head: [['NO', 'HARI, TANGGAL & JAM', 'KATEGORI / JUDUL', 'TAHUN', 'PROPOSAL', 'LOKASI', 'STATUS']],
     body: tableBody,
     theme: 'grid',
     showHead: 'everyPage',
@@ -4080,13 +4073,13 @@ export async function exportSchedulesToPdf({
       halign: 'center',
     },
     columnStyles: {
-      0: { cellWidth: 10, halign: 'center' },
-      1: { cellWidth: 33, halign: 'center' },
-      2: { cellWidth: 30, halign: 'left', fontStyle: 'bold' },
-      3: { cellWidth: 14, halign: 'center' },
-      4: { cellWidth: 36, halign: 'left' },
-      5: { cellWidth: PRINTABLE_WIDTH_MM - 142, halign: 'left' },
-      6: { cellWidth: 19, halign: 'center', fontStyle: 'bold' },
+      0: { cellWidth: 9, halign: 'center' },
+      1: { cellWidth: 32, halign: 'center' },
+      2: { cellWidth: 23.5, halign: 'left', fontStyle: 'bold' },
+      3: { cellWidth: 13, halign: 'center' },
+      4: { cellWidth: 35, halign: 'left' },
+      5: { cellWidth: PRINTABLE_WIDTH_MM - 131, halign: 'left' },
+      6: { cellWidth: 18.5, halign: 'center', fontStyle: 'bold' },
     },
   });
 
