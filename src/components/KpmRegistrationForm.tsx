@@ -39,7 +39,9 @@ import {
   KpmRecord,
   PengelolaProfile,
   ProposalRecord,
+  ProposalSlotMap,
   SingleDocumentKey,
+  SlotRemovalMode,
   ValidationStatus,
   WilayahKabKota,
 } from '../types/kpm';
@@ -49,6 +51,7 @@ import {
   formatAlamatLengkap,
   getItemsForYear,
   getKelurahanOptionsForProposal,
+  getKpmSlotNumberInProposal,
   isKecamatanProposal,
   isValidNik16,
   isValidRtRw,
@@ -56,6 +59,7 @@ import {
   resolvePackageForKpm,
   resolveProposalDomicile,
   resolveProposalKecamatanCategory,
+  resolveProposalSlotStateForGroup,
   sanitizeDigits,
   sortKecamatanCategoryNames,
 } from '../utils/imageProcessor';
@@ -64,6 +68,7 @@ import { DriveImage } from './DriveImage';
 import { MultiDocumentUploadCard } from './MultiDocumentUploadCard';
 import { PengelolaSelectorModal } from './PengelolaSelectorModal';
 import { SelectionPickerModal, SelectionPickerOption } from './SelectionPickerModal';
+import { SlotHandlingConfirmModal } from './SlotHandlingConfirmModal';
 import { PlaceholderSelect } from './FormControls';
 import { useIsDesktopWeb } from '../utils/platform';
 
@@ -80,6 +85,14 @@ interface KpmRegistrationFormProps {
   onDismissFeedback?: () => void;
   preselectedProposal?: { namaProposal: string; tahun: string } | null;
   lockedProposalScope?: { namaProposal: string; tahun: string } | null;
+  proposalSlotMap?: ProposalSlotMap;
+  targetSlot?: {
+    proposalId: string;
+    proposalName: string;
+    tahun: string;
+    slotNumber: number;
+    item?: string;
+  } | null;
   initialStandaloneStatus?: 'pending' | 'rejected' | null;
   onClearPreselectedProposal?: () => void;
   onBack?: () => void;
@@ -87,7 +100,12 @@ interface KpmRegistrationFormProps {
   onCreatePengelola: (profile: PengelolaProfile) => void;
   onAddPekerjaan?: (job: string) => void;
   onAddYear?: (year: string) => void;
-  onSave: (values: KpmFormValues, editingId?: string) => Promise<boolean> | boolean | void;
+  onSave: (
+    values: KpmFormValues,
+    editingId?: string,
+    targetSlotNumber?: number | null,
+    oldSlotHandling?: SlotRemovalMode
+  ) => Promise<boolean> | boolean | void;
   onQuickSyncKpmDocuments?: (kpmId: string, nextDocuments: KpmDocuments) => Promise<void> | void;
   onCancelEdit: () => void;
   onPreviewDocument: (file: KpmDocumentFile, title: string) => void;
@@ -108,6 +126,8 @@ export function KpmRegistrationForm({
   onDismissFeedback,
   preselectedProposal,
   lockedProposalScope,
+  proposalSlotMap = {},
+  targetSlot = null,
   initialStandaloneStatus,
   onClearPreselectedProposal,
   onBack,
@@ -145,6 +165,7 @@ export function KpmRegistrationForm({
         kabKota: dom.kabKota || wilayahList[0]?.nama || '',
         kecamatan: dom.kecamatan || '',
         kelurahan: dom.kelurahan || '',
+        item: targetSlot?.item || INITIAL_FORM_VALUES.item,
         validasi: 'accepted',
       };
     }
@@ -165,6 +186,9 @@ export function KpmRegistrationForm({
   };
 
   const [values, setValues] = useState<KpmFormValues>(buildInitialFormValues);
+  const [selectedEmptySlotNo, setSelectedEmptySlotNo] = useState<number | null>(
+    targetSlot?.slotNumber ?? null
+  );
   const [errors, setErrors] = useState<FormErrors>({});
   const [isTahunModalOpen, setIsTahunModalOpen] = useState(false);
   const [isProposalModalOpen, setIsProposalModalOpen] = useState(false);
@@ -185,6 +209,26 @@ export function KpmRegistrationForm({
     fieldIssues: KtpKkScanIssue[];
     ktpNameMatchesKk: boolean;
   } | null>(null);
+  const [pendingEditMovePayload, setPendingEditMovePayload] = useState<{
+    normalizedValues: KpmFormValues;
+    targetSlotNumber: number | null;
+    destinationLabel: string;
+  } | null>(null);
+
+  const editingOriginSlotNumber = useMemo(
+    () =>
+      editingRecord
+        ? getKpmSlotNumberInProposal(
+            editingRecord,
+            existingRecords,
+            proposals,
+            itemOptions || [],
+            wilayahList,
+            proposalSlotMap
+          )
+        : null,
+    [editingRecord, existingRecords, proposals, itemOptions, wilayahList, proposalSlotMap]
+  );
 
   const resolvedYearOptions = useMemo(() => {
     const set = new Set<string>(TAHUN_OPTIONS);
@@ -290,8 +334,10 @@ export function KpmRegistrationForm({
         kabKota: dom.kabKota || wilayahList[0]?.nama || '',
         kecamatan: dom.kecamatan || '',
         kelurahan: dom.kelurahan || '',
+        item: targetSlot?.item || INITIAL_FORM_VALUES.item,
         validasi: 'accepted',
       });
+      setSelectedEmptySlotNo(targetSlot?.slotNumber ?? null);
       setErrors({});
       setKtpOcrImage(undefined);
       setKkOcrImage(undefined);
@@ -306,6 +352,7 @@ export function KpmRegistrationForm({
         kabKota: wilayahList[0]?.nama || '',
         validasi: initialStandaloneStatus,
       });
+      setSelectedEmptySlotNo(null);
       setErrors({});
       setKtpOcrImage(undefined);
       setKkOcrImage(undefined);
@@ -316,13 +363,14 @@ export function KpmRegistrationForm({
         ...INITIAL_FORM_VALUES,
         kabKota: wilayahList[0]?.nama || '',
       });
+      setSelectedEmptySlotNo(null);
       setErrors({});
       setKtpOcrImage(undefined);
       setKkOcrImage(undefined);
       setScanError(null);
       setScanReport(null);
     }
-  }, [editingRecord, lockedProposalScope, initialStandaloneStatus]);
+  }, [editingRecord, lockedProposalScope, initialStandaloneStatus, targetSlot]);
 
   useEffect(() => {
     if (preselectedProposal && !editingRecord && !lockedProposalScope) {
@@ -435,6 +483,18 @@ export function KpmRegistrationForm({
 
   const isStandaloneMode = values.validasi === 'pending' || values.validasi === 'rejected';
 
+  const availableEmptySlots = useMemo(() => {
+    if (isStandaloneMode || !values.proposal?.trim()) return [];
+    const { state } = resolveProposalSlotStateForGroup(
+      proposalSlotMap,
+      values.proposalId,
+      values.proposal,
+      values.tahun,
+      proposals
+    );
+    return [...(state?.emptySlots || [])].sort((a, b) => a.slotNumber - b.slotNumber);
+  }, [isStandaloneMode, proposalSlotMap, values.proposalId, values.proposal, values.tahun, proposals]);
+
   const standaloneKabKotaOptions = useMemo(() => wilayahList.map((w) => w.nama), [wilayahList]);
 
   const standaloneKecamatanOptions = useMemo(() => {
@@ -494,6 +554,9 @@ export function KpmRegistrationForm({
 
   const handleStatusRoutingChange = (nextStatus: ValidationStatus) => {
     if (isProposalScopeLocked && nextStatus !== 'accepted') return;
+    if (!targetSlot && nextStatus !== 'accepted') {
+      setSelectedEmptySlotNo(null);
+    }
     setValues((prev) => {
       if (nextStatus === 'pending' || nextStatus === 'rejected') {
         const resolvedDom = prev.proposal
@@ -527,6 +590,7 @@ export function KpmRegistrationForm({
   };
 
   const handleYearChange = (nextYear: string) => {
+    if (!targetSlot) setSelectedEmptySlotNo(null);
     setValues((prev) => {
       const keepProposal =
         editingRecord ||
@@ -562,6 +626,7 @@ export function KpmRegistrationForm({
       onOpenAddProposal();
       return;
     }
+    if (!targetSlot) setSelectedEmptySlotNo(null);
     const matchedProp = proposals.find(
       (p) => p.namaProposal === nextProposal && (!values.tahun || p.tahun === values.tahun)
     );
@@ -725,6 +790,34 @@ export function KpmRegistrationForm({
     return nextErrors;
   };
 
+  const executeSave = async (
+    normalizedValues: KpmFormValues,
+    resolvedTargetSlot: number | null,
+    oldSlotHandling: SlotRemovalMode = 'vacate'
+  ) => {
+    setIsSubmitting(true);
+    try {
+      const saveResult = await onSave(
+        normalizedValues,
+        editingRecord?.id,
+        resolvedTargetSlot,
+        oldSlotHandling
+      );
+
+      if (saveResult !== false && !editingRecord) {
+        setValues(buildInitialFormValues());
+        setSelectedEmptySlotNo(null);
+        setErrors({});
+        setKtpOcrImage(undefined);
+        setKkOcrImage(undefined);
+        setScanError(null);
+        setScanReport(null);
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (editingProposalLocked || isSubmitting) return;
@@ -754,41 +847,54 @@ export function KpmRegistrationForm({
       ? resolveProposalDomicile(values.proposal, proposals, values.tahun, wilayahList)
       : { kabKota: values.kabKota || '', kecamatan: values.kecamatan || '', kelurahan: values.kelurahan || '' };
 
-    setIsSubmitting(true);
-    try {
-      const saveResult = await onSave(
-        {
-          ...values,
-          tahun: isStandalone ? values.tahun.trim() : values.tahun,
-          proposalId: isStandalone ? null : resolvedProp?.id || values.proposalId || null,
-          proposal: isStandalone ? '' : values.proposal,
-          kabKota: resolvedDomicile.kabKota || values.kabKota || '',
-          kecamatan: resolvedDomicile.kecamatan || values.kecamatan || '',
-          kelurahan: isStandalone
-            ? values.kelurahan
-            : showKelurahanField
-              ? values.kelurahan
-              : resolvedDomicile.kelurahan || values.kelurahan || '',
-          nama: values.nama.trim().toUpperCase(),
-          alamat: formatAlamatLengkap(values.alamat, true),
-          catatan: values.catatan.trim(),
-          rt: values.rt.trim().padStart(3, '0'),
-          rw: values.rw.trim().padStart(3, '0'),
-        },
-        editingRecord?.id
-      );
+    const normalizedValues: KpmFormValues = {
+      ...values,
+      tahun: isStandalone ? values.tahun.trim() : values.tahun,
+      proposalId: isStandalone ? null : resolvedProp?.id || values.proposalId || null,
+      proposal: isStandalone ? '' : values.proposal,
+      kabKota: resolvedDomicile.kabKota || values.kabKota || '',
+      kecamatan: resolvedDomicile.kecamatan || values.kecamatan || '',
+      kelurahan: isStandalone
+        ? values.kelurahan
+        : showKelurahanField
+          ? values.kelurahan
+          : resolvedDomicile.kelurahan || values.kelurahan || '',
+      nama: values.nama.trim().toUpperCase(),
+      alamat: formatAlamatLengkap(values.alamat, true),
+      catatan: values.catatan.trim(),
+      rt: values.rt.trim().padStart(3, '0'),
+      rw: values.rw.trim().padStart(3, '0'),
+    };
+    const resolvedTargetSlot = isStandalone
+      ? null
+      : (targetSlot?.slotNumber ?? selectedEmptySlotNo ?? null);
 
-      if (saveResult !== false && !editingRecord) {
-        setValues(buildInitialFormValues());
-        setErrors({});
-        setKtpOcrImage(undefined);
-        setKkOcrImage(undefined);
-        setScanError(null);
-        setScanReport(null);
-      }
-    } finally {
-      setIsSubmitting(false);
+    const leavesOldProposalSlot = Boolean(
+      editingRecord &&
+        editingRecord.validasi === 'accepted' &&
+        editingRecord.proposal?.trim() &&
+        (isStandalone ||
+          normalizedValues.proposal !== editingRecord.proposal ||
+          normalizedValues.tahun !== editingRecord.tahun)
+    );
+
+    if (leavesOldProposalSlot && editingRecord) {
+      const destinationLabel = isStandalone
+        ? normalizedValues.validasi === 'rejected'
+          ? 'Arsip Ditolak'
+          : 'Database KPM'
+        : normalizedValues.tahun
+          ? `${normalizedValues.proposal} (${normalizedValues.tahun})`
+          : normalizedValues.proposal;
+      setPendingEditMovePayload({
+        normalizedValues,
+        targetSlotNumber: resolvedTargetSlot,
+        destinationLabel,
+      });
+      return;
     }
+
+    await executeSave(normalizedValues, resolvedTargetSlot, 'vacate');
   };
 
   const handleReset = () => {
@@ -1160,6 +1266,50 @@ export function KpmRegistrationForm({
 
                     {errors.proposal && <p className="mt-0.5 text-xs text-rose-600">{errors.proposal}</p>}
                   </div>
+
+                  {targetSlot && !editingRecord ? (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs text-amber-900">
+                      <p className="font-bold">
+                        Mengisi Baris Kosong Nomor Urut #{String(targetSlot.slotNumber).padStart(2, '0')}
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-amber-800">
+                        KPM baru akan langsung menempati urutan #{String(targetSlot.slotNumber).padStart(2, '0')} di {targetSlot.proposalName}
+                        {targetSlot.item ? ` (paket barang ${targetSlot.item})` : ''} untuk menjaga penomoran SK Dinas / BAST.
+                      </p>
+                    </div>
+                  ) : !editingRecord && availableEmptySlots.length > 0 ? (
+                    <div>
+                      <label htmlFor="input-empty-slot" className="block text-xs font-semibold text-slate-700">
+                        Penempatan Nomor Urut / Baris Kosong (opsional)
+                      </label>
+                      <select
+                        id="input-empty-slot"
+                        value={selectedEmptySlotNo ? String(selectedEmptySlotNo) : ''}
+                        onChange={(e) => {
+                          const nextSlot = e.target.value ? parseInt(e.target.value, 10) : null;
+                          setSelectedEmptySlotNo(nextSlot);
+                          if (nextSlot) {
+                            const matchedSlot = availableEmptySlots.find(
+                              (s) => s.slotNumber === nextSlot
+                            );
+                            if (matchedSlot?.item && !values.item) {
+                              updateField('item', matchedSlot.item);
+                            }
+                          }
+                        }}
+                        className="mt-1.5 min-h-[42px] w-full rounded-xl border border-amber-300 bg-amber-50/60 px-3 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none"
+                      >
+                        <option value="">Urutan Normal (Tambahkan / Ikuti Hierarki)</option>
+                        {availableEmptySlots.map((slot) => (
+                          <option key={slot.slotNumber} value={String(slot.slotNumber)}>
+                            Isi Baris Kosong #{String(slot.slotNumber).padStart(2, '0')}
+                            {slot.previousKpmName ? ` (bekas ${slot.previousKpmName})` : ''}
+                            {slot.item ? ` · ${slot.item}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : null}
 
                   {/* Conditional Kelurahan Field when Proposal is Kecamatan */}
                   {showKelurahanField && (
@@ -2296,6 +2446,36 @@ export function KpmRegistrationForm({
         onSelect={(displayName) => updateField('pengelola', displayName)}
         onCreatePengelola={onCreatePengelola}
         onPreviewDocument={onPreviewDocument}
+      />
+
+      {/* 2-Step Confirmation when editing proposal/year/status moves KPM out of old proposal slot */}
+      <SlotHandlingConfirmModal
+        isOpen={Boolean(pendingEditMovePayload)}
+        actionType="move"
+        kpmName={pendingEditMovePayload?.normalizedValues.nama || editingRecord?.nama || ''}
+        registerCode={editingRecord?.registerCode}
+        originProposalName={
+          editingRecord?.proposal
+            ? editingRecord.tahun
+              ? `${editingRecord.proposal} (${editingRecord.tahun})`
+              : editingRecord.proposal
+            : ''
+        }
+        originSlotNumber={editingOriginSlotNumber}
+        destinationLabel={pendingEditMovePayload?.destinationLabel}
+        requiresSlotChoice
+        isBusy={isSubmitting}
+        onCancel={() => !isSubmitting && setPendingEditMovePayload(null)}
+        onConfirm={(oldSlotHandling) => {
+          if (!pendingEditMovePayload) return;
+          const payload = pendingEditMovePayload;
+          setPendingEditMovePayload(null);
+          void executeSave(
+            payload.normalizedValues,
+            payload.targetSlotNumber,
+            oldSlotHandling
+          );
+        }}
       />
     </>
   );

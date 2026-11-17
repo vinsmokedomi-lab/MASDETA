@@ -324,6 +324,7 @@ export interface ScheduleEventItem {
   title: string;
   category: ScheduleCategory;
   targetDate: string; // YYYY-MM-DD
+  targetTime?: string; // HH:mm
   tahun: string;
   proposalName?: string;
   notes?: string;
@@ -332,6 +333,24 @@ export interface ScheduleEventItem {
   createdBy: string;
   createdAt: string;
 }
+
+export interface ProposalEmptySlot {
+  slotNumber: number; // 1-based nomor urut SK / BAST (mis. 3 untuk "03")
+  item?: string;
+  previousKpmId?: string;
+  previousKpmName?: string;
+  vacatedAt: string;
+}
+
+export interface ProposalSlotState {
+  pinnedOrder: string[]; // daftar ID KPM terurut jika proposal menggunakan urutan slot tetap
+  emptySlots: ProposalEmptySlot[];
+  updatedAt: string;
+}
+
+export type ProposalSlotMap = Record<string, ProposalSlotState>;
+
+export type SlotRemovalMode = 'vacate' | 'collapse';
 
 export interface ReportTemplateConfig {
   enabled: boolean;

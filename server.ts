@@ -129,8 +129,19 @@ function makeConversationKey(a: string, b: string): string {
   return [a, b].sort().join('::');
 }
 
+const PRESENCE_STALE_MS = 90_000;
+
 function sanitizeUser(user: StoredUser): PublicUser {
   const { passwordHash: _passwordHash, passwordPlain: _passwordPlain, ...rest } = user;
+  if (!rest.presenceManual && rest.presenceStatus !== 'offline') {
+    const tsIso = rest.lastActiveAt || rest.updatedAt;
+    if (tsIso) {
+      const ts = new Date(tsIso).getTime();
+      if (Number.isFinite(ts) && Date.now() - ts > PRESENCE_STALE_MS) {
+        rest.presenceStatus = 'offline';
+      }
+    }
+  }
   return rest;
 }
 
@@ -656,6 +667,26 @@ async function startServer() {
           saveStore(store);
           broadcastUsers();
         }
+      }
+    }
+    res.json({ ok: true });
+  });
+
+  // REST: Beacon offline saat browser/WebView ditutup tanpa logout eksplisit
+  app.post('/api/presence/offline', (req: Request, res: Response) => {
+    const bodyToken =
+      req.body && typeof req.body === 'object' && 'token' in req.body
+        ? String((req.body as { token?: unknown }).token || '').trim()
+        : '';
+    const token = extractBearerToken(req) || bodyToken;
+    const session = token ? store.sessions[token] : undefined;
+    if (session) {
+      const user = store.users.find((u) => u.id === session.userId);
+      if (user && !user.presenceManual) {
+        user.presenceStatus = 'offline';
+        user.lastActiveAt = new Date().toISOString();
+        saveStore(store);
+        broadcastUsers();
       }
     }
     res.json({ ok: true });

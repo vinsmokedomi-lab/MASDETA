@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   Check,
   CheckSquare,
+  Database,
   Eye,
   Lock,
   Package,
@@ -13,6 +15,7 @@ import {
   Square,
   Trash2,
   User,
+  UserPlus,
   X,
 } from 'lucide-react';
 import { DTSEN_OPTION_ITEMS, INITIAL_WILAYAH_LIST, TAHUN_OPTIONS } from '../data/kpmOptions';
@@ -20,22 +23,28 @@ import {
   ItemBantuan,
   KpmRecord,
   ProposalRecord,
+  ProposalSlotMap,
+  SlotRemovalMode,
   ValidationStatus,
   WilayahKabKota,
 } from '../types/kpm';
 import {
-  formatNikDisplay,
+  buildMergedProposalSlots,
   getAbsenSeq,
   getItemHierarchyRank,
   getItemsForYear,
+  getKpmSlotNumberInProposal,
   getPrimaryKpmPhoto,
+  ProposalMergedSlotItem,
   resolveKpmDomicile,
+  resolveProposalSlotStateForGroup,
 } from '../utils/imageProcessor';
 import { useIsDesktopWeb } from '../utils/platform';
 import { DriveImage } from './DriveImage';
 import { FilterSelect, SegmentedTabs } from './FormControls';
 import { ProposalPickerModal } from './ProposalPickerModal';
 import { QrScannerLookupModal } from './QrScannerLookupModal';
+import { SlotHandlingConfirmModal } from './SlotHandlingConfirmModal';
 import { SwipeAction, SwipeableRow } from './SwipeableRow';
 
 type KpmSortKey = 'absen' | 'item' | 'rtrw' | 'pengelola' | 'pekerjaan' | 'kelurahan';
@@ -53,13 +62,34 @@ interface KpmListViewProps {
   onChangeItemFilter: (item: string) => void;
   proposalFilter?: string;
   onChangeProposalFilter?: (proposal: string) => void;
+  proposalSlotMap?: ProposalSlotMap;
   canUpdate?: boolean;
   canDelete?: boolean;
   isLoading?: boolean;
   onBack?: () => void;
   onCreateNew: () => void;
+  onCreateForEmptySlot?: (
+    proposalId: string,
+    proposalName: string,
+    tahun: string,
+    slotNumber: number,
+    item?: string
+  ) => void;
+  onMoveSlot?: (
+    proposalName: string,
+    tahun: string,
+    target: { kind: 'kpm'; kpmId: string } | { kind: 'empty'; slotNumber: number },
+    direction: 'up' | 'down'
+  ) => void;
+  onRemoveEmptySlot?: (proposalName: string, tahun: string, slotNumber: number) => void;
+  onFillEmptySlotFromDatabase?: (
+    kpmId: string,
+    proposalName: string,
+    tahun: string,
+    slotNumber: number
+  ) => void;
   onSelectRecord: (record: KpmRecord) => void;
-  onDeleteRecord: (id: string) => void;
+  onDeleteRecord: (id: string, slotHandling?: SlotRemovalMode) => void;
   onBulkUpdateKpms?: (
     ids: string[],
     patch: {
@@ -85,10 +115,15 @@ export function KpmListView({
   onChangeItemFilter,
   proposalFilter = 'all',
   onChangeProposalFilter,
+  proposalSlotMap = {},
   canUpdate = true,
   canDelete = true,
   isLoading = false,
   onCreateNew,
+  onCreateForEmptySlot,
+  onMoveSlot,
+  onRemoveEmptySlot,
+  onFillEmptySlotFromDatabase,
   onSelectRecord,
   onDeleteRecord,
   onBulkUpdateKpms,
@@ -110,6 +145,13 @@ export function KpmListView({
   const [bulkSheet, setBulkSheet] = useState<'none' | 'dtsen' | 'item'>('none');
   const [isBulkProposalPickerOpen, setIsBulkProposalPickerOpen] = useState(false);
   const [bulkProcessing, setBulkProcessing] = useState(false);
+  const [dbPickerTargetSlot, setDbPickerTargetSlot] = useState<{
+    proposalName: string;
+    tahun: string;
+    slotNumber: number;
+    item?: string;
+  } | null>(null);
+  const [dbPickerQuery, setDbPickerQuery] = useState('');
 
   useEffect(() => {
     setVisibleLimit(40);
@@ -210,12 +252,34 @@ export function KpmListView({
   }, [kelurahanScopedRecords]);
 
   const activeExtraFilterCount =
+    (proposalFilter !== 'all' ? 1 : 0) +
     (itemFilter !== 'all' ? 1 : 0) +
     (kelurahanFilter !== 'all' ? 1 : 0) +
     (rtRwFilter !== 'all' ? 1 : 0) +
     (pengelolaFilter !== 'all' ? 1 : 0) +
     (pekerjaanFilter !== 'all' ? 1 : 0) +
     (sortBy !== 'absen' ? 1 : 0);
+
+  const proposalFilterOptions = useMemo(() => {
+    return proposals
+      .filter((p) => selectedYear === 'all' || p.tahun === selectedYear)
+      .sort((a, b) => a.namaProposal.localeCompare(b.namaProposal, 'id'));
+  }, [proposals, selectedYear]);
+
+  const activeProposalRecord = useMemo(() => {
+    if (proposalFilter === 'all') return null;
+    return (
+      proposals.find(
+        (p) =>
+          p.namaProposal === proposalFilter &&
+          (selectedYear === 'all' || p.tahun === selectedYear)
+      ) ??
+      proposals.find((p) => p.namaProposal === proposalFilter) ??
+      null
+    );
+  }, [proposals, proposalFilter, selectedYear]);
+
+  const activeProposalLocked = activeProposalRecord?.status === 'locked';
 
   const handleKelurahanChange = (nextKelurahan: string) => {
     setKelurahanFilter(nextKelurahan);
@@ -352,6 +416,79 @@ export function KpmListView({
     [filteredRecords, proposals]
   );
 
+  const isSlotViewActive = Boolean(
+    activeProposalRecord &&
+      sortBy === 'absen' &&
+      (statusFilter === 'all' || statusFilter === 'accepted') &&
+      !query.trim() &&
+      itemFilter === 'all' &&
+      kelurahanFilter === 'all' &&
+      rtRwFilter === 'all' &&
+      pengelolaFilter === 'all' &&
+      pekerjaanFilter === 'all' &&
+      !bulkMode
+  );
+
+  const mergedSlots = useMemo<ProposalMergedSlotItem[]>(() => {
+    if (!isSlotViewActive || !activeProposalRecord) return [];
+    const { state } = resolveProposalSlotStateForGroup(
+      proposalSlotMap,
+      activeProposalRecord.id,
+      activeProposalRecord.namaProposal,
+      activeProposalRecord.tahun,
+      proposals
+    );
+    return buildMergedProposalSlots({
+      groupRecords: scopedRecords,
+      slotState: state,
+      proposals,
+      catalog: items,
+      wilayahList,
+    });
+  }, [isSlotViewActive, activeProposalRecord, proposalSlotMap, proposals, scopedRecords, items, wilayahList]);
+
+  const databaseCandidates = useMemo(() => {
+    if (!dbPickerTargetSlot) return [];
+    const q = dbPickerQuery.trim().toLowerCase();
+    return records
+      .filter((r) => r.validasi === 'pending' && !(r.proposal || '').trim())
+      .filter((r) => {
+        if (!q) return true;
+        const dom = resolveKpmDomicile(r, proposals, wilayahList);
+        return (
+          r.nama.toLowerCase().includes(q) ||
+          (r.nikKtp || '').includes(q) ||
+          (r.nikKk || '').includes(q) ||
+          (r.item || '').toLowerCase().includes(q) ||
+          (dom.kelurahan || '').toLowerCase().includes(q) ||
+          (dom.kecamatan || '').toLowerCase().includes(q) ||
+          (r.pengelola || '').toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => {
+        if (dbPickerTargetSlot.item) {
+          const aMatch = a.item === dbPickerTargetSlot.item ? 0 : 1;
+          const bMatch = b.item === dbPickerTargetSlot.item ? 0 : 1;
+          if (aMatch !== bMatch) return aMatch - bMatch;
+        }
+        return a.nama.localeCompare(b.nama, 'id');
+      });
+  }, [dbPickerTargetSlot, dbPickerQuery, records, proposals, wilayahList]);
+
+  const renderedEntries = useMemo<ProposalMergedSlotItem[]>(() => {
+    if (isSlotViewActive) return mergedSlots;
+    return filteredRecords.map((record) => ({
+      kind: 'kpm' as const,
+      slotNumber: getAbsenSeq(record.registerCode),
+      record,
+    }));
+  }, [isSlotViewActive, mergedSlots, filteredRecords]);
+
+  const emptySlotCountInProposal = useMemo(
+    () => mergedSlots.filter((entry) => entry.kind === 'empty').length,
+    [mergedSlots]
+  );
+
   const toggleSelectRecord = (id: string) => {
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
@@ -400,6 +537,7 @@ export function KpmListView({
   };
 
   const handleResetExtraFilters = () => {
+    onChangeProposalFilter?.('all');
     onChangeItemFilter('all');
     setSortBy('absen');
     setKelurahanFilter('all');
@@ -494,16 +632,30 @@ export function KpmListView({
           </div>
         )}
         {proposalFilter !== 'all' && onChangeProposalFilter && (
-          <div className="flex items-center justify-between gap-2 rounded-2xl border border-teal-200 bg-teal-50 px-3.5 py-2.5 text-xs text-teal-900">
-            <span className="truncate font-semibold">Proposal: {proposalFilter}</span>
-            <button
-              type="button"
-              onClick={() => onChangeProposalFilter('all')}
-              className="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg bg-white px-2 text-[11px] font-semibold text-teal-800 hover:bg-teal-100"
-            >
-              <X className="h-3 w-3" />
-              <span>Reset</span>
-            </button>
+          <div className="space-y-1.5 rounded-2xl border border-teal-200 bg-teal-50 px-3.5 py-2.5 text-xs text-teal-900">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0 flex items-center gap-2">
+                <span className="truncate font-semibold">Proposal: {proposalFilter}</span>
+                {emptySlotCountInProposal > 0 && (
+                  <span className="shrink-0 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800">
+                    {emptySlotCountInProposal} Baris Kosong
+                  </span>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => onChangeProposalFilter('all')}
+                className="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg bg-white px-2 text-[11px] font-semibold text-teal-800 hover:bg-teal-100"
+              >
+                <X className="h-3 w-3" />
+                <span>Reset</span>
+              </button>
+            </div>
+            {isSlotViewActive && canUpdate && !activeProposalLocked && (
+              <p className="text-[11px] text-teal-800/85">
+                Gunakan tombol panah ↑ / ↓ untuk mengatur urutan prioritas KPM. Jika KPM dikeluarkan, nomor urutnya dipertahankan sebagai Baris Kosong.
+              </p>
+            )}
           </div>
         )}
 
@@ -567,7 +719,22 @@ export function KpmListView({
 
           {showExtraFilters && (
             <div className={`rounded-2xl border border-slate-200 bg-white p-3 space-y-2.5 ${!isNativeApp ? 'md:p-4' : ''}`}>
-              <div className={!isNativeApp ? 'grid grid-cols-2 gap-2 md:grid-cols-6 md:gap-2.5' : 'grid grid-cols-2 gap-2'}>
+              <div className={!isNativeApp ? 'grid grid-cols-2 gap-2 md:grid-cols-7 md:gap-2.5' : 'grid grid-cols-2 gap-2'}>
+                {onChangeProposalFilter && (
+                  <FilterSelect
+                    ariaLabel="Filter proposal"
+                    value={proposalFilter}
+                    onChange={onChangeProposalFilter}
+                  >
+                    <option value="all">Semua Proposal</option>
+                    {proposalFilterOptions.map((prop) => (
+                      <option key={prop.id} value={prop.namaProposal}>
+                        {prop.namaProposal} ({prop.tahun})
+                      </option>
+                    ))}
+                  </FilterSelect>
+                )}
+
                 <FilterSelect
                   ariaLabel="Filter item bantuan"
                   value={itemFilter}
@@ -706,7 +873,7 @@ export function KpmListView({
               </div>
             ))}
           </div>
-        ) : filteredRecords.length === 0 ? (
+        ) : renderedEntries.length === 0 ? (
           <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
             <p className="text-sm font-semibold text-slate-900">Tidak ada data calon KPM ditemukan</p>
             <p className="mt-1 text-xs text-slate-500">
@@ -724,7 +891,6 @@ export function KpmListView({
                     <tr className="border-b border-slate-200 bg-slate-50/90 text-[11px] font-bold uppercase tracking-wider text-slate-500">
                       <th className="w-12 px-3 py-3 text-center">No</th>
                       <th className="px-3 py-3">Calon KPM</th>
-                      <th className="px-3 py-3">NIK KTP / KK</th>
                       <th className="px-3 py-3">Proposal &amp; Wilayah</th>
                       <th className="px-3 py-3">Item &amp; Desil</th>
                       <th className="px-3 py-3">Pengelola</th>
@@ -733,10 +899,156 @@ export function KpmListView({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {filteredRecords.slice(0, visibleLimit).map((rec) => {
+                    {renderedEntries.slice(0, visibleLimit).map((entry, entryIdx) => {
+                      const canMoveUp = entryIdx > 0;
+                      const canMoveDown = entryIdx < renderedEntries.length - 1;
+
+                      if (entry.kind === 'empty') {
+                        const slotLabel = String(entry.slotNumber).padStart(2, '0');
+                        return (
+                          <tr
+                            key={`dt-empty-${entry.slotNumber}`}
+                            className="border-l-4 border-l-amber-400 bg-amber-50/50"
+                          >
+                            <td className="px-3 py-3 text-center font-mono text-[11px] font-bold text-amber-800 tabular-nums">
+                              {slotLabel}
+                            </td>
+                            <td className="px-3 py-3" colSpan={2}>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="rounded-md border border-dashed border-amber-400 bg-white px-2 py-0.5 text-[11px] font-bold text-amber-800">
+                                  Baris Kosong
+                                </span>
+                                <span className="text-xs font-medium text-amber-900">
+                                  {entry.emptySlot.previousKpmName
+                                    ? `Slot bekas ${entry.emptySlot.previousKpmName}`
+                                    : 'Slot dicadangkan untuk pengganti SK / BAST'}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="px-3 py-3 whitespace-nowrap">
+                              {entry.emptySlot.item ? (
+                                <span className="inline-flex rounded-md border border-amber-200 bg-white px-2 py-0.5 text-[11px] font-bold text-amber-800">
+                                  {entry.emptySlot.item}
+                                </span>
+                              ) : (
+                                <span className="text-[11px] text-slate-400">-</span>
+                              )}
+                            </td>
+                            <td className="px-3 py-3 text-[11px] text-slate-400">-</td>
+                            <td className="px-3 py-3 whitespace-nowrap">
+                              <span className="inline-flex rounded-md bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                                Kosong
+                              </span>
+                            </td>
+                            <td className="px-3 py-3 text-right whitespace-nowrap">
+                              {activeProposalRecord && !activeProposalLocked && canUpdate ? (
+                                <div className="inline-flex items-center gap-1">
+                                  {onMoveSlot && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        disabled={!canMoveUp}
+                                        onClick={() =>
+                                          onMoveSlot(
+                                            activeProposalRecord.namaProposal,
+                                            activeProposalRecord.tahun,
+                                            { kind: 'empty', slotNumber: entry.slotNumber },
+                                            'up'
+                                          )
+                                        }
+                                        title="Naikkan urutan slot"
+                                        aria-label="Naikkan urutan slot"
+                                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-35"
+                                      >
+                                        <ArrowUp className="h-3.5 w-3.5" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={!canMoveDown}
+                                        onClick={() =>
+                                          onMoveSlot(
+                                            activeProposalRecord.namaProposal,
+                                            activeProposalRecord.tahun,
+                                            { kind: 'empty', slotNumber: entry.slotNumber },
+                                            'down'
+                                          )
+                                        }
+                                        title="Turunkan urutan slot"
+                                        aria-label="Turunkan urutan slot"
+                                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-35"
+                                      >
+                                        <ArrowDown className="h-3.5 w-3.5" />
+                                      </button>
+                                    </>
+                                  )}
+                                  {onCreateForEmptySlot && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        onCreateForEmptySlot(
+                                          activeProposalRecord.id,
+                                          activeProposalRecord.namaProposal,
+                                          activeProposalRecord.tahun,
+                                          entry.slotNumber,
+                                          entry.emptySlot.item
+                                        )
+                                      }
+                                      className="inline-flex h-8 items-center gap-1 rounded-lg bg-teal-700 px-2.5 text-[11px] font-semibold text-white hover:bg-teal-800"
+                                    >
+                                      <UserPlus className="h-3.5 w-3.5" />
+                                      <span>Daftar Baru</span>
+                                    </button>
+                                  )}
+                                  {onFillEmptySlotFromDatabase && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setDbPickerQuery('');
+                                        setDbPickerTargetSlot({
+                                          proposalName: activeProposalRecord.namaProposal,
+                                          tahun: activeProposalRecord.tahun,
+                                          slotNumber: entry.slotNumber,
+                                          item: entry.emptySlot.item,
+                                        });
+                                      }}
+                                      className="inline-flex h-8 items-center gap-1 rounded-lg border border-teal-700 bg-white px-2.5 text-[11px] font-semibold text-teal-800 hover:bg-teal-50"
+                                    >
+                                      <Database className="h-3.5 w-3.5" />
+                                      <span>Dari Database</span>
+                                    </button>
+                                  )}
+                                  {onRemoveEmptySlot && canDelete && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        onRemoveEmptySlot(
+                                          activeProposalRecord.namaProposal,
+                                          activeProposalRecord.tahun,
+                                          entry.slotNumber
+                                        )
+                                      }
+                                      title="Hapus Baris Kosong (geser urutan di bawahnya naik)"
+                                      aria-label="Hapus Baris Kosong"
+                                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="text-[11px] text-slate-400">Terkunci</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      }
+
+                      const rec = entry.record;
                       const thumb = getPrimaryKpmPhoto(rec.documents);
                       const locked = isRecordProposalLocked(rec);
-                      const absenSeq = getAbsenSeq(rec.registerCode);
+                      const absenSeq = isSlotViewActive
+                        ? entry.slotNumber
+                        : getAbsenSeq(rec.registerCode);
                       const absenLabel =
                         absenSeq < 999999 ? String(absenSeq).padStart(2, '0') : '--';
                       const desilNumeric =
@@ -812,12 +1124,6 @@ export function KpmListView({
                               </div>
                             </div>
                           </td>
-                          <td className="px-3 py-2.5 font-mono text-[11px] text-slate-700 tabular-nums">
-                            <div>{formatNikDisplay(rec.nikKtp) || '-'}</div>
-                            <div className="text-slate-400">
-                              KK {formatNikDisplay(rec.nikKk) || '-'}
-                            </div>
-                          </td>
                           <td className="px-3 py-2.5 max-w-[220px]">
                             <p className="truncate font-medium text-slate-800">{containerTitle}</p>
                             <p className="truncate text-[11px] text-slate-500 tabular-nums">
@@ -864,6 +1170,48 @@ export function KpmListView({
                             onClick={(e) => e.stopPropagation()}
                           >
                             <div className="inline-flex items-center gap-1">
+                              {isSlotViewActive &&
+                                activeProposalRecord &&
+                                canUpdate &&
+                                !locked &&
+                                onMoveSlot && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      disabled={!canMoveUp}
+                                      onClick={() =>
+                                        onMoveSlot(
+                                          activeProposalRecord.namaProposal,
+                                          activeProposalRecord.tahun,
+                                          { kind: 'kpm', kpmId: rec.id },
+                                          'up'
+                                        )
+                                      }
+                                      title="Naikkan urutan KPM"
+                                      aria-label="Naikkan urutan KPM"
+                                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
+                                    >
+                                      <ArrowUp className="h-3.5 w-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={!canMoveDown}
+                                      onClick={() =>
+                                        onMoveSlot(
+                                          activeProposalRecord.namaProposal,
+                                          activeProposalRecord.tahun,
+                                          { kind: 'kpm', kpmId: rec.id },
+                                          'down'
+                                        )
+                                      }
+                                      title="Turunkan urutan KPM"
+                                      aria-label="Turunkan urutan KPM"
+                                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
+                                    >
+                                      <ArrowDown className="h-3.5 w-3.5" />
+                                    </button>
+                                  </>
+                                )}
                               <button
                                 type="button"
                                 onClick={() => onSelectRecord(rec)}
@@ -902,14 +1250,14 @@ export function KpmListView({
                   </tbody>
                 </table>
               </div>
-              {filteredRecords.length > visibleLimit && (
+              {renderedEntries.length > visibleLimit && (
                 <div className="border-t border-slate-100 bg-slate-50/70 p-3">
                   <button
                     type="button"
                     onClick={() => setVisibleLimit((prev) => prev + 40)}
                     className="inline-flex min-h-[40px] w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-50"
                   >
-                    Muat Lebih Banyak ({filteredRecords.length - visibleLimit} tersisa)
+                    Muat Lebih Banyak ({renderedEntries.length - visibleLimit} tersisa)
                   </button>
                 </div>
               )}
@@ -918,10 +1266,146 @@ export function KpmListView({
 
           {/* Mobile & Native APK Swipeable Cards */}
           <div className={`overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100 ${!isNativeApp ? 'md:hidden' : ''}`}>
-            {filteredRecords.slice(0, visibleLimit).map((rec) => {
+            {renderedEntries.slice(0, visibleLimit).map((entry, entryIdx) => {
+              const canMoveUp = entryIdx > 0;
+              const canMoveDown = entryIdx < renderedEntries.length - 1;
+
+              if (entry.kind === 'empty') {
+                const slotLabel = String(entry.slotNumber).padStart(2, '0');
+                return (
+                  <div
+                    key={`mob-empty-${entry.slotNumber}`}
+                    className="border-l-4 border-l-amber-400 bg-amber-50/50 px-3.5 py-3 space-y-2.5"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-dashed border-amber-400 bg-white font-mono text-xs font-bold text-amber-800 tabular-nums">
+                          {slotLabel}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-[13px] font-bold text-amber-900">
+                              Baris Kosong
+                            </span>
+                            {entry.emptySlot.item && (
+                              <span className="rounded bg-white px-1.5 py-0.5 text-[10px] font-bold text-amber-800 border border-amber-200">
+                                {entry.emptySlot.item}
+                              </span>
+                            )}
+                          </div>
+                          <p className="truncate text-[11px] text-amber-800/85">
+                            {entry.emptySlot.previousKpmName
+                              ? `Slot bekas: ${entry.emptySlot.previousKpmName}`
+                              : 'Nomor urut SK / BAST dipertahankan'}
+                          </p>
+                        </div>
+                      </div>
+
+                      {activeProposalRecord && !activeProposalLocked && canUpdate && onMoveSlot && (
+                        <div className="flex shrink-0 items-center gap-1">
+                          <button
+                            type="button"
+                            disabled={!canMoveUp}
+                            onClick={() =>
+                              onMoveSlot(
+                                activeProposalRecord.namaProposal,
+                                activeProposalRecord.tahun,
+                                { kind: 'empty', slotNumber: entry.slotNumber },
+                                'up'
+                              )
+                            }
+                            aria-label="Naikkan slot"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 disabled:opacity-35"
+                          >
+                            <ArrowUp className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!canMoveDown}
+                            onClick={() =>
+                              onMoveSlot(
+                                activeProposalRecord.namaProposal,
+                                activeProposalRecord.tahun,
+                                { kind: 'empty', slotNumber: entry.slotNumber },
+                                'down'
+                              )
+                            }
+                            aria-label="Turunkan slot"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 disabled:opacity-35"
+                          >
+                            <ArrowDown className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {activeProposalRecord && !activeProposalLocked && canUpdate && (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {onCreateForEmptySlot && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onCreateForEmptySlot(
+                                activeProposalRecord.id,
+                                activeProposalRecord.namaProposal,
+                                activeProposalRecord.tahun,
+                                entry.slotNumber,
+                                entry.emptySlot.item
+                              )
+                            }
+                            className="inline-flex min-h-[34px] flex-1 items-center justify-center gap-1 rounded-xl bg-teal-700 px-2.5 text-[11px] font-semibold text-white hover:bg-teal-800"
+                          >
+                            <UserPlus className="h-3.5 w-3.5" />
+                            <span>Daftar Baru</span>
+                          </button>
+                        )}
+                        {onFillEmptySlotFromDatabase && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDbPickerQuery('');
+                              setDbPickerTargetSlot({
+                                proposalName: activeProposalRecord.namaProposal,
+                                tahun: activeProposalRecord.tahun,
+                                slotNumber: entry.slotNumber,
+                                item: entry.emptySlot.item,
+                              });
+                            }}
+                            className="inline-flex min-h-[34px] flex-1 items-center justify-center gap-1 rounded-xl border border-teal-700 bg-white px-2.5 text-[11px] font-semibold text-teal-800 hover:bg-teal-50"
+                          >
+                            <Database className="h-3.5 w-3.5" />
+                            <span>Dari Database</span>
+                          </button>
+                        )}
+                        {onRemoveEmptySlot && canDelete && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onRemoveEmptySlot(
+                                activeProposalRecord.namaProposal,
+                                activeProposalRecord.tahun,
+                                entry.slotNumber
+                              )
+                            }
+                            aria-label="Hapus Baris Kosong"
+                            className="inline-flex min-h-[34px] items-center justify-center gap-1 rounded-xl border border-rose-200 bg-rose-50 px-2.5 text-[11px] font-semibold text-rose-700 hover:bg-rose-100"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            <span>Hapus</span>
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              const rec = entry.record;
               const thumb = getPrimaryKpmPhoto(rec.documents);
               const locked = isRecordProposalLocked(rec);
-              const absenSeq = getAbsenSeq(rec.registerCode);
+              const absenSeq = isSlotViewActive
+                ? entry.slotNumber
+                : getAbsenSeq(rec.registerCode);
               const absenLabel =
                 absenSeq < 999999 ? String(absenSeq).padStart(2, '0') : '--';
               const desilNumeric = rec.dtsen && /^\d/.test(rec.dtsen.trim())
@@ -958,6 +1442,14 @@ export function KpmListView({
                   : [];
 
               const isSelected = selectedIds.includes(rec.id);
+              const showMobileMoveArrows = Boolean(
+                isSlotViewActive &&
+                  activeProposalRecord &&
+                  canUpdate &&
+                  !locked &&
+                  !bulkMode &&
+                  onMoveSlot
+              );
 
               return (
                 <SwipeableRow
@@ -968,106 +1460,149 @@ export function KpmListView({
                   onClose={() => setOpenSwipeId(null)}
                   actions={bulkMode ? [] : swipeActions}
                 >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (bulkMode) {
-                        if (locked) {
-                          setLockedNoticeRecord(rec);
-                        } else {
-                          toggleSelectRecord(rec.id);
-                        }
-                        return;
-                      }
-                      onSelectRecord(rec);
-                    }}
-                    className={`flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors ${
+                  <div
+                    className={`flex w-full items-center transition-colors ${
                       isSelected
                         ? 'bg-teal-50/70'
                         : 'hover:bg-slate-50 active:bg-slate-100/70'
                     }`}
                   >
-                    {bulkMode ? (
-                      <div className="flex w-5 shrink-0 items-center justify-center">
-                        {locked ? (
-                          <Lock className="h-3.5 w-3.5 text-slate-400" />
-                        ) : isSelected ? (
-                          <CheckSquare className="h-4.5 w-4.5 text-teal-700" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (bulkMode) {
+                          if (locked) {
+                            setLockedNoticeRecord(rec);
+                          } else {
+                            toggleSelectRecord(rec.id);
+                          }
+                          return;
+                        }
+                        onSelectRecord(rec);
+                      }}
+                      className={`flex min-w-0 flex-1 items-center gap-2.5 pl-3.5 py-2.5 text-left ${
+                        showMobileMoveArrows ? 'pr-1.5' : 'pr-3.5'
+                      }`}
+                    >
+                      {bulkMode ? (
+                        <div className="flex w-5 shrink-0 items-center justify-center">
+                          {locked ? (
+                            <Lock className="h-3.5 w-3.5 text-slate-400" />
+                          ) : isSelected ? (
+                            <CheckSquare className="h-4.5 w-4.5 text-teal-700" />
+                          ) : (
+                            <Square className="h-4.5 w-4.5 text-slate-300" />
+                          )}
+                        </div>
+                      ) : (
+                        <div className="flex w-5 shrink-0 items-center justify-center">
+                          <span className="font-mono text-[11px] font-bold text-slate-500 tabular-nums">
+                            {absenLabel}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Foto Thumbnail Fixed Frame (48x48) */}
+                      <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
+                        {thumb ? (
+                          <DriveImage
+                            doc={thumb}
+                            alt={rec.nama}
+                            className="absolute inset-0 h-full w-full object-cover"
+                          />
                         ) : (
-                          <Square className="h-4.5 w-4.5 text-slate-300" />
+                          <User className="h-5 w-5" />
                         )}
                       </div>
-                    ) : (
-                      <div className="flex w-5 shrink-0 items-center justify-center">
-                        <span className="font-mono text-[11px] font-bold text-slate-500 tabular-nums">
-                          {absenLabel}
-                        </span>
-                      </div>
-                    )}
 
-                    {/* Foto Thumbnail Fixed Frame (48x48) */}
-                    <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
-                      {thumb ? (
-                        <DriveImage
-                          doc={thumb}
-                          alt={rec.nama}
-                          className="absolute inset-0 h-full w-full object-cover"
-                        />
-                      ) : (
-                        <User className="h-5 w-5" />
-                      )}
-                    </div>
+                      {/* Konten Utama */}
+                      <div className="min-w-0 flex-1 flex flex-col justify-center">
+                        {/* Baris 1: Nama + Item & Angka Desil */}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex min-w-0 items-center gap-1">
+                            <span className="truncate text-[13px] font-medium leading-tight text-slate-900">
+                              {rec.nama}
+                            </span>
+                            {locked && <Lock className="h-3 w-3 shrink-0 text-rose-600" />}
+                          </div>
 
-                    {/* Konten Utama */}
-                    <div className="min-w-0 flex-1 flex flex-col justify-center">
-                      {/* Baris 1: Nama + Item & Angka Desil */}
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex min-w-0 items-center gap-1">
-                          <span className="truncate text-[13px] font-medium leading-tight text-slate-900">
-                            {rec.nama}
+                          <span
+                            className={`shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-bold leading-none tabular-nums ${
+                              rec.item?.trim()
+                                ? 'bg-slate-100 text-slate-700'
+                                : 'bg-amber-50 text-amber-800'
+                            }`}
+                          >
+                            {rec.item?.trim() || 'Tanpa Item'}
+                            {desilNumeric ? ` · D${desilNumeric}` : ''}
                           </span>
-                          {locked && <Lock className="h-3 w-3 shrink-0 text-rose-600" />}
                         </div>
 
-                        <span
-                          className={`shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-bold leading-none tabular-nums ${
-                            rec.item?.trim()
-                              ? 'bg-slate-100 text-slate-700'
-                              : 'bg-amber-50 text-amber-800'
-                          }`}
+                        {/* Baris 2: Proposal / Status Standalone & Tahun */}
+                        <div className="mt-1 flex items-center justify-between gap-2 text-[11px] leading-tight">
+                          <span className="truncate font-medium text-slate-600">
+                            {containerTitle}
+                          </span>
+                          <span className="shrink-0 font-semibold text-slate-400 tabular-nums">
+                            {rec.tahun || 'Tanpa Tahun'}
+                          </span>
+                        </div>
+
+                        {/* Baris 3: Kelurahan / Pengelola */}
+                        <p className="mt-0.5 truncate text-[11px] leading-tight text-slate-500">
+                          {metaLine || '-'}
+                        </p>
+                      </div>
+                    </button>
+
+                    {showMobileMoveArrows && activeProposalRecord && onMoveSlot && (
+                      <div className="flex shrink-0 flex-col items-center justify-center gap-1 py-1.5 pr-2.5">
+                        <button
+                          type="button"
+                          disabled={!canMoveUp}
+                          onClick={() =>
+                            onMoveSlot(
+                              activeProposalRecord.namaProposal,
+                              activeProposalRecord.tahun,
+                              { kind: 'kpm', kpmId: rec.id },
+                              'up'
+                            )
+                          }
+                          aria-label="Naikkan urutan KPM"
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 disabled:opacity-30"
                         >
-                          {rec.item?.trim() || 'Tanpa Item'}
-                          {desilNumeric ? ` · D${desilNumeric}` : ''}
-                        </span>
+                          <ArrowUp className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!canMoveDown}
+                          onClick={() =>
+                            onMoveSlot(
+                              activeProposalRecord.namaProposal,
+                              activeProposalRecord.tahun,
+                              { kind: 'kpm', kpmId: rec.id },
+                              'down'
+                            )
+                          }
+                          aria-label="Turunkan urutan KPM"
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 disabled:opacity-30"
+                        >
+                          <ArrowDown className="h-3.5 w-3.5" />
+                        </button>
                       </div>
-
-                      {/* Baris 2: Proposal / Status Standalone & Tahun */}
-                      <div className="mt-1 flex items-center justify-between gap-2 text-[11px] leading-tight">
-                        <span className="truncate font-medium text-slate-600">
-                          {containerTitle}
-                        </span>
-                        <span className="shrink-0 font-semibold text-slate-400 tabular-nums">
-                          {rec.tahun || 'Tanpa Tahun'}
-                        </span>
-                      </div>
-
-                      {/* Baris 3: Kelurahan / Pengelola */}
-                      <p className="mt-0.5 truncate text-[11px] leading-tight text-slate-500">
-                        {metaLine || (rec.nikKtp ? `NIK ···${rec.nikKtp.slice(-4)}` : '-')}
-                      </p>
-                    </div>
-                  </button>
+                    )}
+                  </div>
                 </SwipeableRow>
               );
             })}
-            {filteredRecords.length > visibleLimit && (
+            {renderedEntries.length > visibleLimit && (
               <div className="bg-slate-50/70 p-3">
                 <button
                   type="button"
                   onClick={() => setVisibleLimit((prev) => prev + 40)}
                   className="inline-flex min-h-[42px] w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-50"
                 >
-                  Muat Lebih Banyak ({filteredRecords.length - visibleLimit} tersisa)
+                  Muat Lebih Banyak ({renderedEntries.length - visibleLimit} tersisa)
                 </button>
               </div>
             )}
@@ -1076,60 +1611,38 @@ export function KpmListView({
         )}
       </div>
 
-      {/* Delete Confirmation Modal */}
-      {pendingDeleteRecord && (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 backdrop-blur-xs sm:items-center sm:p-4"
-          onClick={() => setPendingDeleteRecord(null)}
-          role="dialog"
-          aria-modal="true"
-          aria-label="Konfirmasi Hapus KPM"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-sm rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl space-y-4"
-          >
-            <div className="mx-auto h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
-            <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
-                <AlertTriangle className="h-5 w-5" />
-              </div>
-              <div className="min-w-0">
-                <h2 className="text-base font-bold text-slate-900">Hapus Calon KPM?</h2>
-                <p className="mt-1 text-xs leading-relaxed text-slate-600">
-                  Apakah Anda yakin ingin menghapus data calon KPM{' '}
-                  <strong>&ldquo;{pendingDeleteRecord.nama}&rdquo;</strong> (
-                  {pendingDeleteRecord.registerCode})?
-                </p>
-                <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">
-                  Tindakan ini akan menghapus data KPM beserta dokumen foto terkait secara
-                  permanen.
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2.5">
-              <button
-                type="button"
-                onClick={() => setPendingDeleteRecord(null)}
-                className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const id = pendingDeleteRecord.id;
-                  setPendingDeleteRecord(null);
-                  onDeleteRecord(id);
-                }}
-                className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-rose-600 px-4 text-sm font-semibold text-white hover:bg-rose-700"
-              >
-                Ya, Hapus
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 2-Step Delete Slot Handling & Confirmation Modal */}
+      <SlotHandlingConfirmModal
+        isOpen={Boolean(pendingDeleteRecord)}
+        actionType="delete"
+        kpmName={pendingDeleteRecord?.nama || ''}
+        registerCode={pendingDeleteRecord?.registerCode}
+        originProposalName={pendingDeleteRecord?.proposal}
+        originSlotNumber={
+          pendingDeleteRecord
+            ? getKpmSlotNumberInProposal(
+                pendingDeleteRecord,
+                records,
+                proposals,
+                items,
+                wilayahList,
+                proposalSlotMap
+              )
+            : null
+        }
+        requiresSlotChoice={Boolean(
+          pendingDeleteRecord &&
+            pendingDeleteRecord.validasi === 'accepted' &&
+            pendingDeleteRecord.proposal?.trim()
+        )}
+        onCancel={() => setPendingDeleteRecord(null)}
+        onConfirm={(slotHandling) => {
+          if (!pendingDeleteRecord) return;
+          const id = pendingDeleteRecord.id;
+          setPendingDeleteRecord(null);
+          onDeleteRecord(id, slotHandling);
+        }}
+      />
 
       {/* Locked KPM Notice Modal */}
       {lockedNoticeRecord && (
@@ -1338,6 +1851,106 @@ export function KpmListView({
         onClose={() => setIsQrModalOpen(false)}
         onSelectRecord={onSelectRecord}
       />
+
+      {/* Database KPM Picker Modal for Empty Slot */}
+      {dbPickerTargetSlot && onFillEmptySlotFromDatabase && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/55 backdrop-blur-xs sm:items-center sm:p-4"
+          onClick={() => setDbPickerTargetSlot(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Pilih Calon KPM dari Database"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-lg rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl space-y-3.5"
+          >
+            <div className="mx-auto h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <h2 className="text-base font-bold text-slate-900">
+                  Isi Baris Kosong #{String(dbPickerTargetSlot.slotNumber).padStart(2, '0')} dari Database
+                </h2>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  Pilih calon KPM berstatus Menunggu di {dbPickerTargetSlot.proposalName}
+                  {dbPickerTargetSlot.item ? ` · Item dicadangkan: ${dbPickerTargetSlot.item}` : ''}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDbPickerTargetSlot(null)}
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-400 hover:bg-slate-100"
+                aria-label="Tutup"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="relative">
+              <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                type="search"
+                autoFocus
+                value={dbPickerQuery}
+                onChange={(e) => setDbPickerQuery(e.target.value)}
+                placeholder="Cari nama, NIK, item, kelurahan..."
+                className="min-h-[42px] w-full rounded-xl border border-slate-200 bg-slate-50 pr-3.5 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:bg-white focus:outline-none"
+              />
+            </div>
+
+            <div className="max-h-72 divide-y divide-slate-100 overflow-y-auto rounded-2xl border border-slate-200">
+              {databaseCandidates.length === 0 ? (
+                <p className="px-4 py-8 text-center text-xs text-slate-500">
+                  Tidak ada calon KPM tersedia di Database KPM.
+                </p>
+              ) : (
+                databaseCandidates.slice(0, 50).map((cand) => {
+                  const dom = resolveKpmDomicile(cand, proposals, wilayahList);
+                  const isSameItem =
+                    Boolean(dbPickerTargetSlot.item) && cand.item === dbPickerTargetSlot.item;
+                  return (
+                    <button
+                      key={cand.id}
+                      type="button"
+                      onClick={() => {
+                        onFillEmptySlotFromDatabase(
+                          cand.id,
+                          dbPickerTargetSlot.proposalName,
+                          dbPickerTargetSlot.tahun,
+                          dbPickerTargetSlot.slotNumber
+                        );
+                        setDbPickerTargetSlot(null);
+                      }}
+                      className="flex w-full items-center justify-between gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-teal-50/70"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="truncate text-sm font-semibold text-slate-900">
+                            {cand.nama}
+                          </span>
+                          {isSameItem && (
+                            <span className="shrink-0 rounded bg-teal-100 px-1.5 py-0.5 text-[10px] font-bold text-teal-800">
+                              Item Cocok
+                            </span>
+                          )}
+                        </div>
+                        <p className="truncate text-[11px] text-slate-500">
+                          {cand.item || 'Tanpa Item'}
+                          {dom.kelurahan ? ` · ${dom.kelurahan}` : ''}
+                          {cand.pengelola ? ` · ${cand.pengelola}` : ''}
+                        </p>
+                      </div>
+                      <span className="shrink-0 rounded-lg bg-teal-700 px-2.5 py-1 text-[11px] font-semibold text-white">
+                        Pilih
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Bulk Accept Target Proposal Picker Modal */}
       <ProposalPickerModal

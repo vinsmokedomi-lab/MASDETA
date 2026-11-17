@@ -36,6 +36,7 @@ import { DriveImage } from './DriveImage';
 import { ProposalPickerModal } from './ProposalPickerModal';
 import { KpmQrCardModal } from './QrScannerLookupModal';
 import { SignaturePadModal } from './SignaturePadModal';
+import { SlotHandlingConfirmModal } from './SlotHandlingConfirmModal';
 import { DTSEN_OPTION_ITEMS, INITIAL_WILAYAH_LIST } from '../data/kpmOptions';
 import {
   InternalUser,
@@ -45,9 +46,11 @@ import {
   KpmDocuments,
   KpmRecord,
   ProposalRecord,
+  ProposalSlotMap,
   ReportTemplateConfig,
   SharedKpmCard,
   SingleDocumentKey,
+  SlotRemovalMode,
   ValidationStatus,
   WilayahKabKota,
 } from '../types/kpm';
@@ -58,6 +61,7 @@ import {
   formatWhatsAppUrl,
   getDocumentDirectUrl,
   getDocumentThumbnailUrl,
+  getKpmSlotNumberInProposal,
   getKpmSubItemStatusList,
   getPrimaryKpmPhoto,
   removeDocumentFromDrive,
@@ -74,6 +78,7 @@ interface KpmDetailViewProps {
   allRecords: KpmRecord[];
   proposals: ProposalRecord[];
   wilayahList?: WilayahKabKota[];
+  proposalSlotMap?: ProposalSlotMap;
   items: ItemBantuan[];
   auditLogs: KpmAuditLogEntry[];
   currentUserId: string;
@@ -83,8 +88,13 @@ interface KpmDetailViewProps {
   canDelete?: boolean;
   onBack: () => void;
   onEditRecord: (record: KpmRecord) => void;
-  onDeleteRecord: (id: string) => void;
-  onUpdateStatus: (id: string, status: ValidationStatus, targetProposalId?: string) => void;
+  onDeleteRecord: (id: string, slotHandling?: SlotRemovalMode) => void;
+  onUpdateStatus: (
+    id: string,
+    status: ValidationStatus,
+    targetProposalId?: string,
+    slotHandling?: SlotRemovalMode
+  ) => void;
   onToggleSubItem: (
     kpmId: string,
     subItemKey: string,
@@ -120,6 +130,7 @@ export function KpmDetailView({
   allRecords,
   proposals,
   wilayahList = INITIAL_WILAYAH_LIST,
+  proposalSlotMap = {},
   items,
   auditLogs,
   currentUserId,
@@ -232,6 +243,19 @@ export function KpmDetailView({
   const displayTahun = record.tahun?.trim() || 'Tanpa Tahun';
 
   const isProposalLocked = !isStandalone && matchingProposal?.status === 'locked';
+
+  const currentSlotNumber = useMemo(
+    () =>
+      getKpmSlotNumberInProposal(
+        record,
+        allRecords,
+        proposals,
+        items,
+        wilayahList,
+        proposalSlotMap
+      ),
+    [record, allRecords, proposals, items, wilayahList, proposalSlotMap]
+  );
 
   const handleClickStatus = (nextStatus: ValidationStatus) => {
     if (isProposalLocked || !canUpdate || nextStatus === record.validasi) return;
@@ -1932,54 +1956,21 @@ export function KpmDetailView({
         </div>
       )}
 
-      {/* Confirmation Modal for Deleting KPM Record (Triggered safely from Top Header) */}
-      {confirmDelete && canDelete && !isProposalLocked && (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-4 backdrop-blur-xs sm:items-center"
-          onClick={() => setConfirmDelete(false)}
-          role="dialog"
-          aria-modal="true"
-          aria-label="Konfirmasi Hapus Data KPM"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-sm space-y-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-xl"
-          >
-            <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-100 text-rose-700">
-                <Trash2 className="h-5 w-5" />
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-slate-900">Hapus Data KPM?</h3>
-                <p className="mt-1 text-xs leading-relaxed text-slate-600">
-                  Data calon KPM <strong>{record.nama}</strong> ({record.registerCode}) akan
-                  dihapus permanen dari daftar.
-                </p>
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setConfirmDelete(false)}
-                className="min-h-[42px] flex-1 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setConfirmDelete(false);
-                  onDeleteRecord(record.id);
-                }}
-                className="inline-flex min-h-[42px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-rose-600 text-xs font-semibold text-white hover:bg-rose-700"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-                <span>Ya, Hapus Data</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 2-Step Confirmation Modal for Deleting KPM Record */}
+      <SlotHandlingConfirmModal
+        isOpen={Boolean(confirmDelete && canDelete && !isProposalLocked)}
+        actionType="delete"
+        kpmName={record.nama}
+        registerCode={record.registerCode}
+        originProposalName={record.proposal}
+        originSlotNumber={currentSlotNumber}
+        requiresSlotChoice={Boolean(!isStandalone && record.validasi === 'accepted' && record.proposal?.trim())}
+        onCancel={() => setConfirmDelete(false)}
+        onConfirm={(slotHandling) => {
+          setConfirmDelete(false);
+          onDeleteRecord(record.id, slotHandling);
+        }}
+      />
 
       {/* QR Code Verification Card Modal */}
       <KpmQrCardModal
@@ -2023,76 +2014,26 @@ export function KpmDetailView({
         }}
       />
 
-      {/* Confirmation Modal when detaching KPM from an active proposal */}
-      {pendingStatusConfirm && (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-4 backdrop-blur-xs sm:items-center"
-          onClick={() => setPendingStatusConfirm(null)}
-          role="dialog"
-          aria-modal="true"
-          aria-label="Konfirmasi Pindah ke Standalone"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-sm space-y-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-xl"
-          >
-            <div className="flex items-start gap-3">
-              <div
-                className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
-                  pendingStatusConfirm.targetStatus === 'rejected'
-                    ? 'bg-rose-100 text-rose-700'
-                    : 'bg-amber-100 text-amber-700'
-                }`}
-              >
-                {pendingStatusConfirm.targetStatus === 'rejected' ? (
-                  <Archive className="h-5 w-5" />
-                ) : (
-                  <Database className="h-5 w-5" />
-                )}
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-slate-900">
-                  {pendingStatusConfirm.targetStatus === 'rejected'
-                    ? 'Pindahkan ke Arsip Berkas Ditolak?'
-                    : 'Pindahkan ke Database KPM?'}
-                </h3>
-                <p className="mt-1 text-xs leading-relaxed text-slate-600">
-                  Mengubah status <strong>{record.nama}</strong> menjadi{' '}
-                  <strong>
-                    {pendingStatusConfirm.targetStatus === 'rejected' ? 'Ditolak' : 'Menunggu'}
-                  </strong>{' '}
-                  akan melepaskan keterkaitan dari proposal{' '}
-                  <strong>{record.proposal}</strong>. Data domisili tetap dipertahankan.
-                </p>
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setPendingStatusConfirm(null)}
-                className="min-h-[42px] flex-1 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const nextSt = pendingStatusConfirm.targetStatus;
-                  setPendingStatusConfirm(null);
-                  onUpdateStatus(record.id, nextSt);
-                }}
-                className={`min-h-[42px] flex-1 rounded-xl text-xs font-semibold text-white ${
-                  pendingStatusConfirm.targetStatus === 'rejected'
-                    ? 'bg-rose-600 hover:bg-rose-700'
-                    : 'bg-amber-600 hover:bg-amber-700'
-                }`}
-              >
-                Ya, Pindahkan
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 2-Step Confirmation Modal when detaching KPM from an active proposal */}
+      <SlotHandlingConfirmModal
+        isOpen={Boolean(pendingStatusConfirm)}
+        actionType="move"
+        kpmName={record.nama}
+        registerCode={record.registerCode}
+        originProposalName={record.proposal}
+        originSlotNumber={currentSlotNumber}
+        destinationLabel={
+          pendingStatusConfirm?.targetStatus === 'rejected' ? 'Arsip Ditolak' : 'Database KPM'
+        }
+        requiresSlotChoice={Boolean(!isStandalone && record.validasi === 'accepted' && record.proposal?.trim())}
+        onCancel={() => setPendingStatusConfirm(null)}
+        onConfirm={(slotHandling) => {
+          if (!pendingStatusConfirm) return;
+          const nextSt = pendingStatusConfirm.targetStatus;
+          setPendingStatusConfirm(null);
+          onUpdateStatus(record.id, nextSt, undefined, slotHandling);
+        }}
+      />
     </div>
   );
 }

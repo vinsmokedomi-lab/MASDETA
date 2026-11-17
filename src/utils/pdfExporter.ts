@@ -395,11 +395,11 @@ export async function exportKpmTableToPdf({
     if (yearCmp !== 0) return yearCmp;
     const propCmp = (a.proposal || '').localeCompare(b.proposal || '', 'id');
     if (propCmp !== 0) return propCmp;
+    const seqCmp = getAbsenSeq(a.registerCode) - getAbsenSeq(b.registerCode);
+    if (seqCmp !== 0) return seqCmp;
     const rankCmp =
       getItemHierarchyRank(a.item, a.tahun, items) - getItemHierarchyRank(b.item, b.tahun, items);
     if (rankCmp !== 0) return rankCmp;
-    const seqCmp = getAbsenSeq(a.registerCode) - getAbsenSeq(b.registerCode);
-    if (seqCmp !== 0) return seqCmp;
     return a.createdAt.localeCompare(b.createdAt);
   });
 
@@ -1862,5 +1862,220 @@ export async function exportSubItemRecapToPdf({
   const resolvedFileName =
     fileName || `masdeta-rekap-item-subitem-${selectedYear === 'all' ? 'semua-tahun' : selectedYear}`;
   return saveOrOpenPdfDocument(doc, resolvedFileName);
+}
+
+export interface ExportSchedulesPdfOptions {
+  schedules: import('../types/kpm').ScheduleEventItem[];
+  title?: string;
+  selectedYear?: string;
+  fileName?: string;
+  reportTemplate?: ReportTemplateConfig;
+}
+
+export async function exportSchedulesToPdf({
+  schedules,
+  title = 'JADWAL KEGIATAN & TARGET PROPOSAL',
+  selectedYear = 'all',
+  fileName,
+  reportTemplate,
+}: ExportSchedulesPdfOptions): Promise<{ savedFileName: string; openedNative: boolean; count: number }> {
+  const catLabelMap: Record<import('../types/kpm').ScheduleCategory, string> = {
+    survey: 'Survey Lapangan',
+    dinas: 'Antar ke Dinas',
+    distribusi: 'Penyaluran / Distribusi',
+    lainnya: 'Agenda Lainnya',
+  };
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const sorted = [...schedules].sort((a, b) => {
+    if (a.completed !== b.completed) return a.completed ? 1 : -1;
+    const dateCmp = (a.targetDate || '').localeCompare(b.targetDate || '');
+    if (dateCmp !== 0) return dateCmp;
+    return (a.targetTime || '99:99').localeCompare(b.targetTime || '99:99');
+  });
+
+  const completedCount = sorted.filter((s) => s.completed).length;
+  const overdueCount = sorted.filter((s) => !s.completed && s.targetDate < todayStr).length;
+  const activeCount = sorted.length - completedCount;
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: [F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM],
+    compress: true,
+  }) as AutoTableDoc;
+
+  let cursorY = F4_PDF_MARGINS.top;
+  const centerX = F4_PDF_MARGINS.left + PRINTABLE_WIDTH_MM / 2;
+
+  if (reportTemplate?.enabled) {
+    if (reportTemplate.orgHeaderLine1?.trim()) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11.5);
+      doc.setTextColor(15, 23, 42);
+      doc.text(reportTemplate.orgHeaderLine1.trim().toUpperCase(), centerX, cursorY + 4.5, {
+        align: 'center',
+      });
+      cursorY += 5.2;
+    }
+    if (reportTemplate.orgHeaderLine2?.trim()) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(15, 118, 110);
+      doc.text(reportTemplate.orgHeaderLine2.trim(), centerX, cursorY + 4, { align: 'center' });
+      cursorY += 4.8;
+    }
+    if (reportTemplate.orgAddress?.trim()) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.2);
+      doc.setTextColor(71, 85, 105);
+      doc.text(reportTemplate.orgAddress.trim(), centerX, cursorY + 3.5, { align: 'center' });
+      cursorY += 4.5;
+    }
+    doc.setDrawColor(15, 23, 42);
+    doc.setLineWidth(0.5);
+    doc.line(F4_PDF_MARGINS.left, cursorY + 1, F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right, cursorY + 1);
+    doc.setLineWidth(0.2);
+    doc.line(
+      F4_PDF_MARGINS.left,
+      cursorY + 2.1,
+      F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right,
+      cursorY + 2.1
+    );
+    cursorY += 6;
+  }
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text(title, F4_PDF_MARGINS.left, cursorY + 4);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.8);
+  doc.setTextColor(71, 85, 105);
+  const yearLabel = selectedYear === 'all' ? 'Semua Tahun' : `Tahun ${selectedYear}`;
+  doc.text(
+    `Cakupan: ${yearLabel}   ·   Total: ${sorted.length} Agenda   ·   Dicetak: ${formatUploadDateTime(new Date().toISOString())}`,
+    F4_PDF_MARGINS.left,
+    cursorY + 9.2
+  );
+  cursorY += 13;
+
+  autoTable(doc, {
+    startY: cursorY,
+    margin: {
+      top: F4_PDF_MARGINS.top,
+      right: F4_PDF_MARGINS.right,
+      bottom: F4_PDF_MARGINS.bottom + 8,
+      left: F4_PDF_MARGINS.left,
+    },
+    tableWidth: PRINTABLE_WIDTH_MM,
+    head: [['TOTAL AGENDA', 'AKTIF / TERJADWAL', 'MELEWATI TARGET', 'SELESAI']],
+    body: [[`${sorted.length} Agenda`, `${activeCount} Agenda`, `${overdueCount} Agenda`, `${completedCount} Agenda`]],
+    theme: 'grid',
+    styles: {
+      font: 'helvetica',
+      fontSize: 8.8,
+      fontStyle: 'bold',
+      halign: 'center',
+      valign: 'middle',
+      textColor: [15, 23, 42],
+      lineColor: [203, 213, 225],
+      lineWidth: 0.22,
+      cellPadding: { top: 2.2, right: 2, bottom: 2.2, left: 2 },
+    },
+    headStyles: {
+      fillColor: [15, 23, 42],
+      textColor: [255, 255, 255],
+      fontSize: 7.8,
+      fontStyle: 'bold',
+    },
+  });
+
+  cursorY = (doc.lastAutoTable?.finalY ?? cursorY + 18) + 6;
+
+  const tableBody: string[][] =
+    sorted.length === 0
+      ? [['-', '-', '-', '-', '-', 'Belum ada agenda terjadwal.', '-']]
+      : sorted.map((ev, idx) => {
+          const isOverdue = !ev.completed && ev.targetDate < todayStr;
+          const statusText = ev.completed ? 'Selesai' : isOverdue ? 'Terlambat' : 'Terjadwal';
+          const dateTimeStr = ev.targetTime ? `${ev.targetDate}\nPukul ${ev.targetTime}` : ev.targetDate;
+          const agendaDesc = [ev.title, ev.notes ? `Catatan: ${ev.notes}` : ''].filter(Boolean).join('\n');
+          return [
+            String(idx + 1).padStart(2, '0'),
+            dateTimeStr,
+            catLabelMap[ev.category] || ev.category,
+            ev.tahun || '-',
+            ev.proposalName?.trim() || 'Umum / Tanpa Proposal',
+            agendaDesc,
+            statusText,
+          ];
+        });
+
+  autoTable(doc, {
+    startY: cursorY,
+    margin: {
+      top: F4_PDF_MARGINS.top,
+      right: F4_PDF_MARGINS.right,
+      bottom: F4_PDF_MARGINS.bottom + 8,
+      left: F4_PDF_MARGINS.left,
+    },
+    tableWidth: PRINTABLE_WIDTH_MM,
+    head: [['NO', 'TANGGAL & JAM', 'KATEGORI', 'TAHUN', 'PROPOSAL', 'AGENDA & CATATAN', 'STATUS']],
+    body: tableBody,
+    theme: 'grid',
+    showHead: 'everyPage',
+    rowPageBreak: 'avoid',
+    styles: {
+      font: 'helvetica',
+      fontSize: 8.2,
+      textColor: [15, 23, 42],
+      lineColor: [203, 213, 225],
+      lineWidth: 0.22,
+      valign: 'middle',
+      cellPadding: { top: 2.1, right: 2, bottom: 2.1, left: 2 },
+    },
+    headStyles: {
+      fillColor: [15, 118, 110],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      fontSize: 7.8,
+      halign: 'center',
+    },
+    columnStyles: {
+      0: { cellWidth: 10, halign: 'center' },
+      1: { cellWidth: 27, halign: 'center' },
+      2: { cellWidth: 28, halign: 'left' },
+      3: { cellWidth: 15, halign: 'center' },
+      4: { cellWidth: 38, halign: 'left' },
+      5: { cellWidth: PRINTABLE_WIDTH_MM - 138, halign: 'left' },
+      6: { cellWidth: 20, halign: 'center', fontStyle: 'bold' },
+    },
+  });
+
+  const totalPages = doc.getNumberOfPages();
+  for (let i = 1; i <= totalPages; i += 1) {
+    doc.setPage(i);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      `MASDETA · Jadwal & Target Proposal (${yearLabel})`,
+      F4_PDF_MARGINS.left,
+      F4_PAPER_HEIGHT_MM - 5.5
+    );
+    doc.text(
+      `Halaman ${i} dari ${totalPages}`,
+      F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right,
+      F4_PAPER_HEIGHT_MM - 5.5,
+      { align: 'right' }
+    );
+  }
+
+  const resolvedFileName =
+    fileName || `masdeta-jadwal-proposal-${selectedYear === 'all' ? 'semua' : selectedYear}`;
+  const res = await saveOrOpenPdfDocument(doc, resolvedFileName);
+  return { ...res, count: sorted.length };
 }
 

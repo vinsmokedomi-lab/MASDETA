@@ -32,6 +32,7 @@ import {
   ProposalDocuments,
   ProposalKpmHistoryEntry,
   ProposalRecord,
+  ProposalSlotMap,
 } from '../types/kpm';
 import {
   computeSubItemRecap,
@@ -40,6 +41,7 @@ import {
   getItemHierarchyRank,
   removeDocumentFromDrive,
   resolvePackageForKpm,
+  resolveProposalSlotStateForGroup,
   uploadProposalDocumentToDrive,
 } from '../utils/imageProcessor';
 import { DriveImage } from './DriveImage';
@@ -50,6 +52,7 @@ interface ProposalDetailViewProps {
   allProposals: ProposalRecord[];
   records: KpmRecord[];
   items: ItemBantuan[];
+  proposalSlotMap?: ProposalSlotMap;
   historyEntries: ProposalKpmHistoryEntry[];
   canAdd?: boolean;
   canUpdate?: boolean;
@@ -73,6 +76,7 @@ export function ProposalDetailView({
   allProposals,
   records,
   items,
+  proposalSlotMap = {},
   historyEntries,
   canAdd = true,
   canUpdate = true,
@@ -170,6 +174,17 @@ export function ProposalDetailView({
     const remainingQuota = Math.max(0, quota - total);
     return { total, accepted, quota, remainingQuota };
   }, [proposalRecords, proposal.jumlahKpm]);
+
+  const emptySlotsCount = useMemo(() => {
+    const { state } = resolveProposalSlotStateForGroup(
+      proposalSlotMap,
+      proposal.id,
+      proposal.namaProposal,
+      proposal.tahun,
+      allProposals
+    );
+    return state?.emptySlots?.length ?? 0;
+  }, [proposalSlotMap, proposal.id, proposal.namaProposal, proposal.tahun, allProposals]);
 
   // DTSEN Breakdown (Desil 1-4, Desil 5, Desil 6-10, Belum Ada Desil, Data Tidak Ditemukan)
   const dtsenBreakdown = useMemo(() => {
@@ -694,8 +709,8 @@ export function ProposalDetailView({
           </div>
 
           {kpmCounts.total === 0 ? (
-            proposal.status !== 'locked' && canAdd ? (
-              <div className="mt-4">
+            <div className="mt-4 space-y-2">
+              {proposal.status !== 'locked' && canAdd && (
                 <button
                   type="button"
                   onClick={() => onAddKpmInProposal(proposal.namaProposal, proposal.tahun)}
@@ -704,8 +719,18 @@ export function ProposalDetailView({
                   <UserPlus className="h-4 w-4" />
                   <span>Tambah Calon KPM</span>
                 </button>
-              </div>
-            ) : null
+              )}
+              {emptySlotsCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => onViewKpmInProposal(proposal.namaProposal, proposal.tahun)}
+                  className="flex w-full items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-left text-xs font-semibold text-amber-900 hover:bg-amber-100/70"
+                >
+                  <span>Tersedia {emptySlotsCount} Baris Kosong (slot pengganti SK/BAST)</span>
+                  <span className="shrink-0 underline">Lihat Slot</span>
+                </button>
+              )}
+            </div>
           ) : (
             <div className="mt-4 space-y-2">
               <div className="flex items-center gap-2">
@@ -730,6 +755,17 @@ export function ProposalDetailView({
                   </button>
                 )}
               </div>
+
+              {emptySlotsCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => onViewKpmInProposal(proposal.namaProposal, proposal.tahun)}
+                  className="flex w-full items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-left text-xs font-semibold text-amber-900 hover:bg-amber-100/70"
+                >
+                  <span>Tersedia {emptySlotsCount} Baris Kosong untuk KPM pengganti</span>
+                  <span className="shrink-0 underline">Isi Slot</span>
+                </button>
+              )}
             </div>
           )}
         </section>

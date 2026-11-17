@@ -5,9 +5,11 @@ import {
   Check,
   CheckCheck,
   ChevronRight,
+  Download,
   Edit3,
   Search,
   Send,
+  Smartphone,
   User,
   X,
 } from 'lucide-react';
@@ -16,6 +18,7 @@ import { getPrimaryKpmPhoto } from '../utils/imageProcessor';
 import { DriveImage } from './DriveImage';
 import { PresenceDot, getPresenceMeta } from './PresenceDot';
 import { isNativeAppPlatform, useIsDesktopWeb } from '../utils/platform';
+import { getPushSupportMeta, usePWAInstall } from '../utils/pwaPush';
 
 interface ChatViewProps {
   currentUser: InternalUser;
@@ -80,6 +83,8 @@ export function ChatView({
 }: ChatViewProps) {
   const isNativeApp = isNativeAppPlatform();
   const isDesktopWeb = useIsDesktopWeb();
+  const pushMeta = getPushSupportMeta();
+  const { canPromptInstall, promptInstall } = usePWAInstall();
   const [searchQuery, setSearchQuery] = useState('');
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
@@ -87,6 +92,76 @@ export function ChatView({
   const [renameTargetUser, setRenameTargetUser] = useState<InternalUser | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+
+  const renderWebPushBanner = (compact: boolean) => {
+    if (pushMeta.isNative) return null;
+
+    if (pushMeta.requiresIosHomeScreenInstall) {
+      return (
+        <div
+          className={`flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 text-amber-900 ${
+            compact ? 'px-3 py-2 text-[11px]' : 'rounded-2xl px-4 py-3 text-xs'
+          }`}
+        >
+          <Smartphone className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+          <p className="leading-snug">
+            <strong>Pengguna iPhone/iOS:</strong> Ketuk <strong>Bagikan</strong> lalu pilih{' '}
+            <strong>Tambah ke Layar Utama</strong> agar push notifikasi chat masuk saat Safari ditutup.
+          </p>
+        </div>
+      );
+    }
+
+    if (pushPermission === 'default') {
+      return (
+        <div
+          className={`flex items-center justify-between gap-2 rounded-xl border border-teal-200 bg-teal-50 ${
+            compact ? 'px-3 py-2' : 'rounded-2xl px-4 py-3'
+          }`}
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            <Bell className="h-4 w-4 shrink-0 text-teal-700" />
+            <p className={`${compact ? 'truncate text-[11px]' : 'text-xs'} font-medium text-teal-900`}>
+              Aktifkan Push Notification agar pesan masuk saat browser diminimalkan.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onRequestPushPermission}
+            className="min-h-[32px] shrink-0 rounded-lg bg-teal-700 px-3 text-[11px] font-bold text-white hover:bg-teal-800"
+          >
+            Aktifkan
+          </button>
+        </div>
+      );
+    }
+
+    if (canPromptInstall) {
+      return (
+        <div
+          className={`flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 ${
+            compact ? 'px-3 py-2' : 'rounded-2xl px-4 py-3'
+          }`}
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            <Download className="h-4 w-4 shrink-0 text-teal-700" />
+            <p className={`${compact ? 'truncate text-[11px]' : 'text-xs'} font-medium text-slate-700`}>
+              Pasang MASDETA ke Layar Utama (PWA) untuk akses &amp; notifikasi lebih andal.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void promptInstall()}
+            className="min-h-[32px] shrink-0 rounded-lg border border-teal-700 bg-white px-2.5 text-[11px] font-bold text-teal-800 hover:bg-teal-50"
+          >
+            Pasang
+          </button>
+        </div>
+      );
+    }
+
+    return null;
+  };
 
   const getPeerDisplayName = (u: InternalUser): string => {
     const alias = (userAliases[u.id] || '').trim();
@@ -569,23 +644,7 @@ export function ChatView({
             </div>
 
             <div className="space-y-3 border-b border-slate-100 p-3.5">
-              {pushPermission === 'default' && (
-                <div className="flex items-center justify-between gap-2 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <Bell className="h-3.5 w-3.5 shrink-0 text-teal-700" />
-                    <p className="truncate text-[11px] font-medium text-teal-900">
-                      Aktifkan notifikasi browser
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={onRequestPushPermission}
-                    className="shrink-0 rounded-lg bg-teal-700 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-teal-800"
-                  >
-                    Aktifkan
-                  </button>
-                </div>
-              )}
+              {renderWebPushBanner(true)}
 
               <div className="relative">
                 <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -895,23 +954,7 @@ export function ChatView({
             <h1 className="truncate text-lg font-bold tracking-tight text-slate-900">Obrolan</h1>
           </div>
         )}
-        {pushPermission === 'default' && (
-          <div className="flex items-center justify-between gap-3 rounded-2xl border border-teal-200 bg-teal-50 px-4 py-3">
-            <div className="flex min-w-0 items-center gap-2.5">
-              <Bell className="h-4 w-4 shrink-0 text-teal-700" />
-              <p className="text-xs font-medium text-teal-900">
-                Aktifkan Push Notification agar pesan masuk langsung tampil.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={onRequestPushPermission}
-              className="min-h-[34px] shrink-0 rounded-xl bg-teal-700 px-3 text-xs font-bold text-white hover:bg-teal-800"
-            >
-              Aktifkan
-            </button>
-          </div>
-        )}
+        {renderWebPushBanner(false)}
 
         <div className="relative">
           <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />

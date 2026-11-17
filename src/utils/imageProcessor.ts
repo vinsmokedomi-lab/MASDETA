@@ -24,8 +24,11 @@ import {
   KpmFormValues,
   KpmRecord,
   PengelolaProfile,
+  ProposalEmptySlot,
   ProposalKpmHistoryEntry,
   ProposalRecord,
+  ProposalSlotMap,
+  ProposalSlotState,
   ValidationStatus,
   WilayahKabKota,
 } from '../types/kpm';
@@ -946,11 +949,653 @@ export function getItemHierarchyRank(
   return idx >= 0 ? idx : 9999;
 }
 
+export function getProposalSlotKey(
+  proposalId: string | null | undefined,
+  proposalName: string | undefined,
+  tahun: string | undefined,
+  proposals: ProposalRecord[] = []
+): string {
+  const cleanId = (proposalId || '').trim();
+  const cleanName = (proposalName || '').trim();
+  const cleanYear = (tahun || '').trim();
+  const matched =
+    (cleanId ? proposals.find((p) => p.id === cleanId) : undefined) ??
+    (cleanName && cleanYear
+      ? proposals.find((p) => p.namaProposal === cleanName && p.tahun === cleanYear)
+      : undefined) ??
+    (cleanName ? proposals.find((p) => p.namaProposal === cleanName) : undefined);
+
+  const keyId = matched?.id || cleanId || cleanName || 'NON';
+  const keyYear = matched?.tahun || cleanYear || 'NON';
+  return `prop::${keyId}__${keyYear}`;
+}
+
+export function compareRecordsByDefaultHierarchy(
+  a: KpmRecord,
+  b: KpmRecord,
+  proposals: ProposalRecord[],
+  catalog: ItemBantuan[],
+  wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST
+): number {
+  const rankA = getItemHierarchyRank(a.item, a.tahun, catalog);
+  const rankB = getItemHierarchyRank(b.item, b.tahun, catalog);
+  if (rankA !== rankB) return rankA - rankB;
+  const itemCmp = (a.item || '').localeCompare(b.item || '', 'id');
+  if (itemCmp !== 0) return itemCmp;
+
+  const domA = resolveKpmDomicile(a, proposals, wilayahList);
+  const domB = resolveKpmDomicile(b, proposals, wilayahList);
+  const kecCmp = domA.kecamatan.localeCompare(domB.kecamatan, 'id');
+  if (kecCmp !== 0) return kecCmp;
+
+  const rwNumA = parseInt(a.rw || '0', 10) || 0;
+  const rwNumB = parseInt(b.rw || '0', 10) || 0;
+  if (rwNumA !== rwNumB) return rwNumA - rwNumB;
+
+  const rtNumA = parseInt(a.rt || '0', 10) || 0;
+  const rtNumB = parseInt(b.rt || '0', 10) || 0;
+  if (rtNumA !== rtNumB) return rtNumA - rtNumB;
+
+  const kelCmp = domA.kelurahan.localeCompare(domB.kelurahan, 'id');
+  if (kelCmp !== 0) return kelCmp;
+
+  const namaCmp = (a.nama || '').localeCompare(b.nama || '', 'id');
+  if (namaCmp !== 0) return namaCmp;
+
+  return (a.createdAt || '').localeCompare(b.createdAt || '');
+}
+
+export type ProposalMergedSlotItem =
+  | {
+      kind: 'kpm';
+      slotNumber: number;
+      record: KpmRecord;
+    }
+  | {
+      kind: 'empty';
+      slotNumber: number;
+      emptySlot: ProposalEmptySlot;
+    };
+
+export function resolveProposalSlotStateForGroup(
+  slotMap: ProposalSlotMap,
+  proposalId: string | null | undefined,
+  proposalName: string | undefined,
+  tahun: string | undefined,
+  proposals: ProposalRecord[] = []
+): { key: string; state?: ProposalSlotState } {
+  const key = getProposalSlotKey(proposalId, proposalName, tahun, proposals);
+  if (slotMap[key]) {
+    return { key, state: slotMap[key] };
+  }
+  const cleanName = (proposalName || '').trim();
+  const cleanYear = (tahun || '').trim();
+  if (cleanName) {
+    const legacyKey = `prop::${cleanName}__${cleanYear || 'NON'}`;
+    if (slotMap[legacyKey]) {
+      return { key, state: slotMap[legacyKey] };
+    }
+  }
+  return { key, state: undefined };
+}
+
+export function buildMergedProposalSlots({
+  groupRecords,
+  slotState,
+  proposals,
+  catalog,
+  wilayahList = INITIAL_WILAYAH_LIST,
+}: {
+  groupRecords: KpmRecord[];
+  slotState?: ProposalSlotState;
+  proposals: ProposalRecord[];
+  catalog: ItemBantuan[];
+  wilayahList?: WilayahKabKota[];
+}): ProposalMergedSlotItem[] {
+  const acceptedRecords = groupRecords.filter((r) => r.validasi === 'accepted');
+  const defaultSorted = [...acceptedRecords].sort((a, b) =>
+    compareRecordsByDefaultHierarchy(a, b, proposals, catalog, wilayahList)
+  );
+
+  if (
+    !slotState ||
+    (slotState.pinnedOrder.length === 0 && slotState.emptySlots.length === 0)
+  ) {
+    return defaultSorted.map((record, idx) => ({
+      kind: 'kpm' as const,
+      slotNumber: idx + 1,
+      record,
+    }));
+  }
+
+  const byId = new Map(acceptedRecords.map((r) => [r.id, r]));
+  const orderedRecords: KpmRecord[] = [];
+  const seenIds = new Set<string>();
+
+  for (const kpmId of slotState.pinnedOrder) {
+    const rec = byId.get(kpmId);
+    if (rec && !seenIds.has(rec.id)) {
+      orderedRecords.push(rec);
+      seenIds.add(rec.id);
+    }
+  }
+  for (const rec of defaultSorted) {
+    if (!seenIds.has(rec.id)) {
+      orderedRecords.push(rec);
+      seenIds.add(rec.id);
+    }
+  }
+
+  const emptyBySlot = new Map<number, ProposalEmptySlot>();
+  for (const es of slotState.emptySlots) {
+    if (es.slotNumber >= 1 && !emptyBySlot.has(es.slotNumber)) {
+      emptyBySlot.set(es.slotNumber, es);
+    }
+  }
+
+  const merged: ProposalMergedSlotItem[] = [];
+  let recordIdx = 0;
+  let slotNo = 1;
+  const maxEmptySlot =
+    emptyBySlot.size > 0 ? Math.max(...Array.from(emptyBySlot.keys())) : 0;
+  const maxIterations = orderedRecords.length + emptyBySlot.size + maxEmptySlot + 5;
+
+  while (
+    (recordIdx < orderedRecords.length || slotNo <= maxEmptySlot) &&
+    slotNo <= maxIterations
+  ) {
+    const reservedEmpty = emptyBySlot.get(slotNo);
+    if (reservedEmpty) {
+      merged.push({
+        kind: 'empty',
+        slotNumber: slotNo,
+        emptySlot: reservedEmpty,
+      });
+    } else if (recordIdx < orderedRecords.length) {
+      merged.push({
+        kind: 'kpm',
+        slotNumber: slotNo,
+        record: orderedRecords[recordIdx],
+      });
+      recordIdx += 1;
+    }
+    slotNo += 1;
+  }
+
+  return merged;
+}
+
+export function ensureProposalPinnedOrder(
+  slotMap: ProposalSlotMap,
+  proposalId: string | null | undefined,
+  proposalName: string | undefined,
+  tahun: string | undefined,
+  allRecords: KpmRecord[],
+  proposals: ProposalRecord[],
+  catalog: ItemBantuan[],
+  wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST
+): { key: string; state: ProposalSlotState; merged: ProposalMergedSlotItem[] } {
+  const { key, state: existing } = resolveProposalSlotStateForGroup(
+    slotMap,
+    proposalId,
+    proposalName,
+    tahun,
+    proposals
+  );
+  const propRecords = allRecords.filter((r) => {
+    if (r.validasi !== 'accepted' || !r.proposal?.trim()) return false;
+    return getProposalSlotKey(r.proposalId, r.proposal, r.tahun, proposals) === key;
+  });
+  const merged = buildMergedProposalSlots({
+    groupRecords: propRecords,
+    slotState: existing,
+    proposals,
+    catalog,
+    wilayahList,
+  });
+  const nextState: ProposalSlotState = {
+    pinnedOrder: merged
+      .filter((m): m is Extract<ProposalMergedSlotItem, { kind: 'kpm' }> => m.kind === 'kpm')
+      .map((m) => m.record.id),
+    emptySlots: merged
+      .filter((m): m is Extract<ProposalMergedSlotItem, { kind: 'empty' }> => m.kind === 'empty')
+      .map((m) => ({ ...m.emptySlot, slotNumber: m.slotNumber })),
+    updatedAt: existing?.updatedAt || new Date().toISOString(),
+  };
+  return { key, state: nextState, merged };
+}
+
+export function vacateKpmSlotsInMap(
+  slotMap: ProposalSlotMap,
+  vacatedRecords: KpmRecord[],
+  allRecordsBeforeChange: KpmRecord[],
+  proposals: ProposalRecord[],
+  catalog: ItemBantuan[],
+  wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST
+): ProposalSlotMap {
+  const acceptedVacated = vacatedRecords.filter(
+    (r) => r.validasi === 'accepted' && Boolean(r.proposal?.trim())
+  );
+  if (acceptedVacated.length === 0) return slotMap;
+
+  const nextMap: ProposalSlotMap = { ...slotMap };
+  const now = new Date().toISOString();
+  const byPropKey = new Map<string, KpmRecord[]>();
+
+  for (const rec of acceptedVacated) {
+    const key = getProposalSlotKey(rec.proposalId, rec.proposal, rec.tahun, proposals);
+    const list = byPropKey.get(key) ?? [];
+    list.push(rec);
+    byPropKey.set(key, list);
+  }
+
+  for (const [key, vacatedList] of byPropKey.entries()) {
+    const sample = vacatedList[0];
+    const ensured = ensureProposalPinnedOrder(
+      nextMap,
+      sample.proposalId,
+      sample.proposal,
+      sample.tahun,
+      allRecordsBeforeChange,
+      proposals,
+      catalog,
+      wilayahList
+    );
+
+    const slotById = new Map<string, number>();
+    for (const item of ensured.merged) {
+      if (item.kind === 'kpm') {
+        slotById.set(item.record.id, item.slotNumber);
+      }
+    }
+
+    const vacatedIds = new Set(vacatedList.map((v) => v.id));
+    const nextPinnedOrder = ensured.state.pinnedOrder.filter((id) => !vacatedIds.has(id));
+    const nextEmptySlots = [...ensured.state.emptySlots];
+
+    for (const v of vacatedList) {
+      const seqFallback = getAbsenSeq(v.registerCode);
+      const slotNum =
+        slotById.get(v.id) ?? (seqFallback < 999999 ? seqFallback : nextPinnedOrder.length + nextEmptySlots.length + 1);
+      if (!nextEmptySlots.some((es) => es.slotNumber === slotNum)) {
+        nextEmptySlots.push({
+          slotNumber: slotNum,
+          item: v.item || undefined,
+          previousKpmId: v.id,
+          previousKpmName: v.nama,
+          vacatedAt: now,
+        });
+      }
+    }
+
+    nextEmptySlots.sort((a, b) => a.slotNumber - b.slotNumber);
+    nextMap[key] = {
+      pinnedOrder: nextPinnedOrder,
+      emptySlots: nextEmptySlots,
+      updatedAt: now,
+    };
+  }
+
+  return nextMap;
+}
+
+export function collapseKpmSlotsInMap(
+  slotMap: ProposalSlotMap,
+  removedRecords: KpmRecord[],
+  allRecordsBeforeChange: KpmRecord[],
+  proposals: ProposalRecord[],
+  catalog: ItemBantuan[],
+  wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST
+): ProposalSlotMap {
+  const acceptedRemoved = removedRecords.filter(
+    (r) => r.validasi === 'accepted' && Boolean(r.proposal?.trim())
+  );
+  if (acceptedRemoved.length === 0) return slotMap;
+
+  const nextMap: ProposalSlotMap = { ...slotMap };
+  const now = new Date().toISOString();
+  const byPropKey = new Map<string, KpmRecord[]>();
+
+  for (const rec of acceptedRemoved) {
+    const key = getProposalSlotKey(rec.proposalId, rec.proposal, rec.tahun, proposals);
+    const list = byPropKey.get(key) ?? [];
+    list.push(rec);
+    byPropKey.set(key, list);
+  }
+
+  for (const [key, removedList] of byPropKey.entries()) {
+    const sample = removedList[0];
+    const resolvedExisting = resolveProposalSlotStateForGroup(
+      nextMap,
+      sample.proposalId,
+      sample.proposal,
+      sample.tahun,
+      proposals
+    );
+    const hadCustomState =
+      Boolean(resolvedExisting.state) &&
+      (resolvedExisting.state!.pinnedOrder.length > 0 ||
+        resolvedExisting.state!.emptySlots.length > 0);
+
+    const ensured = ensureProposalPinnedOrder(
+      nextMap,
+      sample.proposalId,
+      sample.proposal,
+      sample.tahun,
+      allRecordsBeforeChange,
+      proposals,
+      catalog,
+      wilayahList
+    );
+
+    const slotById = new Map<string, number>();
+    for (const item of ensured.merged) {
+      if (item.kind === 'kpm') {
+        slotById.set(item.record.id, item.slotNumber);
+      }
+    }
+
+    const removedIds = new Set(removedList.map((r) => r.id));
+    const removedSlotNums = removedList
+      .map((r) => slotById.get(r.id) ?? getAbsenSeq(r.registerCode))
+      .filter((n) => Number.isFinite(n) && n > 0 && n < 999999)
+      .sort((a, b) => b - a);
+
+    const nextPinnedOrder = ensured.state.pinnedOrder.filter((id) => !removedIds.has(id));
+    let nextEmptySlots = [...ensured.state.emptySlots];
+    for (const removedSlotNo of removedSlotNums) {
+      nextEmptySlots = nextEmptySlots
+        .filter((es) => es.slotNumber !== removedSlotNo)
+        .map((es) =>
+          es.slotNumber > removedSlotNo ? { ...es, slotNumber: es.slotNumber - 1 } : es
+        );
+    }
+    nextEmptySlots.sort((a, b) => a.slotNumber - b.slotNumber);
+
+    if ((!hadCustomState && nextEmptySlots.length === 0) || (nextPinnedOrder.length === 0 && nextEmptySlots.length === 0)) {
+      delete nextMap[key];
+      const legacyKey = sample.proposal?.trim()
+        ? `prop::${sample.proposal.trim()}__${(sample.tahun || '').trim() || 'NON'}`
+        : '';
+      if (legacyKey && legacyKey !== key) {
+        delete nextMap[legacyKey];
+      }
+    } else {
+      nextMap[key] = {
+        pinnedOrder: nextPinnedOrder,
+        emptySlots: nextEmptySlots,
+        updatedAt: now,
+      };
+    }
+  }
+
+  return nextMap;
+}
+
+export function getKpmSlotNumberInProposal(
+  record: KpmRecord,
+  allRecords: KpmRecord[],
+  proposals: ProposalRecord[],
+  catalog: ItemBantuan[],
+  wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST,
+  slotMap: ProposalSlotMap = {}
+): number | null {
+  if (record.validasi !== 'accepted' || !record.proposal?.trim()) return null;
+  const key = getProposalSlotKey(record.proposalId, record.proposal, record.tahun, proposals);
+  const groupRecords = allRecords.filter(
+    (r) =>
+      r.validasi === 'accepted' &&
+      Boolean(r.proposal?.trim()) &&
+      getProposalSlotKey(r.proposalId, r.proposal, r.tahun, proposals) === key
+  );
+  const { state: slotState } = resolveProposalSlotStateForGroup(
+    slotMap,
+    record.proposalId,
+    record.proposal,
+    record.tahun,
+    proposals
+  );
+  const merged = buildMergedProposalSlots({
+    groupRecords,
+    slotState,
+    proposals,
+    catalog,
+    wilayahList,
+  });
+  const found = merged.find((m) => m.kind === 'kpm' && m.record.id === record.id);
+  if (found) return found.slotNumber;
+  const seq = getAbsenSeq(record.registerCode);
+  return seq < 999999 ? seq : null;
+}
+
+export function sanitizeProposalSlotMap(
+  slotMap: ProposalSlotMap,
+  currentRecords: KpmRecord[],
+  proposals: ProposalRecord[]
+): ProposalSlotMap {
+  if (!slotMap || typeof slotMap !== 'object' || currentRecords.length === 0) {
+    return slotMap || {};
+  }
+  const activeIdsByPropKey = new Map<string, Set<string>>();
+  for (const rec of currentRecords) {
+    if (rec.validasi !== 'accepted' || !rec.proposal?.trim()) continue;
+    const key = getProposalSlotKey(rec.proposalId, rec.proposal, rec.tahun, proposals);
+    const set = activeIdsByPropKey.get(key) ?? new Set<string>();
+    set.add(rec.id);
+    activeIdsByPropKey.set(key, set);
+    const legacyKey = `prop::${rec.proposal.trim()}__${(rec.tahun || '').trim() || 'NON'}`;
+    if (legacyKey !== key) {
+      const legacySet = activeIdsByPropKey.get(legacyKey) ?? new Set<string>();
+      legacySet.add(rec.id);
+      activeIdsByPropKey.set(legacyKey, legacySet);
+    }
+  }
+
+  let changed = false;
+  const nextMap: ProposalSlotMap = {};
+  for (const [key, state] of Object.entries(slotMap)) {
+    if (!state || typeof state !== 'object') {
+      changed = true;
+      continue;
+    }
+    const activeIds = activeIdsByPropKey.get(key) ?? new Set<string>();
+    const rawPinned = Array.isArray(state.pinnedOrder) ? state.pinnedOrder : [];
+    const seenPinned = new Set<string>();
+    const cleanPinned = rawPinned.filter((id) => {
+      if (!id || seenPinned.has(id) || !activeIds.has(id)) return false;
+      seenPinned.add(id);
+      return true;
+    });
+
+    const rawEmpty = Array.isArray(state.emptySlots) ? state.emptySlots : [];
+    const seenSlots = new Set<number>();
+    const cleanEmpty = rawEmpty
+      .filter((es) => {
+        if (!es || typeof es.slotNumber !== 'number' || es.slotNumber < 1) return false;
+        if (seenSlots.has(es.slotNumber)) return false;
+        seenSlots.add(es.slotNumber);
+        return true;
+      })
+      .sort((a, b) => a.slotNumber - b.slotNumber);
+
+    if (cleanPinned.length === 0 && cleanEmpty.length === 0) {
+      changed = true;
+      continue;
+    }
+    if (
+      cleanPinned.length !== rawPinned.length ||
+      cleanEmpty.length !== rawEmpty.length
+    ) {
+      changed = true;
+    }
+    nextMap[key] = {
+      pinnedOrder: cleanPinned,
+      emptySlots: cleanEmpty,
+      updatedAt: state.updatedAt || new Date().toISOString(),
+    };
+  }
+
+  return changed ? nextMap : slotMap;
+}
+
+export function assignKpmToProposalSlot(
+  slotMap: ProposalSlotMap,
+  proposalId: string | null | undefined,
+  proposalName: string | undefined,
+  tahun: string | undefined,
+  kpmId: string,
+  targetSlotNumber: number | null | undefined,
+  allRecordsIncludingNew: KpmRecord[],
+  proposals: ProposalRecord[],
+  catalog: ItemBantuan[],
+  wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST
+): ProposalSlotMap {
+  const cleanName = (proposalName || '').trim();
+  if (!cleanName) return slotMap;
+
+  const { key, state } = ensureProposalPinnedOrder(
+    slotMap,
+    proposalId,
+    cleanName,
+    tahun,
+    allRecordsIncludingNew.filter((r) => r.id !== kpmId),
+    proposals,
+    catalog,
+    wilayahList
+  );
+
+  const hasCustomOrderOrEmpty =
+    Boolean(slotMap[key]) && (state.pinnedOrder.length > 0 || state.emptySlots.length > 0);
+  if (!targetSlotNumber && !hasCustomOrderOrEmpty) {
+    // Proposal standar tanpa urutan tetap / baris kosong tetap memakai hierarki otomatis
+    return slotMap;
+  }
+
+  const now = new Date().toISOString();
+  const cleanPinned = state.pinnedOrder.filter((id) => id !== kpmId);
+  const cleanEmpty = state.emptySlots.filter((es) => es.slotNumber !== targetSlotNumber);
+
+  if (targetSlotNumber && targetSlotNumber >= 1) {
+    const emptyBeforeTarget = cleanEmpty.filter((es) => es.slotNumber < targetSlotNumber).length;
+    const insertIdx = Math.max(0, Math.min(cleanPinned.length, targetSlotNumber - 1 - emptyBeforeTarget));
+    cleanPinned.splice(insertIdx, 0, kpmId);
+  } else {
+    // Penambahan baru tanpa target slot tidak boleh merebut Baris Kosong; taruh di akhir
+    cleanPinned.push(kpmId);
+  }
+
+  return {
+    ...slotMap,
+    [key]: {
+      pinnedOrder: cleanPinned,
+      emptySlots: cleanEmpty.sort((a, b) => a.slotNumber - b.slotNumber),
+      updatedAt: now,
+    },
+  };
+}
+
+export function moveProposalSlotDirection(
+  slotMap: ProposalSlotMap,
+  proposalId: string | null | undefined,
+  proposalName: string | undefined,
+  tahun: string | undefined,
+  target: { kind: 'kpm'; kpmId: string } | { kind: 'empty'; slotNumber: number },
+  direction: 'up' | 'down',
+  allRecords: KpmRecord[],
+  proposals: ProposalRecord[],
+  catalog: ItemBantuan[],
+  wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST
+): ProposalSlotMap | null {
+  const { key, merged } = ensureProposalPinnedOrder(
+    slotMap,
+    proposalId,
+    proposalName,
+    tahun,
+    allRecords,
+    proposals,
+    catalog,
+    wilayahList
+  );
+  if (merged.length < 2) return null;
+
+  const idx = merged.findIndex((item) =>
+    target.kind === 'kpm'
+      ? item.kind === 'kpm' && item.record.id === target.kpmId
+      : item.kind === 'empty' && item.slotNumber === target.slotNumber
+  );
+  if (idx < 0) return null;
+
+  const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+  if (swapIdx < 0 || swapIdx >= merged.length) return null;
+
+  const reordered = [...merged];
+  [reordered[idx], reordered[swapIdx]] = [reordered[swapIdx], reordered[idx]];
+
+  const nextPinnedOrder: string[] = [];
+  const nextEmptySlots: ProposalEmptySlot[] = [];
+  reordered.forEach((entry, i) => {
+    const nextSlotNo = i + 1;
+    if (entry.kind === 'kpm') {
+      nextPinnedOrder.push(entry.record.id);
+    } else {
+      nextEmptySlots.push({
+        ...entry.emptySlot,
+        slotNumber: nextSlotNo,
+      });
+    }
+  });
+
+  return {
+    ...slotMap,
+    [key]: {
+      pinnedOrder: nextPinnedOrder,
+      emptySlots: nextEmptySlots,
+      updatedAt: new Date().toISOString(),
+    },
+  };
+}
+
+export function removeEmptySlotFromMap(
+  slotMap: ProposalSlotMap,
+  proposalId: string | null | undefined,
+  proposalName: string | undefined,
+  tahun: string | undefined,
+  slotNumber: number,
+  allRecords: KpmRecord[],
+  proposals: ProposalRecord[],
+  catalog: ItemBantuan[],
+  wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST
+): ProposalSlotMap {
+  const { key, state } = ensureProposalPinnedOrder(
+    slotMap,
+    proposalId,
+    proposalName,
+    tahun,
+    allRecords,
+    proposals,
+    catalog,
+    wilayahList
+  );
+  const nextEmptySlots = state.emptySlots
+    .filter((es) => es.slotNumber !== slotNumber)
+    .map((es) => (es.slotNumber > slotNumber ? { ...es, slotNumber: es.slotNumber - 1 } : es));
+
+  return {
+    ...slotMap,
+    [key]: {
+      pinnedOrder: state.pinnedOrder,
+      emptySlots: nextEmptySlots,
+      updatedAt: new Date().toISOString(),
+    },
+  };
+}
+
 export function recalculateProposalRegisterCodes(
   records: KpmRecord[],
   proposals: ProposalRecord[],
   catalog: ItemBantuan[],
-  wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST
+  wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST,
+  proposalSlotMap: ProposalSlotMap = {}
 ): KpmRecord[] {
   if (records.length === 0) return records;
 
@@ -984,7 +1629,7 @@ export function recalculateProposalRegisterCodes(
     const tahunVal = (rec.tahun || '').trim();
     const key =
       rec.validasi === 'accepted' && propName
-        ? `prop::${rec.proposalId || propName}__${tahunVal}`
+        ? getProposalSlotKey(rec.proposalId, propName, tahunVal, proposals)
         : `standalone::${rec.validasi}__${tahunVal || 'NON'}`;
     const list = groups.get(key) ?? [];
     list.push(rec);
@@ -993,40 +1638,44 @@ export function recalculateProposalRegisterCodes(
 
   const nextCodeById = new Map<string, string>();
 
-  for (const group of groups.values()) {
-    const sorted = [...group].sort((a, b) => {
-      // Hierarchy: Item (per year) -> Kecamatan -> RW -> RT -> Kelurahan -> Inisial/Nama KPM
-      const rankA = getItemHierarchyRank(a.item, a.tahun, catalog);
-      const rankB = getItemHierarchyRank(b.item, b.tahun, catalog);
-      if (rankA !== rankB) return rankA - rankB;
-      const itemCmp = (a.item || '').localeCompare(b.item || '', 'id');
-      if (itemCmp !== 0) return itemCmp;
+  for (const [groupKey, group] of groups.entries()) {
+    if (groupKey.startsWith('prop::') && group.length > 0) {
+      const sample = group[0];
+      const { state: slotState } = resolveProposalSlotStateForGroup(
+        proposalSlotMap,
+        sample.proposalId,
+        sample.proposal,
+        sample.tahun,
+        proposals
+      );
+      if (
+        slotState &&
+        (slotState.pinnedOrder.length > 0 || slotState.emptySlots.length > 0)
+      ) {
+        const merged = buildMergedProposalSlots({
+          groupRecords: group,
+          slotState,
+          proposals,
+          catalog,
+          wilayahList,
+        });
+        for (const entry of merged) {
+          if (entry.kind === 'kpm') {
+            const seq = String(entry.slotNumber).padStart(3, '0');
+            const yearPart = (entry.record.tahun || '').trim() || 'NON';
+            nextCodeById.set(
+              entry.record.id,
+              `${seq}. ${yearPart} - ${entry.record.item || 'BNS'}`
+            );
+          }
+        }
+        continue;
+      }
+    }
 
-      const domA = resolveKpmDomicile(a, proposals, wilayahList);
-      const domB = resolveKpmDomicile(b, proposals, wilayahList);
-      const kecA = domA.kecamatan;
-      const kecB = domB.kecamatan;
-      const kecCmp = kecA.localeCompare(kecB, 'id');
-      if (kecCmp !== 0) return kecCmp;
-
-      const rwNumA = parseInt(a.rw || '0', 10) || 0;
-      const rwNumB = parseInt(b.rw || '0', 10) || 0;
-      if (rwNumA !== rwNumB) return rwNumA - rwNumB;
-
-      const rtNumA = parseInt(a.rt || '0', 10) || 0;
-      const rtNumB = parseInt(b.rt || '0', 10) || 0;
-      if (rtNumA !== rtNumB) return rtNumA - rtNumB;
-
-      const kelA = domA.kelurahan;
-      const kelB = domB.kelurahan;
-      const kelCmp = kelA.localeCompare(kelB, 'id');
-      if (kelCmp !== 0) return kelCmp;
-
-      const namaCmp = (a.nama || '').localeCompare(b.nama || '', 'id');
-      if (namaCmp !== 0) return namaCmp;
-
-      return (a.createdAt || '').localeCompare(b.createdAt || '');
-    });
+    const sorted = [...group].sort((a, b) =>
+      compareRecordsByDefaultHierarchy(a, b, proposals, catalog, wilayahList)
+    );
 
     sorted.forEach((rec, idx) => {
       const seq = String(idx + 1).padStart(3, '0');

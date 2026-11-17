@@ -5,11 +5,13 @@ import {
   BellRing,
   Camera,
   CheckCircle2,
+  Download,
   Loader2,
   Lock,
   LogOut,
   RefreshCw,
   Shield,
+  Smartphone,
   Trash2,
   User,
   X,
@@ -25,6 +27,7 @@ import { capitalizeWords, validateImageUploadFile } from '../utils/imageProcesso
 import { PresenceDot, getPresenceMeta } from './PresenceDot';
 import { APP_VERSION } from '../config/appVersion';
 import { useIsDesktopWeb } from '../utils/platform';
+import { getPushSupportMeta, usePWAInstall } from '../utils/pwaPush';
 
 interface UserProfileViewProps {
   user: InternalUser;
@@ -64,6 +67,8 @@ export function UserProfileView({
   appVersion,
 }: UserProfileViewProps) {
   const isDesktopWeb = useIsDesktopWeb();
+  const pushMeta = getPushSupportMeta();
+  const { canPromptInstall, promptInstall } = usePWAInstall();
   const [nama, setNama] = useState(user.nama);
   const [kontak, setKontak] = useState(user.kontak || '');
   const [fotoDataUrl, setFotoDataUrl] = useState<string | undefined>(user.fotoDataUrl);
@@ -328,18 +333,22 @@ export function UserProfileView({
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-bold text-slate-900">Push Notification Chat</p>
                 <p className="mt-0.5 text-xs leading-snug text-slate-500">
-                  {pushPermission === 'granted'
-                    ? 'Izin notifikasi perangkat aktif'
-                    : pushPermission === 'denied'
-                      ? 'Diblokir browser (aktif via notis in-app)'
-                      : pushPermission === 'unsupported'
-                        ? 'Notifikasi aktif di dalam aplikasi'
-                        : 'Ketuk Aktifkan untuk menerima push notifikasi chat'}
+                  {pushMeta.isNative
+                    ? 'Izin notifikasi aplikasi Android aktif'
+                    : pushMeta.requiresIosHomeScreenInstall
+                      ? 'iOS Safari wajib ditambahkan ke Layar Utama (PWA) untuk Web Push'
+                      : pushPermission === 'granted'
+                        ? 'Web Push Service Worker aktif (notifikasi masuk walau tab diminimalkan)'
+                        : pushPermission === 'denied'
+                          ? 'Diblokir browser — buka Pengaturan Situs untuk mengizinkan Notifikasi'
+                          : pushPermission === 'unsupported'
+                            ? 'Notifikasi aktif di dalam aplikasi'
+                            : 'Ketuk Aktifkan untuk menerima push notifikasi chat di browser'}
                 </p>
               </div>
             </div>
 
-            {pushPermission === 'default' ? (
+            {pushPermission === 'default' && !pushMeta.requiresIosHomeScreenInstall ? (
               <button
                 type="button"
                 onClick={onRequestPushPermission}
@@ -365,6 +374,27 @@ export function UserProfileView({
               </button>
             )}
           </div>
+
+          {!pushMeta.isNative && pushMeta.requiresIosHomeScreenInstall && (
+            <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-2.5 text-[11px] leading-snug text-amber-900">
+              <Smartphone className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-700" />
+              <span>
+                Buka menu <strong>Bagikan</strong> di Safari → pilih{' '}
+                <strong>Tambah ke Layar Utama</strong>, lalu jalankan aplikasi dari ikon layar utama dan aktifkan izin notifikasi.
+              </span>
+            </div>
+          )}
+
+          {!pushMeta.isNative && canPromptInstall && (
+            <button
+              type="button"
+              onClick={() => void promptInstall()}
+              className="inline-flex min-h-[38px] w-full items-center justify-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3 text-xs font-semibold text-teal-800 hover:bg-teal-100"
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span>Pasang Web App (PWA) ke Layar Utama</span>
+            </button>
+          )}
         </section>
 
         {/* Permissions Summary (Read-only for Admin & Viewer; hidden for SuperAdmin) */}

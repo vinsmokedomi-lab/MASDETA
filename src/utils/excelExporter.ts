@@ -43,11 +43,11 @@ export async function exportKpmRecordsToExcel({
     if (yearCmp !== 0) return yearCmp;
     const propCmp = (a.proposal || '').localeCompare(b.proposal || '', 'id');
     if (propCmp !== 0) return propCmp;
+    const seqCmp = getAbsenSeq(a.registerCode) - getAbsenSeq(b.registerCode);
+    if (seqCmp !== 0) return seqCmp;
     const rankCmp =
       getItemHierarchyRank(a.item, a.tahun, items) - getItemHierarchyRank(b.item, b.tahun, items);
     if (rankCmp !== 0) return rankCmp;
-    const seqCmp = getAbsenSeq(a.registerCode) - getAbsenSeq(b.registerCode);
-    if (seqCmp !== 0) return seqCmp;
     return a.createdAt.localeCompare(b.createdAt);
   });
 

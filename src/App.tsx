@@ -82,10 +82,12 @@ import {
   ProposalKpmHistoryEntry,
   ProposalLockStatus,
   ProposalRecord,
+  ProposalSlotMap,
   ReportTemplateConfig,
   ScheduleCategory,
   ScheduleEventItem,
   SharedKpmCard,
+  SlotRemovalMode,
   TrashRecordItem,
   UserPermissions,
   UserPresenceStatus,
@@ -93,10 +95,13 @@ import {
   WilayahKabKota,
 } from './types/kpm';
 import {
+  assignKpmToProposalSlot,
   clearSampleRecordsOnce,
+  collapseKpmSlotsInMap,
   diffKpmRecordChanges,
   formatValidationLabel,
   generateRegisterCode,
+  getProposalSlotKey,
   isLegacyDummyProposal,
   loadCustomYears,
   loadInternalUsers,
@@ -108,13 +113,16 @@ import {
   loadProposalHistory,
   loadProposals,
   loadWilayahList,
+  moveProposalSlotDirection,
   normalizeKpmRouting,
   normalizeSubItemKey,
   recalculateProposalRegisterCodes,
   removeDocumentFromDrive,
+  removeEmptySlotFromMap,
   resolveKpmDomicile,
   resolvePackageForKpm,
   resolveProposalDomicile,
+  sanitizeProposalSlotMap,
   saveCustomYears,
   saveInternalUsers,
   saveItemList,
@@ -126,6 +134,7 @@ import {
   saveProposals,
   saveWilayahList,
   uploadImageDocumentToDrive,
+  vacateKpmSlotsInMap,
 } from './utils/imageProcessor';
 import { loadIdbSnapshot, saveIdbValue } from './utils/indexedDbStorage';
 import {
@@ -180,6 +189,12 @@ import { APP_VERSION } from './config/appVersion';
 import { DesktopSidebar } from './components/DesktopSidebar';
 import { NotificationPageView } from './components/NotificationPageView';
 import { isNativeAppPlatform, useIsDesktopWeb } from './utils/platform';
+import { withEffectiveUserPresence } from './utils/presence';
+import {
+  consumeUrlChatPeerId,
+  ensureBrowserPushSubscription,
+  listenSwOpenChat,
+} from './utils/pwaPush';
 
 type SubView =
   | 'none'
@@ -552,6 +567,15 @@ export default function App() {
   const [trashBin, setTrashBin] = useState<TrashRecordItem[]>([]);
   const [reportTemplate, setReportTemplate] = useState<ReportTemplateConfig>(DEFAULT_REPORT_TEMPLATE);
   const [kpmBastMap, setKpmBastMap] = useState<Record<string, KpmBastInfo>>({});
+  const [proposalSlotMap, setProposalSlotMap] = useState<ProposalSlotMap>({});
+  const [targetKpmFormSlot, setTargetKpmFormSlot] = useState<{
+    proposalId: string;
+    proposalName: string;
+    tahun: string;
+    slotNumber: number;
+    item?: string;
+  } | null>(null);
+  const [presenceTickNow, setPresenceTickNow] = useState<number>(() => Date.now());
   const [userAliasesByOwner, setUserAliasesByOwner] = useState<
     Record<string, Record<string, string>>
   >({});
@@ -591,6 +615,8 @@ export default function App() {
   const appAlertToastTimerRef = useRef<number | undefined>(undefined);
   const nativePushRequestedRef = useRef<boolean>(false);
   const kpmBastMapRef = useRef<Record<string, KpmBastInfo>>(kpmBastMap);
+  const proposalSlotMapRef = useRef<ProposalSlotMap>(proposalSlotMap);
+  const loadAppStateSlicesRef = useRef<() => Promise<void>>(async () => {});
   const currentUserAliasesRef = useRef<Record<string, string>>({});
   const isFlushingQueueRef = useRef<boolean>(false);
   const notifiedChatMsgIdsRef = useRef<Set<string>>(new Set());
@@ -607,6 +633,7 @@ export default function App() {
   const prevAuthenticatedRef = useRef<boolean>(false);
 
   kpmBastMapRef.current = kpmBastMap;
+  proposalSlotMapRef.current = proposalSlotMap;
   directMessagesRef.current = directMessages;
   dismissedUpdateVersionRef.current = dismissedUpdateVersion;
 
@@ -753,6 +780,10 @@ export default function App() {
     if (!sessionUserId) return null;
     return internalUsers.find((u) => u.id === sessionUserId && u.status === 'active') ?? null;
   }, [internalUsers, sessionUserId]);
+  const effectiveInternalUsers = useMemo(
+    () => withEffectiveUserPresence(internalUsers, currentUser?.id, presenceTickNow),
+    [internalUsers, currentUser?.id, presenceTickNow]
+  );
   currentUserIdRef.current = currentUser?.id ?? null;
   currentUserRoleRef.current = currentUser?.role ?? null;
   currentUserPresenceRef.current = currentUser?.presenceStatus ?? 'offline';
@@ -1357,6 +1388,20 @@ export default function App() {
     []
   );
 
+  const persistProposalSlotMap = useCallback(
+    (nextSlotMap: ProposalSlotMap, recordsOverride?: KpmRecord[]) => {
+      const refRecords = recordsOverride ?? latestDataRef.current.records;
+      const cleanSlotMap =
+        refRecords.length > 0
+          ? sanitizeProposalSlotMap(nextSlotMap, refRecords, proposalsRef.current)
+          : nextSlotMap;
+      proposalSlotMapRef.current = cleanSlotMap;
+      setProposalSlotMap(cleanSlotMap);
+      void saveAppStateSlice('masdeta_proposal_slots_v1', cleanSlotMap);
+    },
+    []
+  );
+
   const loadAppStateSlices = useCallback(async () => {
     try {
       const [
@@ -1366,6 +1411,7 @@ export default function App() {
         fetchedBastMap,
         fetchedWatermarks,
         fetchedAliases,
+        fetchedSlotMap,
       ] = await Promise.all([
         fetchAppStateSlice<ScheduleEventItem[]>('masdeta_schedules_v1', []),
         fetchAppStateSlice<TrashRecordItem[]>('masdeta_trash_bin_v1', []),
@@ -1376,6 +1422,7 @@ export default function App() {
         fetchAppStateSlice<Record<string, KpmBastInfo>>('masdeta_kpm_bast_v1', {}),
         fetchChatDeliveryWatermarks(),
         fetchAppStateSlice<Record<string, Record<string, string>>>('masdeta_user_aliases_v1', {}),
+        fetchAppStateSlice<ProposalSlotMap>('masdeta_proposal_slots_v1', {}),
       ]);
 
       const nowMs = Date.now();
@@ -1412,7 +1459,16 @@ export default function App() {
 
       const safeBastMap =
         fetchedBastMap && typeof fetchedBastMap === 'object' ? fetchedBastMap : {};
+      const rawSlotMap: ProposalSlotMap =
+        fetchedSlotMap && typeof fetchedSlotMap === 'object' && !Array.isArray(fetchedSlotMap)
+          ? fetchedSlotMap
+          : {};
+      const safeSlotMap: ProposalSlotMap =
+        latestDataRef.current.records.length > 0
+          ? sanitizeProposalSlotMap(rawSlotMap, latestDataRef.current.records, proposalsRef.current)
+          : rawSlotMap;
       kpmBastMapRef.current = safeBastMap;
+      proposalSlotMapRef.current = safeSlotMap;
       setSchedules(Array.isArray(fetchedSchedules) ? fetchedSchedules : []);
       setTrashBin(activeTrash);
       setReportTemplate(
@@ -1421,17 +1477,31 @@ export default function App() {
           : DEFAULT_REPORT_TEMPLATE
       );
       setKpmBastMap(safeBastMap);
+      setProposalSlotMap(safeSlotMap);
       if (fetchedWatermarks && typeof fetchedWatermarks === 'object') {
         setChatDeliveryWatermarks(fetchedWatermarks);
       }
       if (fetchedAliases && typeof fetchedAliases === 'object' && !Array.isArray(fetchedAliases)) {
         setUserAliasesByOwner(fetchedAliases);
       }
-      setRecords((prev) => mergeBastIntoRecords(prev, safeBastMap));
+      setRecords((prev) =>
+        mergeBastIntoRecords(
+          recalculateProposalRegisterCodes(
+            prev,
+            proposalsRef.current,
+            latestDataRef.current.items,
+            latestDataRef.current.wilayahList,
+            safeSlotMap
+          ),
+          safeBastMap
+        )
+      );
     } catch {
       // Abaikan gangguan sementara saat memuat slice tambahan
     }
   }, [mergeBastIntoRecords]);
+
+  loadAppStateSlicesRef.current = loadAppStateSlices;
 
   const applyRemoteOperationalState = useCallback(
     (state: Partial<OperationalDataPayload>) => {
@@ -1456,7 +1526,8 @@ export default function App() {
         rawRecords,
         nextProposals,
         nextItems,
-        nextWilayah
+        nextWilayah,
+        proposalSlotMapRef.current
       );
       setRecords(mergeBastIntoRecords(recalculated, kpmBastMapRef.current));
       if (Array.isArray(state.pengelolaList)) setPengelolaList(state.pengelolaList);
@@ -2320,6 +2391,13 @@ export default function App() {
         { event: '*', schema: 'public', table: 'kpm_audit_logs' },
         scheduleOperationalRefresh
       )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'masdeta_app_state' },
+        () => {
+          void loadAppStateSlicesRef.current();
+        }
+      )
       .subscribe((status) => {
         if (status === 'SUBSCRIBED') {
           void syncMessagesFromSupabase();
@@ -2862,12 +2940,18 @@ export default function App() {
       }
     };
 
+    const isNative = Capacitor.isNativePlatform();
     const startHiddenIdleCountdown = () => {
       isForegroundActive = false;
       clearRetryOnlineTimer();
       if (idleTimer) {
         window.clearTimeout(idleTimer);
         idleTimer = undefined;
+      }
+      if (!isNative) {
+        // Di Web / iOS Safari / WebView browser: segera tandai idle saat tab/app disembunyikan
+        sendPresence('idle', true);
+        return;
       }
       if (hiddenIdleTimer) return;
       hiddenIdleTimer = window.setTimeout(() => {
@@ -2966,6 +3050,19 @@ export default function App() {
       if (hiddenIdleTimer) window.clearTimeout(hiddenIdleTimer);
       if (supabaseReadyRef.current) {
         supabaseMarkOfflineKeepalive(uid);
+      } else if (
+        sessionTokenRef.current &&
+        typeof navigator !== 'undefined' &&
+        typeof navigator.sendBeacon === 'function'
+      ) {
+        try {
+          const payload = new Blob([JSON.stringify({ token: sessionTokenRef.current })], {
+            type: 'application/json',
+          });
+          navigator.sendBeacon('/api/presence/offline', payload);
+        } catch {
+          // Abaikan kegagalan beacon saat window ditutup
+        }
       }
     };
 
@@ -3067,6 +3164,40 @@ export default function App() {
       }
     };
   }, [currentUser?.id, currentUser?.presenceManual, supabaseReady]);
+
+  // Evaluasi staleness presence 90 detik & sinkronisasi daftar pengguna aktif di Web/Mobile
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    const id = window.setInterval(() => {
+      setPresenceTickNow(Date.now());
+      if (supabaseReadyRef.current && document.visibilityState === 'visible') {
+        void supabaseFetchInternalUsers()
+          .then((users) => {
+            if (users.length > 0) setInternalUsers(mergeFetchedInternalUsers(users));
+          })
+          .catch(() => {});
+      }
+    }, 30_000);
+    return () => window.clearInterval(id);
+  }, [currentUser?.id, mergeFetchedInternalUsers]);
+
+  // Web Push registration & deep-link notifikasi Service Worker (?chatPeer=...)
+  useEffect(() => {
+    if (!currentUser?.id || Capacitor.isNativePlatform()) return;
+    const initialPeer = consumeUrlChatPeerId();
+    if (initialPeer) {
+      openChatViewRef.current(initialPeer);
+    }
+    const stopListenSw = listenSwOpenChat((peerId) => {
+      openChatViewRef.current(peerId);
+    });
+    if (pushPermission === 'granted') {
+      void ensureBrowserPushSubscription();
+    }
+    return () => {
+      stopListenSw();
+    };
+  }, [currentUser?.id, pushPermission]);
 
   // Kunci pinch-in / pinch-out zoom aplikasi secara global (kecuali di pratinjau foto lightbox)
   useEffect(() => {
@@ -3521,7 +3652,15 @@ export default function App() {
   }, [subView, activeKpmRecord, activeProposal, returnToTab]);
 
   useEffect(() => {
-    setRecords((prev) => recalculateProposalRegisterCodes(prev, proposals, items, wilayahList));
+    setRecords((prev) =>
+      recalculateProposalRegisterCodes(
+        prev,
+        proposals,
+        items,
+        wilayahList,
+        proposalSlotMapRef.current
+      )
+    );
   }, [proposals, items, wilayahList]);
 
   const latestImportStateRef = useRef({
@@ -3694,7 +3833,14 @@ export default function App() {
     returnToDetail = false,
     returnToProposalDetail = false,
     lockedScope: { namaProposal: string; tahun: string } | null = null,
-    standaloneStatus: 'pending' | 'rejected' | null = null
+    standaloneStatus: 'pending' | 'rejected' | null = null,
+    targetSlot: {
+      proposalId: string;
+      proposalName: string;
+      tahun: string;
+      slotNumber: number;
+      item?: string;
+    } | null = null
   ) => {
     if (record) {
       if (!requirePermission('update', 'mengubah data calon KPM')) return;
@@ -3708,6 +3854,7 @@ export default function App() {
     setKpmFormReturnToProposalDetail(returnToProposalDetail);
     setLockedKpmProposalScope(lockedScope);
     setKpmFormInitialStandaloneStatus(record ? null : standaloneStatus);
+    setTargetKpmFormSlot(record ? null : targetSlot);
     setEditingKpmRecord(record);
     setSubView('kpm-form');
   };
@@ -3948,7 +4095,9 @@ export default function App() {
 
   const handleSaveKpm = async (
     values: KpmFormValues,
-    editingId?: string
+    editingId?: string,
+    targetSlotNumber?: number | null,
+    oldSlotHandling: SlotRemovalMode = 'vacate'
   ): Promise<boolean> => {
     if (editingId) {
       if (!requirePermission('update', 'memperbarui data calon KPM')) return false;
@@ -4114,7 +4263,65 @@ export default function App() {
             }
           : rec
       );
-      const nextRecords = recalculateProposalRegisterCodes(mapped, proposals, items, wilayahList);
+
+      let nextSlotMap = proposalSlotMapRef.current;
+      const leftPreviousProposal =
+        previousRecord &&
+        previousRecord.validasi === 'accepted' &&
+        Boolean(previousRecord.proposal?.trim()) &&
+        (normalizedValues.validasi !== 'accepted' ||
+          previousRecord.proposal !== normalizedValues.proposal ||
+          previousRecord.tahun !== normalizedValues.tahun);
+      if (leftPreviousProposal && previousRecord) {
+        nextSlotMap =
+          oldSlotHandling === 'collapse'
+            ? collapseKpmSlotsInMap(
+                nextSlotMap,
+                [previousRecord],
+                records,
+                proposals,
+                items,
+                wilayahList
+              )
+            : vacateKpmSlotsInMap(
+                nextSlotMap,
+                [previousRecord],
+                records,
+                proposals,
+                items,
+                wilayahList
+              );
+      }
+
+      const enteredOrTargetedProposal =
+        normalizedValues.validasi === 'accepted' &&
+        Boolean(normalizedValues.proposal?.trim()) &&
+        (leftPreviousProposal ||
+          !previousRecord ||
+          previousRecord.validasi !== 'accepted' ||
+          Boolean(targetSlotNumber));
+      if (enteredOrTargetedProposal) {
+        nextSlotMap = assignKpmToProposalSlot(
+          nextSlotMap,
+          normalizedValues.proposalId,
+          normalizedValues.proposal,
+          normalizedValues.tahun,
+          editingId,
+          targetSlotNumber ?? null,
+          mapped,
+          proposals,
+          items,
+          wilayahList
+        );
+      }
+
+      const nextRecords = recalculateProposalRegisterCodes(
+        mapped,
+        proposals,
+        items,
+        wilayahList,
+        nextSlotMap
+      );
 
       if (!isOnlineRef.current || (typeof navigator !== 'undefined' && !navigator.onLine)) {
         await enqueueOfflineAction({
@@ -4127,11 +4334,15 @@ export default function App() {
         });
         const queue = await getOfflineQueue();
         setOfflineQueueCount(queue.length);
+        if (nextSlotMap !== proposalSlotMapRef.current) {
+          persistProposalSlotMap(nextSlotMap, nextRecords);
+        }
         setKpmAuditLogs(nextAuditLogs);
         setProposalHistory(nextProposalHistory);
         setRecords(nextRecords);
         setEditingKpmRecord(null);
         setKpmFormInitialStandaloneStatus(null);
+        setTargetKpmFormSlot(null);
         if (kpmFormReturnToDetail && activeKpmId) {
           setKpmFormReturnToDetail(false);
           navigateRestoreScroll();
@@ -4186,11 +4397,15 @@ export default function App() {
           );
       if (!ok) return false;
 
+      if (nextSlotMap !== proposalSlotMapRef.current) {
+        persistProposalSlotMap(nextSlotMap, nextRecords);
+      }
       setKpmAuditLogs(nextAuditLogs);
       setProposalHistory(nextProposalHistory);
       setRecords(nextRecords);
       setEditingKpmRecord(null);
       setKpmFormInitialStandaloneStatus(null);
+      setTargetKpmFormSlot(null);
       navigateRestoreScroll();
       if (kpmFormReturnToDetail && activeKpmId) {
         setKpmFormReturnToDetail(false);
@@ -4225,11 +4440,30 @@ export default function App() {
       updatedAt: now,
     };
 
+    const effectiveTargetSlot = targetSlotNumber ?? targetKpmFormSlot?.slotNumber ?? null;
+    const baseNewList = [rawNewRecord, ...records];
+    const nextSlotMap =
+      normalizedValues.validasi === 'accepted' && normalizedValues.proposal?.trim()
+        ? assignKpmToProposalSlot(
+            proposalSlotMapRef.current,
+            normalizedValues.proposalId,
+            normalizedValues.proposal,
+            normalizedValues.tahun,
+            rawNewRecord.id,
+            effectiveTargetSlot,
+            baseNewList,
+            proposals,
+            items,
+            wilayahList
+          )
+        : proposalSlotMapRef.current;
+
     const nextRecordsList = recalculateProposalRegisterCodes(
-      [rawNewRecord, ...records],
+      baseNewList,
       proposals,
       items,
-      wilayahList
+      wilayahList,
+      nextSlotMap
     );
     const savedNewRecord =
       nextRecordsList.find((r) => r.id === rawNewRecord.id) ?? rawNewRecord;
@@ -4299,12 +4533,16 @@ export default function App() {
       });
       const queue = await getOfflineQueue();
       setOfflineQueueCount(queue.length);
+      if (nextSlotMap !== proposalSlotMapRef.current) {
+        persistProposalSlotMap(nextSlotMap);
+      }
       setRecords(nextRecordsList);
       setKpmAuditLogs(nextAuditLogs);
       setProposalHistory(nextProposalHistory);
       setPendingSelectedProposal(null);
       setLockedKpmProposalScope(null);
       setKpmFormInitialStandaloneStatus(null);
+      setTargetKpmFormSlot(null);
       if (savedNewRecord.tahun) setSelectedYear(savedNewRecord.tahun);
       setActiveKpmId(savedNewRecord.id);
       setKpmDetailReturnToRecap(false);
@@ -4354,12 +4592,16 @@ export default function App() {
         );
     if (!ok) return false;
 
+    if (nextSlotMap !== proposalSlotMapRef.current) {
+      persistProposalSlotMap(nextSlotMap);
+    }
     setRecords(nextRecordsList);
     setKpmAuditLogs(nextAuditLogs);
     setProposalHistory(nextProposalHistory);
     setPendingSelectedProposal(null);
     setLockedKpmProposalScope(null);
     setKpmFormInitialStandaloneStatus(null);
+    setTargetKpmFormSlot(null);
     if (savedNewRecord.tahun) setSelectedYear(savedNewRecord.tahun);
     setActiveKpmId(savedNewRecord.id);
     setKpmDetailReturnToRecap(false);
@@ -4380,7 +4622,7 @@ export default function App() {
     return true;
   };
 
-  const handleDeleteKpm = (id: string) => {
+  const handleDeleteKpm = (id: string, slotHandling: SlotRemovalMode = 'vacate') => {
     if (!requirePermission('delete', 'menghapus data calon KPM')) return;
     const target = records.find((r) => r.id === id);
     if (!target) return;
@@ -4398,11 +4640,16 @@ export default function App() {
     // Pindahkan ke Tempat Sampah 30 hari (berkas Drive tetap dipertahankan sampai kedaluwarsa atau dihapus permanen)
     const now = new Date().toISOString();
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    const containerSubtitle =
+      target.proposal?.trim() ||
+      (target.validasi === 'rejected' ? 'Arsip Ditolak' : 'Database KPM');
     const trashEntry: TrashRecordItem = {
       id: `trash-kpm-${target.id}-${Date.now()}`,
       kind: 'kpm',
       title: target.nama,
-      subtitle: `${target.proposal} · ${target.tahun} · ${target.registerCode}`,
+      subtitle: [containerSubtitle, target.tahun || 'Tanpa Tahun', target.registerCode]
+        .filter(Boolean)
+        .join(' · '),
       tahun: target.tahun,
       deletedAt: now,
       expiresAt,
@@ -4426,14 +4673,41 @@ export default function App() {
       timestamp: now,
     };
 
+    const wasInAcceptedProposal =
+      target.validasi === 'accepted' && Boolean(target.proposal?.trim());
+    const nextSlotMap = wasInAcceptedProposal
+      ? slotHandling === 'collapse'
+        ? collapseKpmSlotsInMap(
+            proposalSlotMapRef.current,
+            [target],
+            records,
+            proposals,
+            items,
+            wilayahList
+          )
+        : vacateKpmSlotsInMap(
+            proposalSlotMapRef.current,
+            [target],
+            records,
+            proposals,
+            items,
+            wilayahList
+          )
+      : proposalSlotMapRef.current;
+
     const nextHistory = [removedHistory, ...proposalHistory];
+    const remainingRecords = records.filter((r) => r.id !== id);
     const nextRecords = recalculateProposalRegisterCodes(
-      records.filter((r) => r.id !== id),
+      remainingRecords,
       proposals,
       items,
-      wilayahList
+      wilayahList,
+      nextSlotMap
     );
 
+    if (nextSlotMap !== proposalSlotMapRef.current) {
+      persistProposalSlotMap(nextSlotMap, nextRecords);
+    }
     setProposalHistory(nextHistory);
     setRecords(nextRecords);
 
@@ -4581,7 +4855,8 @@ export default function App() {
   const handleUpdateKpmStatus = (
     id: string,
     status: ValidationStatus,
-    targetProposalId?: string
+    targetProposalId?: string,
+    slotHandling: SlotRemovalMode = 'vacate'
   ) => {
     if (!requirePermission('update', 'mengubah status validasi KPM')) return;
     const target = records.find((r) => r.id === id);
@@ -4728,13 +5003,56 @@ export default function App() {
           }
         : r
     );
+    let nextSlotMap = proposalSlotMapRef.current;
+    const isLeavingPrevProp =
+      target.validasi === 'accepted' &&
+      Boolean(target.proposal?.trim()) &&
+      (status !== 'accepted' || nextProposalName !== target.proposal || nextTahun !== target.tahun);
+    if (isLeavingPrevProp) {
+      nextSlotMap =
+        slotHandling === 'collapse'
+          ? collapseKpmSlotsInMap(
+              nextSlotMap,
+              [target],
+              records,
+              proposals,
+              items,
+              wilayahList
+            )
+          : vacateKpmSlotsInMap(
+              nextSlotMap,
+              [target],
+              records,
+              proposals,
+              items,
+              wilayahList
+            );
+    }
+    if (status === 'accepted' && nextProp && (target.validasi !== 'accepted' || isLeavingPrevProp)) {
+      nextSlotMap = assignKpmToProposalSlot(
+        nextSlotMap,
+        nextProp.id,
+        nextProp.namaProposal,
+        nextTahun,
+        id,
+        null,
+        mapped,
+        proposals,
+        items,
+        wilayahList
+      );
+    }
+
     const nextRecords = mergeBastIntoRecords(
-      recalculateProposalRegisterCodes(mapped, proposals, items, wilayahList),
+      recalculateProposalRegisterCodes(mapped, proposals, items, wilayahList, nextSlotMap),
       kpmBastMapRef.current
     );
     const nextLogs = [statusAudit, ...kpmAuditLogs];
     const nextHistory = addedHist.length > 0 ? [...addedHist, ...proposalHistory] : proposalHistory;
 
+    if (nextSlotMap !== proposalSlotMapRef.current) {
+      persistProposalSlotMap(nextSlotMap, nextRecords);
+    }
     setKpmAuditLogs(nextLogs);
     setProposalHistory(nextHistory);
     setRecords(nextRecords);
@@ -5155,7 +5473,8 @@ export default function App() {
         workRecords,
         workProposals,
         workItems,
-        workWilayah
+        workWilayah,
+        proposalSlotMapRef.current
       );
 
       if (processedIds.length > 0) {
@@ -5445,10 +5764,61 @@ export default function App() {
       return;
     }
 
+    let nextSlotMap = proposalSlotMapRef.current;
+    if (patch.validasi) {
+      const updatedIdSet = new Set(newLogs.map((l) => l.kpmId));
+      const vacatedTargets = records.filter((oldRec) => {
+        if (!updatedIdSet.has(oldRec.id)) return false;
+        if (oldRec.validasi !== 'accepted' || !oldRec.proposal?.trim()) return false;
+        const newRec = mapped.find((m) => m.id === oldRec.id);
+        return (
+          !newRec ||
+          newRec.validasi !== 'accepted' ||
+          newRec.proposal !== oldRec.proposal ||
+          newRec.tahun !== oldRec.tahun
+        );
+      });
+      if (vacatedTargets.length > 0) {
+        nextSlotMap = vacateKpmSlotsInMap(
+          nextSlotMap,
+          vacatedTargets,
+          records,
+          proposals,
+          items,
+          wilayahList
+        );
+      }
+      const enteredTargets = mapped.filter((newRec) => {
+        if (!updatedIdSet.has(newRec.id)) return false;
+        if (newRec.validasi !== 'accepted' || !newRec.proposal?.trim()) return false;
+        const oldRec = records.find((r) => r.id === newRec.id);
+        return (
+          !oldRec ||
+          oldRec.validasi !== 'accepted' ||
+          oldRec.proposal !== newRec.proposal ||
+          oldRec.tahun !== newRec.tahun
+        );
+      });
+      for (const entered of enteredTargets) {
+        nextSlotMap = assignKpmToProposalSlot(
+          nextSlotMap,
+          entered.proposalId,
+          entered.proposal,
+          entered.tahun,
+          entered.id,
+          null,
+          mapped,
+          proposals,
+          items,
+          wilayahList
+        );
+      }
+    }
+
     const nextRecords =
       patch.item || patch.validasi
         ? mergeBastIntoRecords(
-            recalculateProposalRegisterCodes(mapped, proposals, items, wilayahList),
+            recalculateProposalRegisterCodes(mapped, proposals, items, wilayahList, nextSlotMap),
             kpmBastMapRef.current
           )
         : mapped;
@@ -5462,6 +5832,9 @@ export default function App() {
       (r) => changedIdSet.has(r.id) || prevById.get(r.id)?.registerCode !== r.registerCode
     );
 
+    if (nextSlotMap !== proposalSlotMapRef.current) {
+      persistProposalSlotMap(nextSlotMap);
+    }
     setRecords(nextRecords);
     setKpmAuditLogs(nextLogs);
     setProposalHistory(nextHistory);
@@ -5550,11 +5923,21 @@ export default function App() {
         timestamp: now,
       }));
 
+    const nextSlotMap = vacateKpmSlotsInMap(
+      proposalSlotMapRef.current,
+      deletableTargets,
+      records,
+      proposals,
+      items,
+      wilayahList
+    );
+
     const remainingRecords = recalculateProposalRegisterCodes(
       records.filter((r) => !deleteSet.has(r.id)),
       proposals,
       items,
-      wilayahList
+      wilayahList,
+      nextSlotMap
     );
     const nextRecords = mergeBastIntoRecords(remainingRecords, kpmBastMapRef.current);
     const nextLogs = kpmAuditLogs.filter((l) => !deleteSet.has(l.kpmId));
@@ -5588,6 +5971,9 @@ export default function App() {
         );
     if (!ok) return;
 
+    if (nextSlotMap !== proposalSlotMapRef.current) {
+      persistProposalSlotMap(nextSlotMap);
+    }
     setRecords(nextRecords);
     setKpmAuditLogs(nextLogs);
     setProposalHistory(nextHistory);
@@ -5691,8 +6077,23 @@ export default function App() {
       const kpm = target.kpmRecord;
       const alreadyExists = records.some((r) => r.id === kpm.id);
       const baseRecords = alreadyExists ? records : [{ ...kpm, updatedAt: now }, ...records];
+      const nextSlotMap =
+        !alreadyExists && kpm.validasi === 'accepted' && kpm.proposal?.trim()
+          ? assignKpmToProposalSlot(
+              proposalSlotMapRef.current,
+              kpm.proposalId,
+              kpm.proposal,
+              kpm.tahun,
+              kpm.id,
+              null,
+              baseRecords,
+              proposals,
+              items,
+              wilayahList
+            )
+          : proposalSlotMapRef.current;
       const nextRecords = mergeBastIntoRecords(
-        recalculateProposalRegisterCodes(baseRecords, proposals, items, wilayahList),
+        recalculateProposalRegisterCodes(baseRecords, proposals, items, wilayahList, nextSlotMap),
         kpmBastMapRef.current
       );
       const restoreHist: ProposalKpmHistoryEntry = {
@@ -5714,6 +6115,9 @@ export default function App() {
         (r) => r.id === kpm.id || prevById.get(r.id)?.registerCode !== r.registerCode
       );
 
+      if (nextSlotMap !== proposalSlotMapRef.current) {
+        persistProposalSlotMap(nextSlotMap);
+      }
       setTrashBin(nextTrash);
       setRecords(nextRecords);
       setProposalHistory(nextHistory);
@@ -5833,6 +6237,8 @@ export default function App() {
     title: string;
     category: ScheduleCategory;
     targetDate: string;
+    targetTime?: string;
+    tahun?: string;
     proposalName?: string;
     notes?: string;
   }) => {
@@ -5841,14 +6247,19 @@ export default function App() {
       title: payload.title,
       category: payload.category,
       targetDate: payload.targetDate,
-      tahun: selectedYear,
+      targetTime: payload.targetTime?.trim() || undefined,
+      tahun: payload.tahun?.trim() || selectedYear,
       proposalName: payload.proposalName,
       notes: payload.notes,
       completed: false,
       createdBy: currentActor.nama,
       createdAt: new Date().toISOString(),
     };
-    const next = [newItem, ...schedules].sort((a, b) => a.targetDate.localeCompare(b.targetDate));
+    const next = [newItem, ...schedules].sort((a, b) => {
+      const dateCmp = a.targetDate.localeCompare(b.targetDate);
+      if (dateCmp !== 0) return dateCmp;
+      return (a.targetTime || '99:99').localeCompare(b.targetTime || '99:99');
+    });
     setSchedules(next);
     void saveAppStateSlice('masdeta_schedules_v1', next);
     setFeedback({
@@ -5975,7 +6386,13 @@ export default function App() {
         };
       });
       nextRecords = codeChanged
-        ? recalculateProposalRegisterCodes(mappedRecords, proposals, nextItems, wilayahList)
+        ? recalculateProposalRegisterCodes(
+            mappedRecords,
+            proposals,
+            nextItems,
+            wilayahList,
+            proposalSlotMapRef.current
+          )
         : mappedRecords;
       setRecords(nextRecords);
     }
@@ -6291,6 +6708,27 @@ export default function App() {
     let nextKpmAuditLogs = kpmAuditLogs;
 
     if (values.tahun !== existing.tahun) {
+      const oldSlotKey = getProposalSlotKey(
+        existing.id,
+        existing.namaProposal,
+        existing.tahun,
+        proposals
+      );
+      const newSlotKey = getProposalSlotKey(
+        existing.id,
+        existing.namaProposal,
+        values.tahun,
+        nextProposals
+      );
+      let nextSlotMap = proposalSlotMapRef.current;
+      if (oldSlotKey !== newSlotKey && nextSlotMap[oldSlotKey]) {
+        const cloned = { ...nextSlotMap };
+        cloned[newSlotKey] = cloned[oldSlotKey];
+        delete cloned[oldSlotKey];
+        nextSlotMap = cloned;
+        persistProposalSlotMap(nextSlotMap);
+      }
+
       const updatedRecords = records.map((rec) =>
         rec.proposal === existing.namaProposal && rec.tahun === existing.tahun
           ? { ...rec, tahun: values.tahun, updatedAt: now }
@@ -6300,7 +6738,8 @@ export default function App() {
         updatedRecords,
         nextProposals,
         items,
-        wilayahList
+        wilayahList,
+        nextSlotMap
       );
       nextProposalHistory = proposalHistory.map((h) =>
         h.proposalName === existing.namaProposal && h.tahun === existing.tahun
@@ -6667,6 +7106,12 @@ export default function App() {
     };
 
     setProposals((prev) => prev.filter((p) => p.id !== proposalId));
+    const deletedSlotKey = getProposalSlotKey(target.id, target.namaProposal, target.tahun, proposals);
+    if (proposalSlotMapRef.current[deletedSlotKey]) {
+      const nextSlotMap = { ...proposalSlotMapRef.current };
+      delete nextSlotMap[deletedSlotKey];
+      persistProposalSlotMap(nextSlotMap);
+    }
     setProposalHistory((prev) => [actEntry, ...prev]);
     if (activeProposalId === proposalId) {
       setActiveProposalId(null);
@@ -7135,12 +7580,14 @@ export default function App() {
         }
         applyRemoteOperationalState(freshSnapshot);
         if (action === 'delete_all_kpm') {
+          persistProposalSlotMap({});
           setActiveKpmId(null);
           setFeedback({
             type: 'success',
             message: 'Seluruh data calon KPM dan log audit KPM telah dihapus.',
           });
         } else if (action === 'delete_all_proposal') {
+          persistProposalSlotMap({});
           setActiveProposalId(null);
           setActiveKpmId(null);
           setFeedback({
@@ -7153,6 +7600,7 @@ export default function App() {
             message: 'Seluruh katalog item dan sub-item telah dikosongkan.',
           });
         } else if (action === 'delete_all_data') {
+          persistProposalSlotMap({});
           setActiveKpmId(null);
           setActiveProposalId(null);
           setFeedback({
@@ -7160,6 +7608,7 @@ export default function App() {
             message: 'Seluruh data KPM, proposal, item, wilayah, pengelola, dan riwayat telah dihapus.',
           });
         } else if (action === 'reset_total') {
+          persistProposalSlotMap({});
           setDirectMessages([]);
           setActiveKpmId(null);
           setActiveProposalId(null);
@@ -7211,12 +7660,14 @@ export default function App() {
       applyRemoteOperationalState(data.state);
 
       if (action === 'delete_all_kpm') {
+        persistProposalSlotMap({});
         setActiveKpmId(null);
         setFeedback({
           type: 'success',
           message: 'Seluruh data calon KPM dan log audit KPM telah dihapus.',
         });
       } else if (action === 'delete_all_proposal') {
+        persistProposalSlotMap({});
         setActiveProposalId(null);
         setActiveKpmId(null);
         setFeedback({
@@ -7229,6 +7680,7 @@ export default function App() {
           message: 'Seluruh katalog item dan sub-item telah dikosongkan.',
         });
       } else if (action === 'delete_all_data') {
+        persistProposalSlotMap({});
         setActiveKpmId(null);
         setActiveProposalId(null);
         setFeedback({
@@ -7236,6 +7688,7 @@ export default function App() {
           message: 'Seluruh data KPM, proposal, item, wilayah, pengelola, dan riwayat telah dihapus.',
         });
       } else if (action === 'reset_total') {
+        persistProposalSlotMap({});
         setDirectMessages([]);
         setActiveKpmId(null);
         setActiveProposalId(null);
@@ -7617,8 +8070,10 @@ export default function App() {
       eligibleIdSet.has(rec.id)
         ? {
             ...rec,
+            proposalId: targetProposal.id,
             proposal: targetProposal.namaProposal,
             tahun: targetProposal.tahun,
+            kabKota: targetDomicile.kabKota || rec.kabKota,
             kecamatan: targetDomicile.kecamatan || rec.kecamatan,
             kelurahan: targetDomicile.kelurahan || rec.kelurahan,
             updatedAt: now,
@@ -7626,11 +8081,35 @@ export default function App() {
         : rec
     );
 
+    let nextSlotMap = vacateKpmSlotsInMap(
+      proposalSlotMapRef.current,
+      eligibleTargets,
+      records,
+      proposals,
+      items,
+      wilayahList
+    );
+    for (const transferred of eligibleTargets) {
+      nextSlotMap = assignKpmToProposalSlot(
+        nextSlotMap,
+        targetProposal.id,
+        targetProposal.namaProposal,
+        targetProposal.tahun,
+        transferred.id,
+        null,
+        mapped,
+        proposals,
+        items,
+        wilayahList
+      );
+    }
+
     const nextRecords = recalculateProposalRegisterCodes(
       mapped,
       proposals,
       items,
-      wilayahList
+      wilayahList,
+      nextSlotMap
     );
     const nextAuditLogs = [...addedAuditLogs, ...kpmAuditLogs];
     const nextProposalHistory = [...addedHistoryEntries, ...proposalHistory];
@@ -7662,6 +8141,9 @@ export default function App() {
         );
     if (!ok) return false;
 
+    if (nextSlotMap !== proposalSlotMapRef.current) {
+      persistProposalSlotMap(nextSlotMap);
+    }
     setKpmAuditLogs(nextAuditLogs);
     setProposalHistory(nextProposalHistory);
     setRecords(nextRecords);
@@ -7670,6 +8152,274 @@ export default function App() {
       message: `${eligibleTargets.length} calon KPM berhasil ditransfer ke "${targetProposal.namaProposal}" (${targetProposal.tahun}).`,
     });
     return true;
+  };
+
+  const handleMoveKpmSlot = async (
+    proposalName: string,
+    tahun: string,
+    target: { kind: 'kpm'; kpmId: string } | { kind: 'empty'; slotNumber: number },
+    direction: 'up' | 'down'
+  ) => {
+    if (!requirePermission('update', 'mengubah urutan nomor slot KPM')) return;
+    const prop =
+      proposals.find((p) => p.namaProposal === proposalName && p.tahun === tahun) ??
+      proposals.find((p) => p.namaProposal === proposalName);
+    if (prop?.status === 'locked') {
+      setFeedback({
+        type: 'error',
+        message: `Proposal "${prop.namaProposal}" berstatus Terkunci.`,
+      });
+      return;
+    }
+
+    const nextSlotMap = moveProposalSlotDirection(
+      proposalSlotMapRef.current,
+      prop?.id,
+      proposalName,
+      tahun,
+      target,
+      direction,
+      records,
+      proposals,
+      items,
+      wilayahList
+    );
+    if (!nextSlotMap) return;
+
+    const nextRecords = mergeBastIntoRecords(
+      recalculateProposalRegisterCodes(records, proposals, items, wilayahList, nextSlotMap),
+      kpmBastMapRef.current
+    );
+    const prevById = new Map(records.map((r) => [r.id, r]));
+    const changedRecords = nextRecords.filter(
+      (r) => prevById.get(r.id)?.registerCode !== r.registerCode
+    );
+
+    persistProposalSlotMap(nextSlotMap);
+    setRecords(nextRecords);
+
+    if (changedRecords.length > 0) {
+      if (supabaseReadyRef.current) {
+        void runSupabaseMutation(
+          () =>
+            upsertKpmRecordsBatchInSupabase({
+              records: changedRecords,
+              proposals,
+              pengelolaList,
+              includeDeliveries: false,
+            }),
+          'Gagal menyinkronkan urutan nomor KPM ke Supabase'
+        );
+      } else {
+        void syncOperationalData({ records: nextRecords }, 'update');
+      }
+    }
+  };
+
+  const handleRemoveEmptySlot = async (
+    proposalName: string,
+    tahun: string,
+    slotNumber: number
+  ) => {
+    if (!requirePermission('update', 'menghapus baris kosong slot KPM')) return;
+    const prop =
+      proposals.find((p) => p.namaProposal === proposalName && p.tahun === tahun) ??
+      proposals.find((p) => p.namaProposal === proposalName);
+    if (prop?.status === 'locked') {
+      setFeedback({
+        type: 'error',
+        message: `Proposal "${prop.namaProposal}" berstatus Terkunci.`,
+      });
+      return;
+    }
+
+    const nextSlotMap = removeEmptySlotFromMap(
+      proposalSlotMapRef.current,
+      prop?.id,
+      proposalName,
+      tahun,
+      slotNumber,
+      records,
+      proposals,
+      items,
+      wilayahList
+    );
+    const nextRecords = mergeBastIntoRecords(
+      recalculateProposalRegisterCodes(records, proposals, items, wilayahList, nextSlotMap),
+      kpmBastMapRef.current
+    );
+    const prevById = new Map(records.map((r) => [r.id, r]));
+    const changedRecords = nextRecords.filter(
+      (r) => prevById.get(r.id)?.registerCode !== r.registerCode
+    );
+
+    persistProposalSlotMap(nextSlotMap);
+    setRecords(nextRecords);
+
+    if (changedRecords.length > 0) {
+      if (supabaseReadyRef.current) {
+        void runSupabaseMutation(
+          () =>
+            upsertKpmRecordsBatchInSupabase({
+              records: changedRecords,
+              proposals,
+              pengelolaList,
+              includeDeliveries: false,
+            }),
+          'Gagal menyinkronkan nomor urut setelah menghapus baris kosong'
+        );
+      } else {
+        void syncOperationalData({ records: nextRecords }, 'update');
+      }
+    }
+
+    setFeedback({
+      type: 'success',
+      message: `Baris kosong #${String(slotNumber).padStart(2, '0')} dihapus dan urutan KPM berikutnya dirapatkan.`,
+    });
+  };
+
+  const handleFillEmptySlotFromDatabase = async (
+    kpmId: string,
+    proposalName: string,
+    tahun: string,
+    slotNumber: number
+  ) => {
+    if (!requirePermission('update', 'mengisi baris kosong dari Database KPM')) return;
+    const prop =
+      proposals.find((p) => p.namaProposal === proposalName && p.tahun === tahun) ??
+      proposals.find((p) => p.namaProposal === proposalName);
+    if (!prop) {
+      setFeedback({ type: 'error', message: 'Proposal tujuan tidak ditemukan.' });
+      return;
+    }
+    if (prop.status === 'locked') {
+      setFeedback({
+        type: 'error',
+        message: `Proposal "${prop.namaProposal}" berstatus Terkunci.`,
+      });
+      return;
+    }
+
+    const target = records.find((r) => r.id === kpmId);
+    if (!target) return;
+
+    const now = new Date().toISOString();
+    const dom = resolveKpmDomicile(
+      { ...target, proposalId: prop.id, proposal: prop.namaProposal },
+      proposals,
+      wilayahList
+    );
+    const nextTahun = target.tahun?.trim() || prop.tahun;
+
+    const mapped = records.map((r) =>
+      r.id === kpmId
+        ? {
+            ...r,
+            validasi: 'accepted' as ValidationStatus,
+            proposalId: prop.id,
+            proposal: prop.namaProposal,
+            tahun: nextTahun,
+            kabKota: dom.kabKota,
+            kecamatan: dom.kecamatan,
+            kelurahan: dom.kelurahan,
+            updatedAt: now,
+          }
+        : r
+    );
+
+    const nextSlotMap = assignKpmToProposalSlot(
+      proposalSlotMapRef.current,
+      prop.id,
+      prop.namaProposal,
+      prop.tahun,
+      kpmId,
+      slotNumber,
+      mapped,
+      proposals,
+      items,
+      wilayahList
+    );
+
+    const nextRecords = mergeBastIntoRecords(
+      recalculateProposalRegisterCodes(mapped, proposals, items, wilayahList, nextSlotMap),
+      kpmBastMapRef.current
+    );
+
+    const auditEntry: KpmAuditLogEntry = {
+      id: `audit-slot-${Date.now()}`,
+      kpmId: target.id,
+      action: 'status_changed',
+      actorName: currentActor.nama,
+      actorEmail: currentActor.email,
+      timestamp: now,
+      proposal: prop.namaProposal,
+      tahun: nextTahun || 'Tanpa Tahun',
+      changes: [
+        {
+          field: 'Pengisian Slot Tetap',
+          before: target.proposal || 'Database KPM',
+          after: `${prop.namaProposal} · Nomor #${String(slotNumber).padStart(2, '0')}`,
+        },
+        {
+          field: 'Status Validasi',
+          before: formatValidationLabel(target.validasi),
+          after: 'Diterima',
+        },
+      ],
+    };
+
+    const histEntry: ProposalKpmHistoryEntry = {
+      id: `hist-slot-${Date.now()}`,
+      tahun: prop.tahun,
+      proposalName: prop.namaProposal,
+      kpmId: target.id,
+      kpmName: target.nama,
+      registerCode:
+        nextRecords.find((r) => r.id === kpmId)?.registerCode || target.registerCode,
+      action: 'moved_in',
+      fromProposal: target.proposal || 'Database KPM',
+      toProposal: prop.namaProposal,
+      actorName: currentActor.nama,
+      timestamp: now,
+    };
+
+    const prevById = new Map(records.map((r) => [r.id, r]));
+    const changedRecords = nextRecords.filter(
+      (r) => r.id === kpmId || prevById.get(r.id)?.registerCode !== r.registerCode
+    );
+
+    const ok = supabaseReadyRef.current
+      ? await runSupabaseMutation(
+          () =>
+            upsertKpmRecordsBatchInSupabase({
+              records: changedRecords,
+              proposals,
+              pengelolaList,
+              auditLogs: [auditEntry],
+              historyEntries: [histEntry],
+              includeDeliveries: false,
+            }),
+          'Gagal mengisi baris kosong dari Database KPM ke Supabase'
+        )
+      : await syncOperationalData(
+          {
+            records: nextRecords,
+            kpmAuditLogs: [auditEntry, ...kpmAuditLogs],
+            proposalHistory: [histEntry, ...proposalHistory],
+          },
+          'update'
+        );
+    if (!ok) return;
+
+    persistProposalSlotMap(nextSlotMap);
+    setKpmAuditLogs([auditEntry, ...kpmAuditLogs]);
+    setProposalHistory([histEntry, ...proposalHistory]);
+    setRecords(nextRecords);
+    setFeedback({
+      type: 'success',
+      message: `"${target.nama}" ditempatkan ke nomor urut #${String(slotNumber).padStart(2, '0')} di ${prop.namaProposal}.`,
+    });
   };
 
   const handleToggleBerkasDikembalikan = (kpmId: string, nextValue: boolean) => {
@@ -8296,7 +9046,7 @@ export default function App() {
           <div className={subView === 'chat' ? '' : 'hidden'}>
             <ChatView
               currentUser={currentUser}
-              users={internalUsers}
+              users={effectiveInternalUsers}
               userAliases={currentUserAliases}
               onSaveUserAlias={handleSaveUserAlias}
               messages={messagesWithDelivery}
@@ -8398,9 +9148,10 @@ export default function App() {
             proposals={proposals}
             items={items}
             wilayahList={wilayahList}
+            proposalSlotMap={proposalSlotMap}
             auditLogs={kpmAuditLogs}
             currentUserId={currentUser.id}
-            internalUsers={internalUsers}
+            internalUsers={effectiveInternalUsers}
             userAliases={currentUserAliases}
             canUpdate={hasPermission('update')}
             canDelete={hasPermission('delete')}
@@ -8513,6 +9264,8 @@ export default function App() {
               preselectedProposal={pendingSelectedProposal}
               lockedProposalScope={lockedKpmProposalScope}
               initialStandaloneStatus={kpmFormInitialStandaloneStatus}
+              proposalSlotMap={proposalSlotMap}
+              targetSlot={targetKpmFormSlot}
               onClearPreselectedProposal={() => setPendingSelectedProposal(null)}
               onBack={() => {
                 navigateRestoreScroll();
@@ -8520,6 +9273,7 @@ export default function App() {
                 setEditingKpmRecord(null);
                 setLockedKpmProposalScope(null);
                 setKpmFormInitialStandaloneStatus(null);
+                setTargetKpmFormSlot(null);
                 if (kpmFormReturnToDetail && activeKpmId) {
                   setKpmFormReturnToDetail(false);
                   setSubView('kpm-detail');
@@ -8542,6 +9296,7 @@ export default function App() {
                 setEditingKpmRecord(null);
                 setLockedKpmProposalScope(null);
                 setKpmFormInitialStandaloneStatus(null);
+                setTargetKpmFormSlot(null);
                 if (kpmFormReturnToDetail && activeKpmId) {
                   setKpmFormReturnToDetail(false);
                   setSubView('kpm-detail');
@@ -8593,6 +9348,7 @@ export default function App() {
               records={records}
               items={items}
               historyEntries={proposalHistory}
+              proposalSlotMap={proposalSlotMap}
               canAdd={hasPermission('add')}
               canUpdate={hasPermission('update')}
               onBack={() => {
@@ -8767,6 +9523,7 @@ export default function App() {
             proposals={proposals}
             items={items}
             wilayahList={wilayahList}
+            proposalSlotMap={proposalSlotMap}
             selectedYear={selectedYear}
             onChangeYear={setSelectedYear}
             statusFilter={kpmStatusFilter}
@@ -8788,6 +9545,26 @@ export default function App() {
               }
             }}
             onCreateNew={() => openKpmForm(null, 'kpm')}
+            onCreateForEmptySlot={(proposalId, proposalName, tahun, slotNumber, item) =>
+              openKpmForm(
+                null,
+                'kpm',
+                false,
+                false,
+                { namaProposal: proposalName, tahun },
+                null,
+                { proposalId, proposalName, tahun, slotNumber, item }
+              )
+            }
+            onMoveSlot={(proposalName, tahun, target, direction) =>
+              void handleMoveKpmSlot(proposalName, tahun, target, direction)
+            }
+            onRemoveEmptySlot={(proposalName, tahun, slotNumber) =>
+              void handleRemoveEmptySlot(proposalName, tahun, slotNumber)
+            }
+            onFillEmptySlotFromDatabase={(kpmId, proposalName, tahun, slotNumber) =>
+              void handleFillEmptySlotFromDatabase(kpmId, proposalName, tahun, slotNumber)
+            }
             onSelectRecord={(rec) => openKpmDetail(rec, 'kpm')}
             onDeleteRecord={handleDeleteKpm}
             onBulkUpdateKpms={handleBulkUpdateKpms}
@@ -8879,7 +9656,7 @@ export default function App() {
             pekerjaanList={pekerjaanList}
             pengelolaList={pengelolaList}
             wilayahList={wilayahList}
-            internalUsers={internalUsers}
+            internalUsers={effectiveInternalUsers}
             userAliases={currentUserAliases}
             onSaveUserAlias={handleSaveUserAlias}
             proposalHistory={proposalHistory}
