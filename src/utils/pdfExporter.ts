@@ -3,7 +3,6 @@ import { Directory, Filesystem } from '@capacitor/filesystem';
 import { FileOpener } from '@capawesome-team/capacitor-file-opener';
 import { jsPDF } from 'jspdf';
 import autoTable, { Styles } from 'jspdf-autotable';
-import QRCode from 'qrcode';
 import { DTSEN_OPTION_ITEMS, INITIAL_WILAYAH_LIST } from '../data/kpmOptions';
 import {
   BastTemplateConfig,
@@ -95,25 +94,7 @@ export const PDF_COLUMN_DEFINITIONS: PdfColumnDefinition[] = [
     uiLabel: 'No (Absen)',
     defaultEnabled: true,
     baseWidthMm: 10,
-    minWidthMm: 8.5,
-    halign: 'center',
-  },
-  {
-    key: 'nikKtp',
-    pdfHeader: 'NIK KTP',
-    uiLabel: 'NIK KTP',
-    defaultEnabled: false,
-    baseWidthMm: 27,
-    minWidthMm: 22.5,
-    halign: 'center',
-  },
-  {
-    key: 'nikKk',
-    pdfHeader: 'NIK KK',
-    uiLabel: 'NIK KK',
-    defaultEnabled: false,
-    baseWidthMm: 27,
-    minWidthMm: 22.5,
+    minWidthMm: 8,
     halign: 'center',
   },
   {
@@ -122,7 +103,7 @@ export const PDF_COLUMN_DEFINITIONS: PdfColumnDefinition[] = [
     uiLabel: 'Item',
     defaultEnabled: true,
     baseWidthMm: 13.5,
-    minWidthMm: 11.5,
+    minWidthMm: 10.5,
     halign: 'center',
   },
   {
@@ -130,8 +111,8 @@ export const PDF_COLUMN_DEFINITIONS: PdfColumnDefinition[] = [
     pdfHeader: 'DESIL',
     uiLabel: 'Desil',
     defaultEnabled: true,
-    baseWidthMm: 12,
-    minWidthMm: 10,
+    baseWidthMm: 11.5,
+    minWidthMm: 9.5,
     halign: 'center',
   },
   {
@@ -139,8 +120,8 @@ export const PDF_COLUMN_DEFINITIONS: PdfColumnDefinition[] = [
     pdfHeader: 'NAMA',
     uiLabel: 'Nama',
     defaultEnabled: true,
-    baseWidthMm: 36,
-    minWidthMm: 23,
+    baseWidthMm: 34,
+    minWidthMm: 20,
     flexible: true,
     halign: 'left',
   },
@@ -149,8 +130,8 @@ export const PDF_COLUMN_DEFINITIONS: PdfColumnDefinition[] = [
     pdfHeader: 'ALAMAT',
     uiLabel: 'Alamat',
     defaultEnabled: true,
-    baseWidthMm: 48,
-    minWidthMm: 28,
+    baseWidthMm: 42,
+    minWidthMm: 23,
     flexible: true,
     halign: 'left',
   },
@@ -159,38 +140,36 @@ export const PDF_COLUMN_DEFINITIONS: PdfColumnDefinition[] = [
     pdfHeader: 'RT / RW',
     uiLabel: 'RT / RW',
     defaultEnabled: true,
-    baseWidthMm: 18,
-    minWidthMm: 15,
+    baseWidthMm: 17.5,
+    minWidthMm: 13.5,
     halign: 'center',
   },
   {
-    key: 'administrasi',
-    pdfHeader: 'ADMINISTRASI',
-    uiLabel: 'Administrasi',
-    description: 'Status pembayaran administrasi (Sudah Bayar / Belum Bayar)',
-    defaultEnabled: false,
-    baseWidthMm: 23,
+    key: 'kontak',
+    pdfHeader: 'KONTAK',
+    uiLabel: 'Kontak',
+    defaultEnabled: true,
+    baseWidthMm: 24,
     minWidthMm: 18,
     halign: 'center',
   },
   {
-    key: 'proposal',
-    pdfHeader: 'PROPOSAL',
-    uiLabel: 'Proposal',
-    description: 'Nama proposal atau status standalone',
-    defaultEnabled: false,
-    baseWidthMm: 30,
-    minWidthMm: 20,
+    key: 'pengelola',
+    pdfHeader: 'PENGELOLA',
+    uiLabel: 'Pengelola',
+    defaultEnabled: true,
+    baseWidthMm: 24,
+    minWidthMm: 16,
     flexible: true,
-    halign: 'left',
+    halign: 'center',
   },
   {
     key: 'kelurahan',
     pdfHeader: 'KELURAHAN',
     uiLabel: 'Kelurahan',
     defaultEnabled: false,
-    baseWidthMm: 25,
-    minWidthMm: 17,
+    baseWidthMm: 24,
+    minWidthMm: 16.5,
     flexible: true,
     halign: 'left',
   },
@@ -199,28 +178,48 @@ export const PDF_COLUMN_DEFINITIONS: PdfColumnDefinition[] = [
     pdfHeader: 'KECAMATAN',
     uiLabel: 'Kecamatan',
     defaultEnabled: false,
-    baseWidthMm: 25,
-    minWidthMm: 17,
+    baseWidthMm: 24,
+    minWidthMm: 16.5,
     flexible: true,
     halign: 'left',
   },
   {
-    key: 'kontak',
-    pdfHeader: 'KONTAK',
-    uiLabel: 'Kontak',
-    defaultEnabled: true,
-    baseWidthMm: 25,
+    key: 'proposal',
+    pdfHeader: 'PROPOSAL',
+    uiLabel: 'Proposal',
+    description: 'Nama proposal atau status standalone',
+    defaultEnabled: false,
+    baseWidthMm: 28,
+    minWidthMm: 18,
+    flexible: true,
+    halign: 'left',
+  },
+  {
+    key: 'administrasi',
+    pdfHeader: 'ADMINISTRASI',
+    uiLabel: 'Administrasi',
+    description: 'Status pembayaran administrasi (Sudah Bayar / Belum Bayar)',
+    defaultEnabled: false,
+    baseWidthMm: 23,
+    minWidthMm: 18.5,
+    halign: 'center',
+  },
+  {
+    key: 'nikKtp',
+    pdfHeader: 'NIK KTP',
+    uiLabel: 'NIK KTP',
+    defaultEnabled: false,
+    baseWidthMm: 26,
     minWidthMm: 20,
     halign: 'center',
   },
   {
-    key: 'pengelola',
-    pdfHeader: 'PENGELOLA',
-    uiLabel: 'Pengelola',
-    defaultEnabled: true,
+    key: 'nikKk',
+    pdfHeader: 'NIK KK',
+    uiLabel: 'NIK KK',
+    defaultEnabled: false,
     baseWidthMm: 26,
-    minWidthMm: 18,
-    flexible: true,
+    minWidthMm: 20,
     halign: 'center',
   },
 ];
@@ -282,57 +281,7 @@ function formatNikForPdf(raw: string): string {
   return digits;
 }
 
-function isNonPublicOrigin(origin: string): boolean {
-  const lower = (origin || '').toLowerCase();
-  if (!lower || !/^https?:\/\//i.test(lower)) return true;
-  if (
-    lower.includes('localhost') ||
-    lower.includes('127.0.0.1') ||
-    lower.includes('0.0.0.0') ||
-    lower.includes('ais-dev-') ||
-    lower.includes('ais-pre-') ||
-    lower.includes('aistudio.google.com')
-  ) {
-    return true;
-  }
-  return false;
-}
 
-export function resolveQrBaseUrlPreview(customBaseUrl?: string): {
-  baseUrl: string;
-  isPreviewDevOrigin: boolean;
-} {
-  const cleanedCustom = (customBaseUrl || '').trim().replace(/\/+$/, '');
-  const envPublic = ((import.meta.env?.VITE_PUBLIC_APP_URL as string | undefined) || '')
-    .trim()
-    .replace(/\/+$/, '');
-  const basePath = ((import.meta.env?.BASE_URL as string | undefined) || '/').replace(/\/+$/, '');
-  const currentOrigin =
-    typeof window !== 'undefined'
-      ? `${(window.location.origin || '').trim().replace(/\/+$/, '')}${basePath}`
-      : '';
-  const isPreviewDevOrigin = isNonPublicOrigin(currentOrigin);
-
-  if (cleanedCustom && /^https?:\/\//i.test(cleanedCustom)) {
-    return { baseUrl: cleanedCustom, isPreviewDevOrigin };
-  }
-  if (!isPreviewDevOrigin && currentOrigin) {
-    return { baseUrl: currentOrigin, isPreviewDevOrigin: false };
-  }
-  if (envPublic && /^https?:\/\//i.test(envPublic)) {
-    return { baseUrl: envPublic, isPreviewDevOrigin };
-  }
-  return { baseUrl: 'https://masdeta.pages.dev', isPreviewDevOrigin };
-}
-
-export function buildKpmQrUrl(
-  record: Pick<KpmRecord, 'id' | 'registerCode'>,
-  customBaseUrl?: string
-): string {
-  const { baseUrl } = resolveQrBaseUrlPreview(customBaseUrl);
-  const token = encodeURIComponent(record.id || record.registerCode || '');
-  return `${baseUrl}/?kpm=${token}`;
-}
 
 const INDONESIAN_WEEKDAYS = [
   'Minggu',
@@ -596,7 +545,6 @@ export function resolveScheduleForProposal(
     if (ev.category === 'distribusi') s += 100;
     else if (ev.category === 'dinas') s += 20;
     if ((ev.location || '').trim()) s += 30;
-    if ((ev.footerNote || '').trim()) s += 10;
     if (!ev.completed) s += 15;
     return s;
   };
@@ -626,7 +574,11 @@ export function resolveCouponScheduleForRecord(
   const matchedSchedule = resolveScheduleForProposal(propName, propYear, schedules);
 
   if (!matchedSchedule) {
-    return { ...fallbackConfig };
+    return {
+      jadwal: fallbackConfig.jadwal || '',
+      lokasi: fallbackConfig.lokasi || '',
+      footerText: fallbackConfig.footerText || DEFAULT_COUPON_CONFIG.footerText,
+    };
   }
 
   const autoJadwal = formatScheduleDateTimeForCoupon(
@@ -634,14 +586,11 @@ export function resolveCouponScheduleForRecord(
     matchedSchedule.targetTime
   );
   const autoLokasi = (matchedSchedule.location || '').trim();
-  const autoFooter =
-    (matchedSchedule.footerNote || '').trim() || (matchedSchedule.notes || '').trim();
 
   return {
     jadwal: autoJadwal || fallbackConfig.jadwal || '',
     lokasi: autoLokasi || fallbackConfig.lokasi || '',
-    footerText:
-      autoFooter || fallbackConfig.footerText || DEFAULT_COUPON_CONFIG.footerText,
+    footerText: fallbackConfig.footerText || DEFAULT_COUPON_CONFIG.footerText,
     matchedSchedule,
   };
 }
@@ -704,7 +653,7 @@ function computeScaledColumnWidths(columns: PdfColumnDefinition[]): number[] {
     return rawWidths.map((w) => Number(((w / sum) * PRINTABLE_WIDTH_MM).toFixed(2)));
   }
 
-  // Jika 9-10 kolom terpilih: skalakan proporsional dengan tetap menjaga minWidthMm tiap kolom
+  // Jika 9-12 kolom terpilih: skalakan proporsional dengan tetap menjaga minWidthMm tiap kolom
   const ratio = PRINTABLE_WIDTH_MM / totalBase;
   const scaled = columns.map((col) => Math.max(col.minWidthMm, col.baseWidthMm * ratio));
   const scaledSum = scaled.reduce((sum, w) => sum + w, 0);
@@ -899,12 +848,15 @@ export async function exportKpmTableToPdf({
   const colWidths = computeScaledColumnWidths(activeCols);
   const colCount = activeCols.length;
   // Skala ukuran huruf, tinggi baris minimum, dan padding secara adaptif agar tabel selalu proporsional & tidak dempetan
-  const bodyFontSize = colCount <= 6 ? 9.2 : colCount <= 8 ? 8.6 : colCount === 9 ? 7.9 : 7.3;
-  const headFontSize = colCount <= 6 ? 9.0 : colCount <= 8 ? 8.4 : colCount === 9 ? 7.8 : 7.2;
-  const bodyMinCellHeight = colCount <= 6 ? 10.5 : colCount <= 8 ? 9.2 : colCount === 9 ? 8.4 : 7.8;
-  const headMinCellHeight = colCount <= 8 ? 9.5 : 8.5;
-  const padY = colCount <= 6 ? 3.0 : colCount <= 8 ? 2.5 : 2.1;
-  const padX = colCount <= 8 ? 1.8 : 1.3;
+  const bodyFontSize =
+    colCount <= 6 ? 9.2 : colCount <= 8 ? 8.6 : colCount === 9 ? 7.8 : colCount === 10 ? 7.2 : 6.4;
+  const headFontSize =
+    colCount <= 6 ? 9.0 : colCount <= 8 ? 8.4 : colCount === 9 ? 7.6 : colCount === 10 ? 7.0 : 6.1;
+  const bodyMinCellHeight =
+    colCount <= 6 ? 10.5 : colCount <= 8 ? 9.2 : colCount === 9 ? 8.4 : colCount === 10 ? 7.8 : 7.0;
+  const headMinCellHeight = colCount <= 8 ? 9.5 : colCount <= 10 ? 8.5 : 7.8;
+  const padY = colCount <= 6 ? 3.0 : colCount <= 8 ? 2.5 : colCount <= 10 ? 2.0 : 1.7;
+  const padX = colCount <= 8 ? 1.8 : colCount <= 10 ? 1.3 : 0.85;
 
   const columnStyles: Record<number, Partial<Styles>> = {};
   activeCols.forEach((col, idx) => {
@@ -1010,7 +962,12 @@ export async function exportKpmTableToPdf({
       valign: 'middle',
       lineColor: [30, 41, 59],
       lineWidth: 0.25,
-      cellPadding: { top: padY + 0.3, right: 1.2, bottom: padY + 0.3, left: 1.2 },
+      cellPadding: {
+        top: padY + 0.3,
+        right: colCount <= 10 ? 1.2 : 0.75,
+        bottom: padY + 0.3,
+        left: colCount <= 10 ? 1.2 : 0.75,
+      },
     },
     columnStyles,
   });
@@ -1243,24 +1200,119 @@ export interface ExportSingleKpmPdfOptions {
   wilayahList?: WilayahKabKota[];
 }
 
+interface SingleKpmDensityPreset {
+  photoW: number;
+  photoH: number;
+  identityCol0W: number;
+  sectionGap: number;
+  t1Font: number;
+  t1PadY: number;
+  t2Font: number;
+  t2PadY: number;
+  t3Font: number;
+  t3PadY: number;
+  t4Font: number;
+  t4PadY: number;
+}
+
+const SINGLE_KPM_DENSITY_PRESETS: SingleKpmDensityPreset[] = [
+  {
+    photoW: 54,
+    photoH: 72,
+    identityCol0W: 43,
+    sectionGap: 5,
+    t1Font: 9.2,
+    t1PadY: 2.35,
+    t2Font: 9.3,
+    t2PadY: 2.5,
+    t3Font: 9.0,
+    t3PadY: 2.35,
+    t4Font: 8.8,
+    t4PadY: 2.25,
+  },
+  {
+    photoW: 49.5,
+    photoH: 66,
+    identityCol0W: 43,
+    sectionGap: 4,
+    t1Font: 8.8,
+    t1PadY: 1.9,
+    t2Font: 8.9,
+    t2PadY: 2.0,
+    t3Font: 8.6,
+    t3PadY: 1.85,
+    t4Font: 8.5,
+    t4PadY: 1.85,
+  },
+  {
+    photoW: 45,
+    photoH: 60,
+    identityCol0W: 42,
+    sectionGap: 3.2,
+    t1Font: 8.4,
+    t1PadY: 1.55,
+    t2Font: 8.5,
+    t2PadY: 1.65,
+    t3Font: 8.1,
+    t3PadY: 1.45,
+    t4Font: 8.1,
+    t4PadY: 1.5,
+  },
+  {
+    photoW: 40.5,
+    photoH: 54,
+    identityCol0W: 41,
+    sectionGap: 2.6,
+    t1Font: 8.0,
+    t1PadY: 1.25,
+    t2Font: 8.0,
+    t2PadY: 1.3,
+    t3Font: 7.5,
+    t3PadY: 1.15,
+    t4Font: 7.7,
+    t4PadY: 1.2,
+  },
+  {
+    photoW: 36,
+    photoH: 48,
+    identityCol0W: 40,
+    sectionGap: 2.1,
+    t1Font: 7.6,
+    t1PadY: 1.0,
+    t2Font: 7.6,
+    t2PadY: 1.05,
+    t3Font: 7.0,
+    t3PadY: 0.9,
+    t4Font: 7.3,
+    t4PadY: 0.95,
+  },
+  {
+    photoW: 33,
+    photoH: 44,
+    identityCol0W: 39,
+    sectionGap: 1.7,
+    t1Font: 7.2,
+    t1PadY: 0.85,
+    t2Font: 7.2,
+    t2PadY: 0.85,
+    t3Font: 6.5,
+    t3PadY: 0.72,
+    t4Font: 7.0,
+    t4PadY: 0.8,
+  },
+];
+
 export async function exportSingleKpmToPdf({
   record,
   proposals,
   items,
   wilayahList = INITIAL_WILAYAH_LIST,
 }: ExportSingleKpmPdfOptions): Promise<{ savedFileName: string; openedNative: boolean }> {
-  // Ukuran kertas Full A4 Portrait (210mm x 297mm)
+  // Ukuran kertas Full A4 Portrait (210mm x 297mm) — dijamin 1 lembar untuk 1 KPM
   const A4_WIDTH_MM = 210;
   const A4_HEIGHT_MM = 297;
   const A4_MARGIN = { top: 12, right: 14, bottom: 12, left: 14 };
   const A4_PRINT_WIDTH = A4_WIDTH_MM - A4_MARGIN.left - A4_MARGIN.right; // 182mm
-
-  const doc = new jsPDF({
-    orientation: 'portrait',
-    unit: 'mm',
-    format: [A4_WIDTH_MM, A4_HEIGHT_MM],
-    compress: true,
-  }) as AutoTableDoc;
 
   const domicile = resolveProposalDomicile(record.proposal, proposals, record.tahun, wilayahList);
   const kelurahan = record.kelurahan?.trim() || domicile.kelurahan || '-';
@@ -1307,331 +1359,346 @@ export async function exportSingleKpmToPdf({
   const rumahCount = Array.isArray(docs.rumah) ? docs.rumah.length : docs.rumah ? 1 : 0;
   const lainnyaCount = Array.isArray(docs.lainnya) ? docs.lainnya.length : 0;
   const rtRwText = `${record.rt ? record.rt.padStart(3, '0') : '-'} / ${record.rw ? record.rw.padStart(3, '0') : '-'}`;
+  const printedAtStr = formatUploadDateTime(new Date().toISOString());
 
-  let qrDataUrl = '';
-  try {
-    qrDataUrl = await QRCode.toDataURL(buildKpmQrUrl(record), {
-      width: 180,
-      margin: 1,
-      color: { dark: '#0f172a', light: '#ffffff' },
-    });
-  } catch {
-    qrDataUrl = '';
-  }
+  const renderSingleKpmPage = (preset: SingleKpmDensityPreset): { doc: AutoTableDoc; finalY: number } => {
+    const doc = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: [A4_WIDTH_MM, A4_HEIGHT_MM],
+      compress: true,
+    }) as AutoTableDoc;
 
-  // =========================================================================
-  // 1. HEADER DOKUMEN A4 (TANPA BINGKAI KARTU ROUNDED)
-  // =========================================================================
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(14.5);
-  doc.setTextColor(15, 23, 42);
-  doc.text('PROFIL DATA KPM', A4_MARGIN.left, A4_MARGIN.top + 5.5);
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9.5);
-  doc.setTextColor(71, 85, 105);
-  doc.text(
-    `Kode Register: ${record.registerCode || '-'}   ·   Tahun Anggaran: ${record.tahun}`,
-    A4_MARGIN.left,
-    A4_MARGIN.top + 11.5
-  );
-
-  const rightTextEdge = qrDataUrl ? A4_WIDTH_MM - A4_MARGIN.right - 19 : A4_WIDTH_MM - A4_MARGIN.right;
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10.5);
-  doc.setTextColor(...statusColor);
-  doc.text(`STATUS: ${statusText.toUpperCase()}`, rightTextEdge, A4_MARGIN.top + 5.5, {
-    align: 'right',
-  });
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8.5);
-  doc.setTextColor(100, 116, 139);
-  doc.text('MASDETA', rightTextEdge, A4_MARGIN.top + 11.5, { align: 'right' });
-
-  if (qrDataUrl) {
-    doc.addImage(qrDataUrl, 'PNG', A4_WIDTH_MM - A4_MARGIN.right - 16, A4_MARGIN.top - 1, 16, 16);
-  }
-
-  const dividerY = A4_MARGIN.top + 16;
-  doc.setDrawColor(15, 118, 110);
-  doc.setLineWidth(0.5);
-  doc.line(A4_MARGIN.left, dividerY, A4_WIDTH_MM - A4_MARGIN.right, dividerY);
-
-  // =========================================================================
-  // 2. BLOK ATAS: FOTO PROPORSIONAL (KIRI) + IDENTITAS CALON PENERIMA (KANAN)
-  // =========================================================================
-  const topBlockY = dividerY + 5;
-  const photoW = 54;
-  const photoH = 72; // Rasio 3:4 standar foto resmi
-  const photoX = A4_MARGIN.left;
-
-  doc.setFillColor(248, 250, 252);
-  doc.setDrawColor(203, 213, 225);
-  doc.setLineWidth(0.3);
-  doc.rect(photoX, topBlockY, photoW, photoH, 'FD');
-
-  if (loadedPortrait) {
-    const padImg = 1.2;
-    const availW = photoW - padImg * 2;
-    const availH = photoH - padImg * 2;
-    const imgRatio = loadedPortrait.width / loadedPortrait.height;
-    const boxRatio = availW / availH;
-    let drawW = availW;
-    let drawH = availH;
-    if (imgRatio > boxRatio) {
-      drawH = availW / imgRatio;
-    } else {
-      drawW = availH * imgRatio;
-    }
-    const drawX = photoX + (photoW - drawW) / 2;
-    const drawY = topBlockY + (photoH - drawH) / 2;
-    doc.addImage(loadedPortrait.dataUrl, loadedPortrait.format, drawX, drawY, drawW, drawH);
-  } else {
-    const initials = (record.nama || 'KPM')
-      .trim()
-      .split(/\s+/)
-      .slice(0, 2)
-      .map((s) => s[0]?.toUpperCase() || '')
-      .join('');
+    // 1. Header Dokumen A4 (tanpa QR Code)
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(16);
-    doc.setTextColor(148, 163, 184);
-    doc.text(initials || 'KPM', photoX + photoW / 2, topBlockY + photoH / 2 - 2, {
-      align: 'center',
-    });
+    doc.setFontSize(14.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text('PROFIL DATA KPM', A4_MARGIN.left, A4_MARGIN.top + 5.5);
+
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
+    doc.setFontSize(9.5);
+    doc.setTextColor(71, 85, 105);
     doc.text(
-      heroPhotoDoc ? 'Foto tersimpan di Drive' : 'Belum ada foto',
+      `Kode Register: ${record.registerCode || '-'}   ·   Tahun Anggaran: ${record.tahun}`,
+      A4_MARGIN.left,
+      A4_MARGIN.top + 11.5
+    );
+
+    const rightTextEdge = A4_WIDTH_MM - A4_MARGIN.right;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10.5);
+    doc.setTextColor(...statusColor);
+    doc.text(`STATUS: ${statusText.toUpperCase()}`, rightTextEdge, A4_MARGIN.top + 5.5, {
+      align: 'right',
+    });
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text('MASDETA', rightTextEdge, A4_MARGIN.top + 11.5, { align: 'right' });
+
+    const dividerY = A4_MARGIN.top + 15.5;
+    doc.setDrawColor(15, 118, 110);
+    doc.setLineWidth(0.5);
+    doc.line(A4_MARGIN.left, dividerY, A4_WIDTH_MM - A4_MARGIN.right, dividerY);
+
+    // 2. Blok Atas: Foto (Kiri) + Identitas KPM (Kanan)
+    const topBlockY = dividerY + 4.5;
+    const photoW = preset.photoW;
+    const photoH = preset.photoH;
+    const photoX = A4_MARGIN.left;
+
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(203, 213, 225);
+    doc.setLineWidth(0.3);
+    doc.rect(photoX, topBlockY, photoW, photoH, 'FD');
+
+    if (loadedPortrait) {
+      const padImg = 1.2;
+      const availW = photoW - padImg * 2;
+      const availH = photoH - padImg * 2;
+      const imgRatio = loadedPortrait.width / loadedPortrait.height;
+      const boxRatio = availW / availH;
+      let drawW = availW;
+      let drawH = availH;
+      if (imgRatio > boxRatio) {
+        drawH = availW / imgRatio;
+      } else {
+        drawW = availH * imgRatio;
+      }
+      const drawX = photoX + (photoW - drawW) / 2;
+      const drawY = topBlockY + (photoH - drawH) / 2;
+      doc.addImage(loadedPortrait.dataUrl, loadedPortrait.format, drawX, drawY, drawW, drawH);
+    } else {
+      const initials = (record.nama || 'KPM')
+        .trim()
+        .split(/\s+/)
+        .slice(0, 2)
+        .map((s) => s[0]?.toUpperCase() || '')
+        .join('');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(15);
+      doc.setTextColor(148, 163, 184);
+      doc.text(initials || 'KPM', photoX + photoW / 2, topBlockY + photoH / 2 - 2, {
+        align: 'center',
+      });
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.8);
+      doc.text(
+        heroPhotoDoc ? 'Foto tersimpan di Drive' : 'Belum ada foto',
+        photoX + photoW / 2,
+        topBlockY + photoH / 2 + 5.5,
+        { align: 'center' }
+      );
+    }
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.8);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      heroPhotoMeta?.label || 'Foto KPM',
       photoX + photoW / 2,
-      topBlockY + photoH / 2 + 6,
+      topBlockY + photoH + 3.8,
       { align: 'center' }
     );
+
+    const identityGap = 5;
+    const identityX = photoX + photoW + identityGap;
+    const identityW = A4_PRINT_WIDTH - photoW - identityGap;
+
+    autoTable(doc, {
+      startY: topBlockY,
+      margin: { ...A4_MARGIN, left: identityX },
+      tableWidth: identityW,
+      rowPageBreak: 'avoid',
+      head: [['01. IDENTITAS KPM', 'KETERANGAN']],
+      body: [
+        ['Nama Lengkap', (record.nama || '-').toUpperCase()],
+        ['NIK KTP', record.nikKtp || '-'],
+        ['Nomor Kartu Keluarga', record.nikKk || '-'],
+        ['Pekerjaan', record.pekerjaan || '-'],
+        ['No. HP / Kontak', formatPhoneForPdf(record.kontak) || '-'],
+        ['RT / RW', rtRwText],
+        ['Kelurahan / Desa', kelurahan],
+        ['Kecamatan', kecamatan],
+      ],
+      theme: 'grid',
+      styles: {
+        font: 'helvetica',
+        fontSize: preset.t1Font,
+        textColor: [15, 23, 42],
+        lineColor: [203, 213, 225],
+        lineWidth: 0.22,
+        cellPadding: { top: preset.t1PadY, right: 2.4, bottom: preset.t1PadY, left: 2.4 },
+        valign: 'middle',
+      },
+      headStyles: {
+        fillColor: [15, 118, 110],
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+        fontSize: preset.t1Font,
+        lineColor: [15, 118, 110],
+        lineWidth: 0.25,
+      },
+      columnStyles: {
+        0: {
+          cellWidth: preset.identityCol0W,
+          fontStyle: 'bold',
+          fillColor: [248, 250, 252],
+          textColor: [51, 65, 85],
+        },
+        1: { cellWidth: identityW - preset.identityCol0W },
+      },
+    });
+
+    // 3. Blok Tengah: Data Usulan & Bantuan (1-line header)
+    const afterTopY = Math.max(
+      topBlockY + photoH + 6.5,
+      (doc.lastAutoTable?.finalY ?? topBlockY + photoH) + preset.sectionGap
+    );
+
+    autoTable(doc, {
+      startY: afterTopY,
+      margin: A4_MARGIN,
+      tableWidth: A4_PRINT_WIDTH,
+      rowPageBreak: 'avoid',
+      head: [['02. ALAMAT & USULAN', 'KETERANGAN']],
+      body: [
+        ['Alamat Lengkap', record.alamat || '-'],
+        ['Proposal Pengajuan', `${record.proposal || '-'} (Tahun ${record.tahun})`],
+        ['Item Bantuan', itemLabel],
+        ['Klasifikasi DTSEN', dtsenText],
+        ['Pengelola Lapangan', record.pengelola || '-'],
+        ['Status Validasi Berkas', statusText],
+        ['Catatan Petugas', record.catatan?.trim() || '-'],
+      ],
+      theme: 'grid',
+      styles: {
+        font: 'helvetica',
+        fontSize: preset.t2Font,
+        textColor: [15, 23, 42],
+        lineColor: [203, 213, 225],
+        lineWidth: 0.22,
+        cellPadding: { top: preset.t2PadY, right: 3, bottom: preset.t2PadY, left: 3 },
+        valign: 'middle',
+      },
+      headStyles: {
+        fillColor: [241, 245, 249],
+        textColor: [15, 23, 42],
+        fontStyle: 'bold',
+        fontSize: preset.t2Font,
+        lineColor: [148, 163, 184],
+        lineWidth: 0.25,
+      },
+      columnStyles: {
+        0: { cellWidth: 48, fontStyle: 'bold', fillColor: [248, 250, 252], textColor: [51, 65, 85] },
+        1: { cellWidth: A4_PRINT_WIDTH - 48 },
+      },
+    });
+
+    // 4. Blok Bawah 1: Rincian Sub-Item Bantuan
+    const afterMidY = (doc.lastAutoTable?.finalY ?? afterTopY + 60) + preset.sectionGap;
+
+    autoTable(doc, {
+      startY: afterMidY,
+      margin: A4_MARGIN,
+      tableWidth: A4_PRINT_WIDTH,
+      rowPageBreak: 'avoid',
+      head: [['NO', '03. RINCIAN SUB-ITEM BANTUAN', 'STATUS PENYALURAN', 'PEMBARUAN']],
+      body:
+        subStatuses.length > 0
+          ? subStatuses.map((sub, i) => [
+              String(i + 1).padStart(2, '0'),
+              sub.name,
+              sub.delivered ? 'Sudah Diterima' : 'Belum Diterima',
+              sub.updatedAt ? formatUploadDateTime(sub.updatedAt) : '-',
+            ])
+          : [['-', 'Belum ada rincian sub-item pada paket bantuan ini', '-', '-']],
+      theme: 'grid',
+      styles: {
+        font: 'helvetica',
+        fontSize: preset.t3Font,
+        textColor: [15, 23, 42],
+        lineColor: [203, 213, 225],
+        lineWidth: 0.22,
+        cellPadding: { top: preset.t3PadY, right: 2.5, bottom: preset.t3PadY, left: 2.5 },
+        valign: 'middle',
+      },
+      headStyles: {
+        fillColor: [241, 245, 249],
+        textColor: [15, 23, 42],
+        fontStyle: 'bold',
+        fontSize: preset.t3Font,
+        halign: 'center',
+        lineColor: [148, 163, 184],
+        lineWidth: 0.25,
+      },
+      columnStyles: {
+        0: { cellWidth: 12, halign: 'center' },
+        1: { cellWidth: A4_PRINT_WIDTH - 90 },
+        2: { cellWidth: 40, halign: 'center' },
+        3: { cellWidth: 38, halign: 'center' },
+      },
+    });
+
+    // 5. Blok Bawah 2: Kelengkapan Dokumen (1-line header)
+    const afterSubY = (doc.lastAutoTable?.finalY ?? afterMidY + 26) + preset.sectionGap;
+
+    autoTable(doc, {
+      startY: afterSubY,
+      margin: A4_MARGIN,
+      tableWidth: A4_PRINT_WIDTH,
+      rowPageBreak: 'avoid',
+      head: [['04. KELENGKAPAN', 'STATUS', 'DOKUMEN LAINNYA', 'STATUS']],
+      body: [
+        [
+          'Foto KTP',
+          docs.ktp ? 'Tersedia' : 'Belum diunggah',
+          'Foto Survey Lapangan',
+          docs.survey ? 'Tersedia' : 'Belum diunggah',
+        ],
+        [
+          'Foto Kartu Keluarga (KK)',
+          docs.kk ? 'Tersedia' : 'Belum diunggah',
+          'Foto Rumah',
+          rumahCount > 0 ? `${rumahCount} foto tersedia` : 'Belum diunggah',
+        ],
+        [
+          'Foto Calon Penerima',
+          docs.penerima ? 'Tersedia' : 'Belum diunggah',
+          'Foto Lainnya',
+          lainnyaCount > 0 ? `${lainnyaCount} foto tersedia` : 'Belum diunggah',
+        ],
+      ],
+      theme: 'grid',
+      styles: {
+        font: 'helvetica',
+        fontSize: preset.t4Font,
+        textColor: [15, 23, 42],
+        lineColor: [203, 213, 225],
+        lineWidth: 0.22,
+        cellPadding: { top: preset.t4PadY, right: 2.5, bottom: preset.t4PadY, left: 2.5 },
+        valign: 'middle',
+      },
+      headStyles: {
+        fillColor: [241, 245, 249],
+        textColor: [15, 23, 42],
+        fontStyle: 'bold',
+        fontSize: preset.t4Font,
+        lineColor: [148, 163, 184],
+        lineWidth: 0.25,
+      },
+      columnStyles: {
+        0: { cellWidth: 48, fontStyle: 'bold', fillColor: [248, 250, 252], textColor: [51, 65, 85] },
+        1: { cellWidth: 43 },
+        2: { cellWidth: 48, fontStyle: 'bold', fillColor: [248, 250, 252], textColor: [51, 65, 85] },
+        3: { cellWidth: A4_PRINT_WIDTH - 139 },
+      },
+    });
+
+    const finalY = doc.lastAutoTable?.finalY ?? afterSubY + 25;
+    return { doc, finalY };
+  };
+
+  const maxAllowedTableBottom = A4_HEIGHT_MM - A4_MARGIN.bottom - 7;
+  let chosen = renderSingleKpmPage(SINGLE_KPM_DENSITY_PRESETS[0]);
+  for (let i = 0; i < SINGLE_KPM_DENSITY_PRESETS.length; i += 1) {
+    const attempt = i === 0 ? chosen : renderSingleKpmPage(SINGLE_KPM_DENSITY_PRESETS[i]);
+    chosen = attempt;
+    if (attempt.doc.getNumberOfPages() === 1 && attempt.finalY <= maxAllowedTableBottom) {
+      break;
+    }
   }
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(100, 116, 139);
-  doc.text(
-    heroPhotoMeta?.label || 'Foto KPM',
-    photoX + photoW / 2,
-    topBlockY + photoH + 4.2,
-    { align: 'center' }
+  const finalDoc = chosen.doc;
+  const footerLineY = A4_HEIGHT_MM - A4_MARGIN.bottom - 3;
+  const effectiveFooterY = Math.max(
+    chosen.finalY + 5.5,
+    Math.min(A4_HEIGHT_MM - 8, footerLineY)
   );
 
-  const identityGap = 5;
-  const identityX = photoX + photoW + identityGap;
-  const identityW = A4_PRINT_WIDTH - photoW - identityGap; // 123mm
+  finalDoc.setDrawColor(226, 232, 240);
+  finalDoc.setLineWidth(0.25);
+  finalDoc.line(
+    A4_MARGIN.left,
+    effectiveFooterY - 3.5,
+    A4_WIDTH_MM - A4_MARGIN.right,
+    effectiveFooterY - 3.5
+  );
 
-  autoTable(doc, {
-    startY: topBlockY,
-    margin: { ...A4_MARGIN, left: identityX },
-    tableWidth: identityW,
-    head: [['01. IDENTITAS & DOMISILI', 'KETERANGAN']],
-    body: [
-      ['Nama Lengkap', (record.nama || '-').toUpperCase()],
-      ['NIK KTP', record.nikKtp || '-'],
-      ['Nomor Kartu Keluarga', record.nikKk || '-'],
-      ['Pekerjaan', record.pekerjaan || '-'],
-      ['No. HP / Kontak', formatPhoneForPdf(record.kontak) || '-'],
-      ['RT / RW', rtRwText],
-      ['Kelurahan / Desa', kelurahan],
-      ['Kecamatan', kecamatan],
-    ],
-    theme: 'grid',
-    styles: {
-      font: 'helvetica',
-      fontSize: 9.2,
-      textColor: [15, 23, 42],
-      lineColor: [203, 213, 225],
-      lineWidth: 0.22,
-      cellPadding: { top: 2.35, right: 2.5, bottom: 2.35, left: 2.5 },
-      valign: 'middle',
-    },
-    headStyles: {
-      fillColor: [15, 118, 110],
-      textColor: [255, 255, 255],
-      fontStyle: 'bold',
-      fontSize: 9.2,
-      lineColor: [15, 118, 110],
-      lineWidth: 0.25,
-    },
-    columnStyles: {
-      0: { cellWidth: 42, fontStyle: 'bold', fillColor: [248, 250, 252], textColor: [51, 65, 85] },
-      1: { cellWidth: identityW - 42 },
-    },
-  });
-
-  // =========================================================================
-  // 3. BLOK TENGAH: DATA ALAMAT, USULAN, BANTUAN & VALIDASI (FULL WIDTH A4)
-  // =========================================================================
-  const afterTopY = Math.max(topBlockY + photoH + 8, (doc.lastAutoTable?.finalY ?? topBlockY + 72) + 5);
-
-  autoTable(doc, {
-    startY: afterTopY,
-    margin: A4_MARGIN,
-    tableWidth: A4_PRINT_WIDTH,
-    head: [['02. DATA ALAMAT, USULAN & VALIDASI', 'KETERANGAN']],
-    body: [
-      ['Alamat Lengkap', record.alamat || '-'],
-      ['Proposal Pengajuan', `${record.proposal || '-'} (Tahun ${record.tahun})`],
-      ['Item Bantuan', itemLabel],
-      ['Klasifikasi DTSEN', dtsenText],
-      ['Pengelola Lapangan', record.pengelola || '-'],
-      ['Status Validasi Berkas', statusText],
-      ['Catatan Petugas', record.catatan?.trim() || '-'],
-    ],
-    theme: 'grid',
-    styles: {
-      font: 'helvetica',
-      fontSize: 9.3,
-      textColor: [15, 23, 42],
-      lineColor: [203, 213, 225],
-      lineWidth: 0.22,
-      cellPadding: { top: 2.6, right: 3, bottom: 2.6, left: 3 },
-      valign: 'middle',
-    },
-    headStyles: {
-      fillColor: [241, 245, 249],
-      textColor: [15, 23, 42],
-      fontStyle: 'bold',
-      fontSize: 9.3,
-      lineColor: [148, 163, 184],
-      lineWidth: 0.25,
-    },
-    columnStyles: {
-      0: { cellWidth: 48, fontStyle: 'bold', fillColor: [248, 250, 252], textColor: [51, 65, 85] },
-      1: { cellWidth: A4_PRINT_WIDTH - 48 },
-    },
-  });
-
-  // =========================================================================
-  // 4. BLOK BAWAH 1: RINCIAN SUB-ITEM BANTUAN
-  // =========================================================================
-  const afterMidY = (doc.lastAutoTable?.finalY ?? afterTopY + 68) + 5.5;
-
-  autoTable(doc, {
-    startY: afterMidY,
-    margin: A4_MARGIN,
-    tableWidth: A4_PRINT_WIDTH,
-    head: [['NO', '03. RINCIAN SUB-ITEM BANTUAN', 'STATUS PENYALURAN', 'PEMBARUAN']],
-    body:
-      subStatuses.length > 0
-        ? subStatuses.map((sub, i) => [
-            String(i + 1).padStart(2, '0'),
-            sub.name,
-            sub.delivered ? 'Sudah Diterima' : 'Belum Diterima',
-            sub.updatedAt ? formatUploadDateTime(sub.updatedAt) : '-',
-          ])
-        : [['-', 'Belum ada rincian sub-item pada paket bantuan ini', '-', '-']],
-    theme: 'grid',
-    styles: {
-      font: 'helvetica',
-      fontSize: 9,
-      textColor: [15, 23, 42],
-      lineColor: [203, 213, 225],
-      lineWidth: 0.22,
-      cellPadding: { top: 2.4, right: 2.5, bottom: 2.4, left: 2.5 },
-      valign: 'middle',
-    },
-    headStyles: {
-      fillColor: [241, 245, 249],
-      textColor: [15, 23, 42],
-      fontStyle: 'bold',
-      fontSize: 9,
-      halign: 'center',
-      lineColor: [148, 163, 184],
-      lineWidth: 0.25,
-    },
-    columnStyles: {
-      0: { cellWidth: 12, halign: 'center' },
-      1: { cellWidth: A4_PRINT_WIDTH - 90 },
-      2: { cellWidth: 40, halign: 'center' },
-      3: { cellWidth: 38, halign: 'center' },
-    },
-  });
-
-  // =========================================================================
-  // 5. BLOK BAWAH 2: KELENGKAPAN DOKUMEN LAPANGAN (2 KOLOM RINGKAS)
-  // =========================================================================
-  const afterSubY = (doc.lastAutoTable?.finalY ?? afterMidY + 30) + 5.5;
-
-  autoTable(doc, {
-    startY: afterSubY,
-    margin: A4_MARGIN,
-    tableWidth: A4_PRINT_WIDTH,
-    head: [['04. KELENGKAPAN DOKUMEN', 'STATUS', 'DOKUMEN LAINNYA', 'STATUS']],
-    body: [
-      [
-        'Foto KTP',
-        docs.ktp ? 'Tersedia' : 'Belum diunggah',
-        'Foto Survey Lapangan',
-        docs.survey ? 'Tersedia' : 'Belum diunggah',
-      ],
-      [
-        'Foto Kartu Keluarga (KK)',
-        docs.kk ? 'Tersedia' : 'Belum diunggah',
-        'Foto Rumah',
-        rumahCount > 0 ? `${rumahCount} foto tersedia` : 'Belum diunggah',
-      ],
-      [
-        'Foto Calon Penerima',
-        docs.penerima ? 'Tersedia' : 'Belum diunggah',
-        'Foto Lainnya',
-        lainnyaCount > 0 ? `${lainnyaCount} foto tersedia` : 'Belum diunggah',
-      ],
-    ],
-    theme: 'grid',
-    styles: {
-      font: 'helvetica',
-      fontSize: 8.8,
-      textColor: [15, 23, 42],
-      lineColor: [203, 213, 225],
-      lineWidth: 0.22,
-      cellPadding: { top: 2.3, right: 2.5, bottom: 2.3, left: 2.5 },
-      valign: 'middle',
-    },
-    headStyles: {
-      fillColor: [241, 245, 249],
-      textColor: [15, 23, 42],
-      fontStyle: 'bold',
-      fontSize: 8.8,
-      lineColor: [148, 163, 184],
-      lineWidth: 0.25,
-    },
-    columnStyles: {
-      0: { cellWidth: 48, fontStyle: 'bold', fillColor: [248, 250, 252], textColor: [51, 65, 85] },
-      1: { cellWidth: 43 },
-      2: { cellWidth: 48, fontStyle: 'bold', fillColor: [248, 250, 252], textColor: [51, 65, 85] },
-      3: { cellWidth: A4_PRINT_WIDTH - 139 },
-    },
-  });
-
-  // =========================================================================
-  // 6. FOOTER HALAMAN A4
-  // =========================================================================
-  const footerLineY = A4_HEIGHT_MM - A4_MARGIN.bottom - 5;
-  const lastTableEnd = (doc.lastAutoTable?.finalY ?? afterSubY + 28) + 4;
-  const effectiveFooterY = Math.max(footerLineY, Math.min(A4_HEIGHT_MM - 10, lastTableEnd + 4));
-
-  doc.setDrawColor(226, 232, 240);
-  doc.setLineWidth(0.25);
-  doc.line(A4_MARGIN.left, effectiveFooterY - 3.5, A4_WIDTH_MM - A4_MARGIN.right, effectiveFooterY - 3.5);
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.2);
-  doc.setTextColor(100, 116, 139);
-  doc.text('Dokumen Profil KPM · Sistem Informasi MASDETA', A4_MARGIN.left, effectiveFooterY);
-  doc.text(
-    `Dicetak pada ${formatUploadDateTime(new Date().toISOString())}`,
+  finalDoc.setFont('helvetica', 'normal');
+  finalDoc.setFontSize(8.2);
+  finalDoc.setTextColor(100, 116, 139);
+  finalDoc.text('Dokumen Profil KPM · Sistem Informasi MASDETA', A4_MARGIN.left, effectiveFooterY);
+  finalDoc.text(
+    `Dicetak pada ${printedAtStr}`,
     A4_WIDTH_MM - A4_MARGIN.right,
     effectiveFooterY,
     { align: 'right' }
   );
 
   const safeName = `${record.tahun}_${record.nama}_${record.registerCode || 'kpm'}`;
-  return saveOrOpenPdfDocument(doc, safeName);
+  return saveOrOpenPdfDocument(finalDoc, safeName);
 }
 
 export interface ExportKuponPdfOptions {
@@ -1660,7 +1727,6 @@ function drawCouponCard(
     proposals,
     wilayahList,
     couponConfig,
-    qrDataUrl,
   }: {
     x: number;
     y: number;
@@ -1671,7 +1737,6 @@ function drawCouponCard(
     proposals: ProposalRecord[];
     wilayahList: WilayahKabKota[];
     couponConfig: CouponPrintConfig;
-    qrDataUrl: string;
   }
 ) {
   const showKelurahan = isKecamatanScopedProposalForCoupon(record, proposals);
@@ -1706,18 +1771,13 @@ function drawCouponCard(
   doc.setTextColor(15, 23, 42);
   doc.text(noKupon, noBoxX + noBoxW / 2, noBoxY + 7.6, { align: 'center' });
 
-  // Tengah atas: Judul kupon (ukuran font sama & warna hitam polos, tanpa subjudul program)
-  const titleCenterX = x + cardW / 2;
+  // Judul kupon di area kanan No. Kupon (tanpa QR)
+  const titleCenterX = x + 52.0;
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
+  doc.setFontSize(10);
   doc.setTextColor(15, 23, 42);
-  doc.text('KUPON PEMBAGIAN', titleCenterX, y + 7.6, { align: 'center' });
-  doc.text(`TAHUN ${tahunStr}`, titleCenterX, y + 12.2, { align: 'center' });
-
-  // Kanan atas: QR Code mengarah ke detail KPM
-  if (qrDataUrl) {
-    doc.addImage(qrDataUrl, 'PNG', x + cardW - 17.2, y + 1.8, 14.8, 14.8);
-  }
+  doc.text('KUPON PEMBAGIAN', titleCenterX, y + 7.8, { align: 'center' });
+  doc.text(`TAHUN ${tahunStr}`, titleCenterX, y + 12.6, { align: 'center' });
 
   // Kotak isi informasi KPM (Item/UNI disembunyikan)
   const innerX = x + 2.5;
@@ -1775,13 +1835,13 @@ function drawCouponCard(
     rowY += Math.max(1, row.lines.length) * lineStep;
   }
 
-  // Footer wajib
+  // Catatan kaki kupon
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(6.1);
   doc.setTextColor(15, 23, 42);
   doc.text(
-    couponConfig.footerText?.trim() || 'Wajib membawa Kupon dan KTP asli saat pembagian.',
-    titleCenterX,
+    couponConfig.footerText?.trim() || DEFAULT_COUPON_CONFIG.footerText,
+    x + cardW / 2,
     y + cardH - 2.0,
     { align: 'center' }
   );
@@ -1840,24 +1900,6 @@ export async function exportKuponPdf({
     return { num, label: String(num).padStart(2, '0') };
   };
 
-  // Pre-generate QR code untuk semua KPM target dalam batch paralel
-  const qrEntries = await Promise.all(
-    targetRecords.map(async (rec) => {
-      try {
-        const url = await QRCode.toDataURL(buildKpmQrUrl(rec, couponConfig?.qrBaseUrl), {
-          width: 180,
-          margin: 1,
-          errorCorrectionLevel: 'M',
-          color: { dark: '#0f172a', light: '#ffffff' },
-        });
-        return [rec.id, url] as const;
-      } catch {
-        return [rec.id, ''] as const;
-      }
-    })
-  );
-  const qrMap = new Map<string, string>(qrEntries);
-
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -1881,7 +1923,6 @@ export async function exportKuponPdf({
       proposals,
       wilayahList,
       couponConfig: effectiveConfig,
-      qrDataUrl: qrMap.get(rec.id) || '',
     });
 
     const defaultName = `Kupon_${rec.tahun || 'KPM'}_${rec.nama}_${label}`;
@@ -1934,7 +1975,6 @@ export async function exportKuponPdf({
         proposals,
         wilayahList,
         couponConfig: effectiveConfig,
-        qrDataUrl: qrMap.get(entry.rec.id) || '',
       });
     });
   }
@@ -3965,7 +4005,6 @@ export async function exportSchedulesToPdf({
           const agendaDesc = [
             ev.title,
             ev.location ? `Lokasi: ${ev.location}` : '',
-            ev.footerNote ? `Catatan Kaki: ${ev.footerNote}` : '',
             ev.notes ? `Catatan: ${ev.notes}` : '',
           ]
             .filter(Boolean)

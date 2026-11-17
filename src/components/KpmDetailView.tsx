@@ -23,7 +23,6 @@ import {
   Pencil,
   PenTool,
   Plus,
-  QrCode,
   Send,
   Share2,
   ShieldCheck,
@@ -37,7 +36,6 @@ import {
 } from 'lucide-react';
 import { DriveImage } from './DriveImage';
 import { ProposalPickerModal } from './ProposalPickerModal';
-import { KpmQrCardModal } from './QrScannerLookupModal';
 import { SignaturePadModal } from './SignaturePadModal';
 import { SlotHandlingConfirmModal } from './SlotHandlingConfirmModal';
 import { DTSEN_OPTION_ITEMS, INITIAL_WILAYAH_LIST } from '../data/kpmOptions';
@@ -94,7 +92,6 @@ import {
   getSptjmAutoDayFromIso,
   resolveCouponScheduleForRecord,
   resolveEffectiveBastConfig,
-  resolveQrBaseUrlPreview,
 } from '../utils/pdfExporter';
 import { openCekBansosWithNik } from '../services/cekBansos';
 import { isNativeAppPlatform, useIsDesktopWeb } from '../utils/platform';
@@ -229,7 +226,6 @@ export function KpmDetailView({
     () => sptjmTemplate ?? DEFAULT_SPTJM_TEMPLATE
   );
   const [saveSptjmDefault, setSaveSptjmDefault] = useState(true);
-  const [isQrCardOpen, setIsQrCardOpen] = useState(false);
   const [isSignatureOpen, setIsSignatureOpen] = useState(false);
   const [isProposalPickerOpen, setIsProposalPickerOpen] = useState(false);
   const [pendingStatusConfirm, setPendingStatusConfirm] = useState<{
@@ -696,8 +692,7 @@ export function KpmDetailView({
     setCouponDraft({
       jadwal: resolved.jadwal,
       lokasi: resolved.lokasi,
-      footerText: resolved.footerText,
-      qrBaseUrl: fallback.qrBaseUrl || '',
+      footerText: resolved.footerText || fallback.footerText || DEFAULT_COUPON_CONFIG.footerText,
     });
     setMatchedKuponScheduleTitle(resolved.matchedSchedule?.title || null);
     setSaveCouponDefault(!resolved.matchedSchedule);
@@ -993,7 +988,7 @@ export function KpmDetailView({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <div className="grid grid-cols-3 gap-2">
                 <button
                   type="button"
                   disabled={isDownloadingPdf}
@@ -1022,15 +1017,6 @@ export function KpmDetailView({
                     <Ticket className="h-3.5 w-3.5 shrink-0" />
                   )}
                   <span className="truncate">Kupon</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setIsQrCardOpen(true)}
-                  className="inline-flex min-h-[42px] items-center justify-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-2 text-xs font-semibold text-slate-800 transition-colors hover:bg-slate-100"
-                >
-                  <QrCode className="h-3.5 w-3.5 shrink-0 text-teal-700" />
-                  <span className="truncate">Kartu QR</span>
                 </button>
 
                 <button
@@ -2277,13 +2263,6 @@ export function KpmDetailView({
         }}
       />
 
-      {/* QR Code Verification Card Modal */}
-      <KpmQrCardModal
-        isOpen={isQrCardOpen}
-        record={record}
-        onClose={() => setIsQrCardOpen(false)}
-      />
-
       {/* Digital Signature & GPS Modal for BAST */}
       {onSaveBast && (
         <SignaturePadModal
@@ -2395,55 +2374,9 @@ export function KpmDetailView({
                   onChange={(e) =>
                     setCouponDraft((prev) => ({ ...prev, footerText: e.target.value }))
                   }
+                  placeholder={DEFAULT_COUPON_CONFIG.footerText}
                   className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
                 />
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-600">
-                  URL Web Publik untuk Scan QR (Opsional)
-                </label>
-                <input
-                  type="url"
-                  value={couponDraft.qrBaseUrl || ''}
-                  onChange={(e) =>
-                    setCouponDraft((prev) => ({ ...prev, qrBaseUrl: e.target.value }))
-                  }
-                  placeholder="https://vinsmokedomi-lab.github.io/MASDETA"
-                  className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                />
-                <div className="mt-1.5 flex flex-wrap gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setCouponDraft((prev) => ({
-                        ...prev,
-                        qrBaseUrl: 'https://vinsmokedomi-lab.github.io/MASDETA',
-                      }))
-                    }
-                    className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-medium text-slate-700 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-800"
-                  >
-                    GitHub Pages (Gratis)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setCouponDraft((prev) => ({
-                        ...prev,
-                        qrBaseUrl: 'https://masdeta.pages.dev',
-                      }))
-                    }
-                    className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-medium text-slate-700 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-800"
-                  >
-                    Cloudflare Pages
-                  </button>
-                </div>
-                <p className="mt-1 text-[10px] text-slate-500">
-                  Link QR:{' '}
-                  <span className="font-mono text-slate-700">
-                    {resolveQrBaseUrlPreview(couponDraft.qrBaseUrl).baseUrl}/?kpm=...
-                  </span>{' '}
-                  (bebas login, pastikan domain sudah terpublikasi)
-                </p>
               </div>
             </div>
 

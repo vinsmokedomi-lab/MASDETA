@@ -9,7 +9,6 @@ import {
   ImagePlus,
   Loader2,
   Printer,
-  QrCode,
   Ticket,
 } from 'lucide-react';
 import { TAHUN_OPTIONS } from '../data/kpmOptions';
@@ -57,7 +56,6 @@ import {
   isKecamatanScopedProposalForCoupon,
   resolveCouponScheduleForRecord,
   resolveEffectiveBastConfig,
-  resolveQrBaseUrlPreview,
   resolveScheduleForProposal,
 } from '../utils/pdfExporter';
 import { SelectionPickerModal, SelectionPickerOption } from './SelectionPickerModal';
@@ -262,17 +260,16 @@ export function MenuDownloadView({
             matchedProposalSchedule.targetTime
           ) || baseCoupon.jadwal,
         lokasi: (matchedProposalSchedule.location || '').trim() || baseCoupon.lokasi,
-        footerText:
-          (matchedProposalSchedule.footerNote || '').trim() ||
-          (matchedProposalSchedule.notes || '').trim() ||
-          baseCoupon.footerText ||
-          DEFAULT_COUPON_CONFIG.footerText,
-        qrBaseUrl: baseCoupon.qrBaseUrl || '',
+        footerText: baseCoupon.footerText || DEFAULT_COUPON_CONFIG.footerText,
       });
       setCouponManualOverride(false);
       return;
     }
-    setCouponDraft(baseCoupon);
+    setCouponDraft({
+      jadwal: baseCoupon.jadwal || '',
+      lokasi: baseCoupon.lokasi || '',
+      footerText: baseCoupon.footerText || DEFAULT_COUPON_CONFIG.footerText,
+    });
     setCouponManualOverride(false);
   }, [selectedProposal, matchedProposalSchedule, couponConfig]);
 
@@ -405,11 +402,6 @@ export function MenuDownloadView({
   const sptjmDatePreviewText = useMemo(
     () => formatSptjmFullDate(sptjmDraft),
     [sptjmDraft]
-  );
-
-  const qrPreviewInfo = useMemo(
-    () => resolveQrBaseUrlPreview(couponDraft.qrBaseUrl),
-    [couponDraft.qrBaseUrl]
   );
 
   const maxAddonCount = MAX_PDF_TOTAL_COLUMNS - MANDATORY_PDF_COLUMN_KEYS.length; // 6 add-on
@@ -745,13 +737,18 @@ export function MenuDownloadView({
           </section>
 
           {/* Card 2: Pilihan Jenis Cetak */}
-          <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2 md:p-4">
-            <h2 className="text-sm font-bold text-slate-900">Pilih Jenis Cetak PDF F4</h2>
+          <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2.5 md:p-4">
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">Pilih Jenis Cetak PDF</h2>
+              <p className="mt-0.5 text-[11px] text-slate-500">
+                Ukuran kertas F4 Portrait (216 × 310 mm)
+              </p>
+            </div>
             <div className="grid grid-cols-2 gap-1.5 rounded-xl bg-slate-100 p-1 sm:grid-cols-4">
               {(
                 [
-                  { id: 'kpm', label: 'Print KPM', Icon: Printer },
-                  { id: 'kupon', label: 'Print Kupon', Icon: Ticket },
+                  { id: 'kpm', label: 'KPM', Icon: Printer },
+                  { id: 'kupon', label: 'Kupon', Icon: Ticket },
                   { id: 'bast', label: 'BAST', Icon: FileCheck2 },
                   { id: 'sptjm', label: 'SPTJM', Icon: FileText },
                 ] as const
@@ -776,7 +773,7 @@ export function MenuDownloadView({
             </div>
           </section>
 
-          {/* Template Kop Surat & Penandatangan (khusus mode Print KPM) */}
+          {/* Template Kop Surat & Penandatangan (khusus mode KPM) */}
           {printMode === 'kpm' && (
           <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
             <button
@@ -788,12 +785,12 @@ export function MenuDownloadView({
                 <FileText className="h-4 w-4 shrink-0 text-teal-700" />
                 <div className="min-w-0">
                   <p className="text-sm font-bold text-slate-900">
-                    Template Kop &amp; Penandatangan (Print KPM)
+                    Template Kop &amp; Penandatangan (KPM)
                   </p>
                   <p className="truncate text-[11px] text-slate-500">
                     {templateDraft.enabled
-                      ? `${templateDraft.orgHeaderLine2} · Aktif pada Tabel PDF Print KPM`
-                      : 'Nonaktif · Ketuk untuk mengaktifkan kop Print KPM'}
+                      ? `${templateDraft.orgHeaderLine2} · Aktif pada Tabel PDF KPM`
+                      : 'Nonaktif · Ketuk untuk mengaktifkan kop PDF KPM'}
                   </p>
                 </div>
               </div>
@@ -1156,7 +1153,7 @@ export function MenuDownloadView({
             </section>
           )}
 
-          {/* MODE 2: PRINT KUPON (10 KUPON PER LEMBAR F4 + QR PROFIL LENGKAP) */}
+          {/* MODE 2: KUPON (10 KUPON PER LEMBAR F4) */}
           {printMode === 'kupon' && (
             <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-3.5 md:p-5">
               <div className="flex items-start justify-between gap-2">
@@ -1173,25 +1170,22 @@ export function MenuDownloadView({
                 </span>
               </div>
 
-              {/* Pratinjau Kupon Mini */}
+              {/* Pratinjau Kupon Mini (tanpa QR) */}
               <div className="rounded-xl border border-slate-300 bg-white p-3.5 shadow-xs space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex flex-col items-center">
+                <div className="flex items-center gap-3">
+                  <div className="flex flex-col items-center shrink-0">
                     <span className="text-[9px] font-medium text-slate-500">No. Kupon</span>
                     <div className="mt-0.5 flex h-9 w-12 items-center justify-center rounded-lg border border-slate-900 text-base font-bold text-slate-900 tabular-nums">
                       01
                     </div>
                   </div>
-                  <div className="text-center px-2">
+                  <div className="flex-1 text-center pr-6">
                     <p className="text-xs font-extrabold tracking-wide text-slate-900">
                       KUPON PEMBAGIAN
                     </p>
                     <p className="text-xs font-extrabold tracking-wide text-slate-900">
                       TAHUN {selectedTahun === 'all' ? '2026' : selectedTahun}
                     </p>
-                  </div>
-                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-slate-50 text-slate-800">
-                    <QrCode className="h-7 w-7" />
                   </div>
                 </div>
 
@@ -1228,11 +1222,11 @@ export function MenuDownloadView({
                 </div>
               ) : selectedProposal === 'all' && scheduledKuponCount > 0 ? (
                 <div className="rounded-xl border border-teal-200 bg-teal-50/70 px-3 py-2 text-[11px] leading-relaxed text-teal-900">
-                  <strong>{scheduledKuponCount} dari {eligibleKuponRecords.length} KPM</strong> akan otomatis mengisi Jadwal, Lokasi &amp; Catatan Kaki dari jadwal masing-masing proposal. Kolom di bawah menjadi cadangan bila proposal belum dijadwalkan.
+                  <strong>{scheduledKuponCount} dari {eligibleKuponRecords.length} KPM</strong> akan otomatis mengisi Jadwal &amp; Lokasi dari jadwal masing-masing proposal. Kolom di bawah menjadi cadangan bila proposal belum dijadwalkan.
                 </div>
               ) : (
                 <div className="rounded-xl border border-teal-200 bg-teal-50/60 px-3 py-2 text-[11px] leading-relaxed text-teal-900">
-                  Jenis item bantuan disembunyikan dari tampilan kupon fisik. Saat KPM memindai <strong>QR Code</strong> di kupon, halaman profil lengkap KPM beserta rincian item bantuan akan terbuka.
+                  Jenis item bantuan disembunyikan dari tampilan kupon fisik. Informasi Jadwal, Lokasi, dan Catatan Kaki dapat disesuaikan pada kolom di bawah.
                 </div>
               )}
 
@@ -1283,58 +1277,9 @@ export function MenuDownloadView({
                       setCouponManualOverride(true);
                       setCouponDraft((prev) => ({ ...prev, footerText: e.target.value }));
                     }}
-                    placeholder="Wajib membawa Kupon dan KTP asli saat pembagian."
+                    placeholder={DEFAULT_COUPON_CONFIG.footerText}
                     className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
                   />
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600">
-                    URL Web Publik untuk Scan QR (Opsional)
-                  </label>
-                  <input
-                    type="url"
-                    value={couponDraft.qrBaseUrl || ''}
-                    onChange={(e) => {
-                      setCouponSavedNotice(false);
-                      setCouponDraft((prev) => ({ ...prev, qrBaseUrl: e.target.value }));
-                    }}
-                    placeholder="https://vinsmokedomi-lab.github.io/MASDETA"
-                    className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                  />
-                  <div className="mt-1.5 flex flex-wrap gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCouponSavedNotice(false);
-                        setCouponDraft((prev) => ({
-                          ...prev,
-                          qrBaseUrl: 'https://vinsmokedomi-lab.github.io/MASDETA',
-                        }));
-                      }}
-                      className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-medium text-slate-700 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-800"
-                    >
-                      GitHub Pages (Gratis)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCouponSavedNotice(false);
-                        setCouponDraft((prev) => ({
-                          ...prev,
-                          qrBaseUrl: 'https://masdeta.pages.dev',
-                        }));
-                      }}
-                      className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-medium text-slate-700 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-800"
-                    >
-                      Cloudflare Pages
-                    </button>
-                  </div>
-                  <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
-                    Link QR aktif:{' '}
-                    <span className="font-mono text-slate-700">{qrPreviewInfo.baseUrl}/?kpm=...</span>{' '}
-                    (bebas login tanpa username/password — pastikan domain tersebut sudah aktif terpublikasi).
-                  </p>
                 </div>
               </div>
 

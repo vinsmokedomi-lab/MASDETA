@@ -37,7 +37,6 @@ interface DesktopSidebarProps {
   unreadChatCount: number;
   pendingUsersCount: number;
   urgentSchedulesCount: number;
-  duplicateNikCount: number;
   hasAppUpdate: boolean;
   canAdd: boolean;
   appNotifications: AppNotificationItem[];
@@ -66,7 +65,6 @@ export function DesktopSidebar({
   unreadChatCount,
   pendingUsersCount,
   urgentSchedulesCount,
-  duplicateNikCount,
   hasAppUpdate,
   canAdd,
   appNotifications,
@@ -338,11 +336,6 @@ export function DesktopSidebar({
               }`}
             />
             <span className="flex-1 truncate">Duplikasi NIK/KK</span>
-            {duplicateNikCount > 0 && (
-              <span className="rounded-full bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-700 tabular-nums">
-                {duplicateNikCount}
-              </span>
-            )}
           </button>
 
           <button

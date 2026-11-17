@@ -9,7 +9,6 @@ import {
   Lock,
   Package,
   Plus,
-  QrCode,
   Search,
   SlidersHorizontal,
   Square,
@@ -43,7 +42,6 @@ import { useIsDesktopWeb } from '../utils/platform';
 import { DriveImage } from './DriveImage';
 import { FilterSelect, SegmentedTabs } from './FormControls';
 import { ProposalPickerModal } from './ProposalPickerModal';
-import { QrScannerLookupModal } from './QrScannerLookupModal';
 import { SlotHandlingConfirmModal } from './SlotHandlingConfirmModal';
 import { SwipeAction, SwipeableRow } from './SwipeableRow';
 
@@ -139,7 +137,6 @@ export function KpmListView({
   const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
   const [pendingDeleteRecord, setPendingDeleteRecord] = useState<KpmRecord | null>(null);
   const [lockedNoticeRecord, setLockedNoticeRecord] = useState<KpmRecord | null>(null);
-  const [isQrModalOpen, setIsQrModalOpen] = useState(false);
   const [bulkMode, setBulkMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkSheet, setBulkSheet] = useState<'none' | 'dtsen' | 'item'>('none');
@@ -686,16 +683,6 @@ export function KpmListView({
               ))}
               <option value="all">Semua</option>
             </FilterSelect>
-
-            <button
-              type="button"
-              onClick={() => setIsQrModalOpen(true)}
-              aria-label="Scan QR atau cari 4 digit NIK"
-              title="Scan QR / 4 Digit NIK"
-              className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 transition-colors hover:bg-slate-50"
-            >
-              <QrCode className="h-4 w-4" />
-            </button>
 
             <button
               type="button"
@@ -1843,14 +1830,6 @@ export function KpmListView({
           </div>
         </div>
       )}
-
-      {/* QR Code & 4-Digit NIK Fast Lookup Modal */}
-      <QrScannerLookupModal
-        isOpen={isQrModalOpen}
-        records={records}
-        onClose={() => setIsQrModalOpen(false)}
-        onSelectRecord={onSelectRecord}
-      />
 
       {/* Database KPM Picker Modal for Empty Slot */}
       {dbPickerTargetSlot && onFillEmptySlotFromDatabase && (

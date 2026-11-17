@@ -205,7 +205,6 @@ interface MenuHubViewProps {
     tahun?: string;
     proposalName?: string;
     location?: string;
-    footerNote?: string;
     notes?: string;
   }) => void;
   onUpdateSchedule?: (
@@ -218,7 +217,6 @@ interface MenuHubViewProps {
       tahun?: string;
       proposalName?: string;
       location?: string;
-      footerNote?: string;
       notes?: string;
     }
   ) => void;
@@ -743,7 +741,6 @@ export function MenuHubView({
   );
   const [scheduleProposal, setScheduleProposal] = useState('');
   const [scheduleLocation, setScheduleLocation] = useState('');
-  const [scheduleFooterNote, setScheduleFooterNote] = useState('');
   const [scheduleNotes, setScheduleNotes] = useState('');
   const [exportingSchedulePdf, setExportingSchedulePdf] = useState(false);
   const [schedulePdfError, setSchedulePdfError] = useState<string | null>(null);
@@ -5163,7 +5160,6 @@ export function MenuHubView({
       setScheduleTime('');
       setScheduleProposal('');
       setScheduleLocation('');
-      setScheduleFooterNote('');
       setScheduleNotes('');
     };
 
@@ -5176,7 +5172,6 @@ export function MenuHubView({
       if (ev.tahun) setScheduleYear(ev.tahun);
       setScheduleProposal(ev.proposalName || '');
       setScheduleLocation(ev.location || '');
-      setScheduleFooterNote(ev.footerNote || '');
       setScheduleNotes(ev.notes || '');
       if (typeof window !== 'undefined') {
         window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -5194,7 +5189,6 @@ export function MenuHubView({
         tahun: scheduleYear || undefined,
         proposalName: scheduleProposal.trim() || undefined,
         location: scheduleLocation.trim() || undefined,
-        footerNote: scheduleFooterNote.trim() || undefined,
         notes: scheduleNotes.trim() || undefined,
       };
       if (editingScheduleId && onUpdateSchedule) {
@@ -5381,19 +5375,6 @@ export function MenuHubView({
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700">
-                  Catatan Kaki Kupon (opsional)
-                </label>
-                <input
-                  type="text"
-                  value={scheduleFooterNote}
-                  onChange={(e) => setScheduleFooterNote(e.target.value)}
-                  placeholder={DEFAULT_COUPON_CONFIG.footerText}
-                  className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">
                   Catatan Singkat Internal (opsional)
                 </label>
                 <input
@@ -5428,7 +5409,7 @@ export function MenuHubView({
                   Daftar Agenda ({sortedSchedules.length})
                 </h2>
                 <p className="text-[11px] text-slate-500">
-                  Jadwal, lokasi penyaluran &amp; catatan kaki otomatis terhubung ke Cetak Kupon
+                  Jadwal &amp; lokasi penyaluran otomatis terhubung ke Cetak Kupon
                 </p>
               </div>
               <button
@@ -5521,19 +5502,12 @@ export function MenuHubView({
                             {[ev.proposalName, ev.notes].filter(Boolean).join(' · ')}
                           </p>
                         )}
-                        {(ev.location || ev.footerNote) && (
+                        {ev.location && (
                           <div className="mt-1 space-y-0.5 text-[11px] text-slate-600">
-                            {ev.location && (
-                              <p className="flex items-center gap-1">
-                                <MapPin className="h-3 w-3 shrink-0 text-teal-700" />
-                                <span className="truncate">{ev.location}</span>
-                              </p>
-                            )}
-                            {ev.footerNote && (
-                              <p className="text-slate-500">
-                                Catatan Kaki Kupon: {ev.footerNote}
-                              </p>
-                            )}
+                            <p className="flex items-center gap-1">
+                              <MapPin className="h-3 w-3 shrink-0 text-teal-700" />
+                              <span className="truncate">{ev.location}</span>
+                            </p>
                           </div>
                         )}
                       </div>

@@ -391,7 +391,6 @@ export const DEFAULT_COUPON_CONFIG: CouponPrintConfig = {
   jadwal: '',
   lokasi: '',
   footerText: 'Wajib membawa Kupon dan KTP asli saat pembagian.',
-  qrBaseUrl: '',
 };
 
 export interface BastTemplateConfig {

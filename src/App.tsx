@@ -173,7 +173,6 @@ import { App as CapacitorApp } from '@capacitor/app';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { ChatView } from './components/ChatView';
 import { UserProfileView } from './components/UserProfileView';
-import { PublicKpmProfileView } from './components/PublicKpmProfileView';
 import { AppUpdateModal } from './components/AppUpdateModal';
 import { PullToRefresh } from './components/PullToRefresh';
 import {
@@ -578,30 +577,6 @@ export default function App() {
   const [bastTemplate, setBastTemplate] = useState<BastTemplateConfig>(DEFAULT_BAST_TEMPLATE);
   const [sptjmTemplate, setSptjmTemplate] = useState<SptjmTemplateConfig>(DEFAULT_SPTJM_TEMPLATE);
   const [proposalBastMap, setProposalBastMap] = useState<ProposalBastMap>({});
-  const [publicKpmToken, setPublicKpmToken] = useState<string | null>(() => {
-    if (typeof window === 'undefined') return null;
-    try {
-      const params = new URLSearchParams(window.location.search);
-      const val = params.get('kpm') || params.get('kpmQr');
-      if (val && val.trim()) return val.trim();
-      const pathMatch = window.location.pathname.match(/\/kpm\/([^/]+)/i);
-      if (pathMatch && pathMatch[1]) {
-        return decodeURIComponent(pathMatch[1]).trim();
-      }
-      const rawHash = window.location.hash || '';
-      const hashParamMatch = rawHash.match(/[?#&]?kpm=([^&]+)/i);
-      if (hashParamMatch && hashParamMatch[1]) {
-        return decodeURIComponent(hashParamMatch[1]).trim();
-      }
-      const hashPathMatch = rawHash.match(/^#\/?kpm\/([^/?]+)/i);
-      if (hashPathMatch && hashPathMatch[1]) {
-        return decodeURIComponent(hashPathMatch[1]).trim();
-      }
-      return null;
-    } catch {
-      return null;
-    }
-  });
   const [kpmBastMap, setKpmBastMap] = useState<Record<string, KpmBastInfo>>({});
   const [proposalSlotMap, setProposalSlotMap] = useState<ProposalSlotMap>({});
   const [targetKpmFormSlot, setTargetKpmFormSlot] = useState<{
@@ -6200,7 +6175,6 @@ export default function App() {
     tahun?: string;
     proposalName?: string;
     location?: string;
-    footerNote?: string;
     notes?: string;
   }) => {
     const newItem: ScheduleEventItem = {
@@ -6212,7 +6186,6 @@ export default function App() {
       tahun: payload.tahun?.trim() || selectedYear,
       proposalName: payload.proposalName,
       location: payload.location?.trim() || undefined,
-      footerNote: payload.footerNote?.trim() || undefined,
       notes: payload.notes,
       completed: false,
       createdBy: currentActor.nama,
@@ -6241,7 +6214,6 @@ export default function App() {
       tahun?: string;
       proposalName?: string;
       location?: string;
-      footerNote?: string;
       notes?: string;
     }
   ) => {
@@ -6257,7 +6229,6 @@ export default function App() {
               tahun: payload.tahun?.trim() || s.tahun,
               proposalName: payload.proposalName,
               location: payload.location?.trim() || undefined,
-              footerNote: payload.footerNote?.trim() || undefined,
               notes: payload.notes,
             }
           : s
@@ -8749,31 +8720,6 @@ export default function App() {
     );
   }
 
-  if (publicKpmToken) {
-    return (
-      <PublicKpmProfileView
-        kpmToken={publicKpmToken}
-        inMemoryRecords={records}
-        inMemoryProposals={proposals}
-        inMemoryItems={items}
-        inMemoryWilayah={wilayahList}
-        onOpenMainApp={() => {
-          setPublicKpmToken(null);
-          if (typeof window !== 'undefined') {
-            const url = new URL(window.location.href);
-            url.searchParams.delete('kpm');
-            url.searchParams.delete('kpmQr');
-            const cleanPath = /\/kpm\//i.test(url.pathname)
-              ? ((import.meta.env?.BASE_URL as string | undefined) || '/')
-              : url.pathname;
-            const cleanHash = /^#\/?kpm[=/]/i.test(url.hash) ? '' : url.hash;
-            window.history.replaceState({}, '', cleanPath + url.search + cleanHash);
-          }
-        }}
-      />
-    );
-  }
-
   if ((sessionToken || supabaseReady) && !authReady && !currentUser) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-100 p-4">
@@ -8871,7 +8817,6 @@ export default function App() {
           unreadChatCount={unreadChatCount}
           pendingUsersCount={currentUser.role === 'SuperAdmin' ? pendingUsersCount : 0}
           urgentSchedulesCount={urgentSchedulesCount}
-          duplicateNikCount={duplicateNikCount}
           hasAppUpdate={isNativeApp && Boolean(appUpdateInfo?.hasUpdate)}
           canAdd={hasPermission('add')}
           appNotifications={appNotifications}

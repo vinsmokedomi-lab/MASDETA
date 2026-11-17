@@ -1090,9 +1090,9 @@ export function ProposalDetailView({
                   <span>{matchedSchedule.location}</span>
                 </p>
               )}
-              {(matchedSchedule.footerNote || matchedSchedule.notes) && (
+              {matchedSchedule.notes && (
                 <p className="text-[11px] text-teal-700">
-                  Catatan: {matchedSchedule.footerNote || matchedSchedule.notes}
+                  Catatan: {matchedSchedule.notes}
                 </p>
               )}
             </div>
