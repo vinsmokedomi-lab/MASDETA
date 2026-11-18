@@ -4157,12 +4157,15 @@ export default function App() {
       wilayahList
     );
 
+    const rawInputTahun = (values.tahun || '').trim();
+    const cleanInputTahun =
+      rawInputTahun.toLowerCase() === 'tanpa tahun' ? '' : rawInputTahun.slice(0, 10);
     const normalizedValues: KpmFormValues & { validasi: ValidationStatus } = {
       ...values,
       validasi: targetStatus,
       tahun: isAcceptedTarget
-        ? values.tahun?.trim() || matchingProposal?.tahun || ''
-        : values.tahun?.trim() || '',
+        ? cleanInputTahun || matchingProposal?.tahun || ''
+        : '',
       proposalId: isAcceptedTarget ? (matchingProposal?.id ?? values.proposalId ?? null) : null,
       proposal: isAcceptedTarget ? (matchingProposal?.namaProposal ?? values.proposal.trim()) : '',
       kabKota: resolvedDom.kabKota,
@@ -4208,7 +4211,7 @@ export default function App() {
             proposal:
               normalizedValues.proposal ||
               (normalizedValues.validasi === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM'),
-            tahun: normalizedValues.tahun || 'Tanpa Tahun',
+            tahun: normalizedValues.tahun || '',
             changes: fieldChanges,
           };
           nextAuditLogs = [auditEntry, ...kpmAuditLogs];
@@ -4434,15 +4437,19 @@ export default function App() {
 
     const rawNewRecord: KpmRecord = {
       id: `kpm-${Date.now()}`,
-      registerCode: generateRegisterCode(
-        normalizedValues.tahun,
-        normalizedValues.item,
-        normalizedValues.proposal
-          ? records.filter(
-              (r) => r.proposal === normalizedValues.proposal && r.tahun === normalizedValues.tahun
-            ).length
-          : records.length
-      ),
+      registerCode:
+        isAcceptedTarget && normalizedValues.proposal
+          ? generateRegisterCode(
+              normalizedValues.tahun,
+              normalizedValues.item,
+              records.filter(
+                (r) =>
+                  r.validasi === 'accepted' &&
+                  r.proposal === normalizedValues.proposal &&
+                  r.tahun === normalizedValues.tahun
+              ).length
+            )
+          : '',
       ...normalizedValues,
       createdAt: now,
       updatedAt: now,
@@ -4494,12 +4501,12 @@ export default function App() {
       actorEmail: currentActor.email,
       timestamp: now,
       proposal: containerLabel,
-      tahun: savedNewRecord.tahun || 'Tanpa Tahun',
+      tahun: savedNewRecord.tahun || '',
       changes: [
         {
           field: 'Penempatan Awal',
           before: '-',
-          after: `${containerLabel} (${savedNewRecord.tahun || 'Tanpa Tahun'})`,
+          after: savedNewRecord.tahun ? `${containerLabel} (${savedNewRecord.tahun})` : containerLabel,
         },
         { field: 'Item Bantuan', before: '-', after: itemDisplay },
         {
@@ -4625,7 +4632,9 @@ export default function App() {
     setSubView('kpm-detail');
     setFeedback({
       type: 'success',
-      message: `KPM "${savedNewRecord.nama}" (${savedNewRecord.registerCode}) disimpan ke ${containerLabel}.`,
+      message: savedNewRecord.registerCode
+        ? `KPM "${savedNewRecord.nama}" (${savedNewRecord.registerCode}) disimpan ke ${containerLabel}.`
+        : `KPM "${savedNewRecord.nama}" disimpan ke ${containerLabel}.`,
     });
     return true;
   };
@@ -4655,7 +4664,7 @@ export default function App() {
       id: `trash-kpm-${target.id}-${Date.now()}`,
       kind: 'kpm',
       title: target.nama,
-      subtitle: [containerSubtitle, target.tahun || 'Tanpa Tahun', target.registerCode]
+      subtitle: [containerSubtitle, target.tahun || '', target.registerCode]
         .filter(Boolean)
         .join(' · '),
       tahun: target.tahun,
@@ -4924,12 +4933,16 @@ export default function App() {
 
     const now = new Date().toISOString();
     const dom = resolveKpmDomicile(target, proposals, wilayahList);
+    const cleanTargetTahun =
+      target.tahun?.trim() && target.tahun.trim().toLowerCase() !== 'tanpa tahun'
+        ? target.tahun.trim().slice(0, 10)
+        : '';
     const nextProposalId = status === 'accepted' && nextProp ? nextProp.id : null;
     const nextProposalName = status === 'accepted' && nextProp ? nextProp.namaProposal : '';
     const nextTahun =
       status === 'accepted' && nextProp
-        ? target.tahun?.trim() || nextProp.tahun
-        : target.tahun;
+        ? cleanTargetTahun || nextProp.tahun
+        : '';
 
     const prevPlaceLabel =
       target.proposal ||
@@ -4960,7 +4973,7 @@ export default function App() {
       actorEmail: currentActor.email,
       timestamp: now,
       proposal: nextPlaceLabel,
-      tahun: nextTahun || 'Tanpa Tahun',
+      tahun: nextTahun || '',
       changes: auditChanges,
     };
 
@@ -4968,7 +4981,7 @@ export default function App() {
     if (target.proposal?.trim() && target.proposal !== nextProposalName) {
       addedHist.push({
         id: `hist-out-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-        tahun: target.tahun,
+        tahun: cleanTargetTahun,
         proposalName: target.proposal,
         kpmId: target.id,
         kpmName: target.nama,
@@ -5348,15 +5361,23 @@ export default function App() {
                 act.values.nikKtp &&
                 workRecords.some((r) => r.nikKtp === act.values.nikKtp && r.nama === act.values.nama);
               if (!dupById && !dupByNik) {
+                const isAcceptedOffline =
+                  (act.values.validasi || 'pending') === 'accepted' &&
+                  Boolean(act.values.proposal?.trim());
                 const newRec: KpmRecord = {
                   id: targetId,
-                  registerCode: generateRegisterCode(
-                    act.values.tahun,
-                    act.values.item,
-                    workRecords.filter(
-                      (r) => r.proposal === act.values.proposal && r.tahun === act.values.tahun
-                    ).length
-                  ),
+                  registerCode: isAcceptedOffline
+                    ? generateRegisterCode(
+                        act.values.tahun,
+                        act.values.item,
+                        workRecords.filter(
+                          (r) =>
+                            r.validasi === 'accepted' &&
+                            r.proposal === act.values.proposal &&
+                            r.tahun === act.values.tahun
+                        ).length
+                      )
+                    : '',
                   ...act.values,
                   validasi: act.values.validasi || 'pending',
                   createdAt: act.createdAt,
@@ -5389,6 +5410,10 @@ export default function App() {
               const dom = resolveKpmDomicile(target, workProposals, workWilayah);
               const nextPropName = resolvedStatus === 'accepted' && targetProp ? targetProp.namaProposal : '';
               const nextPropId = resolvedStatus === 'accepted' && targetProp ? targetProp.id : null;
+              const nextTahun =
+                resolvedStatus === 'accepted' && targetProp
+                  ? target.tahun || targetProp.tahun || ''
+                  : '';
 
               const auditEntry: KpmAuditLogEntry = {
                 id: `audit-off-st-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
@@ -5398,7 +5423,7 @@ export default function App() {
                 actorEmail: actor.email,
                 timestamp: act.createdAt,
                 proposal: nextPropName || (resolvedStatus === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM'),
-                tahun: target.tahun || targetProp?.tahun || 'Tanpa Tahun',
+                tahun: nextTahun,
                 changes: [
                   {
                     field: 'Status Validasi',
@@ -5416,7 +5441,7 @@ export default function App() {
                       validasi: resolvedStatus,
                       proposalId: nextPropId,
                       proposal: nextPropName,
-                      tahun: target.tahun || targetProp?.tahun || '',
+                      tahun: nextTahun,
                       kabKota: dom.kabKota,
                       kecamatan: dom.kecamatan,
                       kelurahan: dom.kelurahan,
@@ -5635,9 +5660,13 @@ export default function App() {
                 timestamp: now,
               });
             }
+            const cleanRecTahun =
+              rec.tahun?.trim() && rec.tahun.trim().toLowerCase() !== 'tanpa tahun'
+                ? rec.tahun.trim().slice(0, 10)
+                : '';
             newHistEntries.push({
               id: `hist-bin-${Date.now()}-${idx}`,
-              tahun: rec.tahun?.trim() || resolvedProp.tahun,
+              tahun: cleanRecTahun || resolvedProp.tahun,
               proposalName: resolvedProp.namaProposal,
               kpmId: rec.id,
               kpmName: rec.nama,
@@ -5649,12 +5678,16 @@ export default function App() {
               timestamp: now,
             });
           }
+          const cleanRecTahun =
+            rec.tahun?.trim() && rec.tahun.trim().toLowerCase() !== 'tanpa tahun'
+              ? rec.tahun.trim().slice(0, 10)
+              : '';
           nextRec = {
             ...nextRec,
             validasi: 'accepted',
             proposalId: resolvedProp.id,
             proposal: resolvedProp.namaProposal,
-            tahun: rec.tahun?.trim() || resolvedProp.tahun,
+            tahun: cleanRecTahun || resolvedProp.tahun,
             kabKota: dom.kabKota,
             kecamatan: dom.kecamatan,
             kelurahan: dom.kelurahan,
@@ -5692,6 +5725,7 @@ export default function App() {
           nextRec = {
             ...nextRec,
             validasi: patch.validasi,
+            tahun: '',
             proposalId: null,
             proposal: '',
             kabKota: dom.kabKota,
@@ -5758,7 +5792,7 @@ export default function App() {
         proposal:
           nextRec.proposal ||
           (nextRec.validasi === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM'),
-        tahun: nextRec.tahun || 'Tanpa Tahun',
+        tahun: nextRec.tahun || '',
         changes,
       });
       return nextRec;
@@ -8455,7 +8489,11 @@ export default function App() {
       proposals,
       wilayahList
     );
-    const nextTahun = target.tahun?.trim() || prop.tahun;
+    const cleanExistingTahun =
+      target.tahun?.trim() && target.tahun.trim().toLowerCase() !== 'tanpa tahun'
+        ? target.tahun.trim().slice(0, 10)
+        : '';
+    const nextTahun = cleanExistingTahun || prop.tahun;
 
     const mapped = records.map((r) =>
       r.id === kpmId
@@ -8499,7 +8537,7 @@ export default function App() {
       actorEmail: currentActor.email,
       timestamp: now,
       proposal: prop.namaProposal,
-      tahun: nextTahun || 'Tanpa Tahun',
+      tahun: nextTahun || '',
       changes: [
         {
           field: 'Pengisian Slot Tetap',

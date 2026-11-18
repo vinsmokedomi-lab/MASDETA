@@ -36,13 +36,15 @@ export function DriveImage({
 
   const [currentSrc, setCurrentSrc] = useState(primarySrc);
   const [usedFallback, setUsedFallback] = useState(false);
+  const [hasFailed, setHasFailed] = useState(false);
 
   useEffect(() => {
     setCurrentSrc(primarySrc);
     setUsedFallback(false);
+    setHasFailed(false);
   }, [primarySrc, computedThumb]);
 
-  if (!currentSrc) {
+  if (!currentSrc || hasFailed) {
     return null;
   }
 
@@ -67,6 +69,7 @@ export function DriveImage({
             return;
           }
         }
+        setHasFailed(true);
         onBothFailed?.();
       }}
     />

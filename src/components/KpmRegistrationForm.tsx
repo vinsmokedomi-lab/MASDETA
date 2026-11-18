@@ -565,6 +565,7 @@ export function KpmRegistrationForm({
         return {
           ...prev,
           validasi: nextStatus,
+          tahun: '',
           proposalId: null,
           proposal: '',
           kabKota: prev.kabKota || resolvedDom.kabKota || wilayahList[0]?.nama || '',
@@ -849,7 +850,7 @@ export function KpmRegistrationForm({
 
     const normalizedValues: KpmFormValues = {
       ...values,
-      tahun: isStandalone ? values.tahun.trim() : values.tahun,
+      tahun: isStandalone ? '' : values.tahun,
       proposalId: isStandalone ? null : resolvedProp?.id || values.proposalId || null,
       proposal: isStandalone ? '' : values.proposal,
       kabKota: resolvedDomicile.kabKota || values.kabKota || '',
@@ -1194,44 +1195,40 @@ export function KpmRegistrationForm({
                 <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">
                   {isStandaloneMode
                     ? values.validasi === 'rejected'
-                      ? 'Mode Standalone: data tidak terhubung ke proposal (proposal_id = NULL) dan langsung masuk ke menu Arsip Berkas Ditolak.'
-                      : 'Mode Standalone: data tidak terhubung ke proposal (proposal_id = NULL) dan langsung masuk ke menu Database KPM.'
+                      ? 'Mode Standalone: data tidak terikat tahun & proposal (tahun = NULL, proposal_id = NULL) dan langsung masuk ke menu Arsip Berkas Ditolak.'
+                      : 'Mode Standalone: data tidak terikat tahun & proposal (tahun = NULL, proposal_id = NULL) dan langsung masuk ke menu Database KPM.'
                     : 'Mode Proposal: KPM berstatus Diterima wajib terhubung ke salah satu Proposal aktif bertipe Murni atau Perubahan.'}
                 </p>
               </div>
 
-              <div id="field-tahun">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="block text-xs font-semibold text-slate-700">
-                    Tahun Anggaran {!isStandaloneMode && <span className="text-rose-600">*</span>}
-                  </span>
-                  {isStandaloneMode && (
-                    <span className="text-[11px] text-slate-400">Opsional (boleh kosong)</span>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  id="input-tahun"
-                  disabled={editingProposalLocked || isProposalScopeLocked}
-                  onClick={() => setIsTahunModalOpen(true)}
-                  className={`mt-1.5 flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border bg-white px-3.5 text-left text-sm transition-colors hover:bg-slate-50 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-700 ${
-                    errors.tahun ? 'border-rose-400' : 'border-slate-300'
-                  }`}
-                >
-                  <span
-                    className={`truncate ${
-                      values.tahun ? 'font-medium text-slate-900' : 'text-slate-500'
-                    }`}
-                  >
-                    {values.tahun || (isStandaloneMode ? 'Tanpa Tahun' : 'Pilih Tahun')}
-                  </span>
-                  <ChevronDown className="h-4 w-4 text-slate-500 shrink-0" />
-                </button>
-                {errors.tahun && <p className="mt-1 text-xs text-rose-600">{errors.tahun}</p>}
-              </div>
-
               {!isStandaloneMode ? (
                 <>
+                  <div id="field-tahun">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="block text-xs font-semibold text-slate-700">
+                        Tahun Anggaran <span className="text-rose-600">*</span>
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      id="input-tahun"
+                      disabled={editingProposalLocked || isProposalScopeLocked}
+                      onClick={() => setIsTahunModalOpen(true)}
+                      className={`mt-1.5 flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border bg-white px-3.5 text-left text-sm transition-colors hover:bg-slate-50 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-700 ${
+                        errors.tahun ? 'border-rose-400' : 'border-slate-300'
+                      }`}
+                    >
+                      <span
+                        className={`truncate ${
+                          values.tahun ? 'font-medium text-slate-900' : 'text-slate-500'
+                        }`}
+                      >
+                        {values.tahun || 'Pilih Tahun'}
+                      </span>
+                      <ChevronDown className="h-4 w-4 text-slate-500 shrink-0" />
+                    </button>
+                    {errors.tahun && <p className="mt-1 text-xs text-rose-600">{errors.tahun}</p>}
+                  </div>
                   <div id="field-proposal">
                     <span className="block text-xs font-semibold text-slate-700">
                       Proposal Tujuan (Murni / Perubahan) <span className="text-rose-600">*</span>

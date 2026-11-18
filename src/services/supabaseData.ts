@@ -152,6 +152,12 @@ export function sanitizeMediaUrl(url?: string | null): string | null {
   return clean;
 }
 
+function sanitizeYearValue(raw?: string | null): string {
+  const clean = (raw || '').trim();
+  if (!clean || clean.toLowerCase() === 'tanpa tahun') return '';
+  return clean.slice(0, 10);
+}
+
 function buildDocFileFromRow(row: Record<string, unknown>): KpmDocumentFile | undefined {
   const directUrl = sanitizeMediaUrl(String(row.direct_url || ''));
   if (!directUrl) return undefined;
@@ -184,12 +190,22 @@ function buildDocFileFromRow(row: Record<string, unknown>): KpmDocumentFile | un
   };
 }
 
+function isRenderableMediaUrl(url?: string | null): boolean {
+  const clean = sanitizeMediaUrl(url);
+  if (!clean) return false;
+  if (/^https?:\/\//i.test(clean) || clean.startsWith('/') || clean.startsWith('blob:')) {
+    return true;
+  }
+  return Boolean(extractDriveFileId(clean));
+}
+
 function buildDocFileFromUrlFallback(
   url?: string | null,
   thumbUrl?: string | null,
   fallbackId = 'doc-url',
   fileName = 'dokumen-drive'
 ): KpmDocumentFile | undefined {
+  if (!isRenderableMediaUrl(url)) return undefined;
   const directUrl = sanitizeMediaUrl(url);
   if (!directUrl) return undefined;
   const fileId = extractDriveFileId(directUrl) || undefined;
@@ -721,10 +737,14 @@ export async function fetchOperationalDataFromSupabase(): Promise<SupabaseOperat
     const rawValidasi = (r.validasi as KpmRecord['validasi']) || 'pending';
     const rawPropId = r.proposal_id ? String(r.proposal_id) : null;
     const rawPropName = r.proposal ? String(r.proposal).trim() : '';
+    const isPhantomArsip = !rawPropId && /^arsip\b/i.test(rawPropName);
     const isDetached =
       rawValidasi !== 'accepted' ||
+      isPhantomArsip ||
       Boolean(rawPropId && removedDummyPropIds.has(rawPropId)) ||
       Boolean(rawPropName && removedDummyPropNames.has(rawPropName.toLowerCase()));
+    const effectiveValidasi: KpmRecord['validasi'] =
+      rawValidasi === 'accepted' && isDetached ? 'pending' : rawValidasi;
     const matchedProp = !isDetached
       ? (rawPropId ? proposals.find((p) => p.id === rawPropId) : undefined) ??
         proposals.find((p) => p.namaProposal === rawPropName && p.tahun === String(r.tahun || '')) ??
@@ -733,8 +753,8 @@ export async function fetchOperationalDataFromSupabase(): Promise<SupabaseOperat
 
     return {
       id: kpmId,
-      registerCode: String(r.register_code || ''),
-      tahun: r.tahun ? String(r.tahun).trim() : '',
+      registerCode: isDetached ? '' : String(r.register_code || ''),
+      tahun: isDetached ? '' : sanitizeYearValue(r.tahun ? String(r.tahun) : ''),
       proposalId: isDetached ? null : matchedProp?.id ?? rawPropId,
       proposal: isDetached ? '' : matchedProp?.namaProposal ?? rawPropName,
       kabKota: matchedProp?.kabKota || '',
@@ -748,7 +768,7 @@ export async function fetchOperationalDataFromSupabase(): Promise<SupabaseOperat
       nikKk: String(r.nik_kk || ''),
       nikKtp: String(r.nik_ktp || ''),
       dtsen: String(r.dtsen || ''),
-      validasi: rawValidasi,
+      validasi: effectiveValidasi,
       kontak: String(r.kontak || ''),
       pekerjaan: String(r.pekerjaan || ''),
       pengelola: String(r.pengelola || ''),
@@ -900,7 +920,9 @@ function buildKpmRecordRow(
     record.documents.survey?.directUrl || record.documents.survey?.dataUrl
   );
 
-  const tahunVal = record.tahun?.trim() ? record.tahun.trim() : null;
+  const tahunVal = isAccepted
+    ? sanitizeYearValue(record.tahun) || sanitizeYearValue(matchedProposal?.tahun) || null
+    : null;
   const proposalIdVal = isAccepted ? matchedProposal?.id || record.proposalId || null : null;
   const proposalNameVal = isAccepted
     ? matchedProposal?.namaProposal || (record.proposal?.trim() ? record.proposal.trim() : null)
@@ -908,20 +930,20 @@ function buildKpmRecordRow(
 
   return {
     id: record.id,
-    register_code: record.registerCode,
+    register_code: isAccepted ? record.registerCode || '' : '',
     tahun: tahunVal,
     proposal_id: proposalIdVal,
     proposal: proposalNameVal,
     kecamatan: record.kecamatan || '',
     kelurahan: record.kelurahan || '',
-    item: record.item,
+    item: (record.item || '').slice(0, 20),
     nama: record.nama,
     alamat: record.alamat || '',
-    rt: record.rt || '',
-    rw: record.rw || '',
-    nik_kk: record.nikKk || '',
-    nik_ktp: record.nikKtp || '',
-    dtsen: record.dtsen || '',
+    rt: (record.rt || '').slice(0, 10),
+    rw: (record.rw || '').slice(0, 10),
+    nik_kk: (record.nikKk || '').slice(0, 16),
+    nik_ktp: (record.nikKtp || '').slice(0, 16),
+    dtsen: (record.dtsen || '').slice(0, 20),
     validasi: record.validasi,
     kontak: record.kontak || '',
     pekerjaan: record.pekerjaan || '',
@@ -1063,6 +1085,7 @@ export async function appendKpmAuditLogsInSupabase(
     if (!a.kpmId || seenIds.has(a.id)) continue;
     if (validKpmIdsHint && !validKpmIdsHint.has(a.kpmId)) continue;
     seenIds.add(a.id);
+    const cleanTahun = sanitizeYearValue(a.tahun);
     rows.push({
       id: a.id,
       kpm_id: a.kpmId,
@@ -1071,7 +1094,7 @@ export async function appendKpmAuditLogsInSupabase(
       actor_email: a.actorEmail || null,
       timestamp: a.timestamp || nowIso,
       proposal: a.proposal || '',
-      tahun: a.tahun || '',
+      tahun: cleanTahun,
       changes: a.changes || [],
     });
   }
@@ -1099,11 +1122,12 @@ export async function appendProposalHistoryInSupabase(
     seenIds.add(h.id);
     const cleanKpmId =
       h.kpmId && (!validKpmIdsHint || validKpmIdsHint.has(h.kpmId)) ? h.kpmId : null;
+    const cleanHistTahun = sanitizeYearValue(h.tahun);
     rows.push({
       id: h.id,
-      tahun: h.tahun || '',
+      tahun: cleanHistTahun,
       proposal_id:
-        propIdByKey.get(`${h.tahun || ''}::${(h.proposalName || '').trim().toLowerCase()}`) || null,
+        propIdByKey.get(`${cleanHistTahun}::${(h.proposalName || '').trim().toLowerCase()}`) || null,
       proposal_name: h.proposalName || '',
       kpm_id: cleanKpmId,
       kpm_name: h.kpmName,
@@ -1262,7 +1286,8 @@ export async function updateKpmStatusesBatchInSupabase(params: {
     const isAccepted = u.validasi === 'accepted';
     const propId = isAccepted ? u.proposalId ?? null : null;
     const propName = isAccepted ? u.proposal?.trim() || null : null;
-    const key = `${u.validasi}::${propId || ''}::${propName || ''}::${u.tahun ?? '__keep__'}`;
+    const tahunKey = isAccepted ? (u.tahun ?? '__keep__') : '__null__';
+    const key = `${u.validasi}::${propId || ''}::${propName || ''}::${tahunKey}`;
     const list = groupedUpdates.get(key) || [];
     list.push(u);
     groupedUpdates.set(key, list);
@@ -1282,8 +1307,15 @@ export async function updateKpmStatusesBatchInSupabase(params: {
           proposal: isAccepted ? u.proposal?.trim() || null : null,
           updated_at: u.updatedAt || updatedAt,
         };
-        if (u.tahun !== undefined) patch.tahun = u.tahun?.trim() ? u.tahun.trim() : null;
-        if (u.registerCode) patch.register_code = u.registerCode;
+        if (!isAccepted) {
+          patch.tahun = null;
+          patch.register_code = '';
+        } else {
+          if (u.tahun !== undefined) {
+            patch.tahun = sanitizeYearValue(u.tahun) || null;
+          }
+          if (u.registerCode) patch.register_code = u.registerCode;
+        }
         const { error } = await supabase.from('kpm_records').update(patch).eq('id', u.id);
         if (error) throw error;
       }
@@ -1297,8 +1329,11 @@ export async function updateKpmStatusesBatchInSupabase(params: {
       proposal: isAccepted ? first.proposal?.trim() || null : null,
       updated_at: updatedAt,
     };
-    if (first.tahun !== undefined) {
-      batchPatch.tahun = first.tahun?.trim() ? first.tahun.trim() : null;
+    if (!isAccepted) {
+      batchPatch.tahun = null;
+      batchPatch.register_code = '';
+    } else if (first.tahun !== undefined) {
+      batchPatch.tahun = sanitizeYearValue(first.tahun) || null;
     }
     for (let i = 0; i < ids.length; i += 100) {
       const chunk = ids.slice(i, i + 100);
@@ -2145,7 +2180,7 @@ export async function supabaseUpdateProposalLockStatus(
       );
       return {
         id: h.id,
-        tahun: h.tahun,
+        tahun: sanitizeYearValue(h.tahun),
         proposal_id: matchedTarget?.id || null,
         proposal_name: h.proposalName,
         kpm_id: h.kpmId || null,
@@ -2185,7 +2220,7 @@ export async function supabaseDeleteProposalDirect(
   if (historyEntries.length > 0) {
     const histRows = historyEntries.map((h) => ({
       id: h.id,
-      tahun: h.tahun,
+      tahun: sanitizeYearValue(h.tahun),
       proposal_id: null,
       proposal_name: h.proposalName,
       kpm_id: h.kpmId || null,
@@ -2687,11 +2722,12 @@ export async function syncAllOperationalDataToSupabase(
     for (const h of snapshot.proposalHistory.slice(0, 1000)) {
       if (seenHistIds.has(h.id)) continue;
       seenHistIds.add(h.id);
+      const cleanHistTahun = sanitizeYearValue(h.tahun);
       histRows.push({
         id: h.id,
-        tahun: h.tahun,
+        tahun: cleanHistTahun,
         proposal_id:
-          propIdByKey.get(`${h.tahun}::${h.proposalName.trim().toLowerCase()}`) || null,
+          propIdByKey.get(`${cleanHistTahun}::${h.proposalName.trim().toLowerCase()}`) || null,
         proposal_name: h.proposalName,
         kpm_id: keepKpmIds.has(h.kpmId) ? h.kpmId : null,
         kpm_name: h.kpmName,
@@ -2722,7 +2758,7 @@ export async function syncAllOperationalDataToSupabase(
         actor_email: a.actorEmail || null,
         timestamp: a.timestamp || nowIso,
         proposal: a.proposal || '',
-        tahun: a.tahun || '',
+        tahun: sanitizeYearValue(a.tahun),
         changes: a.changes || [],
       });
       if (validLogs.length >= 1500) break;
@@ -4016,7 +4052,10 @@ export async function fetchPublicKpmContextFromSupabase(
     const rawValidasi = (kpmRow.validasi as KpmRecord['validasi']) || 'pending';
     const rawPropId = kpmRow.proposal_id ? String(kpmRow.proposal_id) : null;
     const rawPropName = kpmRow.proposal ? String(kpmRow.proposal).trim() : '';
-    const isDetached = rawValidasi !== 'accepted';
+    const isPhantomArsip = !rawPropId && /^arsip\b/i.test(rawPropName);
+    const isDetached = rawValidasi !== 'accepted' || isPhantomArsip;
+    const effectiveValidasi: KpmRecord['validasi'] =
+      rawValidasi === 'accepted' && isDetached ? 'pending' : rawValidasi;
     const matchedProp = !isDetached
       ? (rawPropId ? proposals.find((p) => p.id === rawPropId) : undefined) ??
         proposals.find((p) => p.namaProposal === rawPropName && p.tahun === String(kpmRow.tahun || '')) ??
@@ -4025,8 +4064,8 @@ export async function fetchPublicKpmContextFromSupabase(
 
     const record: KpmRecord = {
       id: kpmId,
-      registerCode: String(kpmRow.register_code || ''),
-      tahun: kpmRow.tahun ? String(kpmRow.tahun).trim() : '',
+      registerCode: isDetached ? '' : String(kpmRow.register_code || ''),
+      tahun: isDetached ? '' : sanitizeYearValue(kpmRow.tahun ? String(kpmRow.tahun) : ''),
       proposalId: isDetached ? null : matchedProp?.id ?? rawPropId,
       proposal: isDetached ? '' : matchedProp?.namaProposal ?? rawPropName,
       kabKota: matchedProp?.kabKota || '',
@@ -4040,7 +4079,7 @@ export async function fetchPublicKpmContextFromSupabase(
       nikKk: String(kpmRow.nik_kk || ''),
       nikKtp: String(kpmRow.nik_ktp || ''),
       dtsen: String(kpmRow.dtsen || ''),
-      validasi: rawValidasi,
+      validasi: effectiveValidasi,
       kontak: String(kpmRow.kontak || ''),
       pekerjaan: String(kpmRow.pekerjaan || ''),
       pengelola: String(kpmRow.pengelola || ''),

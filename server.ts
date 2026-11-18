@@ -1797,6 +1797,32 @@ async function startServer() {
     }
   });
 
+  app.get('/api/supabase-files/:filename', (req: Request, res: Response) => {
+    const allowedFiles = new Set([
+      'fix_standalone_kpm_no_year.sql',
+      'kpm_records_import.sql',
+      'kpm_records_import.csv',
+      'schema.sql',
+    ]);
+    const filename = String(req.params.filename || '').trim();
+    if (!allowedFiles.has(filename)) {
+      res.status(404).json({ error: 'File tidak ditemukan.' });
+      return;
+    }
+    const filePath = path.resolve(process.cwd(), 'supabase', filename);
+    if (!fs.existsSync(filePath)) {
+      res.status(404).json({ error: 'File belum tersedia.' });
+      return;
+    }
+    const contentType = filename.endsWith('.csv')
+      ? 'text/csv; charset=utf-8'
+      : 'application/sql; charset=utf-8';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.sendFile(filePath);
+  });
+
   // WebSocket handling for multi-tab presence & real-time push
   wss.on('connection', (ws: WebSocket) => {
     let boundUserId: string | null = null;

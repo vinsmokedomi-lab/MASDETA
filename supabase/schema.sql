@@ -156,7 +156,7 @@ CREATE TABLE IF NOT EXISTS public.kpm_records (
   proposal TEXT,
   kecamatan TEXT NOT NULL DEFAULT '',
   kelurahan TEXT NOT NULL DEFAULT '',
-  item VARCHAR(20) NOT NULL,
+  item VARCHAR(20) NOT NULL DEFAULT '',
   nama TEXT NOT NULL,
   alamat TEXT NOT NULL DEFAULT '',
   rt VARCHAR(10) NOT NULL DEFAULT '',
@@ -185,6 +185,55 @@ CREATE TABLE IF NOT EXISTS public.kpm_records (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE public.kpm_records
+  ALTER COLUMN tahun DROP NOT NULL,
+  ALTER COLUMN tahun SET DEFAULT NULL,
+  ALTER COLUMN proposal_id DROP NOT NULL,
+  ALTER COLUMN proposal DROP NOT NULL,
+  ALTER COLUMN item SET DEFAULT '';
+
+CREATE OR REPLACE FUNCTION public.fn_kpm_records_sanitize_defaults()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.register_code := COALESCE(NEW.register_code, '');
+  NEW.kecamatan := COALESCE(NEW.kecamatan, '');
+  NEW.kelurahan := COALESCE(NEW.kelurahan, '');
+  NEW.item := COALESCE(NEW.item, '');
+  NEW.alamat := COALESCE(NEW.alamat, '');
+  NEW.rt := COALESCE(NEW.rt, '');
+  NEW.rw := COALESCE(NEW.rw, '');
+  NEW.nik_kk := COALESCE(NEW.nik_kk, '');
+  NEW.nik_ktp := COALESCE(NEW.nik_ktp, '');
+  NEW.dtsen := COALESCE(NEW.dtsen, '');
+  NEW.validasi := COALESCE(NULLIF(BTRIM(NEW.validasi), ''), 'pending');
+  NEW.kontak := COALESCE(NEW.kontak, '');
+  NEW.pekerjaan := COALESCE(NEW.pekerjaan, '');
+  NEW.pengelola := COALESCE(NEW.pengelola, '');
+  NEW.catatan := COALESCE(NEW.catatan, '');
+  NEW.payment := COALESCE(NEW.payment, 0);
+  NEW.berkas_dikembalikan := COALESCE(NEW.berkas_dikembalikan, FALSE);
+
+  IF NEW.validasi IN ('pending', 'rejected') THEN
+    NEW.register_code := '';
+    NEW.tahun := NULL;
+    NEW.proposal_id := NULL;
+    NEW.proposal := NULL;
+  ELSIF LOWER(BTRIM(COALESCE(NEW.tahun, ''))) IN ('', 'tanpa tahun') THEN
+    NEW.tahun := NULL;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_kpm_records_sanitize_defaults ON public.kpm_records;
+CREATE TRIGGER trg_kpm_records_sanitize_defaults
+  BEFORE INSERT OR UPDATE ON public.kpm_records
+  FOR EACH ROW
+  EXECUTE FUNCTION public.fn_kpm_records_sanitize_defaults();
 
 CREATE TABLE IF NOT EXISTS public.kpm_documents (
   id TEXT PRIMARY KEY,
@@ -221,7 +270,7 @@ CREATE TABLE IF NOT EXISTS public.kpm_sub_item_deliveries (
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.proposal_kpm_history (
   id TEXT PRIMARY KEY,
-  tahun VARCHAR(10) DEFAULT '',
+  tahun VARCHAR(30) DEFAULT '',
   proposal_id TEXT REFERENCES public.proposals(id) ON DELETE SET NULL,
   proposal_name TEXT NOT NULL DEFAULT '',
   kpm_id TEXT REFERENCES public.kpm_records(id) ON DELETE SET NULL,
@@ -242,7 +291,7 @@ CREATE TABLE IF NOT EXISTS public.kpm_audit_logs (
   actor_email TEXT,
   timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   proposal TEXT NOT NULL DEFAULT '',
-  tahun VARCHAR(10) NOT NULL DEFAULT '',
+  tahun VARCHAR(30) NOT NULL DEFAULT '',
   changes JSONB NOT NULL DEFAULT '[]'::jsonb
 );
 

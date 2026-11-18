@@ -375,14 +375,12 @@ export function importProposalKpmFromCsv({
     else if (rawValidasi === 'menunggu' || rawValidasi === 'pending') validasi = 'pending';
 
     const tahunRaw = get(idxTahun);
-    const tahun =
-      validasi !== 'accepted' && (!tahunRaw || tahunRaw === '-' || /tanpa\s*tahun/i.test(tahunRaw))
-        ? ''
-        : /^20\d{2}$/.test(tahunRaw)
-          ? tahunRaw
-          : bannerTahun || '2026';
-
     const isStandalone = validasi !== 'accepted';
+    const tahun = isStandalone
+      ? ''
+      : /^20\d{2}$/.test(tahunRaw)
+        ? tahunRaw
+        : bannerTahun || '2026';
     const rawProposal = isStandalone ? '' : get(idxProposal) || bannerProposal || 'Kecamatan Pontianak Kota';
     let proposalName = isStandalone ? '' : formatProposalTitle(rawProposal);
     const existingProp = !isStandalone
@@ -460,10 +458,12 @@ export function importProposalKpmFromCsv({
     const finalKelurahan = rawKelurahan || dom.kelurahan;
 
     const recCreatedAt = new Date(baseTimeMs + parsedRows.length).toISOString();
-    const regYearPart = tahun || (validasi === 'rejected' ? 'ARSIP' : 'DB');
+    const regYearPart = tahun || 'NON';
     const newRecord: KpmRecord = {
       id: `kpm-csv-${baseTimeMs}-${parsedRows.length}-${Math.random().toString(36).slice(2, 6)}`,
-      registerCode: `${String(parsedRows.length + 1).padStart(3, '0')}. ${regYearPart} - ${rawItem || 'OV'}`,
+      registerCode: isStandalone
+        ? ''
+        : `${String(parsedRows.length + 1).padStart(3, '0')}. ${regYearPart} - ${rawItem || 'OV'}`,
       tahun,
       proposalId: isStandalone ? null : existingProp?.id ?? null,
       proposal: proposalName,
@@ -788,14 +788,12 @@ export function previewImportFile({
     else if (rawValidasi === 'menunggu' || rawValidasi === 'pending') validasi = 'pending';
 
     const tahunRaw = get(idxTahun);
-    const tahun =
-      validasi !== 'accepted' && (!tahunRaw || tahunRaw === '-' || /tanpa\s*tahun/i.test(tahunRaw))
-        ? ''
-        : /^20\d{2}$/.test(tahunRaw)
-          ? tahunRaw
-          : bannerTahun || '2026';
-
     const isStandalone = validasi !== 'accepted';
+    const tahun = isStandalone
+      ? ''
+      : /^20\d{2}$/.test(tahunRaw)
+        ? tahunRaw
+        : bannerTahun || '2026';
     const proposalName = isStandalone
       ? ''
       : formatProposalTitle(get(idxProposal) || bannerProposal || 'Kecamatan Pontianak Kota');

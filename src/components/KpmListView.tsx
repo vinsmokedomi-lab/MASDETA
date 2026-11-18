@@ -1033,21 +1033,29 @@ export function KpmListView({
                       const rec = entry.record;
                       const thumb = getPrimaryKpmPhoto(rec.documents);
                       const locked = isRecordProposalLocked(rec);
-                      const absenSeq = isSlotViewActive
-                        ? entry.slotNumber
-                        : getAbsenSeq(rec.registerCode);
-                      const absenLabel =
-                        absenSeq < 999999 ? String(absenSeq).padStart(2, '0') : '--';
+                      const isStandalone = !rec.proposal?.trim() || rec.validasi !== 'accepted';
+                      const absenSeq = isStandalone
+                        ? 999999
+                        : isSlotViewActive
+                          ? entry.slotNumber
+                          : getAbsenSeq(rec.registerCode);
+                      const absenLabel = isStandalone
+                        ? '—'
+                        : absenSeq < 999999
+                          ? String(absenSeq).padStart(2, '0')
+                          : '--';
                       const desilNumeric =
                         rec.dtsen && /^\d/.test(rec.dtsen.trim())
                           ? rec.dtsen.trim().replace(/\s*-\s*/g, '-')
                           : '';
                       const dom = resolveKpmDomicile(rec, proposals, wilayahList);
                       const kelurahanName = getCompactKelurahan(dom.kelurahan);
-                      const isStandalone = !rec.proposal?.trim() || rec.validasi !== 'accepted';
                       const containerTitle = isStandalone
                         ? getStandalonePlaceLabel(rec)
                         : rec.proposal;
+                      const desktopYearText = isStandalone
+                        ? rec.tahun?.trim() || ''
+                        : rec.tahun || 'Tanpa Tahun';
                       const isSelected = selectedIds.includes(rec.id);
 
                       return (
@@ -1114,10 +1122,14 @@ export function KpmListView({
                           <td className="px-3 py-2.5 max-w-[220px]">
                             <p className="truncate font-medium text-slate-800">{containerTitle}</p>
                             <p className="truncate text-[11px] text-slate-500 tabular-nums">
-                              {rec.tahun || 'Tanpa Tahun'}
-                              {dom.kecamatan ? ` · ${dom.kecamatan}` : ''}
-                              {kelurahanName ? ` · ${kelurahanName}` : ''}
-                              {rec.rt || rec.rw ? ` · RT ${rec.rt || '-'}/RW ${rec.rw || '-'}` : ''}
+                              {[
+                                desktopYearText,
+                                dom.kecamatan,
+                                kelurahanName,
+                                rec.rt || rec.rw ? `RT ${rec.rt || '-'}/RW ${rec.rw || '-'}` : '',
+                              ]
+                                .filter(Boolean)
+                                .join(' · ') || '-'}
                             </p>
                           </td>
                           <td className="px-3 py-2.5 whitespace-nowrap">
@@ -1390,18 +1402,26 @@ export function KpmListView({
               const rec = entry.record;
               const thumb = getPrimaryKpmPhoto(rec.documents);
               const locked = isRecordProposalLocked(rec);
-              const absenSeq = isSlotViewActive
-                ? entry.slotNumber
-                : getAbsenSeq(rec.registerCode);
-              const absenLabel =
-                absenSeq < 999999 ? String(absenSeq).padStart(2, '0') : '--';
+              const isStandalone = !rec.proposal?.trim() || rec.validasi !== 'accepted';
+              const absenSeq = isStandalone
+                ? 999999
+                : isSlotViewActive
+                  ? entry.slotNumber
+                  : getAbsenSeq(rec.registerCode);
+              const absenLabel = isStandalone
+                ? ''
+                : absenSeq < 999999
+                  ? String(absenSeq).padStart(2, '0')
+                  : '--';
               const desilNumeric = rec.dtsen && /^\d/.test(rec.dtsen.trim())
                 ? rec.dtsen.trim().replace(/\s*-\s*/g, '-')
                 : '';
               const dom = resolveKpmDomicile(rec, proposals, wilayahList);
               const kelurahanName = getCompactKelurahan(dom.kelurahan);
-              const isStandalone = !rec.proposal?.trim() || rec.validasi !== 'accepted';
               const containerTitle = isStandalone ? getStandalonePlaceLabel(rec) : rec.proposal;
+              const mobileYearText = isStandalone
+                ? rec.tahun?.trim() || ''
+                : rec.tahun || 'Tanpa Tahun';
               const metaLine = [dom.kecamatan, kelurahanName, rec.pengelola?.trim()]
                 .filter(Boolean)
                 .join(' · ');
@@ -1481,13 +1501,13 @@ export function KpmListView({
                             <Square className="h-4.5 w-4.5 text-slate-300" />
                           )}
                         </div>
-                      ) : (
+                      ) : !isStandalone ? (
                         <div className="flex w-5 shrink-0 items-center justify-center">
                           <span className="font-mono text-[11px] font-bold text-slate-500 tabular-nums">
                             {absenLabel}
                           </span>
                         </div>
-                      )}
+                      ) : null}
 
                       {/* Foto Thumbnail Fixed Frame (48x48) */}
                       <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
@@ -1530,9 +1550,11 @@ export function KpmListView({
                           <span className="truncate font-medium text-slate-600">
                             {containerTitle}
                           </span>
-                          <span className="shrink-0 font-semibold text-slate-400 tabular-nums">
-                            {rec.tahun || 'Tanpa Tahun'}
-                          </span>
+                          {mobileYearText && (
+                            <span className="shrink-0 font-semibold text-slate-400 tabular-nums">
+                              {mobileYearText}
+                            </span>
+                          )}
                         </div>
 
                         {/* Baris 3: Kelurahan / Pengelola */}

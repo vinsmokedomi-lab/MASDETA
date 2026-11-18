@@ -118,7 +118,9 @@ export function CorrespondentKpmListPanel({
         rec.nama.toLowerCase().includes(q) ||
         rec.nikKtp.includes(q) ||
         rec.nikKk.includes(q) ||
-        rec.registerCode.toLowerCase().includes(q) ||
+        (rec.validasi === 'accepted' && Boolean(rec.proposal?.trim())
+          ? rec.registerCode.toLowerCase().includes(q)
+          : false) ||
         rec.proposal.toLowerCase().includes(q) ||
         rec.alamat.toLowerCase().includes(q) ||
         rec.pekerjaan.toLowerCase().includes(q) ||
@@ -389,9 +391,13 @@ export function CorrespondentKpmListPanel({
           {filteredRecords.map((rec) => {
             const thumb = getPrimaryKpmPhoto(rec.documents);
             const locked = isRecordProposalLocked(rec);
-            const absenSeq = getAbsenSeq(rec.registerCode);
-            const absenLabel =
-              absenSeq < 999999 ? String(absenSeq).padStart(2, '0') : '--';
+            const isStandalone = !rec.proposal?.trim() || rec.validasi !== 'accepted';
+            const absenSeq = isStandalone ? 999999 : getAbsenSeq(rec.registerCode);
+            const absenLabel = isStandalone
+              ? ''
+              : absenSeq < 999999
+                ? String(absenSeq).padStart(2, '0')
+                : '--';
             const desilNumeric =
               rec.dtsen && /^\d/.test(rec.dtsen.trim())
                 ? rec.dtsen.trim().replace(/\s*-\s*/g, '-')
@@ -403,6 +409,9 @@ export function CorrespondentKpmListPanel({
               : rec.validasi === 'rejected'
                 ? 'Arsip Ditolak'
                 : 'Database KPM';
+            const yearBadgeText = isStandalone
+              ? rec.tahun?.trim() || ''
+              : rec.tahun || 'Tanpa Tahun';
             const metaLine = [dom.kecamatan, kelurahanName, rec.pengelola?.trim()]
               .filter(Boolean)
               .join(' · ');
@@ -416,11 +425,13 @@ export function CorrespondentKpmListPanel({
                   !isNativeApp ? 'md:rounded-2xl md:border md:border-slate-200 md:bg-white' : ''
                 }`}
               >
-                <div className="flex w-5 shrink-0 items-center justify-center">
-                  <span className="font-mono text-[11px] font-bold text-slate-500 tabular-nums">
-                    {absenLabel}
-                  </span>
-                </div>
+                {!isStandalone && (
+                  <div className="flex w-5 shrink-0 items-center justify-center">
+                    <span className="font-mono text-[11px] font-bold text-slate-500 tabular-nums">
+                      {absenLabel}
+                    </span>
+                  </div>
+                )}
 
                 {/* Foto Thumbnail Fixed Frame (48x48) */}
                 <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
@@ -463,9 +474,11 @@ export function CorrespondentKpmListPanel({
                     <span className="truncate font-medium text-slate-600">
                       {containerTitle}
                     </span>
-                    <span className="shrink-0 font-semibold text-slate-400 tabular-nums">
-                      {rec.tahun || 'Tanpa Tahun'}
-                    </span>
+                    {yearBadgeText && (
+                      <span className="shrink-0 font-semibold text-slate-400 tabular-nums">
+                        {yearBadgeText}
+                      </span>
+                    )}
                   </div>
 
                   {/* Baris 3: Kelurahan / Pengelola */}

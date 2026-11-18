@@ -377,7 +377,9 @@ export function KpmDetailView({
 
   const standaloneContainerLabel =
     record.validasi === 'rejected' ? 'Arsip Ditolak' : 'Database KPM';
-  const displayTahun = record.tahun?.trim() || 'Tanpa Tahun';
+  const displayTahun = isStandalone
+    ? record.tahun?.trim() || ''
+    : record.tahun?.trim() || 'Tanpa Tahun';
 
   const isProposalLocked = !isStandalone && matchingProposal?.status === 'locked';
 
@@ -500,14 +502,14 @@ export function KpmDetailView({
         actorName: 'Petugas Internal',
         timestamp: record.createdAt,
         proposal: record.proposal || standaloneContainerLabel,
-        tahun: displayTahun,
+        tahun: record.tahun?.trim() || '',
         changes: [
           {
             field: 'Penempatan Awal',
             before: '-',
             after: record.proposal
-              ? `${record.proposal} (${displayTahun})`
-              : `${standaloneContainerLabel} (${displayTahun})`,
+              ? `${record.proposal}${record.tahun?.trim() ? ` (${record.tahun.trim()})` : ''}`
+              : `${standaloneContainerLabel}${record.tahun?.trim() ? ` (${record.tahun.trim()})` : ''}`,
           },
           { field: 'Item Bantuan', before: '-', after: itemName },
         ],
@@ -929,7 +931,9 @@ export function KpmDetailView({
           {/* Card Top Bar */}
           <div className="flex items-center justify-between gap-2 border-b border-slate-100 bg-slate-50/70 px-4 py-2.5">
             <p className="truncate text-xs font-medium text-teal-800 tabular-nums">
-              {record.registerCode} · {displayTahun}
+              {[isStandalone ? '' : record.registerCode, displayTahun]
+                .filter(Boolean)
+                .join(' · ') || standaloneContainerLabel}
             </p>
             {renderStatusIndicator(record.validasi)}
           </div>
@@ -1160,6 +1164,8 @@ export function KpmDetailView({
                       ? 'NIK KTP Sama'
                       : 'Nomor KK Sama';
 
+                const dupStandalone = !dup.proposal?.trim() || dup.validasi !== 'accepted';
+
                 return (
                   <button
                     key={dup.id}
@@ -1170,7 +1176,9 @@ export function KpmDetailView({
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <p className="truncate text-sm font-medium text-slate-900">
-                          {dup.registerCode} · {dup.nama}
+                          {[dupStandalone ? '' : dup.registerCode, dup.nama]
+                            .filter(Boolean)
+                            .join(' · ')}
                         </p>
                       </div>
                       <p className="mt-0.5 text-xs font-medium text-amber-800">
@@ -1178,7 +1186,7 @@ export function KpmDetailView({
                       </p>
                       <p className="mt-1 truncate text-xs text-slate-600">
                         {dup.proposal
-                          ? `${dup.proposal} (${dup.tahun || 'Tanpa Tahun'})`
+                          ? `${dup.proposal}${dup.tahun ? ` (${dup.tahun})` : ''}`
                           : `${dup.validasi === 'rejected' ? 'Arsip Ditolak' : 'Database KPM'}${dup.tahun ? ` (${dup.tahun})` : ''}`}{' '}
                         · DTSEN: {dup.dtsen}
                       </p>
@@ -1232,7 +1240,7 @@ export function KpmDetailView({
               <div className="min-w-0">
                 <h3 className="text-sm font-bold text-slate-900">Penyaluran Sub-Item</h3>
                 <p className="text-xs leading-snug text-slate-500">
-                  {itemName} · {displayTahun}
+                  {[itemName || 'Tanpa Item', displayTahun].filter(Boolean).join(' · ')}
                 </p>
               </div>
             </div>
@@ -1265,7 +1273,8 @@ export function KpmDetailView({
 
           {subItemStatuses.length === 0 ? (
             <div className="px-4 py-6 text-center text-xs text-slate-500">
-              Belum ada rincian sub-item untuk paket {record.item || 'bantuan'} ({displayTahun}).
+              Belum ada rincian sub-item untuk paket {record.item || 'bantuan'}
+              {displayTahun ? ` (${displayTahun})` : ''}.
             </div>
           ) : (
             <>
@@ -1499,12 +1508,14 @@ export function KpmDetailView({
             <h3 className="text-sm font-bold text-slate-900">Pengajuan Bantuan</h3>
           </div>
           <dl className="divide-y divide-slate-100 text-sm">
-            <div className="flex items-center justify-between gap-3 px-4 py-3">
-              <dt className="text-xs text-slate-500 shrink-0">Tahun</dt>
-              <dd className="text-right text-xs font-medium text-slate-900 tabular-nums">
-                {displayTahun}
-              </dd>
-            </div>
+            {displayTahun && (
+              <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <dt className="text-xs text-slate-500 shrink-0">Tahun</dt>
+                <dd className="text-right text-xs font-medium text-slate-900 tabular-nums">
+                  {displayTahun}
+                </dd>
+              </div>
+            )}
             <div className="flex items-start justify-between gap-3 px-4 py-3">
               <dt className="text-xs text-slate-500 shrink-0">
                 {!isStandalone && record.proposal ? 'Proposal' : 'Status Penempatan'}
@@ -1959,8 +1970,8 @@ export function KpmDetailView({
                 Masuk ke{' '}
                 <span className="font-medium text-slate-800">
                   {initialCreationEntry.proposal || standaloneContainerLabel}
-                </span>{' '}
-                · Tahun {initialCreationEntry.tahun || 'Tanpa Tahun'}
+                </span>
+                {initialCreationEntry.tahun ? ` · Tahun ${initialCreationEntry.tahun}` : ''}
               </p>
             </div>
           )}
@@ -2035,8 +2046,13 @@ export function KpmDetailView({
                 <div className="shrink-0">{renderStatusIndicator(record.validasi)}</div>
               </div>
               <p className="truncate text-[11px] font-medium text-slate-500 tabular-nums">
-                {record.registerCode} · {itemName} ·{' '}
-                {!isStandalone && record.proposal ? record.proposal : standaloneContainerLabel}
+                {[
+                  isStandalone ? '' : record.registerCode,
+                  itemName,
+                  !isStandalone && record.proposal ? record.proposal : standaloneContainerLabel,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
               </p>
             </div>
           </button>
@@ -2177,11 +2193,13 @@ export function KpmDetailView({
               </div>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[11px] font-medium text-teal-700 tabular-nums">
-                  {record.registerCode} · {displayTahun}
+                  {[isStandalone ? '' : record.registerCode, displayTahun]
+                    .filter(Boolean)
+                    .join(' · ') || standaloneContainerLabel}
                 </p>
                 <p className="truncate text-sm font-bold text-slate-900">{record.nama}</p>
                 <p className="truncate text-xs text-slate-500">
-                  {itemName} · {record.proposal || standaloneContainerLabel}
+                  {[itemName, record.proposal || standaloneContainerLabel].filter(Boolean).join(' · ')}
                 </p>
               </div>
             </div>

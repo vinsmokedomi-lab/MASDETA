@@ -242,12 +242,13 @@ export function normalizeKpmRouting(
   wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST
 ): KpmRecord {
   const dom = resolveKpmDomicile(record, proposals, wilayahList);
-  const tahun = (record.tahun || '').trim();
+  const rawTahun = (record.tahun || '').trim();
+  const tahun = rawTahun.toLowerCase() === 'tanpa tahun' ? '' : rawTahun.slice(0, 10);
 
   if (record.validasi !== 'accepted') {
     return {
       ...record,
-      tahun,
+      tahun: '',
       proposalId: null,
       proposal: '',
       kabKota: dom.kabKota,
@@ -268,7 +269,7 @@ export function normalizeKpmRouting(
   if (!matchedProp && !record.proposal?.trim()) {
     return {
       ...record,
-      tahun,
+      tahun: '',
       validasi: 'pending',
       proposalId: null,
       proposal: '',
@@ -1606,7 +1607,7 @@ export function recalculateProposalRegisterCodes(
     if (rec.validasi !== 'accepted') {
       return {
         ...rec,
-        tahun: (rec.tahun || '').trim(),
+        tahun: '',
         proposalId: null,
         proposal: '',
         kabKota: dom.kabKota,
@@ -1623,15 +1624,13 @@ export function recalculateProposalRegisterCodes(
     };
   });
 
-  // Group records by proposal (accepted only) OR standalone bucket (pending / rejected)
+  // Group records by proposal (accepted only); standalone (pending / rejected) have no registerCode
   const groups = new Map<string, KpmRecord[]>();
   for (const rec of normalizedRecords) {
     const propName = (rec.proposal || '').trim();
     const tahunVal = (rec.tahun || '').trim();
-    const key =
-      rec.validasi === 'accepted' && propName
-        ? getProposalSlotKey(rec.proposalId, propName, tahunVal, proposals)
-        : `standalone::${rec.validasi}__${tahunVal || 'NON'}`;
+    if (rec.validasi !== 'accepted' || !propName) continue;
+    const key = getProposalSlotKey(rec.proposalId, propName, tahunVal, proposals);
     const list = groups.get(key) ?? [];
     list.push(rec);
     groups.set(key, list);
@@ -1680,7 +1679,7 @@ export function recalculateProposalRegisterCodes(
 
     sorted.forEach((rec, idx) => {
       const seq = String(idx + 1).padStart(3, '0');
-      const yearPart = (rec.tahun || '').trim() || (rec.validasi === 'rejected' ? 'ARSIP' : 'DB');
+      const yearPart = (rec.tahun || '').trim() || 'NON';
       nextCodeById.set(rec.id, `${seq}. ${yearPart} - ${rec.item || 'BNS'}`);
     });
   }
@@ -1688,9 +1687,11 @@ export function recalculateProposalRegisterCodes(
   let changed = false;
   const updated = normalizedRecords.map((rec, idx) => {
     const orig = records[idx];
-    const nextCode = nextCodeById.get(rec.id);
-    const codeChanged = Boolean(nextCode && nextCode !== rec.registerCode);
+    const isAcceptedProp = rec.validasi === 'accepted' && Boolean((rec.proposal || '').trim());
+    const nextCode = isAcceptedProp ? nextCodeById.get(rec.id) || rec.registerCode || '' : '';
+    const codeChanged = nextCode !== (rec.registerCode || '');
     const routingChanged =
+      (rec.tahun || '') !== (orig.tahun || '') ||
       rec.proposal !== orig.proposal ||
       (rec.proposalId ?? null) !== (orig.proposalId ?? null) ||
       (rec.kecamatan || '') !== (orig.kecamatan || '') ||
@@ -1699,7 +1700,7 @@ export function recalculateProposalRegisterCodes(
       changed = true;
       return {
         ...rec,
-        registerCode: nextCode || rec.registerCode,
+        registerCode: nextCode,
       };
     }
     return rec;

@@ -20,7 +20,6 @@ import {
 import {
   DTSEN_OPTIONS,
   INITIAL_WILAYAH_LIST,
-  TAHUN_OPTIONS,
 } from '../data/kpmOptions';
 import {
   ItemBantuan,
@@ -31,7 +30,6 @@ import {
 } from '../types/kpm';
 import {
   formatKecamatanCategoryLabel,
-  getAbsenSeq,
   getPrimaryKpmPhoto,
   resolveKpmDomicile,
 } from '../utils/imageProcessor';
@@ -134,7 +132,7 @@ export function StandaloneKpmView({
   );
 
   const yearOptions = useMemo(() => {
-    const set = new Set<string>(TAHUN_OPTIONS);
+    const set = new Set<string>();
     enrichedRecords.forEach((e) => {
       const yr = (e.record.tahun || '').trim();
       if (yr) set.add(yr);
@@ -267,7 +265,6 @@ export function StandaloneKpmView({
           record.nama.toLowerCase().includes(q) ||
           (record.nikKtp || '').includes(q) ||
           (record.nikKk || '').includes(q) ||
-          (record.registerCode || '').toLowerCase().includes(q) ||
           (record.alamat || '').toLowerCase().includes(q) ||
           kecamatan.toLowerCase().includes(q) ||
           kelurahan.toLowerCase().includes(q) ||
@@ -531,20 +528,22 @@ export function StandaloneKpmView({
               />
             </div>
 
-            <FilterSelect
-              ariaLabel="Filter tahun"
-              value={yearFilter}
-              onChange={setYearFilter}
-              className="w-[106px] shrink-0"
-            >
-              <option value="all">Semua</option>
-              {hasRecordsWithoutYear && <option value={NO_YEAR_KEY}>Tanpa Tahun</option>}
-              {yearOptions.map((yr) => (
-                <option key={yr} value={yr}>
-                  {yr}
-                </option>
-              ))}
-            </FilterSelect>
+            {yearOptions.length > 0 && (
+              <FilterSelect
+                ariaLabel="Filter tahun"
+                value={yearFilter}
+                onChange={setYearFilter}
+                className="w-[106px] shrink-0"
+              >
+                <option value="all">Semua</option>
+                {hasRecordsWithoutYear && <option value={NO_YEAR_KEY}>Tanpa Tahun</option>}
+                {yearOptions.map((yr) => (
+                  <option key={yr} value={yr}>
+                    {yr}
+                  </option>
+                ))}
+              </FilterSelect>
+            )}
 
             <button
               type="button"
@@ -755,9 +754,6 @@ export function StandaloneKpmView({
                 >
                   {entries.map(({ record: rec, kecamatan, kelurahan }) => {
                     const thumb = getPrimaryKpmPhoto(rec.documents);
-                    const absenSeq = getAbsenSeq(rec.registerCode);
-                    const absenLabel =
-                      absenSeq < 999999 ? String(absenSeq).padStart(2, '0') : '--';
                     const isChecked = selectedIdSet.has(rec.id);
                     const rawDtsen = rec.dtsen?.trim() || '';
                     const desilText = rawDtsen
@@ -780,7 +776,7 @@ export function StandaloneKpmView({
 
                     const rowSecondaryLine = [
                       rec.nikKtp ? `NIK ${rec.nikKtp}` : '',
-                      rec.tahun?.trim() || 'Tanpa Tahun',
+                      rec.tahun?.trim() || '',
                       rec.alamat?.trim() || '',
                     ]
                       .filter(Boolean)
@@ -812,7 +808,7 @@ export function StandaloneKpmView({
                           }}
                           className="flex min-h-[68px] w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-slate-50/80 active:bg-slate-100/60"
                         >
-                          {selectionMode ? (
+                          {selectionMode && (
                             <div
                               className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-colors ${
                                 isChecked
@@ -821,12 +817,6 @@ export function StandaloneKpmView({
                               }`}
                             >
                               {isChecked && <Check className="h-3.5 w-3.5" strokeWidth={3} />}
-                            </div>
-                          ) : (
-                            <div className="flex w-5 shrink-0 items-center justify-center">
-                              <span className="font-mono text-[11px] font-bold text-slate-500 tabular-nums">
-                                {absenLabel}
-                              </span>
                             </div>
                           )}
 
