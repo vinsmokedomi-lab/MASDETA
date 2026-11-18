@@ -303,6 +303,33 @@ CREATE TABLE IF NOT EXISTS public.masdeta_app_state (
 );
 
 -- ----------------------------------------------------------------------------
+-- 8B. JADWAL KEGIATAN & TEMPLATE DOKUMEN RESMI (SPTJM, BAST, KUPON, KOP)
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.schedules (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  category VARCHAR(40) NOT NULL DEFAULT 'lainnya',
+  target_day VARCHAR(30),
+  target_date VARCHAR(20) NOT NULL,
+  target_time VARCHAR(20),
+  tahun VARCHAR(10),
+  proposal_name TEXT,
+  location TEXT,
+  notes TEXT,
+  completed BOOLEAN NOT NULL DEFAULT FALSE,
+  completed_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL DEFAULT 'Petugas Internal',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.document_templates (
+  template_key TEXT PRIMARY KEY,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ----------------------------------------------------------------------------
 -- 9. INDEKS PERFORMA TINGGI (Pencarian NIK, KK, Wilayah, Proposal, Audit, Chat)
 -- ----------------------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_wilayah_kec_kabkota ON public.wilayah_kecamatan (kabkota_id);
@@ -337,6 +364,8 @@ CREATE INDEX IF NOT EXISTS idx_internal_users_email ON public.internal_users (lo
 CREATE INDEX IF NOT EXISTS idx_internal_users_status ON public.internal_users (status);
 CREATE INDEX IF NOT EXISTS idx_chat_conv_created ON public.direct_chat_messages (conversation_key, created_at);
 CREATE INDEX IF NOT EXISTS idx_chat_recipient_unread ON public.direct_chat_messages (recipient_id, read_at);
+CREATE INDEX IF NOT EXISTS idx_schedules_target_date ON public.schedules (target_date, target_time);
+CREATE INDEX IF NOT EXISTS idx_schedules_tahun_proposal ON public.schedules (tahun, proposal_name);
 
 -- ----------------------------------------------------------------------------
 -- 10. ROW LEVEL SECURITY (RLS) MULTI-ADMIN
@@ -366,6 +395,8 @@ ALTER TABLE public.kpm_audit_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.internal_users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.direct_chat_messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.masdeta_app_state ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.schedules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.document_templates ENABLE ROW LEVEL SECURITY;
 
 DO $$
 DECLARE
@@ -388,7 +419,9 @@ BEGIN
     'kpm_audit_logs',
     'internal_users',
     'direct_chat_messages',
-    'masdeta_app_state'
+    'masdeta_app_state',
+    'schedules',
+    'document_templates'
   ]
   LOOP
     EXECUTE format('DROP POLICY IF EXISTS "masdeta_multiadmin_select_%s" ON public.%I;', tbl, tbl);
@@ -439,7 +472,9 @@ BEGIN
     'kpm_audit_logs',
     'internal_users',
     'direct_chat_messages',
-    'masdeta_app_state'
+    'masdeta_app_state',
+    'schedules',
+    'document_templates'
   ]
   LOOP
     BEGIN

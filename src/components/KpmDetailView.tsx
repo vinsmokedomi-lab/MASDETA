@@ -15,6 +15,7 @@ import {
   FileCheck2,
   FileText,
   History,
+  ImagePlus,
   Loader2,
   Lock,
   MapPin,
@@ -160,6 +161,44 @@ interface KpmDetailViewProps {
   onDismissFeedback?: () => void;
 }
 
+async function compressKuponLogoFile(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Gagal membaca file gambar logo.'));
+    reader.onload = () => {
+      const src = typeof reader.result === 'string' ? reader.result : '';
+      if (!src) {
+        reject(new Error('File gambar tidak valid.'));
+        return;
+      }
+      const img = new Image();
+      img.onerror = () => reject(new Error('Format gambar logo tidak didukung.'));
+      img.onload = () => {
+        const maxDim = 220;
+        const scale = Math.min(
+          1,
+          maxDim / Math.max(img.naturalWidth || maxDim, img.naturalHeight || maxDim)
+        );
+        const w = Math.max(1, Math.round((img.naturalWidth || maxDim) * scale));
+        const h = Math.max(1, Math.round((img.naturalHeight || maxDim) * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(src);
+          return;
+        }
+        ctx.clearRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/png'));
+      };
+      img.src = src;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 export function KpmDetailView({
   record,
   allRecords,
@@ -210,6 +249,8 @@ export function KpmDetailView({
   const [isDownloadingKuponPdf, setIsDownloadingKuponPdf] = useState(false);
   const [isDownloadingBastPdf, setIsDownloadingBastPdf] = useState(false);
   const [isDownloadingSptjmPdf, setIsDownloadingSptjmPdf] = useState(false);
+  const kuponKalbarInputRef = useRef<HTMLInputElement | null>(null);
+  const kuponGerindraInputRef = useRef<HTMLInputElement | null>(null);
   const [isKuponModalOpen, setIsKuponModalOpen] = useState(false);
   const [couponDraft, setCouponDraft] = useState<CouponPrintConfig>(
     () => couponConfig ?? DEFAULT_COUPON_CONFIG
@@ -693,10 +734,33 @@ export function KpmDetailView({
       jadwal: resolved.jadwal,
       lokasi: resolved.lokasi,
       footerText: resolved.footerText || fallback.footerText || DEFAULT_COUPON_CONFIG.footerText,
+      logoKalbarUrl: fallback.logoKalbarUrl || '',
+      logoGerindraUrl: fallback.logoGerindraUrl || '',
     });
     setMatchedKuponScheduleTitle(resolved.matchedSchedule?.title || null);
     setSaveCouponDefault(!resolved.matchedSchedule);
     setIsKuponModalOpen(true);
+  };
+
+  const handleSingleKuponLogoUpload = async (
+    slot: 'kalbar' | 'gerindra',
+    e: ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const dataUrl = await compressKuponLogoFile(file);
+      setCouponDraft((prev) => ({
+        ...prev,
+        ...(slot === 'kalbar' ? { logoKalbarUrl: dataUrl } : { logoGerindraUrl: dataUrl }),
+      }));
+    } catch (err) {
+      setPdfNotice({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Gagal memproses file logo kupon.',
+      });
+    }
   };
 
   const handleDownloadSingleKuponPdf = async () => {
@@ -2309,7 +2373,7 @@ export function KpmDetailView({
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md rounded-t-3xl border border-slate-200 bg-white p-5 shadow-2xl sm:rounded-3xl space-y-3.5"
+            className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-t-3xl border border-slate-200 bg-white p-5 shadow-2xl sm:rounded-3xl space-y-3.5"
           >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -2340,6 +2404,69 @@ export function KpmDetailView({
                 Terisi otomatis dari jadwal proposal <strong>{record.proposal}</strong> ({matchedKuponScheduleTitle}).
               </div>
             )}
+
+            {/* Pratinjau Header Kupon */}
+            {(() => {
+              const hasKalbar = Boolean(couponDraft.logoKalbarUrl?.trim());
+              const hasGerindra = Boolean(couponDraft.logoGerindraUrl?.trim());
+              const hasAny = hasKalbar || hasGerindra;
+              return (
+                <div className="rounded-xl border border-slate-300 bg-white px-3 py-2.5">
+                  <div className="flex items-center gap-2">
+                    <div className="flex flex-col items-center shrink-0">
+                      <span className="text-[8px] font-medium text-slate-500">No. Kupon</span>
+                      <div className="mt-0.5 flex h-7 w-10 items-center justify-center rounded-md border border-slate-900 text-xs font-bold text-slate-900 tabular-nums">
+                        {String(
+                          currentSlotNumber ||
+                            (getAbsenSeq(record.registerCode) < 999999
+                              ? getAbsenSeq(record.registerCode)
+                              : 1)
+                        ).padStart(2, '0')}
+                      </div>
+                    </div>
+                    {hasAny ? (
+                      <div className="flex flex-1 min-w-0 items-center justify-between gap-1.5">
+                        <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden">
+                          {hasKalbar && (
+                            <img
+                              src={couponDraft.logoKalbarUrl}
+                              alt="Logo Kalimantan Barat"
+                              className="max-h-full max-w-full object-contain"
+                            />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0 text-center">
+                          <p className="text-[10px] font-bold tracking-wide text-slate-900 leading-tight">
+                            KUPON PEMBAGIAN
+                          </p>
+                          <p className="text-[10px] font-bold tracking-wide text-slate-900 leading-tight">
+                            TAHUN {record.tahun || '2026'}
+                          </p>
+                        </div>
+                        <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden">
+                          {hasGerindra && (
+                            <img
+                              src={couponDraft.logoGerindraUrl}
+                              alt="Logo Gerindra"
+                              className="max-h-full max-w-full object-contain"
+                            />
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex-1 text-center pr-2">
+                        <p className="text-[13px] font-black tracking-wide text-slate-950 leading-tight">
+                          KUPON PEMBAGIAN
+                        </p>
+                        <p className="text-[13px] font-black tracking-wide text-slate-950 leading-tight">
+                          TAHUN {record.tahun || '2026'}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
 
             <div className="space-y-2.5">
               <div>
@@ -2377,6 +2504,108 @@ export function KpmDetailView({
                   placeholder={DEFAULT_COUPON_CONFIG.footerText}
                   className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
                 />
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-2.5 space-y-2">
+                <div>
+                  <p className="text-[11px] font-bold text-slate-800">Logo Kupon (Opsional)</p>
+                  <p className="text-[10px] text-slate-500">
+                    Ada logo → judul di tengah. Tanpa logo → judul diperbesar &amp; ditebalkan.
+                  </p>
+                </div>
+                <input
+                  ref={kuponKalbarInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => void handleSingleKuponLogoUpload('kalbar', e)}
+                />
+                <input
+                  ref={kuponGerindraInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => void handleSingleKuponLogoUpload('gerindra', e)}
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="flex flex-col gap-1.5 rounded-xl border border-slate-200 bg-white p-2">
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                        {couponDraft.logoKalbarUrl ? (
+                          <img
+                            src={couponDraft.logoKalbarUrl}
+                            alt="Logo Kalimantan Barat"
+                            className="max-h-full max-w-full object-contain"
+                          />
+                        ) : (
+                          <ImagePlus className="h-3.5 w-3.5 text-slate-400" />
+                        )}
+                      </div>
+                      <span className="truncate text-[10px] font-semibold text-slate-700">
+                        Logo Kalbar
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => kuponKalbarInputRef.current?.click()}
+                        className="flex-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[10px] font-semibold text-teal-800 hover:bg-teal-100"
+                      >
+                        {couponDraft.logoKalbarUrl ? 'Ganti' : 'Unggah'}
+                      </button>
+                      {couponDraft.logoKalbarUrl && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCouponDraft((prev) => ({ ...prev, logoKalbarUrl: '' }))
+                          }
+                          className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700 hover:bg-rose-100"
+                        >
+                          Hapus
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-1.5 rounded-xl border border-slate-200 bg-white p-2">
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                        {couponDraft.logoGerindraUrl ? (
+                          <img
+                            src={couponDraft.logoGerindraUrl}
+                            alt="Logo Gerindra"
+                            className="max-h-full max-w-full object-contain"
+                          />
+                        ) : (
+                          <ImagePlus className="h-3.5 w-3.5 text-slate-400" />
+                        )}
+                      </div>
+                      <span className="truncate text-[10px] font-semibold text-slate-700">
+                        Logo Gerindra
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => kuponGerindraInputRef.current?.click()}
+                        className="flex-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[10px] font-semibold text-teal-800 hover:bg-teal-100"
+                      >
+                        {couponDraft.logoGerindraUrl ? 'Ganti' : 'Unggah'}
+                      </button>
+                      {couponDraft.logoGerindraUrl && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCouponDraft((prev) => ({ ...prev, logoGerindraUrl: '' }))
+                          }
+                          className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700 hover:bg-rose-100"
+                        >
+                          Hapus
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
 

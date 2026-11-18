@@ -15,12 +15,16 @@ import {
   deleteKpmRecordWithSideEffectsInSupabase,
   deleteKpmsBatchInSupabase,
   deletePengelolaInSupabase,
+  deleteScheduleFromSupabase,
   fetchAppStateSlice,
   fetchChatDeliveryWatermarks,
+  fetchDocumentTemplateFromSupabase,
   fetchOperationalDataFromSupabase,
+  fetchSchedulesFromSupabase,
   isSchemaMissingError,
   runAdminDataActionInSupabase,
   saveAppStateSlice,
+  saveDocumentTemplateInSupabase,
   supabaseAdminControlInternalUser,
   supabaseCreateInternalUserBySuperAdmin,
   supabaseDeleteInternalUser,
@@ -48,6 +52,7 @@ import {
   upsertPengelolaInSupabase,
   upsertProposalInSupabase,
   upsertProposalsBatchInSupabase,
+  upsertScheduleInSupabase,
 } from './services/supabaseData';
 import {
   INITIAL_INTERNAL_USERS,
@@ -1430,21 +1435,25 @@ export default function App() {
         fetchedSlotMap,
         fetchedProposalBastMap,
       ] = await Promise.all([
-        fetchAppStateSlice<ScheduleEventItem[]>('masdeta_schedules_v1', []),
+        fetchSchedulesFromSupabase(),
         fetchAppStateSlice<TrashRecordItem[]>('masdeta_trash_bin_v1', []),
-        fetchAppStateSlice<ReportTemplateConfig>(
+        fetchDocumentTemplateFromSupabase<ReportTemplateConfig>(
+          'report',
           'masdeta_report_template_v1',
           DEFAULT_REPORT_TEMPLATE
         ),
-        fetchAppStateSlice<CouponPrintConfig>(
+        fetchDocumentTemplateFromSupabase<CouponPrintConfig>(
+          'kupon',
           'masdeta_coupon_config_v1',
           DEFAULT_COUPON_CONFIG
         ),
-        fetchAppStateSlice<BastTemplateConfig>(
+        fetchDocumentTemplateFromSupabase<BastTemplateConfig>(
+          'bast',
           'masdeta_bast_template_v1',
           DEFAULT_BAST_TEMPLATE
         ),
-        fetchAppStateSlice<SptjmTemplateConfig>(
+        fetchDocumentTemplateFromSupabase<SptjmTemplateConfig>(
+          'sptjm',
           'masdeta_sptjm_template_v1',
           DEFAULT_SPTJM_TEMPLATE
         ),
@@ -1452,7 +1461,11 @@ export default function App() {
         fetchChatDeliveryWatermarks(),
         fetchAppStateSlice<Record<string, Record<string, string>>>('masdeta_user_aliases_v1', {}),
         fetchAppStateSlice<ProposalSlotMap>('masdeta_proposal_slots_v1', {}),
-        fetchAppStateSlice<ProposalBastMap>('masdeta_proposal_bast_v1', {}),
+        fetchDocumentTemplateFromSupabase<ProposalBastMap>(
+          'proposal_bast',
+          'masdeta_proposal_bast_v1',
+          {}
+        ),
       ]);
 
       const nowMs = Date.now();
@@ -2468,6 +2481,20 @@ export default function App() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'masdeta_app_state' },
+        () => {
+          void loadAppStateSlicesRef.current();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'schedules' },
+        () => {
+          void loadAppStateSlicesRef.current();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'document_templates' },
         () => {
           void loadAppStateSlicesRef.current();
         }
@@ -6202,7 +6229,7 @@ export default function App() {
       return (a.targetTime || '99:99').localeCompare(b.targetTime || '99:99');
     });
     setSchedules(next);
-    void saveAppStateSlice('masdeta_schedules_v1', next);
+    void upsertScheduleInSupabase(newItem, next);
     setFeedback({
       type: 'success',
       message: `Agenda "${resolvedTitle}" berhasil ditambahkan ke jadwal.`,
@@ -6225,30 +6252,33 @@ export default function App() {
   ) => {
     const resolvedTitle =
       payload.title.trim() || SCHEDULE_CATEGORY_LABELS[payload.category] || 'Agenda Lainnya';
+    let updatedItem: ScheduleEventItem | null = null;
     const next = schedules
-      .map((s) =>
-        s.id === id
-          ? {
-              ...s,
-              title: resolvedTitle,
-              category: payload.category,
-              targetDay: payload.targetDay?.trim() || undefined,
-              targetDate: payload.targetDate,
-              targetTime: payload.targetTime?.trim() || undefined,
-              tahun: payload.tahun?.trim() || s.tahun,
-              proposalName: payload.proposalName,
-              location: payload.location?.trim() || undefined,
-              notes: payload.notes,
-            }
-          : s
-      )
+      .map((s) => {
+        if (s.id !== id) return s;
+        updatedItem = {
+          ...s,
+          title: resolvedTitle,
+          category: payload.category,
+          targetDay: payload.targetDay?.trim() || undefined,
+          targetDate: payload.targetDate,
+          targetTime: payload.targetTime?.trim() || undefined,
+          tahun: payload.tahun?.trim() || s.tahun,
+          proposalName: payload.proposalName,
+          location: payload.location?.trim() || undefined,
+          notes: payload.notes,
+        };
+        return updatedItem;
+      })
       .sort((a, b) => {
         const dateCmp = a.targetDate.localeCompare(b.targetDate);
         if (dateCmp !== 0) return dateCmp;
         return (a.targetTime || '99:99').localeCompare(b.targetTime || '99:99');
       });
     setSchedules(next);
-    void saveAppStateSlice('masdeta_schedules_v1', next);
+    if (updatedItem) {
+      void upsertScheduleInSupabase(updatedItem, next);
+    }
     setFeedback({
       type: 'success',
       message: `Agenda "${resolvedTitle}" berhasil diperbarui.`,
@@ -6257,28 +6287,31 @@ export default function App() {
 
   const handleToggleSchedule = (id: string) => {
     const now = new Date().toISOString();
-    const next = schedules.map((s) =>
-      s.id === id
-        ? {
-            ...s,
-            completed: !s.completed,
-            completedAt: !s.completed ? now : undefined,
-          }
-        : s
-    );
+    let toggledItem: ScheduleEventItem | null = null;
+    const next = schedules.map((s) => {
+      if (s.id !== id) return s;
+      toggledItem = {
+        ...s,
+        completed: !s.completed,
+        completedAt: !s.completed ? now : undefined,
+      };
+      return toggledItem;
+    });
     setSchedules(next);
-    void saveAppStateSlice('masdeta_schedules_v1', next);
+    if (toggledItem) {
+      void upsertScheduleInSupabase(toggledItem, next);
+    }
   };
 
   const handleDeleteSchedule = (id: string) => {
     const next = schedules.filter((s) => s.id !== id);
     setSchedules(next);
-    void saveAppStateSlice('masdeta_schedules_v1', next);
+    void deleteScheduleFromSupabase(id, next);
   };
 
   const handleSaveReportTemplate = (next: ReportTemplateConfig) => {
     setReportTemplate(next);
-    void saveAppStateSlice('masdeta_report_template_v1', next);
+    void saveDocumentTemplateInSupabase('report', 'masdeta_report_template_v1', next);
     setFeedback({
       type: 'success',
       message: 'Template Kop Surat & penandatangan resmi berhasil disimpan.',
@@ -6287,7 +6320,7 @@ export default function App() {
 
   const handleSaveCouponConfig = (next: CouponPrintConfig) => {
     setCouponConfig(next);
-    void saveAppStateSlice('masdeta_coupon_config_v1', next);
+    void saveDocumentTemplateInSupabase('kupon', 'masdeta_coupon_config_v1', next);
     setFeedback({
       type: 'success',
       message: 'Pengaturan cetak kupon pembagian berhasil disimpan.',
@@ -6296,7 +6329,7 @@ export default function App() {
 
   const handleSaveBastTemplate = (next: BastTemplateConfig) => {
     setBastTemplate(next);
-    void saveAppStateSlice('masdeta_bast_template_v1', next);
+    void saveDocumentTemplateInSupabase('bast', 'masdeta_bast_template_v1', next);
     setFeedback({
       type: 'success',
       message: 'Template BAST resmi Dinas Sosial berhasil disimpan.',
@@ -6305,7 +6338,7 @@ export default function App() {
 
   const handleSaveSptjmTemplate = (next: SptjmTemplateConfig) => {
     setSptjmTemplate(next);
-    void saveAppStateSlice('masdeta_sptjm_template_v1', next);
+    void saveDocumentTemplateInSupabase('sptjm', 'masdeta_sptjm_template_v1', next);
     setFeedback({
       type: 'success',
       message: 'Template SPTJM berhasil disimpan.',
@@ -6323,7 +6356,7 @@ export default function App() {
       next[proposalId] = config;
     }
     setProposalBastMap(next);
-    void saveAppStateSlice('masdeta_proposal_bast_v1', next);
+    void saveDocumentTemplateInSupabase('proposal_bast', 'masdeta_proposal_bast_v1', next);
     const propLabel =
       proposals.find((p) => p.id === proposalId)?.namaProposal || 'proposal';
     setFeedback({

@@ -416,12 +416,16 @@ export interface CouponPrintConfig {
   lokasi: string;
   footerText: string;
   qrBaseUrl?: string;
+  logoKalbarUrl?: string;
+  logoGerindraUrl?: string;
 }
 
 export const DEFAULT_COUPON_CONFIG: CouponPrintConfig = {
   jadwal: '',
   lokasi: '',
   footerText: 'Wajib membawa Kupon dan KTP asli saat pembagian.',
+  logoKalbarUrl: '',
+  logoGerindraUrl: '',
 };
 
 export interface BastTemplateConfig {

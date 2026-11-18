@@ -601,6 +601,7 @@ export function resolveCouponScheduleForRecord(
 
   if (!matchedSchedule) {
     return {
+      ...fallbackConfig,
       jadwal: fallbackConfig.jadwal || '',
       lokasi: fallbackConfig.lokasi || '',
       footerText: fallbackConfig.footerText || DEFAULT_COUPON_CONFIG.footerText,
@@ -615,6 +616,7 @@ export function resolveCouponScheduleForRecord(
   const autoLokasi = (matchedSchedule.location || '').trim();
 
   return {
+    ...fallbackConfig,
     jadwal: autoJadwal || fallbackConfig.jadwal || '',
     lokasi: autoLokasi || fallbackConfig.lokasi || '',
     footerText: fallbackConfig.footerText || DEFAULT_COUPON_CONFIG.footerText,
@@ -1754,6 +1756,8 @@ function drawCouponCard(
     proposals,
     wilayahList,
     couponConfig,
+    loadedKalbarLogo,
+    loadedGerindraLogo,
   }: {
     x: number;
     y: number;
@@ -1764,6 +1768,8 @@ function drawCouponCard(
     proposals: ProposalRecord[];
     wilayahList: WilayahKabKota[];
     couponConfig: CouponPrintConfig;
+    loadedKalbarLogo?: LoadedPdfImage | null;
+    loadedGerindraLogo?: LoadedPdfImage | null;
   }
 ) {
   const showKelurahan = isKecamatanScopedProposalForCoupon(record, proposals);
@@ -1798,13 +1804,65 @@ function drawCouponCard(
   doc.setTextColor(15, 23, 42);
   doc.text(noKupon, noBoxX + noBoxW / 2, noBoxY + 7.6, { align: 'center' });
 
-  // Judul kupon di area kanan No. Kupon (tanpa QR)
-  const titleCenterX = x + 52.0;
+  // Area Header Kanan No. Kupon: Logo Kalbar (opsional) · Judul · Logo Gerindra (opsional)
+  const headerLeft = x + 20.0;
+  const headerRight = x + cardW - 2.6;
+  const logoBoxW = 10.6;
+  const logoBoxH = 11.4;
+  const logoBoxY = y + 3.8;
+
+  const drawCouponLogo = (img: LoadedPdfImage, boxX: number) => {
+    const ratio = (img.width || 1) / (img.height || 1);
+    let dw = logoBoxW;
+    let dh = logoBoxH;
+    if (ratio > logoBoxW / logoBoxH) {
+      dh = logoBoxW / ratio;
+    } else {
+      dw = logoBoxH * ratio;
+    }
+    doc.addImage(
+      img.dataUrl,
+      img.format,
+      boxX + (logoBoxW - dw) / 2,
+      logoBoxY + (logoBoxH - dh) / 2,
+      dw,
+      dh
+    );
+  };
+
+  if (loadedKalbarLogo) {
+    drawCouponLogo(loadedKalbarLogo, headerLeft);
+  }
+  if (loadedGerindraLogo) {
+    drawCouponLogo(loadedGerindraLogo, headerRight - logoBoxW);
+  }
+
+  const hasAnyLogo = Boolean(loadedKalbarLogo || loadedGerindraLogo);
+  const titleAreaLeft = loadedKalbarLogo ? headerLeft + logoBoxW + 1.2 : headerLeft;
+  const titleAreaRight = loadedGerindraLogo ? headerRight - logoBoxW - 1.2 : headerRight;
+  const titleCenterX = (titleAreaLeft + titleAreaRight) / 2;
+
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
   doc.setTextColor(15, 23, 42);
-  doc.text('KUPON PEMBAGIAN', titleCenterX, y + 7.8, { align: 'center' });
-  doc.text(`TAHUN ${tahunStr}`, titleCenterX, y + 12.6, { align: 'center' });
+  if (hasAnyLogo) {
+    doc.setFontSize(8.8);
+    doc.text('KUPON PEMBAGIAN', titleCenterX, y + 8.3, { align: 'center' });
+    doc.text(`TAHUN ${tahunStr}`, titleCenterX, y + 12.6, { align: 'center' });
+  } else {
+    doc.setDrawColor(15, 23, 42);
+    doc.setLineWidth(0.16);
+    doc.setFontSize(13.2);
+    doc.text('KUPON PEMBAGIAN', titleCenterX, y + 8.1, {
+      align: 'center',
+      renderingMode: 'fillThenStroke',
+    });
+    doc.setLineWidth(0.14);
+    doc.setFontSize(12.2);
+    doc.text(`TAHUN ${tahunStr}`, titleCenterX, y + 13.5, {
+      align: 'center',
+      renderingMode: 'fillThenStroke',
+    });
+  }
 
   // Kotak isi informasi KPM (Item/UNI disembunyikan)
   const innerX = x + 2.5;
@@ -1927,6 +1985,13 @@ export async function exportKuponPdf({
     return { num, label: String(num).padStart(2, '0') };
   };
 
+  const kalbarLogoUrl = (couponConfig.logoKalbarUrl || '').trim();
+  const gerindraLogoUrl = (couponConfig.logoGerindraUrl || '').trim();
+  const [loadedKalbarLogo, loadedGerindraLogo] = await Promise.all([
+    kalbarLogoUrl ? loadSingleImageForPdf(kalbarLogoUrl) : Promise.resolve(null),
+    gerindraLogoUrl ? loadSingleImageForPdf(gerindraLogoUrl) : Promise.resolve(null),
+  ]);
+
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -1950,6 +2015,8 @@ export async function exportKuponPdf({
       proposals,
       wilayahList,
       couponConfig: effectiveConfig,
+      loadedKalbarLogo,
+      loadedGerindraLogo,
     });
 
     const defaultName = `Kupon_${rec.tahun || 'KPM'}_${rec.nama}_${label}`;
@@ -2002,6 +2069,8 @@ export async function exportKuponPdf({
         proposals,
         wilayahList,
         couponConfig: effectiveConfig,
+        loadedKalbarLogo,
+        loadedGerindraLogo,
       });
     });
   }

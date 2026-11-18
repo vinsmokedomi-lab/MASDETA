@@ -10,6 +10,7 @@ import {
   Loader2,
   Printer,
   Ticket,
+  Trash2,
 } from 'lucide-react';
 import { TAHUN_OPTIONS } from '../data/kpmOptions';
 import {
@@ -146,6 +147,8 @@ export function MenuDownloadView({
   const isNativeApp = !isDesktopWeb;
   const kopLogoInputRef = useRef<HTMLInputElement | null>(null);
   const reportKopLogoInputRef = useRef<HTMLInputElement | null>(null);
+  const kuponKalbarInputRef = useRef<HTMLInputElement | null>(null);
+  const kuponGerindraInputRef = useRef<HTMLInputElement | null>(null);
 
   const yearOptions = useMemo(() => {
     const set = new Set<string>(TAHUN_OPTIONS);
@@ -252,6 +255,10 @@ export function MenuDownloadView({
 
   useEffect(() => {
     const baseCoupon = couponConfig ?? DEFAULT_COUPON_CONFIG;
+    const preservedLogos = {
+      logoKalbarUrl: baseCoupon.logoKalbarUrl || '',
+      logoGerindraUrl: baseCoupon.logoGerindraUrl || '',
+    };
     if (selectedProposal !== 'all' && matchedProposalSchedule) {
       setCouponDraft({
         jadwal:
@@ -262,6 +269,7 @@ export function MenuDownloadView({
           ) || baseCoupon.jadwal,
         lokasi: (matchedProposalSchedule.location || '').trim() || baseCoupon.lokasi,
         footerText: baseCoupon.footerText || DEFAULT_COUPON_CONFIG.footerText,
+        ...preservedLogos,
       });
       setCouponManualOverride(false);
       return;
@@ -270,9 +278,32 @@ export function MenuDownloadView({
       jadwal: baseCoupon.jadwal || '',
       lokasi: baseCoupon.lokasi || '',
       footerText: baseCoupon.footerText || DEFAULT_COUPON_CONFIG.footerText,
+      ...preservedLogos,
     });
     setCouponManualOverride(false);
   }, [selectedProposal, matchedProposalSchedule, couponConfig]);
+
+  const handleKuponLogoUpload = async (
+    slot: 'kalbar' | 'gerindra',
+    e: ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const dataUrl = await compressKopLogoFile(file);
+      setCouponSavedNotice(false);
+      setCouponDraft((prev) => ({
+        ...prev,
+        ...(slot === 'kalbar' ? { logoKalbarUrl: dataUrl } : { logoGerindraUrl: dataUrl }),
+      }));
+    } catch (err) {
+      setKuponFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Gagal memproses file logo kupon.',
+      });
+    }
+  };
 
   useEffect(() => {
     setBastDraft(
@@ -1172,23 +1203,59 @@ export function MenuDownloadView({
               </div>
 
               {/* Pratinjau Kupon Mini (tanpa QR) */}
-              <div className="rounded-xl border border-slate-300 bg-white p-3.5 shadow-xs space-y-2">
-                <div className="flex items-center gap-3">
-                  <div className="flex flex-col items-center shrink-0">
-                    <span className="text-[9px] font-medium text-slate-500">No. Kupon</span>
-                    <div className="mt-0.5 flex h-9 w-12 items-center justify-center rounded-lg border border-slate-900 text-base font-bold text-slate-900 tabular-nums">
-                      01
+              {(() => {
+                const hasKalbarLogo = Boolean(previewKuponConfig.logoKalbarUrl?.trim());
+                const hasGerindraLogo = Boolean(previewKuponConfig.logoGerindraUrl?.trim());
+                const hasAnyLogo = hasKalbarLogo || hasGerindraLogo;
+                return (
+                  <div className="rounded-xl border border-slate-300 bg-white p-3.5 shadow-xs space-y-2">
+                    <div className="flex items-center gap-2.5">
+                      <div className="flex flex-col items-center shrink-0">
+                        <span className="text-[9px] font-medium text-slate-500">No. Kupon</span>
+                        <div className="mt-0.5 flex h-9 w-12 items-center justify-center rounded-lg border border-slate-900 text-base font-bold text-slate-900 tabular-nums">
+                          01
+                        </div>
+                      </div>
+                      {hasAnyLogo ? (
+                        <div className="flex-1 flex items-center justify-between gap-2 min-w-0">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden">
+                            {hasKalbarLogo && (
+                              <img
+                                src={previewKuponConfig.logoKalbarUrl}
+                                alt="Logo Kalimantan Barat"
+                                className="max-h-full max-w-full object-contain"
+                              />
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0 text-center">
+                            <p className="text-[11px] font-bold tracking-wide text-slate-900 leading-tight">
+                              KUPON PEMBAGIAN
+                            </p>
+                            <p className="text-[11px] font-bold tracking-wide text-slate-900 leading-tight">
+                              TAHUN {selectedTahun === 'all' ? '2026' : selectedTahun}
+                            </p>
+                          </div>
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden">
+                            {hasGerindraLogo && (
+                              <img
+                                src={previewKuponConfig.logoGerindraUrl}
+                                alt="Logo Gerindra"
+                                className="max-h-full max-w-full object-contain"
+                              />
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex-1 text-center pr-2">
+                          <p className="text-sm font-black tracking-wide text-slate-950 leading-tight">
+                            KUPON PEMBAGIAN
+                          </p>
+                          <p className="mt-0.5 text-sm font-black tracking-wide text-slate-950 leading-tight">
+                            TAHUN {selectedTahun === 'all' ? '2026' : selectedTahun}
+                          </p>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                  <div className="flex-1 text-center pr-6">
-                    <p className="text-xs font-extrabold tracking-wide text-slate-900">
-                      KUPON PEMBAGIAN
-                    </p>
-                    <p className="text-xs font-extrabold tracking-wide text-slate-900">
-                      TAHUN {selectedTahun === 'all' ? '2026' : selectedTahun}
-                    </p>
-                  </div>
-                </div>
 
                 <div className="rounded-lg border border-slate-800 px-3 py-2 text-[11px] text-slate-800 space-y-0.5">
                   <p className="truncate font-bold text-slate-900">
@@ -1214,7 +1281,9 @@ export function MenuDownloadView({
                 <p className="text-center text-[10px] font-bold text-slate-800">
                   {previewKuponConfig.footerText || DEFAULT_COUPON_CONFIG.footerText}
                 </p>
-              </div>
+                  </div>
+                );
+              })()}
 
               {selectedProposal !== 'all' && matchedProposalSchedule ? (
                 <div className="rounded-xl border border-teal-200 bg-teal-50/70 px-3 py-2 text-[11px] leading-relaxed text-teal-900">
@@ -1281,6 +1350,121 @@ export function MenuDownloadView({
                     placeholder={DEFAULT_COUPON_CONFIG.footerText}
                     className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
                   />
+                </div>
+
+                {/* Form Opsional Dual Logo Kupon */}
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2.5">
+                  <div>
+                    <p className="text-[11px] font-bold text-slate-800">
+                      Logo Header Kupon (Opsional)
+                    </p>
+                    <p className="mt-0.5 text-[10px] leading-relaxed text-slate-500">
+                      Jika ada logo yang diunggah, teks judul otomatis berada di tengah. Jika tanpa logo sama sekali, font judul kupon diperbesar dan ditebalkan.
+                    </p>
+                  </div>
+
+                  <input
+                    ref={kuponKalbarInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => void handleKuponLogoUpload('kalbar', e)}
+                  />
+                  <input
+                    ref={kuponGerindraInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => void handleKuponLogoUpload('gerindra', e)}
+                  />
+
+                  <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                    {/* Slot Logo Kalimantan Barat */}
+                    <div className="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-white p-2.5">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                        {couponDraft.logoKalbarUrl ? (
+                          <img
+                            src={couponDraft.logoKalbarUrl}
+                            alt="Logo Kalimantan Barat"
+                            className="max-h-full max-w-full object-contain p-0.5"
+                          />
+                        ) : (
+                          <ImagePlus className="h-4.5 w-4.5 text-slate-400" />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[11px] font-semibold text-slate-800">
+                          Logo Kalimantan Barat
+                        </p>
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => kuponKalbarInputRef.current?.click()}
+                            className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[10px] font-semibold text-teal-800 hover:bg-teal-100"
+                          >
+                            <ImagePlus className="h-3 w-3" />
+                            <span>{couponDraft.logoKalbarUrl ? 'Ganti' : 'Unggah'}</span>
+                          </button>
+                          {couponDraft.logoKalbarUrl && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCouponSavedNotice(false);
+                                setCouponDraft((prev) => ({ ...prev, logoKalbarUrl: '' }));
+                              }}
+                              className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700 hover:bg-rose-100"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                              <span>Hapus</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Slot Logo Gerindra */}
+                    <div className="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-white p-2.5">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                        {couponDraft.logoGerindraUrl ? (
+                          <img
+                            src={couponDraft.logoGerindraUrl}
+                            alt="Logo Gerindra"
+                            className="max-h-full max-w-full object-contain p-0.5"
+                          />
+                        ) : (
+                          <ImagePlus className="h-4.5 w-4.5 text-slate-400" />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[11px] font-semibold text-slate-800">
+                          Logo Gerindra
+                        </p>
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => kuponGerindraInputRef.current?.click()}
+                            className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[10px] font-semibold text-teal-800 hover:bg-teal-100"
+                          >
+                            <ImagePlus className="h-3 w-3" />
+                            <span>{couponDraft.logoGerindraUrl ? 'Ganti' : 'Unggah'}</span>
+                          </button>
+                          {couponDraft.logoGerindraUrl && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCouponSavedNotice(false);
+                                setCouponDraft((prev) => ({ ...prev, logoGerindraUrl: '' }));
+                              }}
+                              className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700 hover:bg-rose-100"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                              <span>Hapus</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
 

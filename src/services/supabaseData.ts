@@ -24,6 +24,8 @@ import {
   ProposalKpmHistoryEntry,
   ProposalLockStatus,
   ProposalRecord,
+  ScheduleCategory,
+  ScheduleEventItem,
   SharedKpmCard,
   SubItemDeliveryState,
   UserPermissions,
@@ -3536,6 +3538,282 @@ export async function saveAppStateSlice<T>(stateKey: string, payload: T): Promis
     );
     if (error && !isSchemaMissingError(error)) {
       console.warn(`App state sync (${stateKey}) warning:`, error.message);
+    }
+  } catch {
+    // keep local cache intact
+  }
+}
+
+// ============================================================================
+// JADWAL KEGIATAN (public.schedules) & TEMPLATE DOKUMEN (public.document_templates)
+// ============================================================================
+const SCHEDULES_LEGACY_STATE_KEY = 'masdeta_schedules_v1';
+
+function mapRowToSchedule(row: Record<string, unknown>): ScheduleEventItem {
+  return {
+    id: String(row.id || ''),
+    title: String(row.title || 'Agenda Kegiatan'),
+    category: (String(row.category || 'lainnya') as ScheduleCategory) || 'lainnya',
+    targetDay: row.target_day ? String(row.target_day) : undefined,
+    targetDate: String(row.target_date || ''),
+    targetTime: row.target_time ? String(row.target_time) : undefined,
+    tahun: row.tahun
+      ? String(row.tahun)
+      : row.target_date
+        ? String(row.target_date).slice(0, 4)
+        : '2026',
+    proposalName: row.proposal_name ? String(row.proposal_name) : undefined,
+    location: row.location ? String(row.location) : undefined,
+    notes: row.notes ? String(row.notes) : undefined,
+    completed: Boolean(row.completed),
+    completedAt: row.completed_at ? String(row.completed_at) : undefined,
+    createdBy: String(row.created_by || 'Petugas Internal'),
+    createdAt: row.created_at ? String(row.created_at) : new Date().toISOString(),
+  };
+}
+
+function mapScheduleToRow(item: ScheduleEventItem) {
+  return {
+    id: item.id,
+    title: item.title,
+    category: item.category,
+    target_day: item.targetDay || null,
+    target_date: item.targetDate,
+    target_time: item.targetTime || null,
+    tahun: item.tahun || null,
+    proposal_name: item.proposalName || null,
+    location: item.location || null,
+    notes: item.notes || null,
+    completed: Boolean(item.completed),
+    completed_at: item.completedAt || null,
+    created_by: item.createdBy || 'Petugas Internal',
+    created_at: item.createdAt || new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+}
+
+export async function fetchSchedulesFromSupabase(): Promise<ScheduleEventItem[]> {
+  const localKey = `masdeta_slice_${SCHEDULES_LEGACY_STATE_KEY}`;
+  let localList: ScheduleEventItem[] = [];
+  try {
+    const raw = localStorage.getItem(localKey);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) localList = parsed as ScheduleEventItem[];
+    }
+  } catch {
+    // ignore storage errors
+  }
+
+  if (!isSupabaseConfigured) return localList;
+
+  try {
+    const { data, error } = await supabase
+      .from('schedules')
+      .select('*')
+      .order('target_date', { ascending: true })
+      .order('target_time', { ascending: true });
+
+    if (error) {
+      if (isSchemaMissingError(error)) {
+        return await fetchAppStateSlice<ScheduleEventItem[]>(SCHEDULES_LEGACY_STATE_KEY, localList);
+      }
+      return localList;
+    }
+
+    if (data && data.length > 0) {
+      const mapped = data.map((row) => mapRowToSchedule(row as Record<string, unknown>));
+      try {
+        localStorage.setItem(localKey, JSON.stringify(mapped));
+      } catch {
+        // ignore quota errors
+      }
+      return mapped;
+    }
+
+    // Tabel schedules ada namun masih kosong: migrasikan otomatis dari masdeta_app_state atau localStorage bila ada
+    const legacyRemote = await fetchAppStateSlice<ScheduleEventItem[]>(SCHEDULES_LEGACY_STATE_KEY, []);
+    const seedSource = legacyRemote.length > 0 ? legacyRemote : localList;
+    if (seedSource.length > 0) {
+      const { error: seedErr } = await supabase
+        .from('schedules')
+        .upsert(seedSource.map(mapScheduleToRow), { onConflict: 'id' });
+      if (!seedErr) {
+        try {
+          localStorage.setItem(localKey, JSON.stringify(seedSource));
+        } catch {
+          // ignore
+        }
+      }
+      return seedSource;
+    }
+
+    try {
+      localStorage.setItem(localKey, JSON.stringify([]));
+    } catch {
+      // ignore
+    }
+    return [];
+  } catch {
+    return localList;
+  }
+}
+
+export async function upsertScheduleInSupabase(
+  item: ScheduleEventItem,
+  fullNextList?: ScheduleEventItem[]
+): Promise<void> {
+  const localKey = `masdeta_slice_${SCHEDULES_LEGACY_STATE_KEY}`;
+  if (fullNextList) {
+    try {
+      localStorage.setItem(localKey, JSON.stringify(fullNextList));
+    } catch {
+      // ignore
+    }
+  }
+  if (!isSupabaseConfigured) return;
+
+  try {
+    const { error } = await supabase
+      .from('schedules')
+      .upsert(mapScheduleToRow(item), { onConflict: 'id' });
+    if (error) {
+      if (isSchemaMissingError(error) && fullNextList) {
+        await saveAppStateSlice(SCHEDULES_LEGACY_STATE_KEY, fullNextList);
+      } else if (!isSchemaMissingError(error)) {
+        console.warn('Schedule upsert warning:', error.message);
+      }
+    }
+  } catch {
+    // keep local cache intact
+  }
+}
+
+export async function deleteScheduleFromSupabase(
+  id: string,
+  fullNextList?: ScheduleEventItem[]
+): Promise<void> {
+  const localKey = `masdeta_slice_${SCHEDULES_LEGACY_STATE_KEY}`;
+  if (fullNextList) {
+    try {
+      localStorage.setItem(localKey, JSON.stringify(fullNextList));
+    } catch {
+      // ignore
+    }
+  }
+  if (!isSupabaseConfigured) return;
+
+  try {
+    const { error } = await supabase.from('schedules').delete().eq('id', id);
+    if (error) {
+      if (isSchemaMissingError(error) && fullNextList) {
+        await saveAppStateSlice(SCHEDULES_LEGACY_STATE_KEY, fullNextList);
+      } else if (!isSchemaMissingError(error)) {
+        console.warn('Schedule delete warning:', error.message);
+      }
+    }
+  } catch {
+    // keep local cache intact
+  }
+}
+
+export type DocumentTemplateKey = 'report' | 'bast' | 'sptjm' | 'kupon' | 'proposal_bast';
+
+export async function fetchDocumentTemplateFromSupabase<T>(
+  templateKey: DocumentTemplateKey,
+  legacyStateKey: string,
+  fallback: T
+): Promise<T> {
+  const localKey = `masdeta_slice_${legacyStateKey}`;
+  let localValue: T = fallback;
+  let hasLocalValue = false;
+  try {
+    const raw = localStorage.getItem(localKey);
+    if (raw) {
+      localValue = JSON.parse(raw) as T;
+      hasLocalValue = true;
+    }
+  } catch {
+    // ignore storage errors
+  }
+
+  if (!isSupabaseConfigured) return localValue;
+
+  try {
+    const { data, error } = await supabase
+      .from('document_templates')
+      .select('payload')
+      .eq('template_key', templateKey)
+      .maybeSingle();
+
+    if (error) {
+      if (isSchemaMissingError(error)) {
+        return await fetchAppStateSlice<T>(legacyStateKey, localValue);
+      }
+      return localValue;
+    }
+
+    if (data && data.payload !== undefined && data.payload !== null) {
+      const remoteVal = data.payload as T;
+      try {
+        localStorage.setItem(localKey, JSON.stringify(remoteVal));
+      } catch {
+        // ignore quota errors
+      }
+      return remoteVal;
+    }
+
+    // Jika document_templates belum memiliki baris ini, cek masdeta_app_state atau localStorage
+    const legacyRemote = await fetchAppStateSlice<T>(legacyStateKey, fallback);
+    const fallbackJson = JSON.stringify(fallback);
+    const hasLegacyRemote = JSON.stringify(legacyRemote) !== fallbackJson;
+    const hasCustomLocal = hasLocalValue && JSON.stringify(localValue) !== fallbackJson;
+    const seedPayload = hasLegacyRemote ? legacyRemote : hasCustomLocal ? localValue : null;
+    if (seedPayload !== null) {
+      await supabase.from('document_templates').upsert(
+        {
+          template_key: templateKey,
+          payload: seedPayload as Record<string, unknown>,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'template_key' }
+      );
+      return seedPayload;
+    }
+  } catch {
+    // fallback to local cache
+  }
+  return localValue;
+}
+
+export async function saveDocumentTemplateInSupabase<T>(
+  templateKey: DocumentTemplateKey,
+  legacyStateKey: string,
+  payload: T
+): Promise<void> {
+  const localKey = `masdeta_slice_${legacyStateKey}`;
+  try {
+    localStorage.setItem(localKey, JSON.stringify(payload));
+  } catch {
+    // ignore storage quota errors
+  }
+  if (!isSupabaseConfigured) return;
+
+  try {
+    const { error } = await supabase.from('document_templates').upsert(
+      {
+        template_key: templateKey,
+        payload: payload as Record<string, unknown>,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'template_key' }
+    );
+    if (error) {
+      if (isSchemaMissingError(error)) {
+        await saveAppStateSlice(legacyStateKey, payload);
+      } else {
+        console.warn(`Document template sync (${templateKey}) warning:`, error.message);
+      }
     }
   } catch {
     // keep local cache intact
