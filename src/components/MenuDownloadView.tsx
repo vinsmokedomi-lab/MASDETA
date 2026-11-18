@@ -58,6 +58,7 @@ import {
   resolveCouponScheduleForRecord,
   resolveEffectiveBastConfig,
   resolveScheduleForProposal,
+  shouldAutoIncludeKelurahanColumn,
 } from '../utils/pdfExporter';
 import { SelectionPickerModal, SelectionPickerOption } from './SelectionPickerModal';
 import { useIsDesktopWeb } from '../utils/platform';
@@ -165,9 +166,12 @@ export function MenuDownloadView({
   const [selectedTahun, setSelectedTahun] = useState<string>(() => yearOptions[0] || '2026');
   const [selectedProposal, setSelectedProposal] = useState<string>('all');
   const [selectedPengelola, setSelectedPengelola] = useState<string>('all');
-  const [selectedAddonColumns, setSelectedAddonColumns] = useState<PdfColumnKey[]>(
-    DEFAULT_ADDON_PDF_COLUMN_KEYS
-  );
+  const [selectedAddonColumns, setSelectedAddonColumns] = useState<PdfColumnKey[]>(() => {
+    const initial: PdfColumnKey[] = DEFAULT_ADDON_PDF_COLUMN_KEYS.includes('kelurahan')
+      ? [...DEFAULT_ADDON_PDF_COLUMN_KEYS]
+      : [...DEFAULT_ADDON_PDF_COLUMN_KEYS, 'kelurahan'];
+    return initial.slice(0, MAX_PDF_TOTAL_COLUMNS - MANDATORY_PDF_COLUMN_KEYS.length);
+  });
   const [includeSummary, setIncludeSummary] = useState(true);
 
   const [isTahunModalOpen, setIsTahunModalOpen] = useState(false);
@@ -465,10 +469,31 @@ export function MenuDownloadView({
     });
   };
 
+  const applyProposalKelurahanDefault = (
+    prev: PdfColumnKey[],
+    proposalValue: string
+  ): PdfColumnKey[] => {
+    const shouldCheckKelurahan =
+      proposalValue === 'all' || shouldAutoIncludeKelurahanColumn(proposalValue);
+    if (shouldCheckKelurahan) {
+      if (prev.includes('kelurahan')) return prev;
+      if (prev.length < maxAddonCount) return [...prev, 'kelurahan'];
+      const idxToDrop = [...prev].reverse().findIndex((k) => k !== 'catatan');
+      if (idxToDrop >= 0) {
+        const realIdx = prev.length - 1 - idxToDrop;
+        return [...prev.slice(0, realIdx), ...prev.slice(realIdx + 1), 'kelurahan'];
+      }
+      return [...prev.slice(0, Math.max(0, maxAddonCount - 1)), 'kelurahan'];
+    }
+    return prev.filter((k) => k !== 'kelurahan');
+  };
+
   const handleSelectTahun = (nextTahun: string) => {
     setSelectedTahun(nextTahun);
     setSelectedProposal('all');
     setSelectedPengelola('all');
+    setSelectedAddonColumns((prev) => applyProposalKelurahanDefault(prev, 'all'));
+    setLimitNotice(false);
     setPdfFeedback(null);
     setKuponFeedback(null);
     setBastFeedback(null);
@@ -478,6 +503,8 @@ export function MenuDownloadView({
   const handleSelectProposal = (nextProp: string) => {
     setSelectedProposal(nextProp);
     setSelectedPengelola('all');
+    setSelectedAddonColumns((prev) => applyProposalKelurahanDefault(prev, nextProp));
+    setLimitNotice(false);
     setPdfFeedback(null);
     setKuponFeedback(null);
     setBastFeedback(null);
@@ -525,6 +552,9 @@ export function MenuDownloadView({
         fileName,
         includeSummary,
         reportTemplate: templateDraft,
+        splitByProposal: selectedProposal === 'all',
+        autoExcludeKelurahanWhenInProposalTitle: selectedProposal === 'all',
+        selectedPengelolaLabel: selectedPengelola !== 'all' ? selectedPengelola : undefined,
       });
       setPdfFeedback({
         type: 'success',
@@ -1097,6 +1127,11 @@ export function MenuDownloadView({
                         {checked && <Check className="h-3 w-3" />}
                       </span>
                       <span className="truncate text-xs font-semibold">{col.uiLabel}</span>
+                      {col.key === 'kelurahan' && selectedProposal === 'all' && checked && (
+                        <span className="ml-auto shrink-0 rounded-md bg-teal-100 px-1.5 py-0.5 text-[9px] font-bold text-teal-800">
+                          Auto
+                        </span>
+                      )}
                     </button>
                   );
                 })}
@@ -1119,6 +1154,11 @@ export function MenuDownloadView({
                 <p className="mt-0.5 text-[11px] font-semibold leading-relaxed text-slate-800">
                   {activeColumns.map((c) => c.pdfHeader).join('  |  ')}
                 </p>
+                {selectedProposal === 'all' && selectedAddonColumns.includes('kelurahan') && (
+                  <p className="mt-1 text-[10px] leading-relaxed text-teal-700">
+                    Mode <strong>Semua Proposal</strong>: setiap proposal dicetak dalam tabel terpisah. Proposal yang judulnya mengandung kata <strong>Kelurahan</strong> otomatis tidak menampilkan kolom KELURAHAN, sedangkan proposal Kecamatan/Umum menampilkannya.
+                  </p>
+                )}
               </div>
 
               <button

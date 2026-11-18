@@ -70,7 +70,8 @@ export type PdfColumnKey =
   | 'kelurahan'
   | 'kecamatan'
   | 'kontak'
-  | 'pengelola';
+  | 'pengelola'
+  | 'catatan';
 
 export interface PdfColumnDefinition {
   key: PdfColumnKey;
@@ -222,6 +223,17 @@ export const PDF_COLUMN_DEFINITIONS: PdfColumnDefinition[] = [
     baseWidthMm: 26,
     minWidthMm: 20,
     halign: 'center',
+  },
+  {
+    key: 'catatan',
+    pdfHeader: 'CATATAN',
+    uiLabel: 'Catatan',
+    description: 'Catatan petugas pada data KPM',
+    defaultEnabled: false,
+    baseWidthMm: 26,
+    minWidthMm: 16,
+    flexible: true,
+    halign: 'left',
   },
 ];
 
@@ -525,6 +537,12 @@ export function isKecamatanScopedProposalForCoupon(
   return false;
 }
 
+export function shouldAutoIncludeKelurahanColumn(proposalName?: string): boolean {
+  const trimmed = (proposalName || '').trim();
+  if (!trimmed) return true;
+  return !trimmed.toLowerCase().includes('kelurahan');
+}
+
 export function formatScheduleDateTimeForCoupon(
   targetDate: string,
   targetTime?: string,
@@ -753,6 +771,9 @@ export interface ExportKpmTablePdfOptions {
   fileName: string;
   includeSummary?: boolean;
   reportTemplate?: ReportTemplateConfig;
+  splitByProposal?: boolean;
+  autoExcludeKelurahanWhenInProposalTitle?: boolean;
+  selectedPengelolaLabel?: string;
 }
 
 export async function exportKpmTableToPdf({
@@ -766,15 +787,11 @@ export async function exportKpmTableToPdf({
   fileName,
   includeSummary = true,
   reportTemplate,
+  splitByProposal = false,
+  autoExcludeKelurahanWhenInProposalTitle = false,
+  selectedPengelolaLabel,
 }: ExportKpmTablePdfOptions): Promise<{ savedFileName: string; openedNative: boolean; count: number }> {
-  // Selalu sertakan 4 kolom wajib + add-on terpilih hingga maksimal 10 kolom total
-  const mergedKeys = Array.from(new Set([...MANDATORY_PDF_COLUMN_KEYS, ...selectedColumns]));
-  const activeCols = PDF_COLUMN_DEFINITIONS.filter((c) => mergedKeys.includes(c.key)).slice(
-    0,
-    MAX_PDF_TOTAL_COLUMNS
-  );
-
-  // Urutkan data KPM berdasarkan urutan hierarki item & nomor absen
+  // Urutkan data KPM berdasarkan tahun, proposal, nomor absen, & hierarki item
   const sortedRecords = [...records].sort((a, b) => {
     const yearCmp = (a.tahun || '').localeCompare(b.tahun || '');
     if (yearCmp !== 0) return yearCmp;
@@ -796,274 +813,351 @@ export async function exportKpmTableToPdf({
     compress: true,
   }) as AutoTableDoc;
 
-  let headerTopY: number = F4_PDF_MARGINS.top;
-  if (reportTemplate?.enabled) {
-    const reportLogoUrl = (reportTemplate.kopLogoDataUrl || '').trim() || DEFAULT_KOP_LOGO_URL;
-    const loadedReportLogo = reportLogoUrl ? await loadSingleImageForPdf(reportLogoUrl) : null;
-    const logoSpaceW = loadedReportLogo ? 16 : 0;
-    if (loadedReportLogo) {
-      const ratio = loadedReportLogo.width / Math.max(loadedReportLogo.height, 1);
-      let drawW = 14;
-      let drawH = 17.5;
-      if (ratio > drawW / drawH) {
-        drawH = drawW / ratio;
-      } else {
-        drawW = drawH * ratio;
-      }
-      doc.addImage(
-        loadedReportLogo.dataUrl,
-        loadedReportLogo.format,
-        F4_PDF_MARGINS.left + (logoSpaceW - drawW) / 2,
-        headerTopY + Math.max(0, (17.5 - drawH) / 2),
-        drawW,
-        drawH
-      );
-    }
+  const loadedReportLogo = reportTemplate?.enabled
+    ? await loadSingleImageForPdf((reportTemplate.kopLogoDataUrl || '').trim() || DEFAULT_KOP_LOGO_URL)
+    : null;
 
-    const centerX =
-      F4_PDF_MARGINS.left + logoSpaceW + (PRINTABLE_WIDTH_MM - logoSpaceW) / 2;
-    let textBottomY = headerTopY;
-    if (reportTemplate.orgHeaderLine1?.trim()) {
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(11);
-      doc.setTextColor(15, 23, 42);
-      doc.text(reportTemplate.orgHeaderLine1.trim().toUpperCase(), centerX, textBottomY + 4.5, {
-        align: 'center',
-      });
-      textBottomY += 5.5;
-    }
-    if (reportTemplate.orgHeaderLine2?.trim()) {
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(10);
-      doc.setTextColor(15, 118, 110);
-      doc.text(reportTemplate.orgHeaderLine2.trim(), centerX, textBottomY + 4, {
-        align: 'center',
-      });
-      textBottomY += 5;
-    }
-    if (reportTemplate.orgAddress?.trim()) {
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8);
-      doc.setTextColor(71, 85, 105);
-      doc.text(reportTemplate.orgAddress.trim(), centerX, textBottomY + 3.5, {
-        align: 'center',
-      });
-      textBottomY += 5;
-    }
-    headerTopY = Math.max(textBottomY, loadedReportLogo ? headerTopY + 18 : textBottomY);
-    doc.setDrawColor(15, 23, 42);
-    doc.setLineWidth(0.5);
-    doc.line(F4_PDF_MARGINS.left, headerTopY + 1, F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right, headerTopY + 1);
-    doc.setLineWidth(0.2);
-    doc.line(F4_PDF_MARGINS.left, headerTopY + 2.1, F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right, headerTopY + 2.1);
-    headerTopY += 5;
-  }
+  const renderSection = (sectionOpts: {
+    sectionRecords: KpmRecord[];
+    sectionTitle: string;
+    sectionSubtitle?: string;
+    proposalTitleForAutoKel?: string;
+  }) => {
+    const {
+      sectionRecords,
+      sectionTitle,
+      sectionSubtitle,
+      proposalTitleForAutoKel,
+    } = sectionOpts;
 
-  // Header Dokumen
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13);
-  doc.setTextColor(15, 23, 42);
-  doc.text(title.trim() || 'Daftar KPM', F4_PDF_MARGINS.left, headerTopY + 6);
+    const shouldOmitKelurahan =
+      autoExcludeKelurahanWhenInProposalTitle &&
+      proposalTitleForAutoKel !== undefined &&
+      !shouldAutoIncludeKelurahanColumn(proposalTitleForAutoKel);
 
-  let tableStartY = headerTopY + 11;
-  if (subtitle && subtitle.trim()) {
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8.5);
-    doc.setTextColor(71, 85, 105);
-    doc.text(subtitle.trim(), F4_PDF_MARGINS.left, headerTopY + 11);
-    tableStartY = headerTopY + 15;
-  }
+    const filteredColumnInput = shouldOmitKelurahan
+      ? selectedColumns.filter((k) => k !== 'kelurahan')
+      : selectedColumns;
 
-  const colWidths = computeScaledColumnWidths(activeCols);
-  const colCount = activeCols.length;
-  // Skala ukuran huruf, tinggi baris minimum, dan padding secara adaptif agar tabel selalu proporsional & tidak dempetan
-  const bodyFontSize =
-    colCount <= 6 ? 9.2 : colCount <= 8 ? 8.6 : colCount === 9 ? 7.8 : colCount === 10 ? 7.2 : 6.4;
-  const headFontSize =
-    colCount <= 6 ? 9.0 : colCount <= 8 ? 8.4 : colCount === 9 ? 7.6 : colCount === 10 ? 7.0 : 6.1;
-  const bodyMinCellHeight =
-    colCount <= 6 ? 10.5 : colCount <= 8 ? 9.2 : colCount === 9 ? 8.4 : colCount === 10 ? 7.8 : 7.0;
-  const headMinCellHeight = colCount <= 8 ? 9.5 : colCount <= 10 ? 8.5 : 7.8;
-  const padY = colCount <= 6 ? 3.0 : colCount <= 8 ? 2.5 : colCount <= 10 ? 2.0 : 1.7;
-  const padX = colCount <= 8 ? 1.8 : colCount <= 10 ? 1.3 : 0.85;
-
-  const columnStyles: Record<number, Partial<Styles>> = {};
-  activeCols.forEach((col, idx) => {
-    columnStyles[idx] = {
-      cellWidth: colWidths[idx],
-      halign: col.halign,
-    };
-  });
-
-  const headRow = activeCols.map((c) => c.pdfHeader);
-  const bodyRows = sortedRecords.map((rec, rowIdx) => {
-    const seq = getAbsenSeq(rec.registerCode);
-    const absenText = seq < 999999 ? String(seq).padStart(2, '0') : String(rowIdx + 1).padStart(2, '0');
-    const domicile = resolveKpmDomicile(rec, proposals, wilayahList);
-    const resolvedKel = (domicile.kelurahan || '-').trim();
-    const resolvedKec = (
-      domicile.kecamatan ||
-      (rec.proposal
-        ? resolveProposalKecamatanCategory(rec.proposal, proposals, rec.tahun, wilayahList)
-        : '')
-    ).replace(/^Kecamatan\s+/i, '');
-
-    return activeCols.map((col) => {
-      switch (col.key) {
-        case 'no':
-          return absenText;
-        case 'nikKtp':
-          return formatNikForPdf(rec.nikKtp);
-        case 'nikKk':
-          return formatNikForPdf(rec.nikKk);
-        case 'item':
-          return rec.item || '-';
-        case 'desil':
-          return formatDesilValue(rec.dtsen);
-        case 'nama':
-          return (rec.nama || '-').toUpperCase();
-        case 'alamat':
-          return rec.alamat || '-';
-        case 'rtRw': {
-          const rt = (rec.rt || '').trim();
-          const rw = (rec.rw || '').trim();
-          if (!rt && !rw) return '-';
-          return `${rt ? rt.padStart(3, '0') : '-'} / ${rw ? rw.padStart(3, '0') : '-'}`;
-        }
-        case 'administrasi': {
-          const paid = Number(rec.payment || 0);
-          return paid > 0
-            ? `Sudah Bayar\n${formatRupiah(paid).replace(/\u00A0/g, ' ')}`
-            : 'Belum Bayar';
-        }
-        case 'proposal': {
-          return (
-            (rec.proposal || '').trim() ||
-            (rec.validasi === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM')
-          );
-        }
-        case 'kelurahan':
-          return resolvedKel || '-';
-        case 'kecamatan':
-          return resolvedKec || '-';
-        case 'kontak':
-          return formatPhoneForPdf(rec.kontak) || '';
-        case 'pengelola':
-          return rec.pengelola || '-';
-        default:
-          return '-';
-      }
-    });
-  });
-
-  autoTable(doc, {
-    startY: tableStartY,
-    margin: {
-      top: F4_PDF_MARGINS.top,
-      right: F4_PDF_MARGINS.right,
-      bottom: F4_PDF_MARGINS.bottom,
-      left: F4_PDF_MARGINS.left,
-    },
-    tableWidth: PRINTABLE_WIDTH_MM,
-    head: [headRow],
-    body: bodyRows,
-    theme: 'grid',
-    showHead: 'everyPage',
-    rowPageBreak: 'avoid',
-    styles: {
-      font: 'helvetica',
-      fontSize: bodyFontSize,
-      minCellHeight: bodyMinCellHeight,
-      textColor: [15, 23, 42],
-      lineColor: [30, 41, 59],
-      lineWidth: 0.22,
-      valign: 'middle',
-      cellPadding: { top: padY, right: padX, bottom: padY, left: padX },
-      overflow: 'linebreak',
-    },
-    headStyles: {
-      fillColor: [252, 211, 77], // Warna kuning keemasan sesuai referensi PDF
-      textColor: [15, 23, 42],
-      fontStyle: 'bold',
-      fontSize: headFontSize,
-      minCellHeight: headMinCellHeight,
-      halign: 'center',
-      valign: 'middle',
-      lineColor: [30, 41, 59],
-      lineWidth: 0.25,
-      cellPadding: {
-        top: padY + 0.3,
-        right: colCount <= 10 ? 1.2 : 0.75,
-        bottom: padY + 0.3,
-        left: colCount <= 10 ? 1.2 : 0.75,
-      },
-    },
-    columnStyles,
-  });
-
-  // Ringkasan DAFTAR ITEM & PENGELOLA di bawah tabel (sesuai halaman akhir referensi PDF)
-  if (includeSummary && sortedRecords.length > 0) {
-    const itemMap = new Map<string, { count: number; rank: number }>();
-    const pengelolaMap = new Map<string, number>();
-
-    for (const rec of sortedRecords) {
-      const code = rec.item || '-';
-      const existingItem = itemMap.get(code);
-      const rank = getItemHierarchyRank(code, rec.tahun, items);
-      if (existingItem) {
-        existingItem.count += 1;
-        existingItem.rank = Math.min(existingItem.rank, rank);
-      } else {
-        itemMap.set(code, { count: 1, rank });
-      }
-
-      const peng = (rec.pengelola || 'Tanpa Pengelola').trim();
-      pengelolaMap.set(peng, (pengelolaMap.get(peng) || 0) + 1);
-    }
-
-    const itemEntries = Array.from(itemMap.entries()).sort((a, b) => {
-      if (a[1].rank !== b[1].rank) return a[1].rank - b[1].rank;
-      return a[0].localeCompare(b[0], 'id');
-    });
-    const pengelolaEntries = Array.from(pengelolaMap.entries()).sort((a, b) =>
-      a[0].localeCompare(b[0], 'id')
+    // Selalu sertakan 4 kolom wajib + add-on terpilih hingga maksimal 10 kolom total
+    const mergedKeys = Array.from(new Set([...MANDATORY_PDF_COLUMN_KEYS, ...filteredColumnInput]));
+    const activeCols = PDF_COLUMN_DEFINITIONS.filter((c) => mergedKeys.includes(c.key)).slice(
+      0,
+      MAX_PDF_TOTAL_COLUMNS
     );
 
-    const maxLines = Math.max(itemEntries.length, pengelolaEntries.length);
-    const neededHeight = 14 + maxLines * 4.5;
-    let cursorY = (doc.lastAutoTable?.finalY ?? tableStartY) + 9;
+    let headerTopY: number = F4_PDF_MARGINS.top;
+    if (reportTemplate?.enabled) {
+      const logoSpaceW = loadedReportLogo ? 16 : 0;
+      if (loadedReportLogo) {
+        const ratio = loadedReportLogo.width / Math.max(loadedReportLogo.height, 1);
+        let drawW = 14;
+        let drawH = 17.5;
+        if (ratio > drawW / drawH) {
+          drawH = drawW / ratio;
+        } else {
+          drawW = drawH * ratio;
+        }
+        doc.addImage(
+          loadedReportLogo.dataUrl,
+          loadedReportLogo.format,
+          F4_PDF_MARGINS.left + (logoSpaceW - drawW) / 2,
+          headerTopY + Math.max(0, (17.5 - drawH) / 2),
+          drawW,
+          drawH
+        );
+      }
 
-    if (cursorY + neededHeight > F4_PAPER_HEIGHT_MM - F4_PDF_MARGINS.bottom) {
-      doc.addPage([F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM], 'portrait');
-      cursorY = F4_PDF_MARGINS.top + 6;
+      const centerX =
+        F4_PDF_MARGINS.left + logoSpaceW + (PRINTABLE_WIDTH_MM - logoSpaceW) / 2;
+      let textBottomY = headerTopY;
+      if (reportTemplate.orgHeaderLine1?.trim()) {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(11);
+        doc.setTextColor(15, 23, 42);
+        doc.text(reportTemplate.orgHeaderLine1.trim().toUpperCase(), centerX, textBottomY + 4.5, {
+          align: 'center',
+        });
+        textBottomY += 5.5;
+      }
+      if (reportTemplate.orgHeaderLine2?.trim()) {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(10);
+        doc.setTextColor(15, 118, 110);
+        doc.text(reportTemplate.orgHeaderLine2.trim(), centerX, textBottomY + 4, {
+          align: 'center',
+        });
+        textBottomY += 5;
+      }
+      if (reportTemplate.orgAddress?.trim()) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8);
+        doc.setTextColor(71, 85, 105);
+        doc.text(reportTemplate.orgAddress.trim(), centerX, textBottomY + 3.5, {
+          align: 'center',
+        });
+        textBottomY += 5;
+      }
+      headerTopY = Math.max(textBottomY, loadedReportLogo ? headerTopY + 18 : textBottomY);
+      doc.setDrawColor(15, 23, 42);
+      doc.setLineWidth(0.5);
+      doc.line(
+        F4_PDF_MARGINS.left,
+        headerTopY + 1,
+        F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right,
+        headerTopY + 1
+      );
+      doc.setLineWidth(0.2);
+      doc.line(
+        F4_PDF_MARGINS.left,
+        headerTopY + 2.1,
+        F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right,
+        headerTopY + 2.1
+      );
+      headerTopY += 5;
     }
 
-    const leftColX = F4_PDF_MARGINS.left;
-    const rightColX = F4_PDF_MARGINS.left + 58;
-
+    // Header Dokumen
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
+    doc.setFontSize(13);
     doc.setTextColor(15, 23, 42);
-    doc.text('DAFTAR ITEM :', leftColX, cursorY);
-    doc.text('PENGELOLA :', rightColX, cursorY);
+    doc.text(sectionTitle.trim() || 'Daftar KPM', F4_PDF_MARGINS.left, headerTopY + 6);
 
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8.5);
-    const lineStep = 4.6;
+    let tableStartY = headerTopY + 11;
+    if (sectionSubtitle && sectionSubtitle.trim()) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.5);
+      doc.setTextColor(71, 85, 105);
+      doc.text(sectionSubtitle.trim(), F4_PDF_MARGINS.left, headerTopY + 11);
+      tableStartY = headerTopY + 15;
+    }
 
-    itemEntries.forEach(([code, meta], idx) => {
-      doc.text(`- ${code} : ${meta.count}`, leftColX, cursorY + 6 + idx * lineStep);
+    const colWidths = computeScaledColumnWidths(activeCols);
+    const colCount = activeCols.length;
+    // Skala ukuran huruf, tinggi baris minimum, dan padding secara adaptif agar tabel selalu proporsional & tidak dempetan
+    const bodyFontSize =
+      colCount <= 6 ? 9.2 : colCount <= 8 ? 8.6 : colCount === 9 ? 7.8 : colCount === 10 ? 7.2 : 6.4;
+    const headFontSize =
+      colCount <= 6 ? 9.0 : colCount <= 8 ? 8.4 : colCount === 9 ? 7.6 : colCount === 10 ? 7.0 : 6.1;
+    const bodyMinCellHeight =
+      colCount <= 6 ? 10.5 : colCount <= 8 ? 9.2 : colCount === 9 ? 8.4 : colCount === 10 ? 7.8 : 7.0;
+    const headMinCellHeight = colCount <= 8 ? 9.5 : colCount <= 10 ? 8.5 : 7.8;
+    const padY = colCount <= 6 ? 3.0 : colCount <= 8 ? 2.5 : colCount <= 10 ? 2.0 : 1.7;
+    const padX = colCount <= 8 ? 1.8 : colCount <= 10 ? 1.3 : 0.85;
+
+    const columnStyles: Record<number, Partial<Styles>> = {};
+    activeCols.forEach((col, idx) => {
+      columnStyles[idx] = {
+        cellWidth: colWidths[idx],
+        halign: col.halign,
+      };
     });
 
-    pengelolaEntries.forEach(([name, cnt], idx) => {
-      doc.text(`- ${name} : ${cnt}`, rightColX, cursorY + 6 + idx * lineStep);
+    const headRow = activeCols.map((c) => c.pdfHeader);
+    const bodyRows = sectionRecords.map((rec, rowIdx) => {
+      const seq = getAbsenSeq(rec.registerCode);
+      const absenText = seq < 999999 ? String(seq).padStart(2, '0') : String(rowIdx + 1).padStart(2, '0');
+      const domicile = resolveKpmDomicile(rec, proposals, wilayahList);
+      const resolvedKel = (domicile.kelurahan || '-').trim();
+      const resolvedKec = (
+        domicile.kecamatan ||
+        (rec.proposal
+          ? resolveProposalKecamatanCategory(rec.proposal, proposals, rec.tahun, wilayahList)
+          : '')
+      ).replace(/^Kecamatan\s+/i, '');
+
+      return activeCols.map((col) => {
+        switch (col.key) {
+          case 'no':
+            return absenText;
+          case 'nikKtp':
+            return formatNikForPdf(rec.nikKtp);
+          case 'nikKk':
+            return formatNikForPdf(rec.nikKk);
+          case 'item':
+            return rec.item || '-';
+          case 'desil':
+            return formatDesilValue(rec.dtsen);
+          case 'nama':
+            return (rec.nama || '-').toUpperCase();
+          case 'alamat':
+            return rec.alamat || '-';
+          case 'rtRw': {
+            const rt = (rec.rt || '').trim();
+            const rw = (rec.rw || '').trim();
+            if (!rt && !rw) return '-';
+            return `${rt ? rt.padStart(3, '0') : '-'} / ${rw ? rw.padStart(3, '0') : '-'}`;
+          }
+          case 'administrasi': {
+            const paid = Number(rec.payment || 0);
+            return paid > 0
+              ? `Sudah Bayar\n${formatRupiah(paid).replace(/\u00A0/g, ' ')}`
+              : 'Belum Bayar';
+          }
+          case 'proposal': {
+            return (
+              (rec.proposal || '').trim() ||
+              (rec.validasi === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM')
+            );
+          }
+          case 'kelurahan':
+            return resolvedKel || '-';
+          case 'kecamatan':
+            return resolvedKec || '-';
+          case 'kontak':
+            return formatPhoneForPdf(rec.kontak) || '';
+          case 'pengelola':
+            return rec.pengelola || '-';
+          case 'catatan':
+            return (rec.catatan || '').trim() || '-';
+          default:
+            return '-';
+        }
+      });
     });
 
-    if (
+    autoTable(doc, {
+      startY: tableStartY,
+      margin: {
+        top: F4_PDF_MARGINS.top,
+        right: F4_PDF_MARGINS.right,
+        bottom: F4_PDF_MARGINS.bottom,
+        left: F4_PDF_MARGINS.left,
+      },
+      tableWidth: PRINTABLE_WIDTH_MM,
+      head: [headRow],
+      body: bodyRows,
+      theme: 'grid',
+      showHead: 'everyPage',
+      rowPageBreak: 'avoid',
+      styles: {
+        font: 'helvetica',
+        fontSize: bodyFontSize,
+        minCellHeight: bodyMinCellHeight,
+        textColor: [15, 23, 42],
+        lineColor: [30, 41, 59],
+        lineWidth: 0.22,
+        valign: 'middle',
+        cellPadding: { top: padY, right: padX, bottom: padY, left: padX },
+        overflow: 'linebreak',
+      },
+      headStyles: {
+        fillColor: [252, 211, 77], // Warna kuning keemasan sesuai referensi PDF
+        textColor: [15, 23, 42],
+        fontStyle: 'bold',
+        fontSize: headFontSize,
+        minCellHeight: headMinCellHeight,
+        halign: 'center',
+        valign: 'middle',
+        lineColor: [30, 41, 59],
+        lineWidth: 0.25,
+        cellPadding: {
+          top: padY + 0.3,
+          right: colCount <= 10 ? 1.2 : 0.75,
+          bottom: padY + 0.3,
+          left: colCount <= 10 ? 1.2 : 0.75,
+        },
+      },
+      columnStyles,
+    });
+
+    // Ringkasan DAFTAR ITEM & PENGELOLA di bawah tabel (sesuai halaman akhir referensi PDF)
+    if (includeSummary && sectionRecords.length > 0) {
+      const itemMap = new Map<string, { count: number; rank: number }>();
+      const pengelolaMap = new Map<string, number>();
+
+      for (const rec of sectionRecords) {
+        const code = rec.item || '-';
+        const existingItem = itemMap.get(code);
+        const rank = getItemHierarchyRank(code, rec.tahun, items);
+        if (existingItem) {
+          existingItem.count += 1;
+          existingItem.rank = Math.min(existingItem.rank, rank);
+        } else {
+          itemMap.set(code, { count: 1, rank });
+        }
+
+        const peng = (rec.pengelola || 'Tanpa Pengelola').trim();
+        pengelolaMap.set(peng, (pengelolaMap.get(peng) || 0) + 1);
+      }
+
+      const itemEntries = Array.from(itemMap.entries()).sort((a, b) => {
+        if (a[1].rank !== b[1].rank) return a[1].rank - b[1].rank;
+        return a[0].localeCompare(b[0], 'id');
+      });
+      const pengelolaEntries = Array.from(pengelolaMap.entries()).sort((a, b) =>
+        a[0].localeCompare(b[0], 'id')
+      );
+
+      const maxLines = Math.max(itemEntries.length, pengelolaEntries.length);
+      const neededHeight = 14 + maxLines * 4.5;
+      let cursorY = (doc.lastAutoTable?.finalY ?? tableStartY) + 9;
+
+      if (cursorY + neededHeight > F4_PAPER_HEIGHT_MM - F4_PDF_MARGINS.bottom) {
+        doc.addPage([F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM], 'portrait');
+        cursorY = F4_PDF_MARGINS.top + 6;
+      }
+
+      const leftColX = F4_PDF_MARGINS.left;
+      const rightColX = F4_PDF_MARGINS.left + 58;
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.setTextColor(15, 23, 42);
+      doc.text('DAFTAR ITEM :', leftColX, cursorY);
+      doc.text('PENGELOLA :', rightColX, cursorY);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.5);
+      const lineStep = 4.6;
+
+      itemEntries.forEach(([code, meta], idx) => {
+        doc.text(`- ${code} : ${meta.count}`, leftColX, cursorY + 6 + idx * lineStep);
+      });
+
+      pengelolaEntries.forEach(([name, cnt], idx) => {
+        doc.text(`- ${name} : ${cnt}`, rightColX, cursorY + 6 + idx * lineStep);
+      });
+
+      if (
+        reportTemplate?.enabled &&
+        (reportTemplate.signatoryName?.trim() || reportTemplate.signatoryTitle?.trim())
+      ) {
+        let sigY = cursorY + 10 + maxLines * lineStep;
+        if (sigY + 34 > F4_PAPER_HEIGHT_MM - F4_PDF_MARGINS.bottom) {
+          doc.addPage([F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM], 'portrait');
+          sigY = F4_PDF_MARGINS.top + 8;
+        }
+        const sigX = F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right - 34;
+        const dateStr = new Intl.DateTimeFormat('id-ID', {
+          day: 'numeric',
+          month: 'long',
+          year: 'numeric',
+        }).format(new Date());
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8.8);
+        doc.setTextColor(15, 23, 42);
+        doc.text(`${reportTemplate.city?.trim() || 'Pontianak'}, ${dateStr}`, sigX, sigY, {
+          align: 'center',
+        });
+        if (reportTemplate.signatoryTitle?.trim()) {
+          doc.text(reportTemplate.signatoryTitle.trim(), sigX, sigY + 4.8, { align: 'center' });
+        }
+        if (reportTemplate.signatoryName?.trim()) {
+          doc.setFont('helvetica', 'bold');
+          doc.text(reportTemplate.signatoryName.trim(), sigX, sigY + 23, { align: 'center' });
+        }
+        if (reportTemplate.signatoryNip?.trim()) {
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(8);
+          doc.text(`NIP. ${reportTemplate.signatoryNip.trim()}`, sigX, sigY + 27.5, { align: 'center' });
+        }
+      }
+    } else if (
       reportTemplate?.enabled &&
       (reportTemplate.signatoryName?.trim() || reportTemplate.signatoryTitle?.trim())
     ) {
-      let sigY = cursorY + 10 + maxLines * lineStep;
+      let sigY = (doc.lastAutoTable?.finalY ?? tableStartY) + 12;
       if (sigY + 34 > F4_PAPER_HEIGHT_MM - F4_PDF_MARGINS.bottom) {
         doc.addPage([F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM], 'portrait');
         sigY = F4_PDF_MARGINS.top + 8;
@@ -1093,39 +1187,78 @@ export async function exportKpmTableToPdf({
         doc.text(`NIP. ${reportTemplate.signatoryNip.trim()}`, sigX, sigY + 27.5, { align: 'center' });
       }
     }
-  } else if (
-    reportTemplate?.enabled &&
-    (reportTemplate.signatoryName?.trim() || reportTemplate.signatoryTitle?.trim())
-  ) {
-    let sigY = (doc.lastAutoTable?.finalY ?? tableStartY) + 12;
-    if (sigY + 34 > F4_PAPER_HEIGHT_MM - F4_PDF_MARGINS.bottom) {
-      doc.addPage([F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM], 'portrait');
-      sigY = F4_PDF_MARGINS.top + 8;
+  };
+
+  if (splitByProposal && sortedRecords.length > 0) {
+    interface ProposalPrintGroup {
+      key: string;
+      tahun: string;
+      proposalName: string;
+      label: string;
+      isStandalone: boolean;
+      records: KpmRecord[];
     }
-    const sigX = F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right - 34;
-    const dateStr = new Intl.DateTimeFormat('id-ID', {
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-    }).format(new Date());
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8.8);
-    doc.setTextColor(15, 23, 42);
-    doc.text(`${reportTemplate.city?.trim() || 'Pontianak'}, ${dateStr}`, sigX, sigY, {
-      align: 'center',
+    const groupMap = new Map<string, ProposalPrintGroup>();
+    for (const rec of sortedRecords) {
+      const propName = (rec.proposal || '').trim();
+      const tahun = (rec.tahun || '').trim();
+      const isStandalone = !propName;
+      const label = propName
+        ? propName
+        : rec.validasi === 'rejected'
+          ? 'Arsip Berkas Ditolak'
+          : 'Database KPM';
+      const key = `${tahun}::${propName || (rec.validasi === 'rejected' ? '__ARSIP_DITOLAK__' : '__DATABASE_KPM__')}`;
+      const existing = groupMap.get(key);
+      if (existing) {
+        existing.records.push(rec);
+      } else {
+        groupMap.set(key, {
+          key,
+          tahun,
+          proposalName: propName,
+          label,
+          isStandalone,
+          records: [rec],
+        });
+      }
+    }
+
+    const groups = Array.from(groupMap.values()).sort((a, b) => {
+      const yearCmp = a.tahun.localeCompare(b.tahun);
+      if (yearCmp !== 0) return yearCmp;
+      if (a.isStandalone !== b.isStandalone) return a.isStandalone ? 1 : -1;
+      const isKecA = isKecamatanProposal(a.proposalName);
+      const isKecB = isKecamatanProposal(b.proposalName);
+      if (isKecA !== isKecB) return isKecA ? -1 : 1;
+      return a.label.localeCompare(b.label, 'id');
     });
-    if (reportTemplate.signatoryTitle?.trim()) {
-      doc.text(reportTemplate.signatoryTitle.trim(), sigX, sigY + 4.8, { align: 'center' });
-    }
-    if (reportTemplate.signatoryName?.trim()) {
-      doc.setFont('helvetica', 'bold');
-      doc.text(reportTemplate.signatoryName.trim(), sigX, sigY + 23, { align: 'center' });
-    }
-    if (reportTemplate.signatoryNip?.trim()) {
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8);
-      doc.text(`NIP. ${reportTemplate.signatoryNip.trim()}`, sigX, sigY + 27.5, { align: 'center' });
-    }
+
+    groups.forEach((group, idx) => {
+      if (idx > 0) {
+        doc.addPage([F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM], 'portrait');
+      }
+      const sectionTitle = [group.label, group.tahun].filter(Boolean).join(' ').trim();
+      const sectionSubtitle = [
+        selectedPengelolaLabel ? `Pengelola: ${selectedPengelolaLabel}` : '',
+        `Total: ${group.records.length} KPM`,
+      ]
+        .filter(Boolean)
+        .join('  ·  ');
+
+      renderSection({
+        sectionRecords: group.records,
+        sectionTitle,
+        sectionSubtitle,
+        proposalTitleForAutoKel: group.proposalName,
+      });
+    });
+  } else {
+    renderSection({
+      sectionRecords: sortedRecords,
+      sectionTitle: title,
+      sectionSubtitle: subtitle,
+    });
   }
 
   const result = await saveOrOpenPdfDocument(doc, fileName);
