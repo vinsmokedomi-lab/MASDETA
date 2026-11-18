@@ -31,9 +31,11 @@ import {
 } from 'lucide-react';
 import {
   BastTemplateConfig,
+  DEFAULT_PEJABAT_LIST,
   ItemBantuan,
   KpmDocumentFile,
   KpmRecord,
+  PejabatProfile,
   ProposalBastMap,
   ProposalChecklist,
   ProposalDocuments,
@@ -61,6 +63,7 @@ import {
   formatBastProposalLocation,
   formatIndonesianDateWords,
   formatScheduleDateTimeForCoupon,
+  normalizePejabatNipNumber,
   resolveEffectiveBastConfig,
   resolveScheduleForProposal,
 } from '../utils/pdfExporter';
@@ -76,6 +79,7 @@ interface ProposalDetailViewProps {
   schedules?: ScheduleEventItem[];
   reportTemplate?: ReportTemplateConfig;
   bastTemplate?: BastTemplateConfig;
+  pejabatList?: PejabatProfile[];
   proposalBastMap?: ProposalBastMap;
   onSaveProposalBastConfig?: (
     proposalId: string,
@@ -109,6 +113,7 @@ export function ProposalDetailView({
   schedules = [],
   reportTemplate,
   bastTemplate,
+  pejabatList = DEFAULT_PEJABAT_LIST,
   proposalBastMap = {},
   onSaveProposalBastConfig,
   historyEntries,
@@ -2271,6 +2276,41 @@ export function ProposalDetailView({
                 </div>
               </div>
 
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">
+                  Pilih Pejabat Dinas Default (Otomatis Isi Nama, Kelas, Jabatan &amp; NIP)
+                </label>
+                <select
+                  value={
+                    pejabatList.find(
+                      (p) =>
+                        p.nama.trim().toLowerCase() ===
+                        (bastDraft.pejabatNama || '').trim().toLowerCase()
+                    )?.id || ''
+                  }
+                  onChange={(e) => {
+                    const picked = pejabatList.find((p) => p.id === e.target.value);
+                    if (!picked) return;
+                    setBastDraft((prev) => ({
+                      ...prev,
+                      pejabatNama: picked.nama,
+                      pejabatPangkat: picked.kelas,
+                      pejabatJabatan: picked.jabatan,
+                      pejabatNip: normalizePejabatNipNumber(picked.nip).trim(),
+                    }));
+                  }}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800 outline-none focus:border-teal-600"
+                >
+                  <option value="">-- Pilih Pejabat atau Ubah Manual di Bawah --</option>
+                  {pejabatList.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.nama}
+                      {p.kelas ? ` (${p.kelas})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                 <div>
                   <label className="mb-1 block text-xs font-semibold text-slate-700">
@@ -2303,7 +2343,7 @@ export function ProposalDetailView({
               <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                 <div>
                   <label className="mb-1 block text-xs font-semibold text-slate-700">
-                    Pangkat / Golongan
+                    Kelas / Pangkat / Golongan
                   </label>
                   <input
                     type="text"
@@ -2311,21 +2351,31 @@ export function ProposalDetailView({
                     onChange={(e) =>
                       setBastDraft((prev) => ({ ...prev, pejabatPangkat: e.target.value }))
                     }
+                    placeholder="Contoh: Pembina Utama Muda / (IV/c)"
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none focus:border-teal-600"
                   />
                 </div>
                 <div>
                   <label className="mb-1 block text-xs font-semibold text-slate-700">
-                    NIP Pejabat
+                    NIP Pejabat (tanpa &ldquo;NIP.&rdquo;)
                   </label>
-                  <input
-                    type="text"
-                    value={bastDraft.pejabatNip}
-                    onChange={(e) =>
-                      setBastDraft((prev) => ({ ...prev, pejabatNip: e.target.value }))
-                    }
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none focus:border-teal-600"
-                  />
+                  <div className="flex w-full items-center overflow-hidden rounded-xl border border-slate-200 bg-white focus-within:border-teal-600">
+                    <span className="shrink-0 border-r border-slate-200 bg-slate-50 px-2.5 py-2 text-xs font-semibold text-slate-500">
+                      NIP.
+                    </span>
+                    <input
+                      type="text"
+                      value={normalizePejabatNipNumber(bastDraft.pejabatNip)}
+                      onChange={(e) =>
+                        setBastDraft((prev) => ({
+                          ...prev,
+                          pejabatNip: normalizePejabatNipNumber(e.target.value),
+                        }))
+                      }
+                      placeholder="19770830 199603 1 001"
+                      className="w-full border-0 bg-transparent px-3 py-2 text-xs text-slate-800 tabular-nums outline-none"
+                    />
+                  </div>
                 </div>
               </div>
 

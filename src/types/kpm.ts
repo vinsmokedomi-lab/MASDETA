@@ -464,7 +464,7 @@ export const DEFAULT_BAST_TEMPLATE: BastTemplateConfig = {
   pejabatNama: 'Drs. RAMINUDDIN, M.Si',
   pejabatJabatan: 'Kepala Dinas Sosial Provinsi Kalimantan Barat',
   pejabatPangkat: 'Pembina Utama Muda / (IV/c)',
-  pejabatNip: 'NIP. 19770830 199603 1 001',
+  pejabatNip: '19770830 199603 1 001',
   nilaiNominalText: '. . . . . . . . . . . . . . . . . . . . . . . . . . .',
 };
 
@@ -487,5 +487,49 @@ export const DEFAULT_SPTJM_TEMPLATE: SptjmTemplateConfig = {
   tanggalCustomText: '',
   pejabatJabatan: 'Kepala Bidang Pemberdayaan Fakir Miskin Dinas Sosial Provinsi Kalbar',
   pejabatNama: 'TATIK GESTYANINGSIH, A.Ks., M.Si',
-  pejabatNip: 'NIP. 19680514 198901 2 002',
+  pejabatNip: '19680514 198901 2 002',
 };
+
+export interface PejabatProfile {
+  id: string;
+  nama: string;
+  kelas: string;
+  jabatan: string;
+  nip: string;
+  createdAt: string;
+}
+
+export const DEFAULT_PEJABAT_LIST: PejabatProfile[] = [
+  {
+    id: 'pejabat-default-1',
+    nama: 'Drs. RAMINUDDIN, M.Si',
+    kelas: 'Pembina Utama Muda / (IV/c)',
+    jabatan: 'Kepala Dinas Sosial Provinsi Kalimantan Barat',
+    nip: '19770830 199603 1 001',
+    createdAt: '2025-01-01T00:00:00.000Z',
+  },
+  {
+    id: 'pejabat-default-2',
+    nama: 'SHINTA IKASARI, S.STP',
+    kelas: 'Pembina / (IV/a)',
+    jabatan: 'Plt. Kepala Dinas Sosial Provinsi Kalimantan Barat',
+    nip: '19780327 199612 2 001',
+    createdAt: '2025-01-01T00:00:00.000Z',
+  },
+  {
+    id: 'pejabat-default-3',
+    nama: 'TATIK GESTYANINGSIH, A.Ks., M.Si',
+    kelas: 'Pembina / (IV/a)',
+    jabatan: 'Kepala Bidang Pemberdayaan Fakir Miskin Dinas Sosial Provinsi Kalbar',
+    nip: '19680514 198901 2 002',
+    createdAt: '2025-01-01T00:00:00.000Z',
+  },
+  {
+    id: 'pejabat-default-4',
+    nama: 'YELLY MANALU, S.Sos',
+    kelas: '',
+    jabatan: 'Pejabat Pelaksana Teknis Kegiatan',
+    nip: '19801112 200903 2 003',
+    createdAt: '2025-01-01T00:00:00.000Z',
+  },
+];

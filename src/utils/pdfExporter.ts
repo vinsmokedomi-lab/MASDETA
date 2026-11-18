@@ -200,7 +200,7 @@ export const PDF_COLUMN_DEFINITIONS: PdfColumnDefinition[] = [
     key: 'administrasi',
     pdfHeader: 'ADMINISTRASI',
     uiLabel: 'Administrasi',
-    description: 'Status pembayaran administrasi (Sudah Bayar / Belum Bayar)',
+    description: 'Nominal uang administrasi yang masuk',
     defaultEnabled: false,
     baseWidthMm: 23,
     minWidthMm: 18.5,
@@ -543,6 +543,103 @@ export function shouldAutoIncludeKelurahanColumn(proposalName?: string): boolean
   return !trimmed.toLowerCase().includes('kelurahan');
 }
 
+export function doesKpmRecordMatchCheckedColumns(
+  rec: KpmRecord,
+  selectedColumns: PdfColumnKey[],
+  proposals: ProposalRecord[],
+  wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST,
+  autoExcludeKelurahanWhenInProposalTitle = false
+): boolean {
+  const effectiveCols =
+    autoExcludeKelurahanWhenInProposalTitle && !shouldAutoIncludeKelurahanColumn(rec.proposal)
+      ? selectedColumns.filter((c) => c !== 'kelurahan')
+      : selectedColumns;
+
+  const domicile = resolveKpmDomicile(rec, proposals, wilayahList);
+
+  for (const col of effectiveCols) {
+    switch (col) {
+      case 'no':
+        break;
+      case 'item': {
+        const val = (rec.item || '').trim();
+        if (!val || val === '-') return false;
+        break;
+      }
+      case 'nama': {
+        const val = (rec.nama || '').trim();
+        if (!val || val === '-') return false;
+        break;
+      }
+      case 'alamat': {
+        const val = (rec.alamat || '').trim();
+        if (!val || val === '-') return false;
+        break;
+      }
+      case 'desil': {
+        if (formatDesilValue(rec.dtsen) === '-') return false;
+        break;
+      }
+      case 'rtRw': {
+        const rt = (rec.rt || '').trim();
+        const rw = (rec.rw || '').trim();
+        const hasRt = Boolean(rt && rt !== '-');
+        const hasRw = Boolean(rw && rw !== '-');
+        if (!hasRt && !hasRw) return false;
+        break;
+      }
+      case 'kontak': {
+        if (!formatPhoneForPdf(rec.kontak)) return false;
+        break;
+      }
+      case 'pengelola': {
+        const val = (rec.pengelola || '').trim();
+        if (!val || val === '-' || val.toLowerCase() === 'tanpa pengelola') return false;
+        break;
+      }
+      case 'kelurahan': {
+        const val = (domicile.kelurahan || '').trim();
+        if (!val || val === '-' || val.toLowerCase() === 'tanpa kelurahan') return false;
+        break;
+      }
+      case 'kecamatan': {
+        const val = (
+          domicile.kecamatan ||
+          (rec.proposal
+            ? resolveProposalKecamatanCategory(rec.proposal, proposals, rec.tahun, wilayahList)
+            : '')
+        )
+          .replace(/^Kecamatan\s+/i, '')
+          .trim();
+        if (!val || val === '-') return false;
+        break;
+      }
+      case 'proposal': {
+        if (!(rec.proposal || '').trim()) return false;
+        break;
+      }
+      case 'administrasi': {
+        if (!(Number(rec.payment || 0) > 0)) return false;
+        break;
+      }
+      case 'nikKtp': {
+        if (!(rec.nikKtp || '').replace(/\D/g, '')) return false;
+        break;
+      }
+      case 'nikKk': {
+        if (!(rec.nikKk || '').replace(/\D/g, '')) return false;
+        break;
+      }
+      case 'catatan': {
+        const val = (rec.catatan || '').trim();
+        if (!val || val === '-') return false;
+        break;
+      }
+    }
+  }
+  return true;
+}
+
 export function formatScheduleDateTimeForCoupon(
   targetDate: string,
   targetTime?: string,
@@ -642,6 +739,18 @@ export function resolveCouponScheduleForRecord(
   };
 }
 
+export function normalizePejabatNipNumber(raw?: string): string {
+  return (raw || '')
+    .replace(/^\s*NIP\.?\s*:?\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .trimStart();
+}
+
+export function formatOfficialNipLine(raw?: string): string {
+  const digits = normalizePejabatNipNumber(raw).trim();
+  return digits ? `NIP. ${digits}` : '';
+}
+
 export function resolveEffectiveBastConfig(
   globalTemplate: BastTemplateConfig | undefined,
   proposalBastMap: ProposalBastMap | undefined,
@@ -665,6 +774,7 @@ export function resolveEffectiveBastConfig(
 
   return {
     ...merged,
+    pejabatNip: normalizePejabatNipNumber(merged.pejabatNip).trim(),
     kopLogoDataUrl: resolvedLogo,
   };
 }
@@ -822,12 +932,14 @@ export async function exportKpmTableToPdf({
     sectionTitle: string;
     sectionSubtitle?: string;
     proposalTitleForAutoKel?: string;
+    grandTotalMoney?: { totalNominal: number; paidCount: number; totalCount: number };
   }) => {
     const {
       sectionRecords,
       sectionTitle,
       sectionSubtitle,
       proposalTitleForAutoKel,
+      grandTotalMoney,
     } = sectionOpts;
 
     const shouldOmitKelurahan =
@@ -990,9 +1102,7 @@ export async function exportKpmTableToPdf({
           }
           case 'administrasi': {
             const paid = Number(rec.payment || 0);
-            return paid > 0
-              ? `Sudah Bayar\n${formatRupiah(paid).replace(/\u00A0/g, ' ')}`
-              : 'Belum Bayar';
+            return paid > 0 ? formatRupiah(paid).replace(/\u00A0/g, ' ') : '-';
           }
           case 'proposal': {
             return (
@@ -1089,7 +1199,17 @@ export async function exportKpmTableToPdf({
         a[0].localeCompare(b[0], 'id')
       );
 
-      const maxLines = Math.max(itemEntries.length, pengelolaEntries.length);
+      const showMoneySummary = activeCols.some((c) => c.key === 'administrasi');
+      const sectionTotalNominal = sectionRecords.reduce(
+        (sum, rec) => sum + Math.max(0, Number(rec.payment || 0)),
+        0
+      );
+      const sectionPaidCount = sectionRecords.filter(
+        (rec) => Number(rec.payment || 0) > 0
+      ).length;
+      const moneyLinesCount = showMoneySummary ? (grandTotalMoney ? 3 : 2) : 0;
+
+      const maxLines = Math.max(itemEntries.length, pengelolaEntries.length, moneyLinesCount);
       const neededHeight = 14 + maxLines * 4.5;
       let cursorY = (doc.lastAutoTable?.finalY ?? tableStartY) + 9;
 
@@ -1100,12 +1220,16 @@ export async function exportKpmTableToPdf({
 
       const leftColX = F4_PDF_MARGINS.left;
       const rightColX = F4_PDF_MARGINS.left + 58;
+      const thirdColX = F4_PDF_MARGINS.left + 116;
 
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(9);
       doc.setTextColor(15, 23, 42);
       doc.text('DAFTAR ITEM :', leftColX, cursorY);
       doc.text('PENGELOLA :', rightColX, cursorY);
+      if (showMoneySummary) {
+        doc.text('AKUMULASI UANG MASUK :', thirdColX, cursorY);
+      }
 
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(8.5);
@@ -1118,6 +1242,28 @@ export async function exportKpmTableToPdf({
       pengelolaEntries.forEach(([name, cnt], idx) => {
         doc.text(`- ${name} : ${cnt}`, rightColX, cursorY + 6 + idx * lineStep);
       });
+
+      if (showMoneySummary) {
+        const formattedSectionTotal = formatRupiah(sectionTotalNominal).replace(/\u00A0/g, ' ');
+        doc.setFont('helvetica', 'bold');
+        doc.text(`- Total : ${formattedSectionTotal}`, thirdColX, cursorY + 6);
+        doc.setFont('helvetica', 'normal');
+        doc.text(
+          `- Terbayar : ${sectionPaidCount} / ${sectionRecords.length} KPM`,
+          thirdColX,
+          cursorY + 6 + lineStep
+        );
+        if (grandTotalMoney) {
+          const formattedGrand = formatRupiah(grandTotalMoney.totalNominal).replace(/\u00A0/g, ' ');
+          doc.setFont('helvetica', 'bold');
+          doc.text(
+            `- Total Semua : ${formattedGrand}`,
+            thirdColX,
+            cursorY + 6 + lineStep * 2
+          );
+          doc.setFont('helvetica', 'normal');
+        }
+      }
 
       if (
         reportTemplate?.enabled &&
@@ -1208,14 +1354,18 @@ export async function exportKpmTableToPdf({
         : rec.validasi === 'rejected'
           ? 'Arsip Berkas Ditolak'
           : 'Database KPM';
-      const key = `${tahun}::${propName || (rec.validasi === 'rejected' ? '__ARSIP_DITOLAK__' : '__DATABASE_KPM__')}`;
+      const key = isStandalone
+        ? rec.validasi === 'rejected'
+          ? '__ARSIP_DITOLAK__'
+          : '__DATABASE_KPM__'
+        : `${tahun}::${propName}`;
       const existing = groupMap.get(key);
       if (existing) {
         existing.records.push(rec);
       } else {
         groupMap.set(key, {
           key,
-          tahun,
+          tahun: isStandalone ? '' : tahun,
           proposalName: propName,
           label,
           isStandalone,
@@ -1225,20 +1375,38 @@ export async function exportKpmTableToPdf({
     }
 
     const groups = Array.from(groupMap.values()).sort((a, b) => {
+      if (a.isStandalone !== b.isStandalone) return a.isStandalone ? 1 : -1;
+      if (a.isStandalone && b.isStandalone) {
+        if (a.key === b.key) return 0;
+        return a.key === '__DATABASE_KPM__' ? -1 : 1;
+      }
       const yearCmp = a.tahun.localeCompare(b.tahun);
       if (yearCmp !== 0) return yearCmp;
-      if (a.isStandalone !== b.isStandalone) return a.isStandalone ? 1 : -1;
       const isKecA = isKecamatanProposal(a.proposalName);
       const isKecB = isKecamatanProposal(b.proposalName);
       if (isKecA !== isKecB) return isKecA ? -1 : 1;
       return a.label.localeCompare(b.label, 'id');
     });
 
+    const grandTotalMoney =
+      groups.length > 1
+        ? {
+            totalNominal: sortedRecords.reduce(
+              (sum, rec) => sum + Math.max(0, Number(rec.payment || 0)),
+              0
+            ),
+            paidCount: sortedRecords.filter((rec) => Number(rec.payment || 0) > 0).length,
+            totalCount: sortedRecords.length,
+          }
+        : undefined;
+
     groups.forEach((group, idx) => {
       if (idx > 0) {
         doc.addPage([F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM], 'portrait');
       }
-      const sectionTitle = [group.label, group.tahun].filter(Boolean).join(' ').trim();
+      const sectionTitle = group.isStandalone
+        ? group.label
+        : [group.label, group.tahun].filter(Boolean).join(' ').trim();
       const sectionSubtitle = [
         selectedPengelolaLabel ? `Pengelola: ${selectedPengelolaLabel}` : '',
         `Total: ${group.records.length} KPM`,
@@ -1251,6 +1419,7 @@ export async function exportKpmTableToPdf({
         sectionTitle,
         sectionSubtitle,
         proposalTitleForAutoKel: group.proposalName,
+        grandTotalMoney: idx === groups.length - 1 ? grandTotalMoney : undefined,
       });
     });
   } else {
@@ -2522,8 +2691,12 @@ function renderSingleBastPage(
   const pejabatJabatan =
     bastConfig.pejabatJabatan?.trim() || DEFAULT_BAST_TEMPLATE.pejabatJabatan;
   const pejabatPangkat =
-    bastConfig.pejabatPangkat?.trim() || DEFAULT_BAST_TEMPLATE.pejabatPangkat;
-  const pejabatNip = bastConfig.pejabatNip?.trim() || DEFAULT_BAST_TEMPLATE.pejabatNip;
+    bastConfig.pejabatPangkat !== undefined
+      ? bastConfig.pejabatPangkat.trim()
+      : DEFAULT_BAST_TEMPLATE.pejabatPangkat;
+  const pejabatNipLine = formatOfficialNipLine(
+    bastConfig.pejabatNip?.trim() || DEFAULT_BAST_TEMPLATE.pejabatNip
+  );
   const kpmFullName = (record.bast?.recipientName || record.nama || '-').toUpperCase();
 
   doc.setFont('helvetica', 'normal');
@@ -2573,10 +2746,10 @@ function renderSingleBastPage(
   const p1 =
     `Pada hari ini ${dateWords} bertempat di ${locationText}. ` +
     `Berdasarkan keputusan Kepala Dinas Sosial Provinsi Kalimantan Barat nomor : ${nomorSk} ` +
-    `tentang barang yang diserahkan kepada masyarakat berupa peralatan kerja bagi keluarga fakir miskin ` +
-    `kegiatan pengelolaan data fakir miskin cakupan daerah provinsi sub kegiatan fasilitasi bantuan sosial ` +
-    `kesejahteraan keluarga provinsi kalimantan barat tahun anggaran ${tahunAnggaran}. ` +
-    `Berdasarkan surat pesanan (SP) nomor : ${nomorPesanan} tanggal ${tanggalPemesanan}.`;
+    `tentang barang untuk dijual/diserahkan kepada masyarakat berupa peralatan kerja bagi keluarga fakir miskin potensial ` +
+    `kegiatan pengelolaan data fakir miskin cakupan daerah provinsi sub kegiatan fasilitasi bantuan pengembangan ekonomi Masyarakat ` +
+    `tahun anggaran ${tahunAnggaran}. ` +
+    `Berdasarkan surat pesanan nomor : ${nomorPesanan} tanggal ${tanggalPemesanan}.`;
 
   const slotNo = getKpmSlotNumberInProposal(
     record,
@@ -2595,12 +2768,10 @@ function renderSingleBastPage(
   const idMaxW = right - idValX;
   const nominalRaw =
     bastConfig.nilaiNominalText?.trim() || DEFAULT_BAST_TEMPLATE.nilaiNominalText;
-  const isDottedBlank = /^[.\s_…-]+$/.test(nominalRaw);
-  const p2Lead =
-    'Dengan ini PIHAK PERTAMA secara sah telah menyerahkan barang berupa 1 (satu) paket bantuan berupa peralatan kerja dan dalam keadaan “berfungsi dengan baik dan lengkap”';
-  const p2Full =
-    `Dengan ini PIHAK PERTAMA secara sah telah menyerahkan barang berupa 1 (satu) paket bantuan berupa peralatan kerja ` +
-    `dan dalam keadaan “berfungsi dengan baik dan lengkap” dengan nilai sebesar ${nominalRaw} dengan rincian barang sebagai berikut :`;
+  const isDottedBlank = !nominalRaw || /^[.\s_…-]+$/.test(nominalRaw);
+  const p2 = isDottedBlank
+    ? 'Dengan ini PIHAK PERTAMA secara sah telah menyerahkan barang berupa 1 (satu) paket bantuan peralatan kerja dengan rincian barang sebagai berikut :'
+    : `Dengan ini PIHAK PERTAMA secara sah telah menyerahkan barang berupa 1 (satu) paket bantuan peralatan kerja senilai ${nominalRaw} dengan rincian barang sebagai berikut :`;
   const pClose =
     'Maka PIHAK KEDUA menyatakan telah menerima bantuan diatas dalam keadaan sadar dengan kondisi barang bantuan yang di berikan “berfungsi dengan baik dan lengkap”. Demikian berita acara ini dibuat untuk digunakan sebagaimana mestinya.';
 
@@ -2623,7 +2794,7 @@ function renderSingleBastPage(
     const jabH = Math.max(1, leftJabLines.length) * jabLineStep;
     const signingSpaceH = 16.5 * Math.max(0.7, preset.gapScale);
     const extraKpmOffset = Math.max(0, kpmSigNameLines.length - 1) * 3.8;
-    const pangkatOffset = 4.8;
+    const pangkatOffset = pejabatPangkat ? 4.8 : 0;
     const nipOffset = 4.3;
     const totalSigH =
       sigTitleH + jabH + signingSpaceH + extraKpmOffset + pangkatOffset + nipOffset;
@@ -2666,18 +2837,12 @@ function renderSingleBastPage(
     h += preset.idRowStep;
     h += jabLines.length * idJabStep + 0.8 * gs;
     h += 5.8 * gs;
-    h += preset.idRowStep * 3;
+    h += preset.idRowStep * 2;
     h += 5.8 * gs;
 
     // Paragraf penyerahan
-    if (isDottedBlank) {
-      const leadLines = doc.splitTextToSize(p2Lead, PRINTABLE_WIDTH_MM) as string[];
-      h += leadLines.length * bodyStep + 2.4 * gs;
-      h += 7.4 * gs;
-    } else {
-      const p2Lines = doc.splitTextToSize(p2Full, PRINTABLE_WIDTH_MM) as string[];
-      h += p2Lines.length * bodyStep + 5.6 * gs;
-    }
+    const p2Lines = doc.splitTextToSize(p2, PRINTABLE_WIDTH_MM) as string[];
+    h += p2Lines.length * bodyStep + 5.6 * gs;
 
     // Tabel Rincian Barang
     const rows = buildTableRowsForPreset(preset);
@@ -2719,9 +2884,6 @@ function renderSingleBastPage(
   doc.setFontSize(preset.titleFontSize);
   doc.setTextColor(15, 23, 42);
   doc.text(titleText, centerX, cursorY, { align: 'center' });
-  const titleW = doc.getTextWidth(titleText);
-  doc.setLineWidth(0.35);
-  doc.line(centerX - titleW / 2, cursorY + 0.8, centerX + titleW / 2, cursorY + 0.8);
 
   cursorY += 4.8 * gs;
   doc.setFont('helvetica', 'normal');
@@ -2787,49 +2949,23 @@ function renderSingleBastPage(
   doc.text(noBantuanStr, idValX, cursorY);
   cursorY += preset.idRowStep;
 
-  doc.text('Jabatan', idLabelX, cursorY);
-  doc.text(':', idColonX, cursorY);
-  doc.text('sebagai Keluarga Penerima Manfaat (KPM)', idValX, cursorY);
-  cursorY += preset.idRowStep;
-
-  doc.text('selanjutnya disebut sebagai ', idLabelX, cursorY);
-  const p2PrefixW = doc.getTextWidth('selanjutnya disebut sebagai ');
+  doc.text('sebagai Keluarga Penerima Manfaat (KPM) selanjutnya disebut sebagai ', idLabelX, cursorY);
+  const p2PrefixW = doc.getTextWidth(
+    'sebagai Keluarga Penerima Manfaat (KPM) selanjutnya disebut sebagai '
+  );
   doc.setFont('helvetica', 'bold');
   doc.text('PIHAK KEDUA', idLabelX + p2PrefixW, cursorY);
   cursorY += 5.8 * gs;
 
-  // Paragraf penyerahan + nominal
-  if (isDottedBlank) {
-    const leadLines = doc.splitTextToSize(p2Lead, PRINTABLE_WIDTH_MM) as string[];
-    doc.setFont('helvetica', 'normal');
-    doc.text(p2Lead, left, cursorY, {
-      maxWidth: PRINTABLE_WIDTH_MM,
-      align: 'justify',
-      lineHeightFactor: preset.lineHeightFactor,
-    });
-    cursorY += leadLines.length * bodyStep + 2.4 * gs;
-
-    const prefixNominal = 'dengan nilai sebesar ';
-    doc.text(prefixNominal, left, cursorY);
-    const prefixW = doc.getTextWidth(prefixNominal);
-    const dotWidth = 56;
-    doc.text(nominalRaw, left + prefixW + 1, cursorY + 1.3);
-    const suffixX = Math.min(
-      left + prefixW + Math.max(doc.getTextWidth(nominalRaw), dotWidth) + 3,
-      right - 58
-    );
-    doc.text('dengan rincian barang sebagai berikut :', suffixX, cursorY);
-    cursorY += 7.4 * gs;
-  } else {
-    const p2Lines = doc.splitTextToSize(p2Full, PRINTABLE_WIDTH_MM) as string[];
-    doc.setFont('helvetica', 'normal');
-    doc.text(p2Full, left, cursorY, {
-      maxWidth: PRINTABLE_WIDTH_MM,
-      align: 'justify',
-      lineHeightFactor: preset.lineHeightFactor,
-    });
-    cursorY += p2Lines.length * bodyStep + 5.6 * gs;
-  }
+  // Paragraf penyerahan
+  const p2Lines = doc.splitTextToSize(p2, PRINTABLE_WIDTH_MM) as string[];
+  doc.setFont('helvetica', 'normal');
+  doc.text(p2, left, cursorY, {
+    maxWidth: PRINTABLE_WIDTH_MM,
+    align: 'justify',
+    lineHeightFactor: preset.lineHeightFactor,
+  });
+  cursorY += p2Lines.length * bodyStep + 5.6 * gs;
 
   // Tabel rincian barang (selalu 1 halaman)
   const tableRows = buildTableRowsForPreset(preset);
@@ -2982,8 +3118,14 @@ function renderSingleBastPage(
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9.0);
-  doc.text(pejabatPangkat, leftSigX, pangkatY, { align: 'center' });
-  doc.text(pejabatNip, leftSigX, nipY, { align: 'center' });
+  if (pejabatPangkat) {
+    doc.text(pejabatPangkat, leftSigX, pangkatY, { align: 'center' });
+    if (pejabatNipLine) {
+      doc.text(pejabatNipLine, leftSigX, nipY, { align: 'center' });
+    }
+  } else if (pejabatNipLine) {
+    doc.text(pejabatNipLine, leftSigX, nameY + sigMetrics.extraKpmOffset + 4.8, { align: 'center' });
+  }
 }
 
 function renderSingleSptjmPage(
@@ -3029,8 +3171,9 @@ function renderSingleSptjmPage(
     sptjmConfig.pejabatJabatan?.trim() || DEFAULT_SPTJM_TEMPLATE.pejabatJabatan;
   const pejabatNama =
     sptjmConfig.pejabatNama?.trim() || DEFAULT_SPTJM_TEMPLATE.pejabatNama;
-  const pejabatNip =
-    sptjmConfig.pejabatNip?.trim() || DEFAULT_SPTJM_TEMPLATE.pejabatNip;
+  const pejabatNipLine = formatOfficialNipLine(
+    sptjmConfig.pejabatNip?.trim() || DEFAULT_SPTJM_TEMPLATE.pejabatNip
+  );
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9.4);
@@ -3071,18 +3214,20 @@ function renderSingleSptjmPage(
   const noBantuanStr = noBantuanNum ? String(noBantuanNum).padStart(2, '0') : '01';
 
   const kpmFullName = (record.nama || '-').toUpperCase();
+  const rawAlamat = (record.alamat || '').trim();
+  const kpmAlamatText = rawAlamat && rawAlamat !== '-' ? rawAlamat : '';
   const locationText = formatBastProposalLocation(record, proposals, wilayahList);
 
   const pIntro =
     `Berkenaan dengan permohonan bantuan peralatan kerja di ${locationText}. ` +
-    `Kegiatan PFM pada Dinas Sosial Provinsi Kalimantan Barat yang telah direalisasikan barang-barang / peralatan berupa :`;
+    `Kegiatan pengelolaan data fakir miskin cakupan daerah Provinsi sub kegiatan fasilitasi bantuan pengembangan ekonomi Masyarakat pada Dinas Sosial Provinsi Kalimantan Barat yang telah direalisasikan barang-barang / peralatan berupa :`;
 
   const pWill =
     'Akan saya gunakan sesuai dengan proposal/ajuan saya dan dengan ini menyatakan dengan sebenar benarnya bahwa :';
 
   const statementPoints = [
     'Bertanggungjawab mutlak terhadap penggunaan bantuan tersebut diatas;',
-    'Bersedia memenuhi kewajiban yang ada, yaitu bertanggung jawab secara formil dan materil atas penggunaan bantuan sosial yang diterima serta bersedia menyampaikan laporan pemanfaatannya kepada pihak yang berwenang secara berjenjang;',
+    'Bersedia memenuhi kewajiban yang ada, yaitu bertanggung jawab secara formil dan materil atas penggunaan bantuan peralatan kerja yang diterima serta bersedia menyampaikan laporan pemanfaatannya kepada pihak yang berwenang secara berjenjang;',
     'Bersedia dan kooperatif terhadap auditor/pemeriksa yang akan melakukan pemeriksaan atas keabsahan laporan yang saya sampaikan terhadap pemanfaatan bantuan yang diterima;',
     'Tidak akan memperjual belikan bantuan yang telah diterima dari Dinas Sosial Provinsi Kalimantan Barat.',
   ];
@@ -3113,16 +3258,14 @@ function renderSingleSptjmPage(
   const getSptjmSigMetrics = (preset: FenceDensityPreset) => {
     const sigScale = Math.max(0.7, preset.gapScale);
     const sigGap = 7.0 * Math.max(0.65, preset.gapScale);
-    const dateRowH = 5.4 * sigScale;
-    const mengetahuiRowH = 4.4 * sigScale;
+    const mengetahuiRowH = 4.6 * sigScale;
     const jabLineStep = 4.0 * sigScale;
     const jabH = Math.max(1, leftJabLines.length) * jabLineStep;
     const signingSpaceH = 18.0 * Math.max(0.68, preset.gapScale);
     const nipOffset = 4.8;
-    const totalSigH = dateRowH + mengetahuiRowH + jabH + signingSpaceH + nipOffset;
+    const totalSigH = mengetahuiRowH + jabH + signingSpaceH + nipOffset;
     return {
       sigGap,
-      dateRowH,
       mengetahuiRowH,
       jabLineStep,
       jabH,
@@ -3143,13 +3286,17 @@ function renderSingleSptjmPage(
     // Judul SPTJM (tanpa nomor surat)
     h += 8.0 * gs;
 
-    // 'Saya yang bertanda tangan dibawah ini :' + Nama, No. Bantuan, Jabatan
+    // 'Saya yang bertanda tangan dibawah ini :' + Nama, Alamat, No. Bantuan
     h += 5.8 * gs;
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(preset.bodyFontSize);
     const namaLines = doc.splitTextToSize(kpmFullName, idMaxW) as string[];
+    const alamatLines = kpmAlamatText
+      ? (doc.splitTextToSize(kpmAlamatText, idMaxW) as string[])
+      : [''];
     h += Math.max(1, namaLines.length) * preset.idRowStep;
-    h += preset.idRowStep * 2 + 3.4 * gs;
+    h += Math.max(1, alamatLines.length) * preset.idRowStep;
+    h += preset.idRowStep + 3.4 * gs;
 
     // Paragraf pembuka
     const pIntroLines = doc.splitTextToSize(pIntro, PRINTABLE_WIDTH_MM) as string[];
@@ -3220,14 +3367,19 @@ function renderSingleSptjmPage(
   doc.text(namaLines, idValX, cursorY);
   cursorY += Math.max(1, namaLines.length) * preset.idRowStep;
 
+  doc.text('Alamat', idLabelX, cursorY);
+  doc.text(':', idColonX, cursorY);
+  const alamatLines = kpmAlamatText
+    ? (doc.splitTextToSize(kpmAlamatText, idMaxW) as string[])
+    : [];
+  if (alamatLines.length > 0) {
+    doc.text(alamatLines, idValX, cursorY);
+  }
+  cursorY += Math.max(1, alamatLines.length) * preset.idRowStep;
+
   doc.text('No. Bantuan', idLabelX, cursorY);
   doc.text(':', idColonX, cursorY);
   doc.text(noBantuanStr, idValX, cursorY);
-  cursorY += preset.idRowStep;
-
-  doc.text('Jabatan', idLabelX, cursorY);
-  doc.text(':', idColonX, cursorY);
-  doc.text('Sebagai Keluarga Penerima Manfaat (KPM)', idValX, cursorY);
   cursorY += preset.idRowStep + 3.4 * gs;
 
   // Paragraf Permohonan & Realisasi Barang
@@ -3328,11 +3480,10 @@ function renderSingleSptjmPage(
 
   // 2. BLOK TANGGAL & TANDA TANGAN 2 KOLOM MENGIKUTI BARIS AKHIR
   const pCloseEndY = closeY + pCloseLines.length * bodyStep;
-  const dateY = Math.min(
+  const mengetahuiY = Math.min(
     pCloseEndY + sigMetrics.sigGap,
     bottomEdgeY - sigMetrics.totalSigH
   );
-  const mengetahuiY = dateY + sigMetrics.dateRowH;
   const jabTopY = mengetahuiY + sigMetrics.mengetahuiRowH;
   const nameY = jabTopY + sigMetrics.jabH + sigMetrics.signingSpaceH;
   const nipY = nameY + sigMetrics.nipOffset;
@@ -3340,14 +3491,12 @@ function renderSingleSptjmPage(
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9.4);
   doc.setTextColor(15, 23, 42);
-  doc.text(`${tempat}, ${tanggalText}`, centerX, dateY, { align: 'center' });
-
   doc.text('MENGETAHUI', leftSigX, mengetahuiY, { align: 'center' });
-  doc.text('YANG MENYATAKAN', rightSigX, mengetahuiY, { align: 'center' });
+  doc.text(`${tempat}, ${tanggalText}`, rightSigX, mengetahuiY, { align: 'center' });
 
   doc.setFontSize(9.2);
   doc.text(leftJabLines, leftSigX, jabTopY, { align: 'center' });
-  doc.text('Keluarga Penerima Manfaat (KPM)', rightSigX, jabTopY, { align: 'center' });
+  doc.text('Yang Menyatakan', rightSigX, jabTopY, { align: 'center' });
 
   // Kiri: Pejabat (bold) + NIP & Kanan: Nama KPM, dengan garis tanda tangan simetris sejajar
   doc.setFont('helvetica', 'bold');
@@ -3382,7 +3531,9 @@ function renderSingleSptjmPage(
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9.2);
-  doc.text(pejabatNip, leftSigX, nipY, { align: 'center' });
+  if (pejabatNipLine) {
+    doc.text(pejabatNipLine, leftSigX, nipY, { align: 'center' });
+  }
 }
 
 export interface ExportKpmBastPdfOptions {

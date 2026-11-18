@@ -9,6 +9,7 @@ import {
   ImagePlus,
   Loader2,
   Printer,
+  Search,
   Ticket,
   Trash2,
 } from 'lucide-react';
@@ -19,10 +20,12 @@ import {
   DEFAULT_BAST_TEMPLATE,
   DEFAULT_COUPON_CONFIG,
   DEFAULT_KOP_LOGO_URL,
+  DEFAULT_PEJABAT_LIST,
   DEFAULT_REPORT_TEMPLATE,
   DEFAULT_SPTJM_TEMPLATE,
   ItemBantuan,
   KpmRecord,
+  PejabatProfile,
   PengelolaProfile,
   ProposalBastMap,
   ProposalRecord,
@@ -33,7 +36,9 @@ import {
   WilayahKabKota,
 } from '../types/kpm';
 import {
+  formatRupiah,
   isKecamatanProposal,
+  resolveKpmDomicile,
   resolveProposalKecamatanCategory,
   sortKecamatanCategoryNames,
 } from '../utils/imageProcessor';
@@ -45,6 +50,7 @@ import {
   PDF_COLUMN_DEFINITIONS,
   PdfColumnKey,
   SPTJM_DAY_OPTIONS,
+  doesKpmRecordMatchCheckedColumns,
   exportKpmBastBulkToPdf,
   exportKpmSptjmBulkToPdf,
   exportKpmTableToPdf,
@@ -55,6 +61,7 @@ import {
   formatSptjmFullDate,
   getSptjmAutoDayFromIso,
   isKecamatanScopedProposalForCoupon,
+  normalizePejabatNipNumber,
   resolveCouponScheduleForRecord,
   resolveEffectiveBastConfig,
   resolveScheduleForProposal,
@@ -81,6 +88,7 @@ interface MenuDownloadViewProps {
   onSaveBastTemplate?: (next: BastTemplateConfig) => void;
   sptjmTemplate?: SptjmTemplateConfig;
   onSaveSptjmTemplate?: (next: SptjmTemplateConfig) => void;
+  pejabatList?: PejabatProfile[];
   proposalBastMap?: ProposalBastMap;
   onSaveProposalBastConfig?: (
     proposalId: string,
@@ -140,6 +148,7 @@ export function MenuDownloadView({
   onSaveBastTemplate,
   sptjmTemplate,
   onSaveSptjmTemplate,
+  pejabatList = DEFAULT_PEJABAT_LIST,
   proposalBastMap = {},
   onSaveProposalBastConfig,
   onBack,
@@ -173,6 +182,13 @@ export function MenuDownloadView({
     return initial.slice(0, MAX_PDF_TOTAL_COLUMNS - MANDATORY_PDF_COLUMN_KEYS.length);
   });
   const [includeSummary, setIncludeSummary] = useState(true);
+  const [onlyCompleteCheckedColumns, setOnlyCompleteCheckedColumns] = useState(false);
+  const [excludedPengelolaKeys, setExcludedPengelolaKeys] = useState<string[]>([]);
+  const [excludedKelurahanKeys, setExcludedKelurahanKeys] = useState<string[]>([]);
+  const [isPengelolaChecklistOpen, setIsPengelolaChecklistOpen] = useState(false);
+  const [isKelurahanChecklistOpen, setIsKelurahanChecklistOpen] = useState(false);
+  const [pengelolaChecklistQuery, setPengelolaChecklistQuery] = useState('');
+  const [kelurahanChecklistQuery, setKelurahanChecklistQuery] = useState('');
 
   const [isTahunModalOpen, setIsTahunModalOpen] = useState(false);
   const [isProposalModalOpen, setIsProposalModalOpen] = useState(false);
@@ -213,18 +229,24 @@ export function MenuDownloadView({
   const [couponManualOverride, setCouponManualOverride] = useState(false);
   const [couponSavedNotice, setCouponSavedNotice] = useState(false);
 
-  const [bastDraft, setBastDraft] = useState<BastTemplateConfig>(
-    () => bastTemplate ?? DEFAULT_BAST_TEMPLATE
-  );
+  const [bastDraft, setBastDraft] = useState<BastTemplateConfig>(() => ({
+    ...(bastTemplate ?? DEFAULT_BAST_TEMPLATE),
+    pejabatNip: normalizePejabatNipNumber(
+      (bastTemplate ?? DEFAULT_BAST_TEMPLATE).pejabatNip
+    ).trim(),
+  }));
   const [bastSavedNotice, setBastSavedNotice] = useState(false);
   const [bastSavedLabel, setBastSavedLabel] = useState<string>(
     'Template BAST berhasil disimpan sebagai default.'
   );
   const [showBastKopEditor, setShowBastKopEditor] = useState(false);
 
-  const [sptjmDraft, setSptjmDraft] = useState<SptjmTemplateConfig>(
-    () => sptjmTemplate ?? DEFAULT_SPTJM_TEMPLATE
-  );
+  const [sptjmDraft, setSptjmDraft] = useState<SptjmTemplateConfig>(() => ({
+    ...(sptjmTemplate ?? DEFAULT_SPTJM_TEMPLATE),
+    pejabatNip: normalizePejabatNipNumber(
+      (sptjmTemplate ?? DEFAULT_SPTJM_TEMPLATE).pejabatNip
+    ).trim(),
+  }));
   const [sptjmSavedNotice, setSptjmSavedNotice] = useState(false);
 
   useEffect(() => {
@@ -232,30 +254,62 @@ export function MenuDownloadView({
   }, [reportTemplate]);
 
   useEffect(() => {
-    if (sptjmTemplate) setSptjmDraft({ ...DEFAULT_SPTJM_TEMPLATE, ...sptjmTemplate });
+    if (sptjmTemplate) {
+      setSptjmDraft({
+        ...DEFAULT_SPTJM_TEMPLATE,
+        ...sptjmTemplate,
+        pejabatNip: normalizePejabatNipNumber(
+          sptjmTemplate.pejabatNip ?? DEFAULT_SPTJM_TEMPLATE.pejabatNip
+        ).trim(),
+      });
+    }
   }, [sptjmTemplate]);
 
+  const isStandaloneSource =
+    selectedTahun === 'database' ||
+    selectedTahun === 'arsip' ||
+    selectedTahun === 'database_arsip';
+
+  const databaseRecordCount = useMemo(
+    () => records.filter((r) => r.validasi === 'pending').length,
+    [records]
+  );
+
+  const arsipRecordCount = useMemo(
+    () => records.filter((r) => r.validasi === 'rejected').length,
+    [records]
+  );
+
+  const selectedTahunDisplayLabel = useMemo(() => {
+    if (selectedTahun === 'all') return 'Semua Data';
+    if (selectedTahun === 'database') return 'Database KPM';
+    if (selectedTahun === 'arsip') return 'Arsip (Ditolak)';
+    if (selectedTahun === 'database_arsip') return 'Database & Arsip';
+    return selectedTahun;
+  }, [selectedTahun]);
+
   const yearScopedProposals = useMemo(() => {
+    if (isStandaloneSource) return [];
     if (selectedTahun === 'all') return proposals;
     return proposals.filter((p) => p.tahun === selectedTahun);
-  }, [proposals, selectedTahun]);
+  }, [proposals, selectedTahun, isStandaloneSource]);
 
   const selectedProposalObj = useMemo(() => {
-    if (selectedProposal === 'all') return undefined;
+    if (isStandaloneSource || selectedProposal === 'all') return undefined;
     return (
       yearScopedProposals.find((p) => p.namaProposal === selectedProposal) ??
       proposals.find((p) => p.namaProposal === selectedProposal)
     );
-  }, [selectedProposal, yearScopedProposals, proposals]);
+  }, [isStandaloneSource, selectedProposal, yearScopedProposals, proposals]);
 
   const matchedProposalSchedule = useMemo(() => {
-    if (selectedProposal === 'all') return undefined;
+    if (isStandaloneSource || selectedProposal === 'all') return undefined;
     const yr =
       selectedTahun !== 'all'
         ? selectedTahun
         : selectedProposalObj?.tahun;
     return resolveScheduleForProposal(selectedProposal, yr, schedules);
-  }, [selectedProposal, selectedTahun, selectedProposalObj, schedules]);
+  }, [isStandaloneSource, selectedProposal, selectedTahun, selectedProposalObj, schedules]);
 
   useEffect(() => {
     const baseCoupon = couponConfig ?? DEFAULT_COUPON_CONFIG;
@@ -349,11 +403,21 @@ export function MenuDownloadView({
 
   const recordsBeforePengelola = useMemo(() => {
     return records.filter((rec) => {
-      if (selectedTahun !== 'all' && rec.tahun !== selectedTahun) return false;
-      if (selectedProposal !== 'all' && rec.proposal !== selectedProposal) return false;
+      if (selectedTahun === 'database') {
+        if (rec.validasi !== 'pending') return false;
+      } else if (selectedTahun === 'arsip') {
+        if (rec.validasi !== 'rejected') return false;
+      } else if (selectedTahun === 'database_arsip') {
+        if (rec.validasi !== 'pending' && rec.validasi !== 'rejected') return false;
+      } else if (selectedTahun !== 'all') {
+        if (rec.tahun !== selectedTahun) return false;
+      }
+      if (!isStandaloneSource && selectedProposal !== 'all' && rec.proposal !== selectedProposal) {
+        return false;
+      }
       return true;
     });
-  }, [records, selectedTahun, selectedProposal]);
+  }, [records, selectedTahun, isStandaloneSource, selectedProposal]);
 
   const pengelolaOptions = useMemo(() => {
     const countMap = new Map<string, number>();
@@ -397,7 +461,8 @@ export function MenuDownloadView({
   const previewKuponSample = eligibleKuponRecords[0] || filteredRecords[0] || null;
   const previewKuponShowKelurahan = previewKuponSample
     ? isKecamatanScopedProposalForCoupon(previewKuponSample, proposals)
-    : selectedProposal !== 'all' &&
+    : !isStandaloneSource &&
+      selectedProposal !== 'all' &&
       isKecamatanScopedProposalForCoupon(
         { proposal: selectedProposal, tahun: selectedTahun === 'all' ? '' : selectedTahun },
         proposals
@@ -453,6 +518,165 @@ export function MenuDownloadView({
   const totalColumnCount = activeColumns.length;
   const isAtColumnLimit = totalColumnCount >= MAX_PDF_TOTAL_COLUMNS;
 
+  const isPengelolaColumnChecked = selectedAddonColumns.includes('pengelola');
+  const isKelurahanColumnChecked = selectedAddonColumns.includes('kelurahan');
+
+  const getPengelolaFilterKey = (rec: KpmRecord): string => {
+    const raw = (rec.pengelola || '').trim();
+    return raw ? raw.toLowerCase() : '__EMPTY__';
+  };
+
+  const getKelurahanFilterKey = (rec: KpmRecord): string => {
+    const dom = resolveKpmDomicile(rec, proposals, wilayahList);
+    const raw = (dom.kelurahan || '').trim();
+    return raw ? raw.toLowerCase() : '__EMPTY__';
+  };
+
+  const matchedActiveColumnRecords = useMemo(() => {
+    const keys = activeColumns.map((c) => c.key);
+    return filteredRecords.filter((rec) =>
+      doesKpmRecordMatchCheckedColumns(
+        rec,
+        keys,
+        proposals,
+        wilayahList,
+        selectedProposal === 'all'
+      )
+    );
+  }, [filteredRecords, activeColumns, proposals, wilayahList, selectedProposal]);
+
+  const pengelolaChecklistItems = useMemo(() => {
+    if (!isPengelolaColumnChecked) return [];
+    const map = new Map<string, { key: string; label: string; count: number; totalPayment: number }>();
+    for (const rec of matchedActiveColumnRecords) {
+      const raw = (rec.pengelola || '').trim();
+      const key = raw ? raw.toLowerCase() : '__EMPTY__';
+      const label = raw || 'Tanpa Pengelola';
+      const pay = Math.max(0, Number(rec.payment || 0));
+      const existing = map.get(key);
+      if (existing) {
+        existing.count += 1;
+        existing.totalPayment += pay;
+      } else {
+        map.set(key, { key, label, count: 1, totalPayment: pay });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => {
+      if (a.key === '__EMPTY__') return 1;
+      if (b.key === '__EMPTY__') return -1;
+      return a.label.localeCompare(b.label, 'id');
+    });
+  }, [isPengelolaColumnChecked, matchedActiveColumnRecords]);
+
+  const kelurahanChecklistItems = useMemo(() => {
+    if (!isKelurahanColumnChecked) return [];
+    const map = new Map<string, { key: string; label: string; count: number; totalPayment: number }>();
+    for (const rec of matchedActiveColumnRecords) {
+      const dom = resolveKpmDomicile(rec, proposals, wilayahList);
+      const raw = (dom.kelurahan || '').trim();
+      const key = raw ? raw.toLowerCase() : '__EMPTY__';
+      const label = raw || 'Tanpa Kelurahan';
+      const pay = Math.max(0, Number(rec.payment || 0));
+      const existing = map.get(key);
+      if (existing) {
+        existing.count += 1;
+        existing.totalPayment += pay;
+      } else {
+        map.set(key, { key, label, count: 1, totalPayment: pay });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => {
+      if (a.key === '__EMPTY__') return 1;
+      if (b.key === '__EMPTY__') return -1;
+      return a.label.localeCompare(b.label, 'id');
+    });
+  }, [isKelurahanColumnChecked, matchedActiveColumnRecords, proposals, wilayahList]);
+
+  const excludedPengelolaSet = useMemo(() => new Set(excludedPengelolaKeys), [excludedPengelolaKeys]);
+  const excludedKelurahanSet = useMemo(() => new Set(excludedKelurahanKeys), [excludedKelurahanKeys]);
+
+  const activeExcludedPengelolaCount = useMemo(
+    () => pengelolaChecklistItems.filter((item) => excludedPengelolaSet.has(item.key)).length,
+    [pengelolaChecklistItems, excludedPengelolaSet]
+  );
+
+  const activeExcludedKelurahanCount = useMemo(
+    () => kelurahanChecklistItems.filter((item) => excludedKelurahanSet.has(item.key)).length,
+    [kelurahanChecklistItems, excludedKelurahanSet]
+  );
+
+  const matchedAfterChecklistRecords = useMemo(() => {
+    return matchedActiveColumnRecords.filter((rec) => {
+      if (
+        isPengelolaColumnChecked &&
+        excludedPengelolaSet.size > 0 &&
+        excludedPengelolaSet.has(getPengelolaFilterKey(rec))
+      ) {
+        return false;
+      }
+      if (
+        isKelurahanColumnChecked &&
+        excludedKelurahanSet.size > 0 &&
+        excludedKelurahanSet.has(getKelurahanFilterKey(rec))
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }, [
+    matchedActiveColumnRecords,
+    isPengelolaColumnChecked,
+    isKelurahanColumnChecked,
+    excludedPengelolaSet,
+    excludedKelurahanSet,
+    proposals,
+    wilayahList,
+  ]);
+
+  const pdfPrintRecords = useMemo(() => {
+    if (onlyCompleteCheckedColumns) {
+      return matchedAfterChecklistRecords;
+    }
+    return filteredRecords.filter((rec) => {
+      if (
+        isPengelolaColumnChecked &&
+        excludedPengelolaSet.size > 0 &&
+        excludedPengelolaSet.has(getPengelolaFilterKey(rec))
+      ) {
+        return false;
+      }
+      if (
+        isKelurahanColumnChecked &&
+        excludedKelurahanSet.size > 0 &&
+        excludedKelurahanSet.has(getKelurahanFilterKey(rec))
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }, [
+    onlyCompleteCheckedColumns,
+    matchedAfterChecklistRecords,
+    filteredRecords,
+    isPengelolaColumnChecked,
+    isKelurahanColumnChecked,
+    excludedPengelolaSet,
+    excludedKelurahanSet,
+    proposals,
+    wilayahList,
+  ]);
+
+  const pdfTotalMoneyIn = useMemo(
+    () =>
+      pdfPrintRecords.reduce((sum, rec) => sum + Math.max(0, Number(rec.payment || 0)), 0),
+    [pdfPrintRecords]
+  );
+
+  const pdfPaidCount = useMemo(
+    () => pdfPrintRecords.filter((rec) => Number(rec.payment || 0) > 0).length,
+    [pdfPrintRecords]
+  );
+
   const toggleAddonColumn = (key: PdfColumnKey) => {
     setPdfFeedback(null);
     setSelectedAddonColumns((prev) => {
@@ -492,6 +716,10 @@ export function MenuDownloadView({
     setSelectedTahun(nextTahun);
     setSelectedProposal('all');
     setSelectedPengelola('all');
+    setExcludedPengelolaKeys([]);
+    setExcludedKelurahanKeys([]);
+    setPengelolaChecklistQuery('');
+    setKelurahanChecklistQuery('');
     setSelectedAddonColumns((prev) => applyProposalKelurahanDefault(prev, 'all'));
     setLimitNotice(false);
     setPdfFeedback(null);
@@ -503,6 +731,10 @@ export function MenuDownloadView({
   const handleSelectProposal = (nextProp: string) => {
     setSelectedProposal(nextProp);
     setSelectedPengelola('all');
+    setExcludedPengelolaKeys([]);
+    setExcludedKelurahanKeys([]);
+    setPengelolaChecklistQuery('');
+    setKelurahanChecklistQuery('');
     setSelectedAddonColumns((prev) => applyProposalKelurahanDefault(prev, nextProp));
     setLimitNotice(false);
     setPdfFeedback(null);
@@ -511,38 +743,69 @@ export function MenuDownloadView({
     setSptjmFeedback(null);
   };
 
-  const buildScopeTitleAndFileName = (prefix?: string) => {
-    const yearSuffix = selectedTahun === 'all' ? 'Semua Tahun' : selectedTahun;
-    const baseScope =
-      selectedProposal !== 'all' ? selectedProposal : 'Daftar KPM MASDETA';
-
-    const title = `${baseScope} ${yearSuffix}`.trim();
+  const buildScopeTitleAndFileName = (prefix?: string, countOverride?: number) => {
+    const scopeSummary = (() => {
+      if (selectedTahun === 'database') {
+        return {
+          title: 'Database KPM MASDETA',
+          fileBase: `${prefix ? `${prefix}_` : ''}Database_KPM_MASDETA`,
+        };
+      }
+      if (selectedTahun === 'arsip') {
+        return {
+          title: 'Arsip Berkas Ditolak MASDETA',
+          fileBase: `${prefix ? `${prefix}_` : ''}Arsip_Ditolak_MASDETA`,
+        };
+      }
+      if (selectedTahun === 'database_arsip') {
+        return {
+          title: 'Database KPM & Arsip Ditolak MASDETA',
+          fileBase: `${prefix ? `${prefix}_` : ''}Database_dan_Arsip_MASDETA`,
+        };
+      }
+      const yearSuffix = selectedTahun === 'all' ? 'Semua Data' : selectedTahun;
+      const baseScope =
+        selectedProposal !== 'all' ? selectedProposal : 'Daftar KPM MASDETA';
+      return {
+        title: `${baseScope} ${yearSuffix}`.trim(),
+        fileBase: `${prefix ? `${prefix}_` : ''}${
+          selectedTahun === 'all' ? 'Semua_Data' : selectedTahun
+        }_${baseScope}`,
+      };
+    })();
 
     const subParts: string[] = [];
     if (selectedPengelola !== 'all') {
       subParts.push(`Pengelola: ${selectedPengelola}`);
     }
-    subParts.push(`Total: ${filteredRecords.length} KPM`);
+    subParts.push(`Total: ${countOverride ?? filteredRecords.length} KPM`);
 
-    const fileBase = `${prefix ? `${prefix}_` : ''}${
-      selectedTahun === 'all' ? 'Semua_Tahun' : selectedTahun
-    }_${baseScope}${selectedPengelola !== 'all' ? `_${selectedPengelola}` : ''}`;
+    const fileBase = `${scopeSummary.fileBase}${
+      selectedPengelola !== 'all' ? `_${selectedPengelola}` : ''
+    }`;
 
     return {
-      title,
+      title: scopeSummary.title,
       subtitle: subParts.join('  ·  '),
       fileName: fileBase,
     };
   };
 
   const handleDownloadPdf = async () => {
-    if (filteredRecords.length === 0 || isGeneratingPdf) return;
+    if (pdfPrintRecords.length === 0 || isGeneratingPdf) return;
     setPdfFeedback(null);
     setIsGeneratingPdf(true);
     try {
-      const { title, subtitle, fileName } = buildScopeTitleAndFileName();
+      const { title, subtitle, fileName } = buildScopeTitleAndFileName(
+        undefined,
+        pdfPrintRecords.length
+      );
+      const shouldSplitByProposal =
+        selectedProposal === 'all' &&
+        selectedTahun !== 'database' &&
+        selectedTahun !== 'arsip';
       const res = await exportKpmTableToPdf({
-        records: filteredRecords,
+        records: pdfPrintRecords,
         proposals,
         items,
         wilayahList,
@@ -552,8 +815,8 @@ export function MenuDownloadView({
         fileName,
         includeSummary,
         reportTemplate: templateDraft,
-        splitByProposal: selectedProposal === 'all',
-        autoExcludeKelurahanWhenInProposalTitle: selectedProposal === 'all',
+        splitByProposal: shouldSplitByProposal,
+        autoExcludeKelurahanWhenInProposalTitle: shouldSplitByProposal && !isStandaloneSource,
         selectedPengelolaLabel: selectedPengelola !== 'all' ? selectedPengelola : undefined,
       });
       setPdfFeedback({
@@ -747,19 +1010,17 @@ export function MenuDownloadView({
           <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2.5 md:p-4">
             <h2 className="text-sm font-bold text-slate-900">Filter Cetak Dokumen</h2>
 
-            <div className="grid grid-cols-[108px_1fr] gap-2">
+            <div className="grid grid-cols-[146px_1fr] gap-2 sm:grid-cols-[164px_1fr]">
               <div>
                 <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                  Tahun
+                  Tahun / Sumber Data
                 </span>
                 <button
                   type="button"
                   onClick={() => setIsTahunModalOpen(true)}
                   className="mt-1 flex min-h-[42px] w-full items-center justify-between gap-1.5 rounded-xl border border-slate-300 bg-white px-3 text-left text-xs font-medium text-slate-900 hover:bg-slate-50"
                 >
-                  <span className="truncate">
-                    {selectedTahun === 'all' ? 'Semua' : selectedTahun}
-                  </span>
+                  <span className="truncate">{selectedTahunDisplayLabel}</span>
                   <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" />
                 </button>
               </div>
@@ -787,13 +1048,24 @@ export function MenuDownloadView({
               </span>
               <button
                 type="button"
+                disabled={isStandaloneSource}
                 onClick={() => setIsProposalModalOpen(true)}
-                className="mt-1 flex min-h-[42px] w-full items-center justify-between gap-2 rounded-xl border border-slate-300 bg-white px-3 text-left text-xs font-medium text-slate-900 hover:bg-slate-50"
+                className={`mt-1 flex min-h-[42px] w-full items-center justify-between gap-2 rounded-xl border px-3 text-left text-xs font-medium ${
+                  isStandaloneSource
+                    ? 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-500'
+                    : 'border-slate-300 bg-white text-slate-900 hover:bg-slate-50'
+                }`}
               >
                 <span className="truncate">
-                  {selectedProposal === 'all' ? 'Semua Proposal' : selectedProposal}
+                  {isStandaloneSource
+                    ? 'Standalone (Tanpa Proposal)'
+                    : selectedProposal === 'all'
+                      ? 'Semua Proposal'
+                      : selectedProposal}
                 </span>
-                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+                {!isStandaloneSource && (
+                  <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+                )}
               </button>
             </div>
           </section>
@@ -1087,13 +1359,35 @@ export function MenuDownloadView({
             <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2.5 md:p-5">
               <div className="flex items-center justify-between gap-2">
                 <h2 className="text-sm font-bold text-slate-900">Pilih Kolom Tabel PDF</h2>
-                <span
-                  className={`shrink-0 text-[11px] font-semibold tabular-nums ${
-                    isAtColumnLimit ? 'text-amber-700' : 'text-slate-500'
-                  }`}
-                >
-                  {totalColumnCount}/{MAX_PDF_TOTAL_COLUMNS} Kolom
-                </span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPdfFeedback(null);
+                      setLimitNotice(false);
+                      if (selectedAddonColumns.length > 0) {
+                        setSelectedAddonColumns([]);
+                      } else {
+                        setSelectedAddonColumns(
+                          applyProposalKelurahanDefault(
+                            [...DEFAULT_ADDON_PDF_COLUMN_KEYS],
+                            selectedProposal
+                          )
+                        );
+                      }
+                    }}
+                    className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-semibold text-slate-700 hover:bg-slate-100"
+                  >
+                    {selectedAddonColumns.length > 0 ? 'Hanya Wajib (4)' : 'Default'}
+                  </button>
+                  <span
+                    className={`text-[11px] font-semibold tabular-nums ${
+                      isAtColumnLimit ? 'text-amber-700' : 'text-slate-500'
+                    }`}
+                  >
+                    {totalColumnCount}/{MAX_PDF_TOTAL_COLUMNS} Kolom
+                  </span>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-2">
@@ -1127,11 +1421,14 @@ export function MenuDownloadView({
                         {checked && <Check className="h-3 w-3" />}
                       </span>
                       <span className="truncate text-xs font-semibold">{col.uiLabel}</span>
-                      {col.key === 'kelurahan' && selectedProposal === 'all' && checked && (
-                        <span className="ml-auto shrink-0 rounded-md bg-teal-100 px-1.5 py-0.5 text-[9px] font-bold text-teal-800">
-                          Auto
-                        </span>
-                      )}
+                      {col.key === 'kelurahan' &&
+                        selectedProposal === 'all' &&
+                        !isStandaloneSource &&
+                        checked && (
+                          <span className="ml-auto shrink-0 rounded-md bg-teal-100 px-1.5 py-0.5 text-[9px] font-bold text-teal-800">
+                            Auto
+                          </span>
+                        )}
                     </button>
                   );
                 })}
@@ -1154,12 +1451,375 @@ export function MenuDownloadView({
                 <p className="mt-0.5 text-[11px] font-semibold leading-relaxed text-slate-800">
                   {activeColumns.map((c) => c.pdfHeader).join('  |  ')}
                 </p>
-                {selectedProposal === 'all' && selectedAddonColumns.includes('kelurahan') && (
-                  <p className="mt-1 text-[10px] leading-relaxed text-teal-700">
-                    Mode <strong>Semua Proposal</strong>: setiap proposal dicetak dalam tabel terpisah. Proposal yang judulnya mengandung kata <strong>Kelurahan</strong> otomatis tidak menampilkan kolom KELURAHAN, sedangkan proposal Kecamatan/Umum menampilkannya.
-                  </p>
-                )}
+                {selectedProposal === 'all' &&
+                  !isStandaloneSource &&
+                  selectedAddonColumns.includes('kelurahan') && (
+                    <p className="mt-1 text-[10px] leading-relaxed text-teal-700">
+                      Mode <strong>Semua Proposal</strong>: setiap proposal dicetak dalam tabel terpisah. Proposal yang judulnya mengandung kata <strong>Kelurahan</strong> otomatis tidak menampilkan kolom KELURAHAN, sedangkan proposal Kecamatan/Umum menampilkannya.
+                    </p>
+                  )}
               </div>
+
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={onlyCompleteCheckedColumns}
+                onClick={() => {
+                  setPdfFeedback(null);
+                  setOnlyCompleteCheckedColumns((prev) => !prev);
+                }}
+                className={`flex min-h-[42px] w-full items-start gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                  onlyCompleteCheckedColumns
+                    ? 'border-teal-700/50 bg-teal-50/70'
+                    : 'border-slate-200 bg-white hover:bg-slate-50'
+                }`}
+              >
+                <span
+                  className={`mt-0.5 flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-md border transition-colors ${
+                    onlyCompleteCheckedColumns
+                      ? 'border-teal-700 bg-teal-700 text-white'
+                      : 'border-slate-300 bg-white'
+                  }`}
+                >
+                  {onlyCompleteCheckedColumns && <Check className="h-3 w-3" />}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-xs font-semibold text-slate-800">
+                    Hanya cetak KPM yang cocok dengan semua kolom tercentang
+                  </span>
+                  <span className="mt-0.5 block text-[10px] leading-relaxed text-slate-500">
+                    Jika aktif, KPM yang kosong / belum ada nominal pada kolom tercentang tidak ikut tercetak ({matchedAfterChecklistRecords.length} dari {filteredRecords.length} KPM cocok).
+                  </span>
+                </span>
+              </button>
+
+              {/* Opsi Pilih / Kecualikan Pengelola (muncul saat kolom Pengelola dicentang) */}
+              {isPengelolaColumnChecked && filteredRecords.length > 0 && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70">
+                  {pengelolaChecklistItems.length === 0 ? (
+                    <div className="px-3 py-2.5">
+                      <p className="text-xs font-semibold text-slate-800">
+                        Filter / Kecualikan Pengelola
+                      </p>
+                      <p className="mt-0.5 text-[10px] text-slate-500">
+                        Tidak ada pengelola yang cocok dengan urutan kolom PDF aktif saat ini (0 KPM cocok).
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between gap-2 px-3 py-2.5">
+                        <button
+                          type="button"
+                          onClick={() => setIsPengelolaChecklistOpen((prev) => !prev)}
+                          className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left"
+                        >
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold text-slate-800">
+                              Filter / Kecualikan Pengelola
+                            </p>
+                            <p className="text-[10px] text-slate-500">
+                              {activeExcludedPengelolaCount === 0
+                                ? `Semua cocok dipilih (${pengelolaChecklistItems.length} pengelola · sesuai kolom PDF aktif)`
+                                : `${pengelolaChecklistItems.length - activeExcludedPengelolaCount} dari ${pengelolaChecklistItems.length} dipilih · ${activeExcludedPengelolaCount} dikecualikan`}
+                            </p>
+                          </div>
+                          <ChevronDown
+                            className={`h-4 w-4 shrink-0 text-slate-500 transition-transform ${
+                              isPengelolaChecklistOpen ? 'rotate-180' : ''
+                            }`}
+                          />
+                        </button>
+                        {activeExcludedPengelolaCount > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPdfFeedback(null);
+                              setExcludedPengelolaKeys([]);
+                            }}
+                            className="shrink-0 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold text-teal-700 hover:bg-teal-50"
+                          >
+                            Reset
+                          </button>
+                        )}
+                      </div>
+
+                      {isPengelolaChecklistOpen && (
+                        <div className="border-t border-slate-200 bg-white px-3 py-2.5 rounded-b-xl space-y-2">
+                          {!onlyCompleteCheckedColumns &&
+                            matchedActiveColumnRecords.length < filteredRecords.length && (
+                              <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[10px] text-amber-900">
+                                <span>
+                                  Hanya menampilkan pengelola yang cocok kolom aktif ({matchedActiveColumnRecords.length} KPM).
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setPdfFeedback(null);
+                                    setOnlyCompleteCheckedColumns(true);
+                                  }}
+                                  className="shrink-0 rounded-md bg-teal-700 px-2 py-0.5 font-semibold text-white hover:bg-teal-800"
+                                >
+                                  Cetak Cocok Saja
+                                </button>
+                              </div>
+                            )}
+                          {pengelolaChecklistItems.length > 5 && (
+                            <div className="relative">
+                              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                              <input
+                                type="text"
+                                value={pengelolaChecklistQuery}
+                                onChange={(e) => setPengelolaChecklistQuery(e.target.value)}
+                                placeholder="Cari pengelola..."
+                                className="min-h-[34px] w-full rounded-lg border border-slate-300 pl-8 pr-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                              />
+                            </div>
+                          )}
+                          <div className="flex items-center justify-between gap-2 text-[10px]">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPdfFeedback(null);
+                                setExcludedPengelolaKeys([]);
+                              }}
+                              className="font-semibold text-teal-700 hover:underline"
+                            >
+                              Pilih Semua
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPdfFeedback(null);
+                                setExcludedPengelolaKeys(pengelolaChecklistItems.map((x) => x.key));
+                              }}
+                              className="font-semibold text-rose-700 hover:underline"
+                            >
+                              Kecualikan Semua
+                            </button>
+                          </div>
+                          <div className="max-h-48 overflow-y-auto space-y-1 pr-0.5">
+                            {pengelolaChecklistItems
+                              .filter((item) =>
+                                !pengelolaChecklistQuery.trim()
+                                  ? true
+                                  : item.label
+                                      .toLowerCase()
+                                      .includes(pengelolaChecklistQuery.trim().toLowerCase())
+                              )
+                              .map((item) => {
+                                const included = !excludedPengelolaSet.has(item.key);
+                                return (
+                                  <button
+                                    key={item.key}
+                                    type="button"
+                                    role="checkbox"
+                                    aria-checked={included}
+                                    onClick={() => {
+                                      setPdfFeedback(null);
+                                      setExcludedPengelolaKeys((prev) =>
+                                        prev.includes(item.key)
+                                          ? prev.filter((k) => k !== item.key)
+                                          : [...prev, item.key]
+                                      );
+                                    }}
+                                    className={`flex w-full items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-left text-xs transition-colors ${
+                                      included
+                                        ? 'border-teal-700/35 bg-teal-50/50 text-slate-900'
+                                        : 'border-slate-200 bg-slate-50 text-slate-400'
+                                    }`}
+                                  >
+                                    <span className="flex min-w-0 items-center gap-2">
+                                      <span
+                                        className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                                          included
+                                            ? 'border-teal-700 bg-teal-700 text-white'
+                                            : 'border-slate-300 bg-white'
+                                        }`}
+                                      >
+                                        {included && <Check className="h-2.5 w-2.5" />}
+                                      </span>
+                                      <span className="truncate font-medium">{item.label}</span>
+                                    </span>
+                                    <span className="shrink-0 text-[10px] font-medium tabular-nums">
+                                      {item.count} KPM
+                                      {selectedAddonColumns.includes('administrasi') &&
+                                        item.totalPayment > 0 &&
+                                        ` · ${formatRupiah(item.totalPayment)}`}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Opsi Pilih / Kecualikan Kelurahan (muncul saat kolom Kelurahan dicentang) */}
+              {isKelurahanColumnChecked && filteredRecords.length > 0 && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70">
+                  {kelurahanChecklistItems.length === 0 ? (
+                    <div className="px-3 py-2.5">
+                      <p className="text-xs font-semibold text-slate-800">
+                        Filter / Kecualikan Kelurahan
+                      </p>
+                      <p className="mt-0.5 text-[10px] text-slate-500">
+                        Tidak ada kelurahan yang cocok dengan urutan kolom PDF aktif saat ini (0 KPM cocok).
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between gap-2 px-3 py-2.5">
+                        <button
+                          type="button"
+                          onClick={() => setIsKelurahanChecklistOpen((prev) => !prev)}
+                          className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left"
+                        >
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold text-slate-800">
+                              Filter / Kecualikan Kelurahan
+                            </p>
+                            <p className="text-[10px] text-slate-500">
+                              {activeExcludedKelurahanCount === 0
+                                ? `Semua cocok dipilih (${kelurahanChecklistItems.length} kelurahan · sesuai kolom PDF aktif)`
+                                : `${kelurahanChecklistItems.length - activeExcludedKelurahanCount} dari ${kelurahanChecklistItems.length} dipilih · ${activeExcludedKelurahanCount} dikecualikan`}
+                            </p>
+                          </div>
+                          <ChevronDown
+                            className={`h-4 w-4 shrink-0 text-slate-500 transition-transform ${
+                              isKelurahanChecklistOpen ? 'rotate-180' : ''
+                            }`}
+                          />
+                        </button>
+                        {activeExcludedKelurahanCount > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPdfFeedback(null);
+                              setExcludedKelurahanKeys([]);
+                            }}
+                            className="shrink-0 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold text-teal-700 hover:bg-teal-50"
+                          >
+                            Reset
+                          </button>
+                        )}
+                      </div>
+
+                      {isKelurahanChecklistOpen && (
+                        <div className="border-t border-slate-200 bg-white px-3 py-2.5 rounded-b-xl space-y-2">
+                          {!onlyCompleteCheckedColumns &&
+                            matchedActiveColumnRecords.length < filteredRecords.length && (
+                              <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[10px] text-amber-900">
+                                <span>
+                                  Hanya menampilkan kelurahan yang cocok kolom aktif ({matchedActiveColumnRecords.length} KPM).
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setPdfFeedback(null);
+                                    setOnlyCompleteCheckedColumns(true);
+                                  }}
+                                  className="shrink-0 rounded-md bg-teal-700 px-2 py-0.5 font-semibold text-white hover:bg-teal-800"
+                                >
+                                  Cetak Cocok Saja
+                                </button>
+                              </div>
+                            )}
+                          {kelurahanChecklistItems.length > 5 && (
+                            <div className="relative">
+                              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                              <input
+                                type="text"
+                                value={kelurahanChecklistQuery}
+                                onChange={(e) => setKelurahanChecklistQuery(e.target.value)}
+                                placeholder="Cari kelurahan..."
+                                className="min-h-[34px] w-full rounded-lg border border-slate-300 pl-8 pr-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                              />
+                            </div>
+                          )}
+                          <div className="flex items-center justify-between gap-2 text-[10px]">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPdfFeedback(null);
+                                setExcludedKelurahanKeys([]);
+                              }}
+                              className="font-semibold text-teal-700 hover:underline"
+                            >
+                              Pilih Semua
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPdfFeedback(null);
+                                setExcludedKelurahanKeys(kelurahanChecklistItems.map((x) => x.key));
+                              }}
+                              className="font-semibold text-rose-700 hover:underline"
+                            >
+                              Kecualikan Semua
+                            </button>
+                          </div>
+                          <div className="max-h-48 overflow-y-auto space-y-1 pr-0.5">
+                            {kelurahanChecklistItems
+                              .filter((item) =>
+                                !kelurahanChecklistQuery.trim()
+                                  ? true
+                                  : item.label
+                                      .toLowerCase()
+                                      .includes(kelurahanChecklistQuery.trim().toLowerCase())
+                              )
+                              .map((item) => {
+                                const included = !excludedKelurahanSet.has(item.key);
+                                return (
+                                  <button
+                                    key={item.key}
+                                    type="button"
+                                    role="checkbox"
+                                    aria-checked={included}
+                                    onClick={() => {
+                                      setPdfFeedback(null);
+                                      setExcludedKelurahanKeys((prev) =>
+                                        prev.includes(item.key)
+                                          ? prev.filter((k) => k !== item.key)
+                                          : [...prev, item.key]
+                                      );
+                                    }}
+                                    className={`flex w-full items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-left text-xs transition-colors ${
+                                      included
+                                        ? 'border-teal-700/35 bg-teal-50/50 text-slate-900'
+                                        : 'border-slate-200 bg-slate-50 text-slate-400'
+                                    }`}
+                                  >
+                                    <span className="flex min-w-0 items-center gap-2">
+                                      <span
+                                        className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                                          included
+                                            ? 'border-teal-700 bg-teal-700 text-white'
+                                            : 'border-slate-300 bg-white'
+                                        }`}
+                                      >
+                                        {included && <Check className="h-2.5 w-2.5" />}
+                                      </span>
+                                      <span className="truncate font-medium">{item.label}</span>
+                                    </span>
+                                    <span className="shrink-0 text-[10px] font-medium tabular-nums">
+                                      {item.count} KPM
+                                      {selectedAddonColumns.includes('administrasi') &&
+                                        item.totalPayment > 0 &&
+                                        ` · ${formatRupiah(item.totalPayment)}`}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
 
               <button
                 type="button"
@@ -1178,9 +1838,27 @@ export function MenuDownloadView({
                   {includeSummary && <Check className="h-3 w-3" />}
                 </span>
                 <span className="text-xs font-medium text-slate-700">
-                  Sertakan ringkasan <strong>Daftar Item</strong> &amp; <strong>Pengelola</strong> di akhir PDF
+                  Sertakan ringkasan <strong>Daftar Item</strong>, <strong>Pengelola</strong>
+                  {selectedAddonColumns.includes('administrasi') && (
+                    <>
+                      {' '}
+                      &amp; <strong>Akumulasi Uang Masuk</strong>
+                    </>
+                  )}{' '}
+                  di akhir PDF
                 </span>
               </button>
+
+              {selectedAddonColumns.includes('administrasi') && (
+                <div className="flex items-center justify-between gap-2 rounded-xl border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-xs">
+                  <span className="font-medium text-emerald-900">
+                    Akumulasi Uang Masuk ({pdfPaidCount} KPM terbayar)
+                  </span>
+                  <span className="font-bold text-emerald-800 tabular-nums">
+                    {formatRupiah(pdfTotalMoneyIn)}
+                  </span>
+                </div>
+              )}
 
               {pdfFeedback && (
                 <div
@@ -1202,7 +1880,7 @@ export function MenuDownloadView({
 
               <button
                 type="button"
-                disabled={filteredRecords.length === 0 || isGeneratingPdf}
+                disabled={pdfPrintRecords.length === 0 || isGeneratingPdf}
                 onClick={() => void handleDownloadPdf()}
                 className="inline-flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-teal-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
               >
@@ -1214,7 +1892,7 @@ export function MenuDownloadView({
                 ) : (
                   <>
                     <Printer className="h-4.5 w-4.5" />
-                    <span>Download PDF F4 ({filteredRecords.length} KPM)</span>
+                    <span>Download PDF F4 ({pdfPrintRecords.length} KPM)</span>
                   </>
                 )}
               </button>
@@ -1850,6 +2528,42 @@ export function MenuDownloadView({
                   </div>
                 </div>
 
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600">
+                    Pilih Pejabat Dinas Default (Otomatis Isi Nama, Kelas, Jabatan &amp; NIP)
+                  </label>
+                  <select
+                    value={
+                      pejabatList.find(
+                        (p) =>
+                          p.nama.trim().toLowerCase() ===
+                          (bastDraft.pejabatNama || '').trim().toLowerCase()
+                      )?.id || ''
+                    }
+                    onChange={(e) => {
+                      const picked = pejabatList.find((p) => p.id === e.target.value);
+                      if (!picked) return;
+                      setBastSavedNotice(false);
+                      setBastDraft((prev) => ({
+                        ...prev,
+                        pejabatNama: picked.nama,
+                        pejabatPangkat: picked.kelas,
+                        pejabatJabatan: picked.jabatan,
+                        pejabatNip: normalizePejabatNipNumber(picked.nip).trim(),
+                      }));
+                    }}
+                    className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 bg-white px-3 text-xs font-medium text-slate-900 focus:border-teal-700 focus:outline-none"
+                  >
+                    <option value="">-- Pilih Pejabat atau Ubah Manual di Bawah --</option>
+                    {pejabatList.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.nama}
+                        {p.kelas ? ` (${p.kelas})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-600">
@@ -1884,7 +2598,7 @@ export function MenuDownloadView({
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-600">
-                      Pangkat / Golongan Pejabat
+                      Kelas / Pangkat / Golongan Pejabat
                     </label>
                     <input
                       type="text"
@@ -1893,22 +2607,32 @@ export function MenuDownloadView({
                         setBastSavedNotice(false);
                         setBastDraft((prev) => ({ ...prev, pejabatPangkat: e.target.value }));
                       }}
+                      placeholder="Contoh: Pembina Utama Muda / (IV/c)"
                       className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
                     />
                   </div>
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-600">
-                      NIP Pejabat
+                      NIP Pejabat (tanpa &ldquo;NIP.&rdquo;, otomatis tercetak)
                     </label>
-                    <input
-                      type="text"
-                      value={bastDraft.pejabatNip}
-                      onChange={(e) => {
-                        setBastSavedNotice(false);
-                        setBastDraft((prev) => ({ ...prev, pejabatNip: e.target.value }));
-                      }}
-                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                    />
+                    <div className="mt-1 flex min-h-[40px] w-full items-center overflow-hidden rounded-xl border border-slate-300 bg-white focus-within:border-teal-700">
+                      <span className="shrink-0 border-r border-slate-200 bg-slate-50 px-2.5 py-2 text-xs font-semibold text-slate-500">
+                        NIP.
+                      </span>
+                      <input
+                        type="text"
+                        value={normalizePejabatNipNumber(bastDraft.pejabatNip)}
+                        onChange={(e) => {
+                          setBastSavedNotice(false);
+                          setBastDraft((prev) => ({
+                            ...prev,
+                            pejabatNip: normalizePejabatNipNumber(e.target.value),
+                          }));
+                        }}
+                        placeholder="19770830 199603 1 001"
+                        className="min-h-[38px] w-full border-0 bg-transparent px-3 text-xs text-slate-900 tabular-nums focus:outline-none"
+                      />
+                    </div>
                   </div>
                 </div>
 
@@ -2105,6 +2829,41 @@ export function MenuDownloadView({
 
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600">
+                    Pilih Pejabat Penandatangan Default (Otomatis Isi Jabatan, Nama &amp; NIP)
+                  </label>
+                  <select
+                    value={
+                      pejabatList.find(
+                        (p) =>
+                          p.nama.trim().toLowerCase() ===
+                          (sptjmDraft.pejabatNama || '').trim().toLowerCase()
+                      )?.id || ''
+                    }
+                    onChange={(e) => {
+                      const picked = pejabatList.find((p) => p.id === e.target.value);
+                      if (!picked) return;
+                      setSptjmSavedNotice(false);
+                      setSptjmDraft((prev) => ({
+                        ...prev,
+                        pejabatNama: picked.nama,
+                        pejabatJabatan: picked.jabatan,
+                        pejabatNip: normalizePejabatNipNumber(picked.nip).trim(),
+                      }));
+                    }}
+                    className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 bg-white px-3 text-xs font-medium text-slate-900 focus:border-teal-700 focus:outline-none"
+                  >
+                    <option value="">-- Pilih Pejabat atau Ubah Manual di Bawah --</option>
+                    {pejabatList.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.nama}
+                        {p.kelas ? ` (${p.kelas})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600">
                     Jabatan Pejabat Penandatangan
                   </label>
                   <input
@@ -2135,17 +2894,26 @@ export function MenuDownloadView({
                   </div>
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-600">
-                      NIP Pejabat
+                      NIP Pejabat (tanpa &ldquo;NIP.&rdquo;, otomatis tercetak)
                     </label>
-                    <input
-                      type="text"
-                      value={sptjmDraft.pejabatNip}
-                      onChange={(e) => {
-                        setSptjmSavedNotice(false);
-                        setSptjmDraft((prev) => ({ ...prev, pejabatNip: e.target.value }));
-                      }}
-                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                    />
+                    <div className="mt-1 flex min-h-[40px] w-full items-center overflow-hidden rounded-xl border border-slate-300 bg-white focus-within:border-teal-700">
+                      <span className="shrink-0 border-r border-slate-200 bg-slate-50 px-2.5 py-2 text-xs font-semibold text-slate-500">
+                        NIP.
+                      </span>
+                      <input
+                        type="text"
+                        value={normalizePejabatNipNumber(sptjmDraft.pejabatNip)}
+                        onChange={(e) => {
+                          setSptjmSavedNotice(false);
+                          setSptjmDraft((prev) => ({
+                            ...prev,
+                            pejabatNip: normalizePejabatNipNumber(e.target.value),
+                          }));
+                        }}
+                        placeholder="19680514 198901 2 002"
+                        className="min-h-[38px] w-full border-0 bg-transparent px-3 text-xs text-slate-900 tabular-nums focus:outline-none"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2216,12 +2984,31 @@ export function MenuDownloadView({
         </div>
       </div>
 
-      {/* Pop-up Pilihan Tahun */}
+      {/* Pop-up Pilihan Tahun / Sumber Data */}
       <SelectionPickerModal
         isOpen={isTahunModalOpen}
-        title="Pilih Tahun"
+        title="Pilih Tahun / Sumber Data"
         options={[
-          { value: 'all', label: 'Semua Tahun', subtitle: 'Gabungkan seluruh tahun anggaran' },
+          {
+            value: 'all',
+            label: 'Semua (Tahun, Database & Arsip)',
+            subtitle: 'Gabungkan seluruh tahun anggaran, Database KPM & Arsip Ditolak',
+          },
+          {
+            value: 'database_arsip',
+            label: 'Database & Arsip (Ditolak)',
+            subtitle: `Gabungkan Database KPM & Arsip Berkas Ditolak (${databaseRecordCount + arsipRecordCount} KPM)`,
+          },
+          {
+            value: 'database',
+            label: 'Database KPM',
+            subtitle: `Hanya data di Database KPM / status Menunggu (${databaseRecordCount} KPM)`,
+          },
+          {
+            value: 'arsip',
+            label: 'Arsip (Ditolak)',
+            subtitle: `Hanya berkas KPM berstatus Ditolak (${arsipRecordCount} KPM)`,
+          },
           ...yearOptions.map(
             (yr): SelectionPickerOption => ({
               value: yr,
@@ -2283,6 +3070,10 @@ export function MenuDownloadView({
         onClose={() => setIsPengelolaModalOpen(false)}
         onSelect={(val) => {
           setSelectedPengelola(val);
+          setExcludedPengelolaKeys([]);
+          setExcludedKelurahanKeys([]);
+          setPengelolaChecklistQuery('');
+          setKelurahanChecklistQuery('');
           setPdfFeedback(null);
           setKuponFeedback(null);
           setBastFeedback(null);

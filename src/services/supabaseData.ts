@@ -3717,7 +3717,7 @@ export async function deleteScheduleFromSupabase(
   }
 }
 
-export type DocumentTemplateKey = 'report' | 'bast' | 'sptjm' | 'kupon' | 'proposal_bast';
+export type DocumentTemplateKey = 'report' | 'bast' | 'sptjm' | 'kupon' | 'proposal_bast' | 'pejabat';
 
 export async function fetchDocumentTemplateFromSupabase<T>(
   templateKey: DocumentTemplateKey,

@@ -61,11 +61,13 @@ import {
   exportSchedulesToPdf,
   formatScheduleIndonesianDate,
   getSptjmAutoDayFromIso,
+  normalizePejabatNipNumber,
 } from '../utils/pdfExporter';
 import {
   BastTemplateConfig,
   CouponPrintConfig,
   DEFAULT_COUPON_CONFIG,
+  DEFAULT_PEJABAT_LIST,
   InternalUser,
   InternalUserRole,
   InternalUserStatus,
@@ -73,6 +75,7 @@ import {
   KpmAuditLogEntry,
   KpmDocumentFile,
   KpmRecord,
+  PejabatProfile,
   PengelolaProfile,
   ProposalBastMap,
   ProposalKpmHistoryEntry,
@@ -113,6 +116,7 @@ export type MenuSection =
   | 'dtsen'
   | 'pengelola'
   | 'pekerjaan'
+  | 'pejabat'
   | 'activity'
   | 'download'
   | 'kelengkapan'
@@ -243,6 +247,8 @@ interface MenuHubViewProps {
   onSaveBastTemplate?: (next: BastTemplateConfig) => void;
   sptjmTemplate?: SptjmTemplateConfig;
   onSaveSptjmTemplate?: (next: SptjmTemplateConfig) => void;
+  pejabatList?: PejabatProfile[];
+  onSavePejabatList?: (next: PejabatProfile[]) => void;
   proposalBastMap?: ProposalBastMap;
   onSaveProposalBastConfig?: (
     proposalId: string,
@@ -328,6 +334,8 @@ export function MenuHubView({
   onSaveBastTemplate,
   sptjmTemplate,
   onSaveSptjmTemplate,
+  pejabatList = DEFAULT_PEJABAT_LIST,
+  onSavePejabatList,
   proposalBastMap = {},
   onSaveProposalBastConfig,
   onOpenCreateStandaloneDatabaseKpm,
@@ -732,6 +740,18 @@ export function MenuHubView({
     name: string;
     kpmCount: number;
   } | null>(null);
+
+  // Pejabat Penandatangan master CRUD state
+  const [pejabatQuery, setPejabatQuery] = useState('');
+  const [isPejabatFormOpen, setIsPejabatFormOpen] = useState(false);
+  const [editingPejabatId, setEditingPejabatId] = useState<string | null>(null);
+  const [pejabatFormNama, setPejabatFormNama] = useState('');
+  const [pejabatFormKelas, setPejabatFormKelas] = useState('');
+  const [pejabatFormJabatan, setPejabatFormJabatan] = useState('');
+  const [pejabatFormNip, setPejabatFormNip] = useState('');
+  const [pejabatFormError, setPejabatFormError] = useState<string | null>(null);
+  const [pendingDeletePejabat, setPendingDeletePejabat] = useState<PejabatProfile | null>(null);
+  const [confirmResetPejabatOpen, setConfirmResetPejabatOpen] = useState(false);
 
   // Matriks Kelengkapan Berkas KPM state
   const [matrixQuery, setMatrixQuery] = useState('');
@@ -1641,6 +1661,30 @@ export function MenuHubView({
                       <p className="text-sm font-semibold text-slate-900">Profesi &amp; Pekerjaan</p>
                       <p className="mt-0.5 truncate text-xs text-slate-500">
                         Daftar profesi dan sebaran KPM
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onChangeSection('pejabat')}
+                    className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                      <UserCheck className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-slate-900">
+                          Pejabat Penandatangan
+                        </p>
+                        <span className="text-xs font-bold text-teal-700 tabular-nums">
+                          {pejabatList.length}
+                        </span>
+                      </div>
+                      <p className="mt-0.5 truncate text-xs text-slate-500">
+                        Nama pejabat, kelas, jabatan &amp; NIP default BAST / SPTJM
                       </p>
                     </div>
                     <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -4852,6 +4896,441 @@ export function MenuHubView({
     );
   }
 
+  // 8B. PEJABAT PENANDATANGAN (DEFAULT & MASTER BAST / SPTJM)
+  if (activeSection === 'pejabat') {
+    const qPejabat = pejabatQuery.trim().toLowerCase();
+    const filteredPejabatList = pejabatList.filter((p) => {
+      if (!qPejabat) return true;
+      return (
+        p.nama.toLowerCase().includes(qPejabat) ||
+        p.kelas.toLowerCase().includes(qPejabat) ||
+        p.jabatan.toLowerCase().includes(qPejabat) ||
+        p.nip.toLowerCase().includes(qPejabat)
+      );
+    });
+
+    const openAddPejabatModal = () => {
+      setEditingPejabatId(null);
+      setPejabatFormNama('');
+      setPejabatFormKelas('');
+      setPejabatFormJabatan('');
+      setPejabatFormNip('');
+      setPejabatFormError(null);
+      setIsPejabatFormOpen(true);
+    };
+
+    const openEditPejabatModal = (profile: PejabatProfile) => {
+      setEditingPejabatId(profile.id);
+      setPejabatFormNama(profile.nama);
+      setPejabatFormKelas(profile.kelas);
+      setPejabatFormJabatan(profile.jabatan);
+      setPejabatFormNip(normalizePejabatNipNumber(profile.nip));
+      setPejabatFormError(null);
+      setIsPejabatFormOpen(true);
+    };
+
+    const handleSavePejabatForm = (e: FormEvent) => {
+      e.preventDefault();
+      const nama = pejabatFormNama.trim();
+      const kelas = pejabatFormKelas.trim();
+      const jabatan = pejabatFormJabatan.trim();
+      const nip = normalizePejabatNipNumber(pejabatFormNip).trim();
+
+      if (!nama) {
+        setPejabatFormError('Nama pejabat wajib diisi.');
+        return;
+      }
+      if (!jabatan) {
+        setPejabatFormError('Jabatan pejabat wajib diisi.');
+        return;
+      }
+      if (!nip) {
+        setPejabatFormError('NIP pejabat wajib diisi (hanya angka tanpa awalan "NIP.").');
+        return;
+      }
+
+      const duplicate = pejabatList.some(
+        (p) => p.id !== editingPejabatId && p.nama.trim().toLowerCase() === nama.toLowerCase()
+      );
+      if (duplicate) {
+        setPejabatFormError(`Pejabat "${nama}" sudah terdaftar.`);
+        return;
+      }
+
+      const nextList: PejabatProfile[] = editingPejabatId
+        ? pejabatList.map((p) =>
+            p.id === editingPejabatId
+              ? {
+                  ...p,
+                  nama,
+                  kelas,
+                  jabatan,
+                  nip,
+                }
+              : p
+          )
+        : [
+            ...pejabatList,
+            {
+              id: `pejabat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              nama,
+              kelas,
+              jabatan,
+              nip,
+              createdAt: new Date().toISOString(),
+            },
+          ];
+
+      onSavePejabatList?.(nextList);
+      setIsPejabatFormOpen(false);
+    };
+
+    return (
+      <div className="min-h-screen pb-24">
+        {renderSubHeader('Pejabat Penandatangan', () => onChangeSection('root'))}
+        <div
+          className={`space-y-3 px-4 pt-4 ${
+            !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''
+          }`}
+        >
+          <div className="rounded-2xl border border-teal-200/70 bg-teal-50/70 px-3.5 py-2.5 text-xs leading-relaxed text-teal-900">
+            Data <strong>Pejabat Penandatangan</strong> menjadi pilihan dropdown otomatis di semua
+            form cetak <strong>BAST</strong> &amp; <strong>SPTJM</strong> agar nama, kelas/golongan,
+            jabatan, dan NIP tetap konsisten. Kolom NIP cukup angka saja (awalan{' '}
+            <code>NIP.</code> ditambahkan otomatis di surat).
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {canAdd && onSavePejabatList && (
+              <button
+                type="button"
+                onClick={openAddPejabatModal}
+                className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.99] sm:flex-none sm:px-5"
+              >
+                <Plus className="h-4 w-4" />
+                <span>Tambah Pejabat Baru</span>
+              </button>
+            )}
+
+            {canUpdate && onSavePejabatList && (
+              <button
+                type="button"
+                onClick={() => setConfirmResetPejabatOpen(true)}
+                className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                <span>Reset Default</span>
+              </button>
+            )}
+          </div>
+
+          {pejabatList.length > 0 && (
+            <div className="relative">
+              <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                type="search"
+                value={pejabatQuery}
+                onChange={(e) => setPejabatQuery(e.target.value)}
+                placeholder="Cari nama pejabat, kelas, jabatan, atau NIP..."
+                className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pr-3 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
+              />
+            </div>
+          )}
+
+          {filteredPejabatList.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
+              <p className="text-sm font-semibold text-slate-900">
+                {pejabatList.length === 0
+                  ? 'Belum ada data pejabat'
+                  : 'Tidak ada pejabat yang cocok'}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Tambahkan pejabat baru atau muat ulang daftar default pejabat Dinas Sosial.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+              {filteredPejabatList.map((profile) => (
+                <div
+                  key={profile.id}
+                  className="flex items-start justify-between gap-3 px-4 py-3.5 transition-colors hover:bg-slate-50/70"
+                >
+                  <div className="flex min-w-0 flex-1 items-start gap-3">
+                    <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                      <UserCheck className="h-4.5 w-4.5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-bold text-slate-900">{profile.nama}</p>
+                      <p className="mt-0.5 text-xs font-medium text-slate-700">
+                        {profile.jabatan}
+                      </p>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+                        {profile.kelas ? (
+                          <span>
+                            Kelas: <strong className="text-slate-700">{profile.kelas}</strong>
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">Tanpa kelas / pangkat</span>
+                        )}
+                        <span className="tabular-nums">
+                          NIP.{' '}
+                          <strong className="text-slate-800">
+                            {normalizePejabatNipNumber(profile.nip)}
+                          </strong>
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {(canUpdate || canDelete) && onSavePejabatList && (
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {canUpdate && (
+                        <button
+                          type="button"
+                          onClick={() => openEditPejabatModal(profile)}
+                          aria-label={`Edit pejabat ${profile.nama}`}
+                          title="Edit pejabat"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700"
+                        >
+                          <Edit3 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button
+                          type="button"
+                          onClick={() => setPendingDeletePejabat(profile)}
+                          aria-label={`Hapus pejabat ${profile.nama}`}
+                          title="Hapus pejabat"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Add / Edit Pejabat Modal */}
+        {isPejabatFormOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 backdrop-blur-xs sm:items-center sm:p-4"
+            onClick={() => setIsPejabatFormOpen(false)}
+            role="dialog"
+            aria-modal="true"
+            aria-label={editingPejabatId ? 'Edit Data Pejabat' : 'Tambah Pejabat Baru'}
+          >
+            <form
+              onSubmit={handleSavePejabatForm}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-md rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl space-y-3.5"
+            >
+              <div className="mx-auto h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+              <div className="flex items-center justify-between">
+                <h2 className="text-base font-bold text-slate-900">
+                  {editingPejabatId ? 'Edit Pejabat Penandatangan' : 'Tambah Pejabat Baru'}
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setIsPejabatFormOpen(false)}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100"
+                  aria-label="Tutup"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="space-y-2.5">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Nama Pejabat <span className="text-rose-600">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    autoFocus
+                    value={pejabatFormNama}
+                    onChange={(e) => {
+                      setPejabatFormNama(e.target.value);
+                      if (pejabatFormError) setPejabatFormError(null);
+                    }}
+                    placeholder="Contoh: SHINTA IKASARI, S.STP"
+                    className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-3.5 text-sm text-slate-900 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Kelas Pejabat (Pangkat / Golongan, Opsional)
+                  </label>
+                  <input
+                    type="text"
+                    value={pejabatFormKelas}
+                    onChange={(e) => {
+                      setPejabatFormKelas(e.target.value);
+                      if (pejabatFormError) setPejabatFormError(null);
+                    }}
+                    placeholder="Contoh: Pembina / (IV/a)"
+                    className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-3.5 text-sm text-slate-900 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Jabatan <span className="text-rose-600">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={pejabatFormJabatan}
+                    onChange={(e) => {
+                      setPejabatFormJabatan(e.target.value);
+                      if (pejabatFormError) setPejabatFormError(null);
+                    }}
+                    placeholder="Contoh: Plt. Kepala Dinas Sosial Provinsi Kalimantan Barat"
+                    className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-3.5 text-sm text-slate-900 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700">
+                    NIP <span className="text-rose-600">*</span>{' '}
+                    <span className="font-normal text-slate-500">(tanpa awalan &ldquo;NIP.&rdquo;)</span>
+                  </label>
+                  <div className="mt-1 flex min-h-[42px] w-full items-center overflow-hidden rounded-xl border border-slate-300 bg-white focus-within:border-teal-700">
+                    <span className="shrink-0 border-r border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold text-slate-500">
+                      NIP.
+                    </span>
+                    <input
+                      type="text"
+                      value={normalizePejabatNipNumber(pejabatFormNip)}
+                      onChange={(e) => {
+                        setPejabatFormNip(normalizePejabatNipNumber(e.target.value));
+                        if (pejabatFormError) setPejabatFormError(null);
+                      }}
+                      placeholder="19780327 199612 2 001"
+                      className="min-h-[40px] w-full border-0 bg-transparent px-3 text-sm text-slate-900 tabular-nums focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                {pejabatFormError && (
+                  <p className="text-xs font-medium text-rose-600">{pejabatFormError}</p>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setIsPejabatFormOpen(false)}
+                  className="inline-flex min-h-[44px] items-center justify-center rounded-xl border border-slate-200 bg-white px-5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-teal-700 px-5 text-sm font-semibold text-white hover:bg-teal-800"
+                >
+                  Simpan Pejabat
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {/* Delete Pejabat Confirmation Modal */}
+        {pendingDeletePejabat && (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 backdrop-blur-xs sm:items-center sm:p-4"
+            onClick={() => setPendingDeletePejabat(null)}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Hapus Pejabat"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-sm rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl space-y-4"
+            >
+              <div className="mx-auto h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+              <div className="space-y-1.5">
+                <h2 className="text-base font-bold text-slate-900">Hapus Pejabat?</h2>
+                <p className="text-xs leading-relaxed text-slate-600">
+                  Hapus <strong>{pendingDeletePejabat.nama}</strong> dari daftar dropdown Pejabat
+                  Penandatangan?
+                </p>
+              </div>
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setPendingDeletePejabat(null)}
+                  className="inline-flex min-h-[42px] flex-1 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const targetId = pendingDeletePejabat.id;
+                    setPendingDeletePejabat(null);
+                    onSavePejabatList?.(pejabatList.filter((p) => p.id !== targetId));
+                  }}
+                  className="inline-flex min-h-[42px] flex-1 items-center justify-center rounded-xl bg-rose-600 px-4 text-xs font-semibold text-white hover:bg-rose-700"
+                >
+                  Ya, Hapus
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Reset Default Pejabat Confirmation Modal */}
+        {confirmResetPejabatOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 backdrop-blur-xs sm:items-center sm:p-4"
+            onClick={() => setConfirmResetPejabatOpen(false)}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Reset Pejabat Default"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-sm rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl space-y-4"
+            >
+              <div className="mx-auto h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+              <div className="space-y-1.5">
+                <h2 className="text-base font-bold text-slate-900">Kembalikan Daftar Default?</h2>
+                <p className="text-xs leading-relaxed text-slate-600">
+                  Daftar Pejabat Penandatangan akan dikembalikan ke 4 pejabat bawaan (Drs. RAMINUDDIN,
+                  SHINTA IKASARI, TATIK GESTYANINGSIH, dan YELLY MANALU).
+                </p>
+              </div>
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setConfirmResetPejabatOpen(false)}
+                  className="inline-flex min-h-[42px] flex-1 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmResetPejabatOpen(false);
+                    onSavePejabatList?.(DEFAULT_PEJABAT_LIST);
+                  }}
+                  className="inline-flex min-h-[42px] flex-1 items-center justify-center rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white hover:bg-teal-800"
+                >
+                  Ya, Kembalikan
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   // 8. LOG AKTIVITAS UMUM
   if (activeSection === 'activity') {
     const activityYearOptions = Array.from(
@@ -5716,6 +6195,7 @@ export function MenuHubView({
         onSaveBastTemplate={onSaveBastTemplate}
         sptjmTemplate={sptjmTemplate}
         onSaveSptjmTemplate={onSaveSptjmTemplate}
+        pejabatList={pejabatList}
         proposalBastMap={proposalBastMap}
         onSaveProposalBastConfig={onSaveProposalBastConfig}
         onBack={() => onChangeSection('root')}

@@ -71,6 +71,7 @@ import {
   CouponPrintConfig,
   DEFAULT_BAST_TEMPLATE,
   DEFAULT_COUPON_CONFIG,
+  DEFAULT_PEJABAT_LIST,
   DEFAULT_REPORT_TEMPLATE,
   DEFAULT_SPTJM_TEMPLATE,
   DirectChatMessage,
@@ -84,6 +85,7 @@ import {
   KpmDocuments,
   KpmFormValues,
   KpmRecord,
+  PejabatProfile,
   PengelolaProfile,
   ProposalBastMap,
   ProposalChecklist,
@@ -106,6 +108,7 @@ import {
   ValidationStatus,
   WilayahKabKota,
 } from './types/kpm';
+import { normalizePejabatNipNumber } from './utils/pdfExporter';
 import {
   assignKpmToProposalSlot,
   clearSampleRecordsOnce,
@@ -582,6 +585,7 @@ export default function App() {
   const [couponConfig, setCouponConfig] = useState<CouponPrintConfig>(DEFAULT_COUPON_CONFIG);
   const [bastTemplate, setBastTemplate] = useState<BastTemplateConfig>(DEFAULT_BAST_TEMPLATE);
   const [sptjmTemplate, setSptjmTemplate] = useState<SptjmTemplateConfig>(DEFAULT_SPTJM_TEMPLATE);
+  const [pejabatList, setPejabatList] = useState<PejabatProfile[]>(DEFAULT_PEJABAT_LIST);
   const [proposalBastMap, setProposalBastMap] = useState<ProposalBastMap>({});
   const [kpmBastMap, setKpmBastMap] = useState<Record<string, KpmBastInfo>>({});
   const [proposalSlotMap, setProposalSlotMap] = useState<ProposalSlotMap>({});
@@ -1434,6 +1438,7 @@ export default function App() {
         fetchedAliases,
         fetchedSlotMap,
         fetchedProposalBastMap,
+        fetchedPejabatList,
       ] = await Promise.all([
         fetchSchedulesFromSupabase(),
         fetchAppStateSlice<TrashRecordItem[]>('masdeta_trash_bin_v1', []),
@@ -1465,6 +1470,11 @@ export default function App() {
           'proposal_bast',
           'masdeta_proposal_bast_v1',
           {}
+        ),
+        fetchDocumentTemplateFromSupabase<PejabatProfile[]>(
+          'pejabat',
+          'masdeta_pejabat_master_v1',
+          DEFAULT_PEJABAT_LIST
         ),
       ]);
 
@@ -1526,23 +1536,59 @@ export default function App() {
       );
       setBastTemplate(
         fetchedBastTemplate && typeof fetchedBastTemplate === 'object'
-          ? { ...DEFAULT_BAST_TEMPLATE, ...fetchedBastTemplate }
+          ? {
+              ...DEFAULT_BAST_TEMPLATE,
+              ...fetchedBastTemplate,
+              pejabatNip: normalizePejabatNipNumber(
+                fetchedBastTemplate.pejabatNip ?? DEFAULT_BAST_TEMPLATE.pejabatNip
+              ).trim(),
+            }
           : DEFAULT_BAST_TEMPLATE
       );
       setSptjmTemplate(
         fetchedSptjmTemplate && typeof fetchedSptjmTemplate === 'object'
-          ? { ...DEFAULT_SPTJM_TEMPLATE, ...fetchedSptjmTemplate }
+          ? {
+              ...DEFAULT_SPTJM_TEMPLATE,
+              ...fetchedSptjmTemplate,
+              pejabatNip: normalizePejabatNipNumber(
+                fetchedSptjmTemplate.pejabatNip ?? DEFAULT_SPTJM_TEMPLATE.pejabatNip
+              ).trim(),
+            }
           : DEFAULT_SPTJM_TEMPLATE
+      );
+      setPejabatList(
+        Array.isArray(fetchedPejabatList) && fetchedPejabatList.length > 0
+          ? fetchedPejabatList
+              .filter((p) => p && typeof p.nama === 'string' && p.nama.trim())
+              .map((p) => ({
+                ...p,
+                nama: p.nama.trim(),
+                kelas: (p.kelas || '').trim(),
+                jabatan: (p.jabatan || '').trim(),
+                nip: normalizePejabatNipNumber(p.nip).trim(),
+              }))
+          : DEFAULT_PEJABAT_LIST
       );
       setKpmBastMap(safeBastMap);
       setProposalSlotMap(safeSlotMap);
-      setProposalBastMap(
+      const normalizedProposalBastMap: ProposalBastMap = {};
+      if (
         fetchedProposalBastMap &&
-          typeof fetchedProposalBastMap === 'object' &&
-          !Array.isArray(fetchedProposalBastMap)
-          ? fetchedProposalBastMap
-          : {}
-      );
+        typeof fetchedProposalBastMap === 'object' &&
+        !Array.isArray(fetchedProposalBastMap)
+      ) {
+        Object.entries(fetchedProposalBastMap).forEach(([k, v]) => {
+          if (v && typeof v === 'object') {
+            normalizedProposalBastMap[k] = {
+              ...v,
+              ...(v.pejabatNip !== undefined
+                ? { pejabatNip: normalizePejabatNipNumber(v.pejabatNip).trim() }
+                : {}),
+            };
+          }
+        });
+      }
+      setProposalBastMap(normalizedProposalBastMap);
       if (fetchedWatermarks && typeof fetchedWatermarks === 'object') {
         setChatDeliveryWatermarks(fetchedWatermarks);
       }
@@ -6328,8 +6374,12 @@ export default function App() {
   };
 
   const handleSaveBastTemplate = (next: BastTemplateConfig) => {
-    setBastTemplate(next);
-    void saveDocumentTemplateInSupabase('bast', 'masdeta_bast_template_v1', next);
+    const normalized: BastTemplateConfig = {
+      ...next,
+      pejabatNip: normalizePejabatNipNumber(next.pejabatNip).trim(),
+    };
+    setBastTemplate(normalized);
+    void saveDocumentTemplateInSupabase('bast', 'masdeta_bast_template_v1', normalized);
     setFeedback({
       type: 'success',
       message: 'Template BAST resmi Dinas Sosial berhasil disimpan.',
@@ -6337,11 +6387,31 @@ export default function App() {
   };
 
   const handleSaveSptjmTemplate = (next: SptjmTemplateConfig) => {
-    setSptjmTemplate(next);
-    void saveDocumentTemplateInSupabase('sptjm', 'masdeta_sptjm_template_v1', next);
+    const normalized: SptjmTemplateConfig = {
+      ...next,
+      pejabatNip: normalizePejabatNipNumber(next.pejabatNip).trim(),
+    };
+    setSptjmTemplate(normalized);
+    void saveDocumentTemplateInSupabase('sptjm', 'masdeta_sptjm_template_v1', normalized);
     setFeedback({
       type: 'success',
       message: 'Template SPTJM berhasil disimpan.',
+    });
+  };
+
+  const handleSavePejabatList = (next: PejabatProfile[]) => {
+    const normalized = next.map((p) => ({
+      ...p,
+      nama: p.nama.trim(),
+      kelas: (p.kelas || '').trim(),
+      jabatan: (p.jabatan || '').trim(),
+      nip: normalizePejabatNipNumber(p.nip).trim(),
+    }));
+    setPejabatList(normalized);
+    void saveDocumentTemplateInSupabase('pejabat', 'masdeta_pejabat_master_v1', normalized);
+    setFeedback({
+      type: 'success',
+      message: 'Daftar Pejabat Penandatangan berhasil disimpan.',
     });
   };
 
@@ -6353,7 +6423,12 @@ export default function App() {
     if (config === null) {
       delete next[proposalId];
     } else {
-      next[proposalId] = config;
+      next[proposalId] = {
+        ...config,
+        ...(config.pejabatNip !== undefined
+          ? { pejabatNip: normalizePejabatNipNumber(config.pejabatNip).trim() }
+          : {}),
+      };
     }
     setProposalBastMap(next);
     void saveDocumentTemplateInSupabase('proposal_bast', 'masdeta_proposal_bast_v1', next);
@@ -9275,6 +9350,7 @@ export default function App() {
             onSaveBastTemplate={handleSaveBastTemplate}
             sptjmTemplate={sptjmTemplate}
             onSaveSptjmTemplate={handleSaveSptjmTemplate}
+            pejabatList={pejabatList}
             proposalBastMap={proposalBastMap}
             onSaveProposalBastConfig={handleSaveProposalBastConfig}
             onSaveBast={handleSaveKpmBast}
@@ -9430,6 +9506,7 @@ export default function App() {
               schedules={schedules}
               reportTemplate={reportTemplate}
               bastTemplate={bastTemplate}
+              pejabatList={pejabatList}
               proposalBastMap={proposalBastMap}
               onSaveProposalBastConfig={handleSaveProposalBastConfig}
               canAdd={hasPermission('add')}
@@ -9842,6 +9919,8 @@ export default function App() {
             onSaveBastTemplate={handleSaveBastTemplate}
             sptjmTemplate={sptjmTemplate}
             onSaveSptjmTemplate={handleSaveSptjmTemplate}
+            pejabatList={pejabatList}
+            onSavePejabatList={handleSavePejabatList}
             proposalBastMap={proposalBastMap}
             onSaveProposalBastConfig={handleSaveProposalBastConfig}
             onOpenCreateStandaloneDatabaseKpm={() =>

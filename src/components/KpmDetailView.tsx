@@ -45,6 +45,7 @@ import {
   CouponPrintConfig,
   DEFAULT_BAST_TEMPLATE,
   DEFAULT_COUPON_CONFIG,
+  DEFAULT_PEJABAT_LIST,
   DEFAULT_SPTJM_TEMPLATE,
   InternalUser,
   ItemBantuan,
@@ -52,6 +53,7 @@ import {
   KpmDocumentFile,
   KpmDocuments,
   KpmRecord,
+  PejabatProfile,
   ProposalBastMap,
   ProposalRecord,
   ProposalSlotMap,
@@ -91,6 +93,7 @@ import {
   formatIndonesianDateWords,
   formatSptjmFullDate,
   getSptjmAutoDayFromIso,
+  normalizePejabatNipNumber,
   resolveCouponScheduleForRecord,
   resolveEffectiveBastConfig,
 } from '../utils/pdfExporter';
@@ -147,6 +150,7 @@ interface KpmDetailViewProps {
   onSaveBastTemplate?: (next: BastTemplateConfig) => void;
   sptjmTemplate?: SptjmTemplateConfig;
   onSaveSptjmTemplate?: (next: SptjmTemplateConfig) => void;
+  pejabatList?: PejabatProfile[];
   proposalBastMap?: ProposalBastMap;
   onSaveProposalBastConfig?: (
     proposalId: string,
@@ -232,6 +236,7 @@ export function KpmDetailView({
   onSaveBastTemplate,
   sptjmTemplate,
   onSaveSptjmTemplate,
+  pejabatList = DEFAULT_PEJABAT_LIST,
   proposalBastMap = {},
   onSaveProposalBastConfig,
   onSaveBast,
@@ -850,9 +855,13 @@ export function KpmDetailView({
   };
 
   const handleOpenSptjmModal = () => {
-    setSptjmDraft({
+    const merged = {
       ...DEFAULT_SPTJM_TEMPLATE,
       ...(sptjmTemplate || {}),
+    };
+    setSptjmDraft({
+      ...merged,
+      pejabatNip: normalizePejabatNipNumber(merged.pejabatNip).trim(),
     });
     setSaveSptjmDefault(true);
     setIsSptjmModalOpen(true);
@@ -1019,8 +1028,8 @@ export function KpmDetailView({
               </div>
             </div>
 
-            {/* Status Validasi Quick Switch + Share ke Chat */}
-            <div className="mt-4 space-y-3 border-t border-slate-100 pt-3.5">
+            {/* Status Validasi Quick Switch */}
+            <div className="mt-4 border-t border-slate-100 pt-3.5">
               <div>
                 <p className="text-xs font-medium text-slate-500">Ubah Status Validasi</p>
                 <div className="mt-2 grid grid-cols-3 gap-1.5">
@@ -1051,70 +1060,73 @@ export function KpmDetailView({
                   ))}
                 </div>
               </div>
-
-              <div className="grid grid-cols-3 gap-2">
-                <button
-                  type="button"
-                  disabled={isDownloadingPdf}
-                  onClick={() => void handleDownloadKpmPdf()}
-                  className="inline-flex min-h-[42px] items-center justify-center gap-1 rounded-xl bg-teal-700 px-2 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:opacity-60"
-                >
-                  {isDownloadingPdf ? (
-                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
-                  ) : (
-                    <Download className="h-3.5 w-3.5 shrink-0" />
-                  )}
-                  <span className="truncate">
-                    {isDownloadingPdf ? 'Membuat...' : 'PDF'}
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  disabled={isDownloadingKuponPdf}
-                  onClick={handleOpenSingleKuponModal}
-                  className="inline-flex min-h-[42px] items-center justify-center gap-1 rounded-xl border border-teal-200 bg-teal-50/70 px-2 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100 disabled:opacity-60"
-                >
-                  {isDownloadingKuponPdf ? (
-                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
-                  ) : (
-                    <Ticket className="h-3.5 w-3.5 shrink-0" />
-                  )}
-                  <span className="truncate">Kupon</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleOpenShareModal}
-                  className="inline-flex min-h-[42px] items-center justify-center gap-1 rounded-xl border border-teal-200 bg-teal-50/70 px-2 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100"
-                >
-                  <Share2 className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate">Chat</span>
-                </button>
-              </div>
-
-              {pdfNotice && (
-                <div
-                  role="status"
-                  className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-xs ${
-                    pdfNotice.type === 'success'
-                      ? 'border-teal-200 bg-teal-50 text-teal-900'
-                      : 'border-rose-200 bg-rose-50 text-rose-900'
-                  }`}
-                >
-                  <span className="font-medium leading-snug">{pdfNotice.message}</span>
-                  <button
-                    type="button"
-                    onClick={() => setPdfNotice(null)}
-                    className="shrink-0 rounded p-0.5 text-current/70 hover:text-current"
-                    aria-label="Tutup notifikasi"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              )}
             </div>
           </div>
+        </section>
+
+        {/* Container Terpisah: Aksi PDF, Kupon & Share ke Chat */}
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 space-y-2.5">
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              disabled={isDownloadingPdf}
+              onClick={() => void handleDownloadKpmPdf()}
+              className="inline-flex min-h-[42px] items-center justify-center gap-1 rounded-xl bg-teal-700 px-2 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:opacity-60"
+            >
+              {isDownloadingPdf ? (
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+              ) : (
+                <Download className="h-3.5 w-3.5 shrink-0" />
+              )}
+              <span className="truncate">
+                {isDownloadingPdf ? 'Membuat...' : 'PDF'}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              disabled={isDownloadingKuponPdf}
+              onClick={handleOpenSingleKuponModal}
+              className="inline-flex min-h-[42px] items-center justify-center gap-1 rounded-xl border border-teal-200 bg-teal-50/70 px-2 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100 disabled:opacity-60"
+            >
+              {isDownloadingKuponPdf ? (
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+              ) : (
+                <Ticket className="h-3.5 w-3.5 shrink-0" />
+              )}
+              <span className="truncate">Kupon</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleOpenShareModal}
+              className="inline-flex min-h-[42px] items-center justify-center gap-1 rounded-xl border border-teal-200 bg-teal-50/70 px-2 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100"
+            >
+              <Share2 className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">Chat</span>
+            </button>
+          </div>
+
+          {pdfNotice && (
+            <div
+              role="status"
+              className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-xs ${
+                pdfNotice.type === 'success'
+                  ? 'border-teal-200 bg-teal-50 text-teal-900'
+                  : 'border-rose-200 bg-rose-50 text-rose-900'
+              }`}
+            >
+              <span className="font-medium leading-snug">{pdfNotice.message}</span>
+              <button
+                type="button"
+                onClick={() => setPdfNotice(null)}
+                className="shrink-0 rounded p-0.5 text-current/70 hover:text-current"
+                aria-label="Tutup notifikasi"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
         </section>
 
         {/* Catatan Petugas (tampil tepat di bawah heading jika tidak ada duplikasi) */}
@@ -2766,6 +2778,40 @@ export function KpmDetailView({
                   />
                 </div>
               </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600">
+                  Pilih Pejabat Dinas Default (Otomatis Isi Nama, Kelas, Jabatan &amp; NIP)
+                </label>
+                <select
+                  value={
+                    pejabatList.find(
+                      (p) =>
+                        p.nama.trim().toLowerCase() ===
+                        (bastDraft.pejabatNama || '').trim().toLowerCase()
+                    )?.id || ''
+                  }
+                  onChange={(e) => {
+                    const picked = pejabatList.find((p) => p.id === e.target.value);
+                    if (!picked) return;
+                    setBastDraft((prev) => ({
+                      ...prev,
+                      pejabatNama: picked.nama,
+                      pejabatPangkat: picked.kelas,
+                      pejabatJabatan: picked.jabatan,
+                      pejabatNip: normalizePejabatNipNumber(picked.nip).trim(),
+                    }));
+                  }}
+                  className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 bg-white px-3 text-xs font-medium text-slate-900 focus:border-teal-700 focus:outline-none"
+                >
+                  <option value="">-- Pilih Pejabat atau Ubah Manual di Bawah --</option>
+                  {pejabatList.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.nama}
+                      {p.kelas ? ` (${p.kelas})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600">
@@ -2792,6 +2838,44 @@ export function KpmDetailView({
                     }
                     className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
                   />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600">
+                    Kelas / Pangkat / Golongan Pejabat
+                  </label>
+                  <input
+                    type="text"
+                    value={bastDraft.pejabatPangkat}
+                    onChange={(e) =>
+                      setBastDraft((prev) => ({ ...prev, pejabatPangkat: e.target.value }))
+                    }
+                    placeholder="Contoh: Pembina Utama Muda / (IV/c)"
+                    className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600">
+                    NIP Pejabat (tanpa &ldquo;NIP.&rdquo;)
+                  </label>
+                  <div className="mt-1 flex min-h-[38px] w-full items-center overflow-hidden rounded-xl border border-slate-300 bg-white focus-within:border-teal-700">
+                    <span className="shrink-0 border-r border-slate-200 bg-slate-50 px-2.5 py-2 text-xs font-semibold text-slate-500">
+                      NIP.
+                    </span>
+                    <input
+                      type="text"
+                      value={normalizePejabatNipNumber(bastDraft.pejabatNip)}
+                      onChange={(e) =>
+                        setBastDraft((prev) => ({
+                          ...prev,
+                          pejabatNip: normalizePejabatNipNumber(e.target.value),
+                        }))
+                      }
+                      placeholder="19770830 199603 1 001"
+                      className="min-h-[36px] w-full border-0 bg-transparent px-3 text-xs text-slate-900 tabular-nums focus:outline-none"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -2939,6 +3023,40 @@ export function KpmDetailView({
 
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600">
+                  Pilih Pejabat Penandatangan Default (Otomatis Isi Jabatan, Nama &amp; NIP)
+                </label>
+                <select
+                  value={
+                    pejabatList.find(
+                      (p) =>
+                        p.nama.trim().toLowerCase() ===
+                        (sptjmDraft.pejabatNama || '').trim().toLowerCase()
+                    )?.id || ''
+                  }
+                  onChange={(e) => {
+                    const picked = pejabatList.find((p) => p.id === e.target.value);
+                    if (!picked) return;
+                    setSptjmDraft((prev) => ({
+                      ...prev,
+                      pejabatNama: picked.nama,
+                      pejabatJabatan: picked.jabatan,
+                      pejabatNip: normalizePejabatNipNumber(picked.nip).trim(),
+                    }));
+                  }}
+                  className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 bg-white px-3 text-xs font-medium text-slate-900 focus:border-teal-700 focus:outline-none"
+                >
+                  <option value="">-- Pilih Pejabat atau Ubah Manual di Bawah --</option>
+                  {pejabatList.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.nama}
+                      {p.kelas ? ` (${p.kelas})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600">
                   Jabatan Pejabat (Mengetahui)
                 </label>
                 <input
@@ -2967,16 +3085,25 @@ export function KpmDetailView({
                 </div>
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600">
-                    NIP Pejabat
+                    NIP Pejabat (tanpa &ldquo;NIP.&rdquo;)
                   </label>
-                  <input
-                    type="text"
-                    value={sptjmDraft.pejabatNip}
-                    onChange={(e) =>
-                      setSptjmDraft((prev) => ({ ...prev, pejabatNip: e.target.value }))
-                    }
-                    className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                  />
+                  <div className="mt-1 flex min-h-[38px] w-full items-center overflow-hidden rounded-xl border border-slate-300 bg-white focus-within:border-teal-700">
+                    <span className="shrink-0 border-r border-slate-200 bg-slate-50 px-2.5 py-2 text-xs font-semibold text-slate-500">
+                      NIP.
+                    </span>
+                    <input
+                      type="text"
+                      value={normalizePejabatNipNumber(sptjmDraft.pejabatNip)}
+                      onChange={(e) =>
+                        setSptjmDraft((prev) => ({
+                          ...prev,
+                          pejabatNip: normalizePejabatNipNumber(e.target.value),
+                        }))
+                      }
+                      placeholder="19680514 198901 2 002"
+                      className="min-h-[36px] w-full border-0 bg-transparent px-3 text-xs text-slate-900 tabular-nums focus:outline-none"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
