@@ -32,6 +32,7 @@ import {
   ProposalBastMap,
   ProposalRecord,
   ProposalSlotMap,
+  ProposalTipe,
   ReportTemplateConfig,
   ScheduleEventItem,
   SptjmTemplateConfig,
@@ -181,6 +182,7 @@ export function MenuDownloadView({
 
   const [printMode, setPrintMode] = useState<DownloadPrintMode>('kpm');
   const [selectedTahun, setSelectedTahun] = useState<string>(() => yearOptions[0] || '2026');
+  const [selectedProposalTipe, setSelectedProposalTipe] = useState<'all' | ProposalTipe>('all');
   const [selectedProposal, setSelectedProposal] = useState<string>('all');
   const [selectedPengelola, setSelectedPengelola] = useState<string>('all');
   const [selectedAddonColumns, setSelectedAddonColumns] = useState<PdfColumnKey[]>(() => {
@@ -324,13 +326,46 @@ export function MenuDownloadView({
     return proposals.filter((p) => p.tahun === selectedTahun);
   }, [proposals, selectedTahun, isStandaloneSource]);
 
+  const tipeScopedProposals = useMemo(() => {
+    if (isStandaloneSource) return [];
+    if (selectedProposalTipe === 'all') return yearScopedProposals;
+    return yearScopedProposals.filter((p) => p.tipe === selectedProposalTipe);
+  }, [yearScopedProposals, selectedProposalTipe, isStandaloneSource]);
+
+  const proposalLookup = useMemo(() => {
+    const byId = new Map<string, ProposalRecord>();
+    const byNameYear = new Map<string, ProposalRecord>();
+    const byName = new Map<string, ProposalRecord>();
+    for (const p of proposals) {
+      if (p.id) byId.set(p.id, p);
+      const name = (p.namaProposal || '').trim();
+      const year = (p.tahun || '').trim();
+      if (name) {
+        if (year && !byNameYear.has(`${name}__${year}`)) {
+          byNameYear.set(`${name}__${year}`, p);
+        }
+        if (!byName.has(name)) {
+          byName.set(name, p);
+        }
+      }
+    }
+    return { byId, byNameYear, byName };
+  }, [proposals]);
+
   const selectedProposalObj = useMemo(() => {
     if (isStandaloneSource || selectedProposal === 'all') return undefined;
     return (
+      tipeScopedProposals.find((p) => p.namaProposal === selectedProposal) ??
       yearScopedProposals.find((p) => p.namaProposal === selectedProposal) ??
       proposals.find((p) => p.namaProposal === selectedProposal)
     );
-  }, [isStandaloneSource, selectedProposal, yearScopedProposals, proposals]);
+  }, [
+    isStandaloneSource,
+    selectedProposal,
+    tipeScopedProposals,
+    yearScopedProposals,
+    proposals,
+  ]);
 
   const matchedProposalSchedule = useMemo(() => {
     if (isStandaloneSource || selectedProposal === 'all') return undefined;
@@ -406,7 +441,7 @@ export function MenuDownloadView({
 
   const availableProposalItems = useMemo(() => {
     const map = new Map<string, { name: string; kecamatanGroup: string; tipe?: string }>();
-    for (const p of yearScopedProposals) {
+    for (const p of tipeScopedProposals) {
       const kecGroup = resolveProposalKecamatanCategory(
         p.namaProposal,
         proposals,
@@ -429,7 +464,7 @@ export function MenuDownloadView({
       if (isKecA !== isKecB) return isKecA ? -1 : 1;
       return a.name.localeCompare(b.name, 'id');
     });
-  }, [yearScopedProposals, proposals, wilayahList]);
+  }, [tipeScopedProposals, proposals, wilayahList]);
 
   const recordsBeforePengelola = useMemo(() => {
     return records.filter((rec) => {
@@ -442,12 +477,30 @@ export function MenuDownloadView({
       } else if (selectedTahun !== 'all') {
         if (rec.tahun !== selectedTahun) return false;
       }
+      if (!isStandaloneSource && selectedProposalTipe !== 'all') {
+        const propName = (rec.proposal || '').trim();
+        const propYear = (rec.tahun || '').trim();
+        const matched =
+          (rec.proposalId ? proposalLookup.byId.get(rec.proposalId) : undefined) ??
+          (propName && propYear
+            ? proposalLookup.byNameYear.get(`${propName}__${propYear}`)
+            : undefined) ??
+          (propName ? proposalLookup.byName.get(propName) : undefined);
+        if (matched?.tipe !== selectedProposalTipe) return false;
+      }
       if (!isStandaloneSource && selectedProposal !== 'all' && rec.proposal !== selectedProposal) {
         return false;
       }
       return true;
     });
-  }, [records, selectedTahun, isStandaloneSource, selectedProposal]);
+  }, [
+    records,
+    selectedTahun,
+    isStandaloneSource,
+    selectedProposalTipe,
+    proposalLookup,
+    selectedProposal,
+  ]);
 
   const pengelolaOptions = useMemo(() => {
     const countMap = new Map<string, number>();
@@ -879,6 +932,9 @@ export function MenuDownloadView({
 
   const handleSelectTahun = (nextTahun: string) => {
     setSelectedTahun(nextTahun);
+    if (nextTahun === 'database' || nextTahun === 'arsip' || nextTahun === 'database_arsip') {
+      setSelectedProposalTipe('all');
+    }
     setSelectedProposal('all');
     setSelectedPengelola('all');
     setExcludedPengelolaKeys([]);
@@ -886,12 +942,40 @@ export function MenuDownloadView({
     setPengelolaChecklistQuery('');
     setKelurahanChecklistQuery('');
     setSelectedAddonColumns((prev) => applyProposalKelurahanDefault(prev, 'all'));
+    setSubItemShowKelurahan(true);
     setLimitNotice(false);
     setPdfFeedback(null);
     setSubItemFeedback(null);
     setKuponFeedback(null);
     setBastFeedback(null);
     setSptjmFeedback(null);
+    setDinsosFeedback(null);
+  };
+
+  const handleSelectProposalTipe = (nextTipe: 'all' | ProposalTipe) => {
+    setSelectedProposalTipe(nextTipe);
+    const shouldKeepSelectedProposal =
+      selectedProposal !== 'all' &&
+      (nextTipe === 'all' ||
+        yearScopedProposals.some(
+          (p) => p.namaProposal === selectedProposal && p.tipe === nextTipe
+        ));
+    const nextProposal = shouldKeepSelectedProposal ? selectedProposal : 'all';
+    setSelectedProposal(nextProposal);
+    setSelectedPengelola('all');
+    setExcludedPengelolaKeys([]);
+    setExcludedKelurahanKeys([]);
+    setPengelolaChecklistQuery('');
+    setKelurahanChecklistQuery('');
+    setSelectedAddonColumns((prev) => applyProposalKelurahanDefault(prev, nextProposal));
+    setSubItemShowKelurahan(nextProposal === 'all' || shouldAutoIncludeKelurahanColumn(nextProposal));
+    setLimitNotice(false);
+    setPdfFeedback(null);
+    setSubItemFeedback(null);
+    setKuponFeedback(null);
+    setBastFeedback(null);
+    setSptjmFeedback(null);
+    setDinsosFeedback(null);
   };
 
   const handleSelectProposal = (nextProp: string) => {
@@ -909,6 +993,7 @@ export function MenuDownloadView({
     setKuponFeedback(null);
     setBastFeedback(null);
     setSptjmFeedback(null);
+    setDinsosFeedback(null);
   };
 
   const buildScopeTitleAndFileName = (prefix?: string, countOverride?: number) => {
@@ -932,17 +1017,27 @@ export function MenuDownloadView({
         };
       }
       const yearSuffix = selectedTahun === 'all' ? 'Semua Data' : selectedTahun;
+      const tipeLabel = selectedProposalTipe !== 'all' ? selectedProposalTipe : '';
       const baseScope =
-        selectedProposal !== 'all' ? selectedProposal : 'Daftar KPM MASDETA';
+        selectedProposal !== 'all'
+          ? selectedProposal
+          : tipeLabel
+            ? `Daftar KPM ${tipeLabel}`
+            : 'Daftar KPM MASDETA';
       return {
         title: `${baseScope} ${yearSuffix}`.trim(),
         fileBase: `${prefix ? `${prefix}_` : ''}${
           selectedTahun === 'all' ? 'Semua_Data' : selectedTahun
-        }_${baseScope}`,
+        }_${tipeLabel && selectedProposal === 'all' ? `${tipeLabel}_` : ''}${
+          selectedProposal !== 'all' ? selectedProposal : 'Daftar_KPM_MASDETA'
+        }`,
       };
     })();
 
     const subParts: string[] = [];
+    if (!isStandaloneSource && selectedProposalTipe !== 'all') {
+      subParts.push(`Tipe: ${selectedProposalTipe}`);
+    }
     if (selectedPengelola !== 'all') {
       subParts.push(`Pengelola: ${selectedPengelola}`);
     }
@@ -1268,19 +1363,24 @@ export function MenuDownloadView({
 
         {/* Kolom Kiri (Desktop) / Atas (Mobile): Filter, Excel & Kop Umum */}
         <div className={`space-y-3.5 ${!isNativeApp ? 'md:col-span-5 md:col-start-1' : ''}`}>
-          {/* Card 1: Filter Cetak (Tahun, Pengelola, Proposal) */}
-          <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2.5 md:p-4">
-            <h2 className="text-sm font-bold text-slate-900">Filter Cetak Dokumen</h2>
+          {/* Card 1: Filter Cetak (Tahun, Pengelola, Tipe Proposal, Proposal) */}
+          <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-3 md:p-4">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-bold text-slate-900">Filter Cetak Dokumen</h2>
+              <span className="shrink-0 rounded-lg border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-700 tabular-nums">
+                {filteredRecords.length} KPM
+              </span>
+            </div>
 
-            <div className="grid grid-cols-[146px_1fr] gap-2 sm:grid-cols-[164px_1fr]">
-              <div>
+            <div className="grid grid-cols-2 gap-2.5">
+              <div className="min-w-0">
                 <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
                   Tahun / Sumber Data
                 </span>
                 <button
                   type="button"
                   onClick={() => setIsTahunModalOpen(true)}
-                  className="mt-1 flex min-h-[42px] w-full items-center justify-between gap-1.5 rounded-xl border border-slate-300 bg-white px-3 text-left text-xs font-medium text-slate-900 hover:bg-slate-50"
+                  className="mt-1 flex min-h-[42px] w-full items-center justify-between gap-1.5 rounded-xl border border-slate-300 bg-white px-3 text-left text-xs font-medium text-slate-900 transition-colors hover:bg-slate-50"
                 >
                   <span className="truncate">{selectedTahunDisplayLabel}</span>
                   <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" />
@@ -1294,13 +1394,51 @@ export function MenuDownloadView({
                 <button
                   type="button"
                   onClick={() => setIsPengelolaModalOpen(true)}
-                  className="mt-1 flex min-h-[42px] w-full items-center justify-between gap-1.5 rounded-xl border border-slate-300 bg-white px-3 text-left text-xs font-medium text-slate-900 hover:bg-slate-50"
+                  className="mt-1 flex min-h-[42px] w-full items-center justify-between gap-1.5 rounded-xl border border-slate-300 bg-white px-3 text-left text-xs font-medium text-slate-900 transition-colors hover:bg-slate-50"
                 >
                   <span className="truncate">
                     {selectedPengelola === 'all' ? 'Semua Pengelola' : selectedPengelola}
                   </span>
                   <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" />
                 </button>
+              </div>
+            </div>
+
+            <div>
+              <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                Tipe Proposal
+              </span>
+              <div
+                className={`mt-1 grid grid-cols-3 gap-1 rounded-xl border p-1 ${
+                  isStandaloneSource
+                    ? 'border-slate-200 bg-slate-100/60 opacity-60'
+                    : 'border-slate-200 bg-slate-100/80'
+                }`}
+              >
+                {(
+                  [
+                    { value: 'all', label: 'Semua' },
+                    { value: 'Murni', label: 'Murni' },
+                    { value: 'Perubahan', label: 'Perubahan' },
+                  ] as const
+                ).map((opt) => {
+                  const active = !isStandaloneSource && selectedProposalTipe === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      disabled={isStandaloneSource}
+                      onClick={() => handleSelectProposalTipe(opt.value)}
+                      className={`min-h-[34px] rounded-lg px-2 text-xs font-semibold transition-all ${
+                        active
+                          ? 'bg-teal-700 text-white shadow-xs'
+                          : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
+                      } disabled:cursor-not-allowed`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -1312,7 +1450,7 @@ export function MenuDownloadView({
                 type="button"
                 disabled={isStandaloneSource}
                 onClick={() => setIsProposalModalOpen(true)}
-                className={`mt-1 flex min-h-[42px] w-full items-center justify-between gap-2 rounded-xl border px-3 text-left text-xs font-medium ${
+                className={`mt-1 flex min-h-[42px] w-full items-center justify-between gap-2 rounded-xl border px-3 text-left text-xs font-medium transition-colors ${
                   isStandaloneSource
                     ? 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-500'
                     : 'border-slate-300 bg-white text-slate-900 hover:bg-slate-50'
@@ -1322,7 +1460,9 @@ export function MenuDownloadView({
                   {isStandaloneSource
                     ? 'Standalone (Tanpa Proposal)'
                     : selectedProposal === 'all'
-                      ? 'Semua Proposal'
+                      ? selectedProposalTipe === 'all'
+                        ? 'Semua Proposal'
+                        : `Semua Proposal ${selectedProposalTipe}`
                       : selectedProposal}
                 </span>
                 {!isStandaloneSource && (
@@ -3687,19 +3827,19 @@ export function MenuDownloadView({
                     </span>
                   </div>
 
-                  <div className="mx-auto max-w-[300px] overflow-hidden rounded-lg border border-slate-300 bg-white shadow-xs">
+                  <div className="mx-auto max-w-[320px] overflow-hidden rounded-lg border border-slate-300 bg-white shadow-xs">
                     {/* Bagian Atas (165mm) */}
-                    <div className="flex flex-col items-center justify-center px-4 py-6 text-center">
-                      <p className="text-[10px] font-bold tracking-wide text-slate-900 uppercase">
+                    <div className="flex flex-col items-center justify-center px-3 py-5 text-center">
+                      <p className="text-[12px] font-extrabold leading-tight tracking-wide text-black uppercase">
                         {cleanProvText}
                       </p>
-                      <p className="text-[10px] font-bold text-slate-900">
+                      <p className="text-[12px] font-extrabold leading-tight text-black">
                         TAHUN {sampleTahun}
                       </p>
-                      <p className="my-2.5 text-2xl font-extrabold tracking-tight text-slate-950">
+                      <p className="my-2.5 text-4xl font-black tracking-tight text-black leading-none">
                         {cleanPrefixText} 01
                       </p>
-                      <div className="space-y-0.5 text-[10px] font-bold text-slate-800 leading-tight">
+                      <div className="space-y-0.5 text-[11.5px] font-extrabold text-black leading-tight">
                         <p>{sampleKel}</p>
                         <p>{sampleKec}</p>
                         <p>{sampleKab}</p>
@@ -3715,17 +3855,17 @@ export function MenuDownloadView({
                     </div>
 
                     {/* Bagian Bawah (165mm) */}
-                    <div className="flex flex-col items-center justify-center px-4 py-6 text-center">
-                      <p className="text-[10px] font-bold tracking-wide text-slate-900 uppercase">
+                    <div className="flex flex-col items-center justify-center px-3 py-5 text-center">
+                      <p className="text-[12px] font-extrabold leading-tight tracking-wide text-black uppercase">
                         {cleanProvText}
                       </p>
-                      <p className="text-[10px] font-bold text-slate-900">
+                      <p className="text-[12px] font-extrabold leading-tight text-black">
                         TAHUN {sampleTahun}
                       </p>
-                      <p className="my-2.5 text-2xl font-extrabold tracking-tight text-slate-950">
+                      <p className="my-2.5 text-4xl font-black tracking-tight text-black leading-none">
                         {cleanPrefixText} 02
                       </p>
-                      <div className="space-y-0.5 text-[10px] font-bold text-slate-800 leading-tight">
+                      <div className="space-y-0.5 text-[11.5px] font-extrabold text-black leading-tight">
                         <p>{sampleKel}</p>
                         <p>{sampleKec}</p>
                         <p>{sampleKab}</p>
@@ -3862,9 +4002,15 @@ export function MenuDownloadView({
         options={[
           {
             value: 'all',
-            label: 'Semua Proposal',
+            label:
+              selectedProposalTipe === 'all'
+                ? 'Semua Proposal'
+                : `Semua Proposal ${selectedProposalTipe}`,
             group: 'Pilihan Umum',
-            subtitle: 'Gabungkan semua proposal yang cocok',
+            subtitle:
+              selectedProposalTipe === 'all'
+                ? 'Gabungkan semua proposal yang cocok'
+                : `Gabungkan semua proposal tipe ${selectedProposalTipe}`,
           },
           ...availableProposalItems.map(
             (item): SelectionPickerOption => ({
@@ -3913,6 +4059,7 @@ export function MenuDownloadView({
           setKuponFeedback(null);
           setBastFeedback(null);
           setSptjmFeedback(null);
+          setDinsosFeedback(null);
         }}
         searchable
         searchPlaceholder="Pencarian..."

@@ -5506,7 +5506,7 @@ export async function exportNomorDinsosToPdf({
   const cleanProv = (provinsiLabel || 'PROVINSI KALIMANTAN BARAT').trim().toUpperCase();
   const cleanPrefix = (prefixLabel || 'DINSOS').trim().toUpperCase();
   const centerX = PAPER_W / 2;
-  const maxTextW = PAPER_W - 32; // 184mm area aman kiri-kanan
+  const maxTextW = PAPER_W - 28; // Margin kiri-kanan 14mm (~1.4 cm) agar teks maksimal memenuhi kertas
 
   const drawCutGuideLine = () => {
     doc.setDrawColor(148, 163, 184);
@@ -5531,39 +5531,65 @@ export async function exportNomorDinsosToPdf({
     const kecText = rawKec ? `Kecamatan ${rawKec}` : '';
     const kabText = (rec.kabKota || dom.kabKota || '').trim();
 
+    // 1. Header Provinsi & Tahun (skala otomatis hingga 27pt, muat 1 baris lebar penuh)
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(14.5);
+    let headerFontSize = 27;
+    doc.setFontSize(headerFontSize);
+    while (
+      (doc.getTextWidth(cleanProv) > maxTextW || doc.getTextWidth(tahunText) > maxTextW) &&
+      headerFontSize > 16
+    ) {
+      headerFontSize -= 1;
+      doc.setFontSize(headerFontSize);
+    }
+
+    // 2. Domisili: upayakan setiap baris muat dalam 1 baris di ukuran besar (hingga 26pt)
     const rawDomLines = [kelText, kecText, kabText].filter(Boolean);
+    let domFontSize = 26;
+    doc.setFontSize(domFontSize);
+    while (
+      rawDomLines.some((line) => doc.getTextWidth(line) > maxTextW) &&
+      domFontSize > 17
+    ) {
+      domFontSize -= 1;
+      doc.setFontSize(domFontSize);
+    }
     const domLines: string[] = [];
     for (const line of rawDomLines) {
       const wrapped = doc.splitTextToSize(line, maxTextW) as string[];
       domLines.push(...wrapped);
     }
 
-    // Skala otomatis font hero jika teks sangat panjang
-    let heroFontSize = 54;
+    // 3. Hero Nomor DINSOS: skala maksimal memenuhi lebar kertas (188mm) & sangat tebal
+    let heroFontSize = 110;
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(heroFontSize);
-    while (doc.getTextWidth(heroText) > maxTextW && heroFontSize > 30) {
-      heroFontSize -= 2;
+    while (doc.getTextWidth(heroText) > maxTextW - 2 && heroFontSize > 36) {
+      heroFontSize -= 1;
       doc.setFontSize(heroFontSize);
     }
 
-    // Hitung tinggi total blok agar posisi persis center-middle di area 216mm x 165mm
-    const headerFontSize = 15.5;
-    const headerCapH = headerFontSize * 0.26; // ~4.0mm
-    const headerLineStep = 6.8;
-    const topBlockH = headerLineStep + headerCapH; // 2 baris header
+    // Hitung metrik vertikal agar terpusat persis (center-middle) di area 216mm x 165mm
+    const headerCapH = headerFontSize * 0.255;
+    const headerLineStep = headerFontSize * 0.43;
+    const topBlockH = headerLineStep + headerCapH;
 
-    const gapAfterHeader = 16;
-    const heroCapH = heroFontSize * 0.255; // ~13.8mm untuk 54pt
-    const gapBeforeDom = 16;
+    const heroCapH = heroFontSize * 0.255;
 
-    const domFontSize = 14.5;
-    const domCapH = domFontSize * 0.26; // ~3.8mm
-    const domLineStep = 6.4;
+    const domCapH = domFontSize * 0.255;
+    const domLineStep = domFontSize * 0.435;
     const bottomBlockH =
       domLines.length > 0 ? (domLines.length - 1) * domLineStep + domCapH : 0;
+
+    let gapAfterHeader = 22;
+    let gapBeforeDom = 22;
+    const maxAllowedStackH = HALF_H - 26; // Sisakan minimal ~1.3 cm margin atas & bawah
+    const fixedContentH = topBlockH + heroCapH + (domLines.length > 0 ? bottomBlockH : 0);
+    if (domLines.length > 0 && fixedContentH + gapAfterHeader + gapBeforeDom > maxAllowedStackH) {
+      const availableGap = Math.max(18, maxAllowedStackH - fixedContentH);
+      gapAfterHeader = availableGap / 2;
+      gapBeforeDom = availableGap / 2;
+    }
 
     const totalStackH =
       topBlockH +
@@ -5573,21 +5599,29 @@ export async function exportNomorDinsosToPdf({
 
     const blockTopY = halfStartY + (HALF_H - totalStackH) / 2;
 
-    doc.setTextColor(15, 23, 42);
+    doc.setTextColor(0, 0, 0);
+    doc.setDrawColor(0, 0, 0);
     doc.setFont('helvetica', 'bold');
 
-    // 1. Header Provinsi & Tahun
+    // Cetak 1. Header Provinsi & Tahun
     doc.setFontSize(headerFontSize);
     const headerLine1Y = blockTopY + headerCapH;
     doc.text(cleanProv, centerX, headerLine1Y, { align: 'center' });
     doc.text(tahunText, centerX, headerLine1Y + headerLineStep, { align: 'center' });
 
-    // 2. Hero Nomor DINSOS
+    // Cetak 2. Hero Nomor DINSOS (fill + stroke agar ekstra tebal & tegas saat difoto)
     doc.setFontSize(heroFontSize);
+    const heroStrokeW = Math.min(0.95, Math.max(0.45, heroFontSize * 0.0088));
+    doc.setLineWidth(heroStrokeW);
+    doc.setLineJoin('round');
     const heroBaselineY = blockTopY + topBlockH + gapAfterHeader + heroCapH;
-    doc.text(heroText, centerX, heroBaselineY, { align: 'center' });
+    doc.text(heroText, centerX, heroBaselineY, {
+      align: 'center',
+      renderingMode: 'fillThenStroke',
+    });
+    doc.setLineWidth(0.25);
 
-    // 3. Domisili (Kelurahan / Kecamatan / Kab-Kota)
+    // Cetak 3. Domisili (Kelurahan / Kecamatan / Kab-Kota)
     if (domLines.length > 0) {
       doc.setFontSize(domFontSize);
       const domStartBaselineY = heroBaselineY + gapBeforeDom + domCapH;
