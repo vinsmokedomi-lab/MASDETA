@@ -4461,3 +4461,911 @@ export async function exportSchedulesToPdf({
   return { ...res, count: sorted.length };
 }
 
+export type KpmSubItemStatusFilter = 'all' | 'incomplete' | 'complete';
+
+export interface ExportKpmSubItemChecklistPdfOptions {
+  records: KpmRecord[];
+  proposals: ProposalRecord[];
+  items: ItemBantuan[];
+  wilayahList?: WilayahKabKota[];
+  title: string;
+  subtitle?: string;
+  fileName: string;
+  statusFilter?: KpmSubItemStatusFilter;
+  reportTemplate?: ReportTemplateConfig;
+  splitByProposal?: boolean;
+  autoExcludeKelurahanWhenInProposalTitle?: boolean;
+  showProposalColumn?: boolean;
+  showKelurahanColumn?: boolean;
+  showPengelolaColumn?: boolean;
+  showKontakColumn?: boolean;
+  selectedPengelolaLabel?: string;
+}
+
+interface SubItemBreakdownAggregate {
+  itemCode: string;
+  itemName: string;
+  itemRank: number;
+  subKey: string;
+  subName: string;
+  subOrder: number;
+  satuan: string;
+  kpmTotal: number;
+  kpmDelivered: number;
+  kpmPending: number;
+  qtyTotal: number;
+  qtyDelivered: number;
+  qtyPending: number;
+}
+
+interface ComputedChecklistTotals {
+  totalKpm: number;
+  completeKpm: number;
+  partialKpm: number;
+  unstartedKpm: number;
+  noSubItemKpm: number;
+  totalSubItemUnits: number;
+  deliveredSubItemUnits: number;
+  pendingSubItemUnits: number;
+  breakdownRows: SubItemBreakdownAggregate[];
+}
+
+function computeChecklistTotalsForRecords(
+  recs: KpmRecord[],
+  items: ItemBantuan[]
+): ComputedChecklistTotals {
+  let completeKpm = 0;
+  let partialKpm = 0;
+  let unstartedKpm = 0;
+  let noSubItemKpm = 0;
+  let totalSubItemUnits = 0;
+  let deliveredSubItemUnits = 0;
+  let pendingSubItemUnits = 0;
+
+  const map = new Map<string, SubItemBreakdownAggregate>();
+
+  for (const rec of recs) {
+    const pkg = resolvePackageForKpm(items, rec.tahun, rec.item);
+    const statuses = getKpmSubItemStatusList(rec, items);
+
+    if (statuses.length === 0) {
+      noSubItemKpm += 1;
+      continue;
+    }
+
+    const delivCount = statuses.filter((s) => s.delivered).length;
+    if (delivCount === statuses.length) {
+      completeKpm += 1;
+    } else if (delivCount > 0) {
+      partialKpm += 1;
+    } else {
+      unstartedKpm += 1;
+    }
+
+    const itemCode = (pkg.code || rec.item || '-').trim() || '-';
+    const itemName = pkg.name && pkg.name !== itemCode ? pkg.name : itemCode;
+    const itemRank = getItemHierarchyRank(itemCode, rec.tahun, items);
+
+    statuses.forEach((sub, subIdx) => {
+      const qty = sub.volume > 0 ? sub.volume : 1;
+      const satuan = sub.satuan || 'Unit';
+      totalSubItemUnits += qty;
+      if (sub.delivered) {
+        deliveredSubItemUnits += qty;
+      } else {
+        pendingSubItemUnits += qty;
+      }
+
+      const aggKey = `${itemCode.toUpperCase()}::${sub.key}`;
+      const existing = map.get(aggKey);
+      if (existing) {
+        existing.kpmTotal += 1;
+        if (sub.delivered) existing.kpmDelivered += 1;
+        else existing.kpmPending += 1;
+        existing.qtyTotal += qty;
+        if (sub.delivered) existing.qtyDelivered += qty;
+        else existing.qtyPending += qty;
+      } else {
+        map.set(aggKey, {
+          itemCode,
+          itemName,
+          itemRank,
+          subKey: sub.key,
+          subName: sub.baseName || sub.name,
+          subOrder: subIdx,
+          satuan,
+          kpmTotal: 1,
+          kpmDelivered: sub.delivered ? 1 : 0,
+          kpmPending: sub.delivered ? 0 : 1,
+          qtyTotal: qty,
+          qtyDelivered: sub.delivered ? qty : 0,
+          qtyPending: sub.delivered ? 0 : qty,
+        });
+      }
+    });
+  }
+
+  const breakdownRows = Array.from(map.values()).sort((a, b) => {
+    if (a.itemRank !== b.itemRank) return a.itemRank - b.itemRank;
+    const codeCmp = a.itemCode.localeCompare(b.itemCode, 'id');
+    if (codeCmp !== 0) return codeCmp;
+    if (a.subOrder !== b.subOrder) return a.subOrder - b.subOrder;
+    return a.subName.localeCompare(b.subName, 'id');
+  });
+
+  return {
+    totalKpm: recs.length,
+    completeKpm,
+    partialKpm,
+    unstartedKpm,
+    noSubItemKpm,
+    totalSubItemUnits,
+    deliveredSubItemUnits,
+    pendingSubItemUnits,
+    breakdownRows,
+  };
+}
+
+export async function exportKpmSubItemChecklistToPdf({
+  records,
+  proposals,
+  items,
+  wilayahList = INITIAL_WILAYAH_LIST,
+  title,
+  subtitle,
+  fileName,
+  statusFilter = 'all',
+  reportTemplate,
+  splitByProposal = false,
+  autoExcludeKelurahanWhenInProposalTitle = false,
+  showProposalColumn = false,
+  showKelurahanColumn = false,
+  showPengelolaColumn = false,
+  showKontakColumn = false,
+  selectedPengelolaLabel,
+}: ExportKpmSubItemChecklistPdfOptions): Promise<{
+  savedFileName: string;
+  openedNative: boolean;
+  count: number;
+}> {
+  if (records.length === 0) {
+    throw new Error('Tidak ada data KPM yang cocok dengan filter Sub-Item saat ini.');
+  }
+
+  const sortedRecords = [...records].sort((a, b) => {
+    const yearCmp = (a.tahun || '').localeCompare(b.tahun || '');
+    if (yearCmp !== 0) return yearCmp;
+    const propCmp = (a.proposal || '').localeCompare(b.proposal || '', 'id');
+    if (propCmp !== 0) return propCmp;
+    const seqCmp = getAbsenSeq(a.registerCode) - getAbsenSeq(b.registerCode);
+    if (seqCmp !== 0) return seqCmp;
+    const rankCmp =
+      getItemHierarchyRank(a.item, a.tahun, items) - getItemHierarchyRank(b.item, b.tahun, items);
+    if (rankCmp !== 0) return rankCmp;
+    return a.createdAt.localeCompare(b.createdAt);
+  });
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: [F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM],
+    compress: true,
+  }) as AutoTableDoc;
+
+  const loadedReportLogo = reportTemplate?.enabled
+    ? await loadSingleImageForPdf((reportTemplate.kopLogoDataUrl || '').trim() || DEFAULT_KOP_LOGO_URL)
+    : null;
+
+  const drawReportHeaderKop = (startTopY: number): number => {
+    if (!reportTemplate?.enabled) return startTopY;
+    const logoSpaceW = loadedReportLogo ? 16 : 0;
+    if (loadedReportLogo) {
+      const ratio = loadedReportLogo.width / Math.max(loadedReportLogo.height, 1);
+      let drawW = 14;
+      let drawH = 17.5;
+      if (ratio > drawW / drawH) {
+        drawH = drawW / ratio;
+      } else {
+        drawW = drawH * ratio;
+      }
+      doc.addImage(
+        loadedReportLogo.dataUrl,
+        loadedReportLogo.format,
+        F4_PDF_MARGINS.left + (logoSpaceW - drawW) / 2,
+        startTopY + Math.max(0, (17.5 - drawH) / 2),
+        drawW,
+        drawH
+      );
+    }
+
+    const centerX = F4_PDF_MARGINS.left + logoSpaceW + (PRINTABLE_WIDTH_MM - logoSpaceW) / 2;
+    let textBottomY = startTopY;
+    if (reportTemplate.orgHeaderLine1?.trim()) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor(15, 23, 42);
+      doc.text(reportTemplate.orgHeaderLine1.trim().toUpperCase(), centerX, textBottomY + 4.5, {
+        align: 'center',
+      });
+      textBottomY += 5.5;
+    }
+    if (reportTemplate.orgHeaderLine2?.trim()) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(15, 118, 110);
+      doc.text(reportTemplate.orgHeaderLine2.trim(), centerX, textBottomY + 4, { align: 'center' });
+      textBottomY += 5;
+    }
+    if (reportTemplate.orgAddress?.trim()) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(71, 85, 105);
+      doc.text(reportTemplate.orgAddress.trim(), centerX, textBottomY + 3.5, { align: 'center' });
+      textBottomY += 5;
+    }
+    const headerEnd = Math.max(textBottomY, loadedReportLogo ? startTopY + 18 : textBottomY);
+    doc.setDrawColor(15, 23, 42);
+    doc.setLineWidth(0.5);
+    doc.line(
+      F4_PDF_MARGINS.left,
+      headerEnd + 1,
+      F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right,
+      headerEnd + 1
+    );
+    doc.setLineWidth(0.2);
+    doc.line(
+      F4_PDF_MARGINS.left,
+      headerEnd + 2.1,
+      F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right,
+      headerEnd + 2.1
+    );
+    return headerEnd + 5;
+  };
+
+  const drawSignatoryIfEnabled = (afterY: number) => {
+    if (
+      !reportTemplate?.enabled ||
+      (!reportTemplate.signatoryName?.trim() && !reportTemplate.signatoryTitle?.trim())
+    ) {
+      return;
+    }
+    let sigY = afterY + 10;
+    if (sigY + 34 > F4_PAPER_HEIGHT_MM - F4_PDF_MARGINS.bottom - 5) {
+      doc.addPage([F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM], 'portrait');
+      sigY = F4_PDF_MARGINS.top + 8;
+    }
+    const sigX = F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right - 34;
+    const dateStr = new Intl.DateTimeFormat('id-ID', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    }).format(new Date());
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.8);
+    doc.setTextColor(15, 23, 42);
+    doc.text(`${reportTemplate.city?.trim() || 'Pontianak'}, ${dateStr}`, sigX, sigY, {
+      align: 'center',
+    });
+    if (reportTemplate.signatoryTitle?.trim()) {
+      doc.text(reportTemplate.signatoryTitle.trim(), sigX, sigY + 4.8, { align: 'center' });
+    }
+    if (reportTemplate.signatoryName?.trim()) {
+      doc.setFont('helvetica', 'bold');
+      doc.text(reportTemplate.signatoryName.trim(), sigX, sigY + 23, { align: 'center' });
+    }
+    if (reportTemplate.signatoryNip?.trim()) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.text(`NIP. ${reportTemplate.signatoryNip.trim()}`, sigX, sigY + 27.5, { align: 'center' });
+    }
+  };
+
+  const renderTotalsRecapBlock = ({
+    totals,
+    heading,
+    startY,
+  }: {
+    totals: ComputedChecklistTotals;
+    heading: string;
+    startY: number;
+  }): number => {
+    let cursorY = startY;
+    if (cursorY + 46 > F4_PAPER_HEIGHT_MM - F4_PDF_MARGINS.bottom - 6) {
+      doc.addPage([F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM], 'portrait');
+      cursorY = F4_PDF_MARGINS.top + 2;
+    }
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.8);
+    doc.setTextColor(15, 23, 42);
+    doc.text(heading, F4_PDF_MARGINS.left, cursorY);
+    cursorY += 2.6;
+
+    const incompleteKpmCount = totals.partialKpm + totals.unstartedKpm;
+    const pctDelivered =
+      totals.totalSubItemUnits > 0
+        ? Math.round((totals.deliveredSubItemUnits / totals.totalSubItemUnits) * 100)
+        : 0;
+
+    // 1. Ringkasan KPM & Total Unit Sub-Item
+    autoTable(doc, {
+      startY: cursorY,
+      margin: {
+        top: F4_PDF_MARGINS.top,
+        right: F4_PDF_MARGINS.right,
+        bottom: F4_PDF_MARGINS.bottom + 7,
+        left: F4_PDF_MARGINS.left,
+      },
+      tableWidth: PRINTABLE_WIDTH_MM,
+      rowPageBreak: 'avoid',
+      head: [
+        [
+          'TOTAL KPM',
+          'KPM LENGKAP',
+          'KPM BELUM LENGKAP',
+          'TOTAL SUB-ITEM',
+          'SUDAH DITERIMA',
+          'BELUM DITERIMA',
+        ],
+      ],
+      body: [
+        [
+          `${totals.totalKpm} KPM`,
+          `${totals.completeKpm} KPM`,
+          `${incompleteKpmCount} KPM`,
+          `${totals.totalSubItemUnits} Unit`,
+          `${totals.deliveredSubItemUnits} Unit (${pctDelivered}%)`,
+          `${totals.pendingSubItemUnits} Unit`,
+        ],
+      ],
+      theme: 'grid',
+      styles: {
+        font: 'helvetica',
+        fontSize: 8.2,
+        fontStyle: 'bold',
+        halign: 'center',
+        valign: 'middle',
+        textColor: [15, 23, 42],
+        lineColor: [148, 163, 184],
+        lineWidth: 0.24,
+        cellPadding: { top: 2.0, right: 1.5, bottom: 2.0, left: 1.5 },
+      },
+      headStyles: {
+        fillColor: [15, 23, 42],
+        textColor: [255, 255, 255],
+        fontSize: 7.2,
+        fontStyle: 'bold',
+      },
+      didParseCell: (data) => {
+        if (data.section === 'body') {
+          if (data.column.index === 1 || data.column.index === 4) {
+            data.cell.styles.textColor = [15, 118, 110];
+          } else if (data.column.index === 2 || data.column.index === 5) {
+            data.cell.styles.textColor =
+              (data.column.index === 2 ? incompleteKpmCount : totals.pendingSubItemUnits) > 0
+                ? [190, 18, 60]
+                : [15, 118, 110];
+          }
+        }
+      },
+    });
+
+    cursorY = (doc.lastAutoTable?.finalY ?? cursorY + 14) + 3.5;
+
+    // 2. Listing Total Rekap Per Sub-Item (Sudah vs Belum)
+    const breakdownBody: (string | number)[][] = totals.breakdownRows.map((row, idx) => [
+      String(idx + 1).padStart(2, '0'),
+      row.itemCode,
+      row.subName,
+      `${row.qtyTotal} ${row.satuan}`,
+      `${row.qtyDelivered} ${row.satuan} (${row.kpmDelivered} KPM)`,
+      `${row.qtyPending} ${row.satuan} (${row.kpmPending} KPM)`,
+    ]);
+
+    if (totals.breakdownRows.length > 0) {
+      breakdownBody.push([
+        '',
+        'TOTAL',
+        `Seluruh Sub-Item (${totals.breakdownRows.length} jenis)`,
+        `${totals.totalSubItemUnits} Unit`,
+        `${totals.deliveredSubItemUnits} Unit`,
+        `${totals.pendingSubItemUnits} Unit`,
+      ]);
+    } else {
+      breakdownBody.push(['-', '-', 'Belum ada rincian sub-item terdaftar', '-', '-', '-']);
+    }
+
+    autoTable(doc, {
+      startY: cursorY,
+      margin: {
+        top: F4_PDF_MARGINS.top,
+        right: F4_PDF_MARGINS.right,
+        bottom: F4_PDF_MARGINS.bottom + 7,
+        left: F4_PDF_MARGINS.left,
+      },
+      tableWidth: PRINTABLE_WIDTH_MM,
+      head: [
+        [
+          'NO',
+          'ITEM',
+          'NAMA SUB-ITEM',
+          'TOTAL KEBUTUHAN',
+          'TOTAL SUDAH DITERIMA',
+          'TOTAL BELUM DITERIMA',
+        ],
+      ],
+      body: breakdownBody,
+      theme: 'grid',
+      showHead: 'everyPage',
+      rowPageBreak: 'avoid',
+      styles: {
+        font: 'helvetica',
+        fontSize: 8.0,
+        textColor: [15, 23, 42],
+        lineColor: [148, 163, 184],
+        lineWidth: 0.22,
+        valign: 'middle',
+        cellPadding: { top: 1.7, right: 2, bottom: 1.7, left: 2 },
+      },
+      headStyles: {
+        fillColor: [15, 118, 110],
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+        fontSize: 7.4,
+        halign: 'center',
+      },
+      columnStyles: {
+        0: { cellWidth: 10, halign: 'center' },
+        1: { cellWidth: 16, halign: 'center', fontStyle: 'bold' },
+        2: { cellWidth: PRINTABLE_WIDTH_MM - 117, halign: 'left' },
+        3: { cellWidth: 27, halign: 'center', fontStyle: 'bold' },
+        4: { cellWidth: 32, halign: 'center' },
+        5: { cellWidth: 32, halign: 'center' },
+      },
+      didParseCell: (data) => {
+        if (data.section !== 'body') return;
+        const isTotalRow =
+          totals.breakdownRows.length > 0 && data.row.index === breakdownBody.length - 1;
+        if (isTotalRow) {
+          data.cell.styles.fillColor = [241, 245, 249];
+          data.cell.styles.fontStyle = 'bold';
+          data.cell.styles.fontSize = 8.4;
+        }
+        if (data.column.index === 4) {
+          data.cell.styles.textColor = [15, 118, 110];
+          data.cell.styles.fontStyle = 'bold';
+        } else if (data.column.index === 5) {
+          const pendingQty = isTotalRow
+            ? totals.pendingSubItemUnits
+            : totals.breakdownRows[data.row.index]?.qtyPending ?? 0;
+          data.cell.styles.textColor = pendingQty > 0 ? [190, 18, 60] : [15, 118, 110];
+          data.cell.styles.fontStyle = 'bold';
+        }
+      },
+    });
+
+    return doc.lastAutoTable?.finalY ?? cursorY + 20;
+  };
+
+  const renderChecklistSection = (sectionOpts: {
+    sectionRecords: KpmRecord[];
+    sectionTitle: string;
+    sectionSubtitle?: string;
+    proposalTitleForAutoKel?: string;
+    recapHeading: string;
+  }): number => {
+    const {
+      sectionRecords,
+      sectionTitle,
+      sectionSubtitle,
+      proposalTitleForAutoKel,
+      recapHeading,
+    } = sectionOpts;
+
+    const shouldOmitKelurahan =
+      autoExcludeKelurahanWhenInProposalTitle &&
+      proposalTitleForAutoKel !== undefined &&
+      !shouldAutoIncludeKelurahanColumn(proposalTitleForAutoKel);
+
+    const includeKel = showKelurahanColumn && !shouldOmitKelurahan;
+    const includeProp = showProposalColumn;
+    const includePengelola = showPengelolaColumn;
+    const includeKontak = showKontakColumn;
+
+    const headerTopY = drawReportHeaderKop(F4_PDF_MARGINS.top);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text(sectionTitle.trim() || 'Rekap Sub-Item KPM', F4_PDF_MARGINS.left, headerTopY + 5.5);
+
+    let tableStartY = headerTopY + 10.5;
+    if (sectionSubtitle && sectionSubtitle.trim()) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.2);
+      doc.setTextColor(71, 85, 105);
+      doc.text(sectionSubtitle.trim(), F4_PDF_MARGINS.left, headerTopY + 10.2);
+      tableStartY = headerTopY + 14;
+    }
+
+    type ColSpec = {
+      id:
+        | 'no'
+        | 'item'
+        | 'nama'
+        | 'proposal'
+        | 'kelurahan'
+        | 'pengelola'
+        | 'kontak'
+        | 'delivered'
+        | 'pending'
+        | 'status';
+      header: string;
+      width: number;
+      halign: 'left' | 'center' | 'right';
+    };
+
+    const optCols: ColSpec[] = [];
+    if (includeProp) {
+      optCols.push({ id: 'proposal', header: 'PROPOSAL', width: 22, halign: 'left' });
+    }
+    if (includeKel) {
+      optCols.push({ id: 'kelurahan', header: 'KELURAHAN', width: 20, halign: 'left' });
+    }
+    if (includePengelola) {
+      optCols.push({ id: 'pengelola', header: 'PENGELOLA', width: 18, halign: 'left' });
+    }
+    if (includeKontak) {
+      optCols.push({ id: 'kontak', header: 'KONTAK', width: 19, halign: 'center' });
+    }
+
+    const optTotalW = optCols.reduce((s, c) => s + c.width, 0);
+    const fixedNoW = 8.5;
+    const fixedItemW = 12.5;
+    const fixedStatusW = 16.5;
+    const namaW = optCols.length >= 2 ? 25 : optCols.length === 1 ? 28 : 32;
+    const remainingForSubs = Math.max(
+      52,
+      PRINTABLE_WIDTH_MM - fixedNoW - fixedItemW - namaW - fixedStatusW - optTotalW
+    );
+    const deliveredW = Number((remainingForSubs * 0.48).toFixed(2));
+    const pendingW = Number((remainingForSubs - deliveredW).toFixed(2));
+
+    const columns: ColSpec[] = [
+      { id: 'no', header: 'NO', width: fixedNoW, halign: 'center' },
+      { id: 'item', header: 'ITEM', width: fixedItemW, halign: 'center' },
+      { id: 'nama', header: 'NAMA KPM', width: namaW, halign: 'left' },
+      ...optCols,
+      { id: 'delivered', header: 'SUB-ITEM DITERIMA', width: deliveredW, halign: 'left' },
+      { id: 'pending', header: 'SUB-ITEM BELUM DITERIMA', width: pendingW, halign: 'left' },
+      { id: 'status', header: 'STATUS', width: fixedStatusW, halign: 'center' },
+    ];
+
+    const colCount = columns.length;
+    const bodyFontSize = colCount <= 6 ? 8.1 : colCount <= 8 ? 7.4 : 6.8;
+    const headFontSize = colCount <= 6 ? 7.8 : colCount <= 8 ? 7.2 : 6.6;
+    const padY = colCount <= 6 ? 2.1 : 1.75;
+    const padX = colCount <= 6 ? 1.8 : 1.3;
+
+    const columnStyles: Record<number, Partial<Styles>> = {};
+    columns.forEach((col, idx) => {
+      columnStyles[idx] = {
+        cellWidth: col.width,
+        halign: col.halign,
+      };
+    });
+
+    const deliveredColIdx = columns.findIndex((c) => c.id === 'delivered');
+    const pendingColIdx = columns.findIndex((c) => c.id === 'pending');
+    const statusColIdx = columns.findIndex((c) => c.id === 'status');
+
+    type RowMeta = {
+      statusKind: 'complete' | 'partial' | 'unstarted' | 'empty';
+      hasDelivered: boolean;
+      hasPending: boolean;
+    };
+    const rowMetas: RowMeta[] = [];
+
+    const formatSubLabel = (sub: { baseName: string; name: string; volume: number; satuan: string }) => {
+      const base = (sub.baseName || sub.name || '').trim();
+      if (sub.volume > 1) {
+        return `• ${base} (${sub.volume} ${sub.satuan || 'Unit'})`;
+      }
+      return `• ${base}`;
+    };
+
+    const bodyRows = sectionRecords.map((rec, rowIdx) => {
+      const seq = getAbsenSeq(rec.registerCode);
+      const absenText = seq < 999999 ? String(seq).padStart(2, '0') : String(rowIdx + 1).padStart(2, '0');
+      const domicile = resolveKpmDomicile(rec, proposals, wilayahList);
+      const statuses = getKpmSubItemStatusList(rec, items);
+      const deliveredList = statuses.filter((s) => s.delivered);
+      const pendingList = statuses.filter((s) => !s.delivered);
+
+      const statusKind: RowMeta['statusKind'] =
+        statuses.length === 0
+          ? 'empty'
+          : pendingList.length === 0
+            ? 'complete'
+            : deliveredList.length > 0
+              ? 'partial'
+              : 'unstarted';
+
+      rowMetas.push({
+        statusKind,
+        hasDelivered: deliveredList.length > 0,
+        hasPending: pendingList.length > 0,
+      });
+
+      const deliveredText =
+        statuses.length === 0
+          ? '-'
+          : deliveredList.length > 0
+            ? deliveredList.map(formatSubLabel).join('\n')
+            : '-';
+
+      const pendingText =
+        statuses.length === 0
+          ? '(Belum ada daftar sub-item)'
+          : pendingList.length > 0
+            ? pendingList.map(formatSubLabel).join('\n')
+            : 'Lengkap';
+
+      const statusText =
+        statuses.length === 0
+          ? '-'
+          : `${deliveredList.length}/${statuses.length}\n${
+              statusKind === 'complete'
+                ? 'Lengkap'
+                : statusKind === 'partial'
+                  ? 'Sebagian'
+                  : 'Belum'
+            }`;
+
+      return columns.map((col) => {
+        switch (col.id) {
+          case 'no':
+            return absenText;
+          case 'item':
+            return rec.item || '-';
+          case 'nama':
+            return (rec.nama || '-').toUpperCase();
+          case 'proposal':
+            return (
+              (rec.proposal || '').trim() ||
+              (rec.validasi === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM')
+            );
+          case 'kelurahan':
+            return (domicile.kelurahan || '-').trim() || '-';
+          case 'pengelola':
+            return (rec.pengelola || '-').trim() || '-';
+          case 'kontak':
+            return formatPhoneForPdf(rec.kontak) || '-';
+          case 'delivered':
+            return deliveredText;
+          case 'pending':
+            return pendingText;
+          case 'status':
+            return statusText;
+          default:
+            return '-';
+        }
+      });
+    });
+
+    autoTable(doc, {
+      startY: tableStartY,
+      margin: {
+        top: F4_PDF_MARGINS.top,
+        right: F4_PDF_MARGINS.right,
+        bottom: F4_PDF_MARGINS.bottom + 7,
+        left: F4_PDF_MARGINS.left,
+      },
+      tableWidth: PRINTABLE_WIDTH_MM,
+      head: [columns.map((c) => c.header)],
+      body: bodyRows,
+      theme: 'grid',
+      showHead: 'everyPage',
+      rowPageBreak: 'avoid',
+      styles: {
+        font: 'helvetica',
+        fontSize: bodyFontSize,
+        minCellHeight: 8.5,
+        textColor: [15, 23, 42],
+        lineColor: [30, 41, 59],
+        lineWidth: 0.22,
+        valign: 'middle',
+        cellPadding: { top: padY, right: padX, bottom: padY, left: padX },
+        overflow: 'linebreak',
+      },
+      headStyles: {
+        fillColor: [252, 211, 77],
+        textColor: [15, 23, 42],
+        fontStyle: 'bold',
+        fontSize: headFontSize,
+        minCellHeight: 8.5,
+        halign: 'center',
+        valign: 'middle',
+        lineColor: [30, 41, 59],
+        lineWidth: 0.25,
+        cellPadding: { top: padY + 0.3, right: 1.0, bottom: padY + 0.3, left: 1.0 },
+      },
+      columnStyles,
+      didParseCell: (data) => {
+        if (data.section !== 'body') return;
+        const meta = rowMetas[data.row.index];
+        if (!meta) return;
+        if (data.column.index === deliveredColIdx) {
+          data.cell.styles.textColor = meta.hasDelivered ? [15, 118, 110] : [148, 163, 184];
+        } else if (data.column.index === pendingColIdx) {
+          if (meta.statusKind === 'complete') {
+            data.cell.styles.textColor = [15, 118, 110];
+            data.cell.styles.fontStyle = 'bold';
+          } else if (meta.hasPending) {
+            data.cell.styles.textColor = [180, 83, 9];
+          } else {
+            data.cell.styles.textColor = [100, 116, 139];
+          }
+        } else if (data.column.index === statusColIdx) {
+          data.cell.styles.fontStyle = 'bold';
+          if (meta.statusKind === 'complete') {
+            data.cell.styles.textColor = [15, 118, 110];
+          } else if (meta.statusKind === 'partial') {
+            data.cell.styles.textColor = [180, 83, 9];
+          } else if (meta.statusKind === 'unstarted') {
+            data.cell.styles.textColor = [190, 18, 60];
+          } else {
+            data.cell.styles.textColor = [100, 116, 139];
+          }
+        }
+      },
+    });
+
+    const sectionTotals = computeChecklistTotalsForRecords(sectionRecords, items);
+    const afterTableY = (doc.lastAutoTable?.finalY ?? tableStartY + 20) + 6;
+    return renderTotalsRecapBlock({
+      totals: sectionTotals,
+      heading: recapHeading,
+      startY: afterTableY,
+    });
+  };
+
+  const statusTagLabel =
+    statusFilter === 'incomplete'
+      ? 'Filter: Belum Lengkap'
+      : statusFilter === 'complete'
+        ? 'Filter: Sudah Lengkap'
+        : 'Semua Status Sub-Item';
+
+  let finalBlockEndY: number = F4_PDF_MARGINS.top;
+
+  if (splitByProposal) {
+    interface ChecklistGroup {
+      key: string;
+      tahun: string;
+      proposalName: string;
+      label: string;
+      isStandalone: boolean;
+      records: KpmRecord[];
+    }
+    const groupMap = new Map<string, ChecklistGroup>();
+    for (const rec of sortedRecords) {
+      const propName = (rec.proposal || '').trim();
+      const tahun = (rec.tahun || '').trim();
+      const isStandalone = !propName;
+      const label = propName
+        ? propName
+        : rec.validasi === 'rejected'
+          ? 'Arsip Berkas Ditolak'
+          : 'Database KPM';
+      const key = isStandalone
+        ? rec.validasi === 'rejected'
+          ? '__ARSIP_DITOLAK__'
+          : '__DATABASE_KPM__'
+        : `${tahun}::${propName}`;
+      const existing = groupMap.get(key);
+      if (existing) {
+        existing.records.push(rec);
+      } else {
+        groupMap.set(key, {
+          key,
+          tahun: isStandalone ? '' : tahun,
+          proposalName: propName,
+          label,
+          isStandalone,
+          records: [rec],
+        });
+      }
+    }
+
+    const groups = Array.from(groupMap.values()).sort((a, b) => {
+      if (a.isStandalone !== b.isStandalone) return a.isStandalone ? 1 : -1;
+      if (a.isStandalone && b.isStandalone) {
+        if (a.key === b.key) return 0;
+        return a.key === '__DATABASE_KPM__' ? -1 : 1;
+      }
+      const yearCmp = a.tahun.localeCompare(b.tahun);
+      if (yearCmp !== 0) return yearCmp;
+      const isKecA = isKecamatanProposal(a.proposalName);
+      const isKecB = isKecamatanProposal(b.proposalName);
+      if (isKecA !== isKecB) return isKecA ? -1 : 1;
+      return a.label.localeCompare(b.label, 'id');
+    });
+
+    groups.forEach((group, idx) => {
+      if (idx > 0) {
+        doc.addPage([F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM], 'portrait');
+      }
+      const secTitle = `Rekap Sub-Item KPM · ${
+        group.isStandalone ? group.label : [group.label, group.tahun].filter(Boolean).join(' ')
+      }`;
+      const secSub = [
+        statusTagLabel,
+        selectedPengelolaLabel ? `Pengelola: ${selectedPengelolaLabel}` : '',
+        `Total: ${group.records.length} KPM`,
+      ]
+        .filter(Boolean)
+        .join('  ·  ');
+
+      finalBlockEndY = renderChecklistSection({
+        sectionRecords: group.records,
+        sectionTitle: secTitle,
+        sectionSubtitle: secSub,
+        proposalTitleForAutoKel: group.proposalName,
+        recapHeading:
+          groups.length > 1
+            ? `Rekap Total Sub-Item (${group.label})`
+            : 'REKAP TOTAL LISTING SUB-ITEM (SUDAH & BELUM DITERIMA)',
+      });
+    });
+
+    if (groups.length > 1) {
+      const grandTotals = computeChecklistTotalsForRecords(sortedRecords, items);
+      finalBlockEndY = renderTotalsRecapBlock({
+        totals: grandTotals,
+        heading: `REKAP TOTAL KESELURUHAN (${groups.length} PROPOSAL · ${sortedRecords.length} KPM)`,
+        startY: finalBlockEndY + 8,
+      });
+    }
+  } else {
+    const resolvedSubtitle = [
+      subtitle?.trim() || '',
+      statusTagLabel,
+      `Dicetak: ${formatUploadDateTime(new Date().toISOString())}`,
+    ]
+      .filter(Boolean)
+      .join('  ·  ');
+
+    finalBlockEndY = renderChecklistSection({
+      sectionRecords: sortedRecords,
+      sectionTitle: title,
+      sectionSubtitle: resolvedSubtitle,
+      recapHeading: 'REKAP TOTAL LISTING SUB-ITEM (SUDAH & BELUM DITERIMA)',
+    });
+  }
+
+  drawSignatoryIfEnabled(finalBlockEndY);
+
+  const totalPages = doc.getNumberOfPages();
+  for (let i = 1; i <= totalPages; i += 1) {
+    doc.setPage(i);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      `MASDETA · Rekap Sub-Item KPM (${sortedRecords.length} KPM)`,
+      F4_PDF_MARGINS.left,
+      F4_PAPER_HEIGHT_MM - 5.5
+    );
+    doc.text(
+      `Halaman ${i} dari ${totalPages}`,
+      F4_PAPER_WIDTH_MM - F4_PDF_MARGINS.right,
+      F4_PAPER_HEIGHT_MM - 5.5,
+      { align: 'right' }
+    );
+  }
+
+  const result = await saveOrOpenPdfDocument(doc, fileName);
+  return { ...result, count: sortedRecords.length };
+}
+

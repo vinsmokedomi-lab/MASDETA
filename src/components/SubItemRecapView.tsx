@@ -10,14 +10,17 @@ import {
   Users,
 } from 'lucide-react';
 import { TAHUN_OPTIONS } from '../data/kpmOptions';
-import { ItemBantuan, KpmRecord, ReportTemplateConfig } from '../types/kpm';
+import { ItemBantuan, KpmRecord, ProposalRecord, ReportTemplateConfig } from '../types/kpm';
 import {
   computeSubItemRecap,
   getItemHierarchyRank,
   normalizeSubItemKey,
   resolvePackageForKpm,
 } from '../utils/imageProcessor';
-import { exportSubItemRecapToPdf } from '../utils/pdfExporter';
+import {
+  exportKpmSubItemChecklistToPdf,
+  exportSubItemRecapToPdf,
+} from '../utils/pdfExporter';
 import { SegmentedTabs } from './FormControls';
 import { useIsDesktopWeb } from '../utils/platform';
 
@@ -29,6 +32,7 @@ export type RecapDrillTarget =
 
 interface SubItemRecapViewProps {
   records: KpmRecord[];
+  proposals?: ProposalRecord[];
   items: ItemBantuan[];
   selectedYear: string;
   reportTemplate?: ReportTemplateConfig;
@@ -43,6 +47,7 @@ type RecapMainTab = 'item' | 'subitem';
 
 export function SubItemRecapView({
   records,
+  proposals = [],
   items,
   selectedYear,
   reportTemplate,
@@ -56,6 +61,7 @@ export function SubItemRecapView({
   const [activeTab, setActiveTab] = useState<RecapMainTab>('item');
   const [selectedItemCode, setSelectedItemCode] = useState<string>('OV');
   const [exportingPdf, setExportingPdf] = useState(false);
+  const [exportingKpmPdf, setExportingKpmPdf] = useState(false);
   const [pdfNotice, setPdfNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(
     null
   );
@@ -224,6 +230,44 @@ export function SubItemRecapView({
     }
   };
 
+  const handleExportKpmChecklistPdf = async (
+    targetRecs: KpmRecord[],
+    customTitle?: string,
+    statusFilter: 'all' | 'incomplete' | 'complete' = 'all'
+  ) => {
+    if (exportingKpmPdf || targetRecs.length === 0) return;
+    setExportingKpmPdf(true);
+    setPdfNotice(null);
+    try {
+      const yearLabel = selectedYear === 'all' ? 'Semua Tahun' : selectedYear;
+      const res = await exportKpmSubItemChecklistToPdf({
+        records: targetRecs,
+        proposals,
+        items,
+        title: customTitle || `Rekap KPM Sub-Item (${yearLabel})`,
+        subtitle: `Tahun Anggaran: ${yearLabel}  ·  Total: ${targetRecs.length} KPM`,
+        fileName: `masdeta-rekap-kpm-subitem-${selectedYear === 'all' ? 'semua-tahun' : selectedYear}`,
+        statusFilter,
+        reportTemplate,
+        splitByProposal: false,
+        showProposalColumn: true,
+        showKelurahanColumn: true,
+      });
+      setPdfNotice({
+        type: 'success',
+        message: `PDF listing KPM sub-item (${res.savedFileName}, ${res.count} KPM) berhasil diunduh.`,
+      });
+    } catch (err) {
+      setPdfNotice({
+        type: 'error',
+        message:
+          err instanceof Error ? err.message : 'Gagal membuat file PDF listing KPM sub-item.',
+      });
+    } finally {
+      setExportingKpmPdf(false);
+    }
+  };
+
   // Drill-down KPM rows
   const drillKpmRows = useMemo(() => {
     if (!drillTarget) return [];
@@ -304,9 +348,45 @@ export function SubItemRecapView({
                   {drillTitle}
                 </h1>
               </div>
-              <span className="shrink-0 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700 tabular-nums">
-                {drillKpmRows.length} KPM
-              </span>
+              <div className="flex items-center gap-2 shrink-0">
+                {drillKpmRows.length > 0 && (
+                  <button
+                    type="button"
+                    disabled={exportingKpmPdf}
+                    onClick={() =>
+                      void handleExportKpmChecklistPdf(
+                        drillKpmRows.map((r) => r.record),
+                        `Rekap Sub-Item KPM · ${drillTitle}`,
+                        drillTarget.kind === 'pending_all' ? 'incomplete' : 'all'
+                      )
+                    }
+                    className="inline-flex min-h-[38px] shrink-0 items-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:opacity-60"
+                  >
+                    {exportingKpmPdf ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <FileText className="h-3.5 w-3.5" />
+                    )}
+                    <span>Download PDF KPM</span>
+                  </button>
+                )}
+                <span className="shrink-0 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700 tabular-nums">
+                  {drillKpmRows.length} KPM
+                </span>
+              </div>
+            </div>
+          )}
+
+          {pdfNotice && (
+            <div
+              role="status"
+              className={`rounded-2xl border px-4 py-2.5 text-xs font-medium ${
+                pdfNotice.type === 'success'
+                  ? 'border-teal-200 bg-teal-50 text-teal-900'
+                  : 'border-rose-200 bg-rose-50 text-rose-800'
+              }`}
+            >
+              {pdfNotice.message}
             </div>
           )}
 
@@ -415,23 +495,43 @@ export function SubItemRecapView({
               Rekap Item
             </h1>
 
-            <button
-              type="button"
-              disabled={exportingPdf}
-              onClick={() => void handleExportPdf()}
-              className="inline-flex min-h-[42px] shrink-0 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-800 shadow-xs transition-colors hover:border-teal-600 hover:bg-teal-50/40 disabled:opacity-60"
-            >
-              {exportingPdf ? (
-                <Loader2 className="h-4 w-4 animate-spin text-teal-700" />
-              ) : (
-                <FileText className="h-4 w-4 text-teal-700" />
-              )}
-              <span>
-                {exportingPdf
-                  ? 'Menyusun PDF Rekap...'
-                  : `Download Rekap Item & Sub-Item PDF (${selectedYear === 'all' ? 'Semua Tahun' : selectedYear})`}
-              </span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={exportingKpmPdf || scopedRecords.length === 0}
+                onClick={() => void handleExportKpmChecklistPdf(scopedRecords)}
+                className="inline-flex min-h-[42px] shrink-0 items-center gap-2 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-teal-800 disabled:opacity-60"
+              >
+                {exportingKpmPdf ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Users className="h-4 w-4" />
+                )}
+                <span>
+                  {exportingKpmPdf
+                    ? 'Menyusun PDF...'
+                    : `Download Rekap KPM Sub-Item (${scopedRecords.length} KPM)`}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                disabled={exportingPdf}
+                onClick={() => void handleExportPdf()}
+                className="inline-flex min-h-[42px] shrink-0 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-800 shadow-xs transition-colors hover:border-teal-600 hover:bg-teal-50/40 disabled:opacity-60"
+              >
+                {exportingPdf ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-teal-700" />
+                ) : (
+                  <FileText className="h-4 w-4 text-teal-700" />
+                )}
+                <span>
+                  {exportingPdf
+                    ? 'Menyusun PDF Rekap...'
+                    : `Download Rekap Item (${selectedYear === 'all' ? 'Semua Tahun' : selectedYear})`}
+                </span>
+              </button>
+            </div>
           </div>
         )}
 

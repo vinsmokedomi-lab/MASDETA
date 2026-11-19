@@ -9415,6 +9415,7 @@ export default function App() {
           <div className={subView === 'subitem-recap' ? '' : 'hidden'}>
             <SubItemRecapView
               records={records}
+              proposals={proposals}
               items={items}
               selectedYear={selectedYear}
               reportTemplate={reportTemplate}
@@ -9772,6 +9773,7 @@ export default function App() {
               void handleFillEmptySlotFromDatabase(kpmId, proposalName, tahun, slotNumber)
             }
             onSelectRecord={(rec) => openKpmDetail(rec, 'kpm')}
+            onEditRecord={(rec) => openKpmForm(rec, 'kpm', false)}
             onDeleteRecord={handleDeleteKpm}
             onBulkUpdateKpms={handleBulkUpdateKpms}
           />

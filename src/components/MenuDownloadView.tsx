@@ -8,6 +8,7 @@ import {
   FileText,
   ImagePlus,
   Loader2,
+  Package,
   Printer,
   Search,
   Ticket,
@@ -37,14 +38,18 @@ import {
 } from '../types/kpm';
 import {
   formatRupiah,
+  getItemHierarchyRank,
+  getKpmSubItemStatusList,
   isKecamatanProposal,
   resolveKpmDomicile,
+  resolvePackageForKpm,
   resolveProposalKecamatanCategory,
   sortKecamatanCategoryNames,
 } from '../utils/imageProcessor';
 import {
   ADDON_PDF_COLUMN_DEFINITIONS,
   DEFAULT_ADDON_PDF_COLUMN_KEYS,
+  KpmSubItemStatusFilter,
   MANDATORY_PDF_COLUMN_KEYS,
   MAX_PDF_TOTAL_COLUMNS,
   PDF_COLUMN_DEFINITIONS,
@@ -53,6 +58,7 @@ import {
   doesKpmRecordMatchCheckedColumns,
   exportKpmBastBulkToPdf,
   exportKpmSptjmBulkToPdf,
+  exportKpmSubItemChecklistToPdf,
   exportKpmTableToPdf,
   exportKuponPdf,
   formatIndonesianDDMonthYYYY,
@@ -70,7 +76,7 @@ import {
 import { SelectionPickerModal, SelectionPickerOption } from './SelectionPickerModal';
 import { useIsDesktopWeb } from '../utils/platform';
 
-type DownloadPrintMode = 'kpm' | 'kupon' | 'bast' | 'sptjm';
+type DownloadPrintMode = 'kpm' | 'subitem' | 'kupon' | 'bast' | 'sptjm';
 
 interface MenuDownloadViewProps {
   records: KpmRecord[];
@@ -195,12 +201,26 @@ export function MenuDownloadView({
   const [isPengelolaModalOpen, setIsPengelolaModalOpen] = useState(false);
 
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  const [isGeneratingSubItem, setIsGeneratingSubItem] = useState(false);
   const [isGeneratingKupon, setIsGeneratingKupon] = useState(false);
   const [isGeneratingBast, setIsGeneratingBast] = useState(false);
   const [isGeneratingSptjm, setIsGeneratingSptjm] = useState(false);
   const [limitNotice, setLimitNotice] = useState(false);
 
+  const [subItemStatusFilter, setSubItemStatusFilter] = useState<KpmSubItemStatusFilter>('all');
+  const [subItemSelectedCode, setSubItemSelectedCode] = useState<string>('all');
+  const [subItemSplitByProposal, setSubItemSplitByProposal] = useState<boolean>(true);
+  const [subItemShowKelurahan, setSubItemShowKelurahan] = useState<boolean>(true);
+  const [subItemShowPengelola, setSubItemShowPengelola] = useState<boolean>(false);
+  const [subItemShowKontak, setSubItemShowKontak] = useState<boolean>(false);
+  const [subItemShowProposal, setSubItemShowProposal] = useState<boolean>(false);
+  const [showSubItemPreviewList, setShowSubItemPreviewList] = useState<boolean>(false);
+
   const [pdfFeedback, setPdfFeedback] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
+  const [subItemFeedback, setSubItemFeedback] = useState<{
     type: 'success' | 'error';
     message: string;
   } | null>(null);
@@ -677,6 +697,141 @@ export function MenuDownloadView({
     [pdfPrintRecords]
   );
 
+  const subItemCodeOptions = useMemo(() => {
+    const map = new Map<string, { code: string; name: string; count: number; rank: number }>();
+    for (const rec of filteredRecords) {
+      const code = (rec.item || '').trim().toUpperCase();
+      if (!code) continue;
+      const existing = map.get(code);
+      const rank = getItemHierarchyRank(code, rec.tahun, items);
+      if (existing) {
+        existing.count += 1;
+        existing.rank = Math.min(existing.rank, rank);
+      } else {
+        const pkg = resolvePackageForKpm(items, rec.tahun, code);
+        map.set(code, {
+          code,
+          name: pkg.name && pkg.name !== code ? pkg.name : code,
+          count: 1,
+          rank,
+        });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => {
+      if (a.rank !== b.rank) return a.rank - b.rank;
+      return a.code.localeCompare(b.code, 'id');
+    });
+  }, [filteredRecords, items]);
+
+  const effectiveSubItemCode = useMemo(() => {
+    if (subItemSelectedCode === 'all') return 'all';
+    const exists = subItemCodeOptions.some((opt) => opt.code === subItemSelectedCode);
+    return exists ? subItemSelectedCode : 'all';
+  }, [subItemSelectedCode, subItemCodeOptions]);
+
+  const subItemItemScopedRecords = useMemo(() => {
+    if (effectiveSubItemCode === 'all') return filteredRecords;
+    return filteredRecords.filter(
+      (rec) => (rec.item || '').trim().toUpperCase() === effectiveSubItemCode
+    );
+  }, [filteredRecords, effectiveSubItemCode]);
+
+  const subItemClassified = useMemo(() => {
+    let completeCount = 0;
+    let incompleteCount = 0;
+    const incompleteList: KpmRecord[] = [];
+    const completeList: KpmRecord[] = [];
+
+    for (const rec of subItemItemScopedRecords) {
+      const statuses = getKpmSubItemStatusList(rec, items);
+      const hasPending = statuses.some((s) => !s.delivered);
+      const isComplete = statuses.length > 0 && !hasPending;
+      if (isComplete) {
+        completeCount += 1;
+        completeList.push(rec);
+      } else if (statuses.length > 0 && hasPending) {
+        incompleteCount += 1;
+        incompleteList.push(rec);
+      }
+    }
+
+    const activeRecords =
+      subItemStatusFilter === 'incomplete'
+        ? incompleteList
+        : subItemStatusFilter === 'complete'
+          ? completeList
+          : subItemItemScopedRecords;
+
+    let totalUnits = 0;
+    let deliveredUnits = 0;
+    let pendingUnits = 0;
+    const aggMap = new Map<
+      string,
+      {
+        itemCode: string;
+        itemRank: number;
+        subName: string;
+        subOrder: number;
+        satuan: string;
+        qtyTotal: number;
+        qtyDelivered: number;
+        qtyPending: number;
+      }
+    >();
+
+    for (const rec of activeRecords) {
+      const pkg = resolvePackageForKpm(items, rec.tahun, rec.item);
+      const statuses = getKpmSubItemStatusList(rec, items);
+      const itemCode = (pkg.code || rec.item || '-').trim() || '-';
+      const itemRank = getItemHierarchyRank(itemCode, rec.tahun, items);
+      statuses.forEach((sub, idx) => {
+        const qty = sub.volume > 0 ? sub.volume : 1;
+        const satuan = sub.satuan || 'Unit';
+        totalUnits += qty;
+        if (sub.delivered) deliveredUnits += qty;
+        else pendingUnits += qty;
+
+        const key = `${itemCode.toUpperCase()}::${sub.key}`;
+        const existing = aggMap.get(key);
+        if (existing) {
+          existing.qtyTotal += qty;
+          if (sub.delivered) existing.qtyDelivered += qty;
+          else existing.qtyPending += qty;
+        } else {
+          aggMap.set(key, {
+            itemCode,
+            itemRank,
+            subName: sub.baseName || sub.name,
+            subOrder: idx,
+            satuan,
+            qtyTotal: qty,
+            qtyDelivered: sub.delivered ? qty : 0,
+            qtyPending: sub.delivered ? 0 : qty,
+          });
+        }
+      });
+    }
+
+    const breakdownPreview = Array.from(aggMap.values()).sort((a, b) => {
+      if (a.itemRank !== b.itemRank) return a.itemRank - b.itemRank;
+      const codeCmp = a.itemCode.localeCompare(b.itemCode, 'id');
+      if (codeCmp !== 0) return codeCmp;
+      if (a.subOrder !== b.subOrder) return a.subOrder - b.subOrder;
+      return a.subName.localeCompare(b.subName, 'id');
+    });
+
+    return {
+      allCount: subItemItemScopedRecords.length,
+      completeCount,
+      incompleteCount,
+      activeRecords,
+      totalUnits,
+      deliveredUnits,
+      pendingUnits,
+      breakdownPreview,
+    };
+  }, [subItemItemScopedRecords, items, subItemStatusFilter]);
+
   const toggleAddonColumn = (key: PdfColumnKey) => {
     setPdfFeedback(null);
     setSelectedAddonColumns((prev) => {
@@ -723,6 +878,7 @@ export function MenuDownloadView({
     setSelectedAddonColumns((prev) => applyProposalKelurahanDefault(prev, 'all'));
     setLimitNotice(false);
     setPdfFeedback(null);
+    setSubItemFeedback(null);
     setKuponFeedback(null);
     setBastFeedback(null);
     setSptjmFeedback(null);
@@ -736,8 +892,10 @@ export function MenuDownloadView({
     setPengelolaChecklistQuery('');
     setKelurahanChecklistQuery('');
     setSelectedAddonColumns((prev) => applyProposalKelurahanDefault(prev, nextProp));
+    setSubItemShowKelurahan(nextProp === 'all' || shouldAutoIncludeKelurahanColumn(nextProp));
     setLimitNotice(false);
     setPdfFeedback(null);
+    setSubItemFeedback(null);
     setKuponFeedback(null);
     setBastFeedback(null);
     setSptjmFeedback(null);
@@ -941,6 +1099,67 @@ export function MenuDownloadView({
     }
   };
 
+  const handleDownloadSubItemPdf = async () => {
+    const targetRecs = subItemClassified.activeRecords;
+    if (targetRecs.length === 0 || isGeneratingSubItem) return;
+    setSubItemFeedback(null);
+    setIsGeneratingSubItem(true);
+    try {
+      const itemSuffix = effectiveSubItemCode !== 'all' ? `_${effectiveSubItemCode}` : '';
+      const statusSuffix =
+        subItemStatusFilter === 'incomplete'
+          ? '_Belum_Lengkap'
+          : subItemStatusFilter === 'complete'
+            ? '_Lengkap'
+            : '';
+      const { title, subtitle, fileName } = buildScopeTitleAndFileName(
+        'Rekap_SubItem',
+        targetRecs.length
+      );
+      const canSplit =
+        selectedProposal === 'all' &&
+        selectedTahun !== 'database' &&
+        selectedTahun !== 'arsip';
+      const shouldSplit = canSplit && subItemSplitByProposal;
+
+      const res = await exportKpmSubItemChecklistToPdf({
+        records: targetRecs,
+        proposals,
+        items,
+        wilayahList,
+        title: `Rekap Sub-Item KPM · ${title}`,
+        subtitle:
+          effectiveSubItemCode !== 'all'
+            ? `${subtitle}  ·  Item: ${effectiveSubItemCode}`
+            : subtitle,
+        fileName: `${fileName}${itemSuffix}${statusSuffix}`,
+        statusFilter: subItemStatusFilter,
+        reportTemplate: templateDraft,
+        splitByProposal: shouldSplit,
+        autoExcludeKelurahanWhenInProposalTitle: shouldSplit && !isStandaloneSource,
+        showProposalColumn: !shouldSplit && subItemShowProposal,
+        showKelurahanColumn: subItemShowKelurahan,
+        showPengelolaColumn: subItemShowPengelola,
+        showKontakColumn: subItemShowKontak,
+        selectedPengelolaLabel: selectedPengelola !== 'all' ? selectedPengelola : undefined,
+      });
+
+      setSubItemFeedback({
+        type: 'success',
+        message: res.openedNative
+          ? `PDF Rekap Sub-Item "${res.savedFileName}" (${res.count} KPM) berhasil dibuat dan dibuka.`
+          : `PDF Rekap Sub-Item "${res.savedFileName}" (${res.count} KPM) berhasil diunduh.`,
+      });
+    } catch (err) {
+      setSubItemFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Gagal membuat file PDF Rekap Sub-Item.',
+      });
+    } finally {
+      setIsGeneratingSubItem(false);
+    }
+  };
+
   const handleKopLogoUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -1071,44 +1290,101 @@ export function MenuDownloadView({
           </section>
 
           {/* Card 2: Pilihan Jenis Cetak */}
-          <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2.5 md:p-4">
-            <div>
-              <h2 className="text-sm font-bold text-slate-900">Pilih Jenis Cetak PDF</h2>
-              <p className="mt-0.5 text-[11px] text-slate-500">
-                Ukuran kertas F4 Portrait (216 × 310 mm)
-              </p>
+          <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-3 md:p-4">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <h2 className="text-sm font-bold text-slate-900">Pilih Jenis Cetak PDF</h2>
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  Ukuran kertas F4 Portrait (216 × 310 mm)
+                </p>
+              </div>
+              <span className="shrink-0 rounded-lg bg-teal-50 px-2 py-1 text-[10px] font-bold text-teal-800 border border-teal-200/70">
+                5 Format
+              </span>
             </div>
-            <div className="grid grid-cols-2 gap-1.5 rounded-xl bg-slate-100 p-1 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-2">
               {(
                 [
-                  { id: 'kpm', label: 'KPM', Icon: Printer },
-                  { id: 'kupon', label: 'Kupon', Icon: Ticket },
-                  { id: 'bast', label: 'BAST', Icon: FileCheck2 },
-                  { id: 'sptjm', label: 'SPTJM', Icon: FileText },
+                  {
+                    id: 'kpm',
+                    label: 'Data KPM',
+                    subtitle: 'Tabel daftar penerima',
+                    Icon: Printer,
+                    fullSpan: false,
+                  },
+                  {
+                    id: 'subitem',
+                    label: 'Rekap Sub-Item',
+                    subtitle: 'Sudah & belum diterima',
+                    Icon: Package,
+                    fullSpan: false,
+                  },
+                  {
+                    id: 'kupon',
+                    label: 'Cetak Kupon',
+                    subtitle: 'Kartu & QR Code',
+                    Icon: Ticket,
+                    fullSpan: false,
+                  },
+                  {
+                    id: 'bast',
+                    label: 'BAST Massal',
+                    subtitle: 'Berita acara F4',
+                    Icon: FileCheck2,
+                    fullSpan: false,
+                  },
+                  {
+                    id: 'sptjm',
+                    label: 'SPTJM Massal',
+                    subtitle: 'Surat Pernyataan Tanggung Jawab Mutlak',
+                    Icon: FileText,
+                    fullSpan: true,
+                  },
                 ] as const
-              ).map(({ id, label, Icon }) => {
+              ).map(({ id, label, subtitle, Icon, fullSpan }) => {
                 const active = printMode === id;
                 return (
                   <button
                     key={id}
                     type="button"
                     onClick={() => setPrintMode(id)}
-                    className={`flex min-h-[40px] items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-semibold transition-all whitespace-nowrap ${
+                    className={`flex items-center gap-2.5 rounded-xl border p-2.5 text-left transition-all ${
+                      fullSpan ? 'col-span-2' : ''
+                    } ${
                       active
-                        ? 'bg-teal-700 text-white shadow-xs'
-                        : 'text-slate-600 hover:bg-white/70 hover:text-slate-900'
+                        ? 'border-teal-700 bg-teal-700 text-white shadow-xs'
+                        : 'border-slate-200 bg-slate-50/70 text-slate-800 hover:border-teal-300 hover:bg-teal-50/50'
                     }`}
                   >
-                    <Icon className="h-3.5 w-3.5 shrink-0" />
-                    <span className="truncate">{label}</span>
+                    <span
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
+                        active
+                          ? 'bg-white/15 text-white'
+                          : 'bg-white text-teal-700 border border-slate-200'
+                      }`}
+                    >
+                      <Icon className="h-4 w-4" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-xs font-bold leading-snug">
+                        {label}
+                      </span>
+                      <span
+                        className={`block text-[10px] leading-tight mt-0.5 ${
+                          active ? 'text-teal-100' : 'text-slate-500'
+                        }`}
+                      >
+                        {subtitle}
+                      </span>
+                    </span>
                   </button>
                 );
               })}
             </div>
           </section>
 
-          {/* Template Kop Surat & Penandatangan (khusus mode KPM) */}
-          {printMode === 'kpm' && (
+          {/* Template Kop Surat & Penandatangan (untuk mode KPM & Rekap Sub-Item) */}
+          {(printMode === 'kpm' || printMode === 'subitem') && (
           <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
             <button
               type="button"
@@ -1119,12 +1395,12 @@ export function MenuDownloadView({
                 <FileText className="h-4 w-4 shrink-0 text-teal-700" />
                 <div className="min-w-0">
                   <p className="text-sm font-bold text-slate-900">
-                    Template Kop &amp; Penandatangan (KPM)
+                    Template Kop &amp; Penandatangan
                   </p>
                   <p className="truncate text-[11px] text-slate-500">
                     {templateDraft.enabled
-                      ? `${templateDraft.orgHeaderLine2} · Aktif pada Tabel PDF KPM`
-                      : 'Nonaktif · Ketuk untuk mengaktifkan kop PDF KPM'}
+                      ? `${templateDraft.orgHeaderLine2} · Aktif pada Laporan PDF`
+                      : 'Nonaktif · Ketuk untuk mengaktifkan kop Laporan PDF'}
                   </p>
                 </div>
               </div>
@@ -2981,6 +3257,342 @@ export function MenuDownloadView({
               </p>
             </section>
           )}
+
+          {/* MODE 5: REKAP SUB-ITEM KPM (SUDAH & BELUM DITERIMA + TOTAL BAWAH) */}
+          {printMode === 'subitem' && (
+            <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-3.5 md:p-5">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900">
+                    Rekap KPM &amp; Listing Sub-Item (Sudah vs Belum)
+                  </h2>
+                  <p className="mt-0.5 text-[11px] text-slate-500">
+                    Mencetak daftar setiap KPM beserta rincian sub-item yang sudah dan belum diterima, lengkap dengan total rekap keseluruhan di bagian paling bawah PDF.
+                  </p>
+                </div>
+                <span className="shrink-0 text-xs font-bold text-teal-700 tabular-nums">
+                  {subItemClassified.activeRecords.length} KPM
+                </span>
+              </div>
+
+              {/* Filter Status Penerimaan Sub-Item */}
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                  Filter Status Sub-Item KPM
+                </p>
+                <div className="mt-1.5 grid grid-cols-3 gap-1.5">
+                  {(
+                    [
+                      {
+                        key: 'all',
+                        label: 'Semua KPM',
+                        count: subItemClassified.allCount,
+                      },
+                      {
+                        key: 'incomplete',
+                        label: 'Belum Lengkap',
+                        count: subItemClassified.incompleteCount,
+                      },
+                      {
+                        key: 'complete',
+                        label: 'Sudah Lengkap',
+                        count: subItemClassified.completeCount,
+                      },
+                    ] as const
+                  ).map((opt) => {
+                    const active = subItemStatusFilter === opt.key;
+                    return (
+                      <button
+                        key={opt.key}
+                        type="button"
+                        onClick={() => {
+                          setSubItemFeedback(null);
+                          setSubItemStatusFilter(opt.key);
+                        }}
+                        className={`flex flex-col items-center justify-center rounded-xl border px-2 py-2 text-center transition-colors ${
+                          active
+                            ? 'border-teal-700 bg-teal-50/80 text-teal-950'
+                            : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        <span className="text-[11px] font-bold leading-tight">{opt.label}</span>
+                        <span
+                          className={`mt-0.5 text-[11px] font-bold tabular-nums ${
+                            opt.key === 'incomplete' && opt.count > 0
+                              ? 'text-amber-700'
+                              : opt.key === 'complete'
+                                ? 'text-teal-700'
+                                : 'text-slate-500'
+                          }`}
+                        >
+                          {opt.count} KPM
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Filter Paket Item (Opsional) */}
+              {subItemCodeOptions.length > 1 && (
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    Filter Paket Item Bantuan
+                  </p>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSubItemFeedback(null);
+                        setSubItemSelectedCode('all');
+                      }}
+                      className={`min-h-[32px] rounded-lg border px-2.5 text-[11px] font-semibold transition-colors ${
+                        effectiveSubItemCode === 'all'
+                          ? 'border-teal-700 bg-teal-700 text-white'
+                          : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      Semua Item ({filteredRecords.length})
+                    </button>
+                    {subItemCodeOptions.map((opt) => {
+                      const active = effectiveSubItemCode === opt.code;
+                      return (
+                        <button
+                          key={opt.code}
+                          type="button"
+                          onClick={() => {
+                            setSubItemFeedback(null);
+                            setSubItemSelectedCode(opt.code);
+                          }}
+                          className={`min-h-[32px] rounded-lg border px-2.5 text-[11px] font-semibold transition-colors ${
+                            active
+                              ? 'border-teal-700 bg-teal-700 text-white'
+                              : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                          }`}
+                        >
+                          {opt.code} ({opt.count})
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Ringkasan Total Sub-Item (Sudah vs Belum) */}
+              <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 space-y-2.5">
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="rounded-lg border border-slate-200 bg-white px-2 py-2">
+                    <p className="text-[10px] font-semibold text-slate-500">Total Unit</p>
+                    <p className="mt-0.5 text-sm font-bold text-slate-900 tabular-nums">
+                      {subItemClassified.totalUnits}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-teal-200 bg-teal-50/60 px-2 py-2">
+                    <p className="text-[10px] font-semibold text-teal-800">Sudah Diterima</p>
+                    <p className="mt-0.5 text-sm font-bold text-teal-700 tabular-nums">
+                      {subItemClassified.deliveredUnits}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-rose-200 bg-rose-50/60 px-2 py-2">
+                    <p className="text-[10px] font-semibold text-rose-800">Belum Diterima</p>
+                    <p className="mt-0.5 text-sm font-bold text-rose-700 tabular-nums">
+                      {subItemClassified.pendingUnits}
+                    </p>
+                  </div>
+                </div>
+
+                {subItemClassified.breakdownPreview.length > 0 && (
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => setShowSubItemPreviewList((prev) => !prev)}
+                      className="flex w-full items-center justify-between gap-2 text-left text-[11px] font-semibold text-slate-700 hover:text-teal-800"
+                    >
+                      <span>
+                        Pratinjau Rekap Total per Sub-Item ({subItemClassified.breakdownPreview.length} rincian)
+                      </span>
+                      <ChevronDown
+                        className={`h-3.5 w-3.5 shrink-0 text-slate-500 transition-transform ${
+                          showSubItemPreviewList ? 'rotate-180' : ''
+                        }`}
+                      />
+                    </button>
+
+                    {showSubItemPreviewList && (
+                      <div className="mt-2 max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-white divide-y divide-slate-100">
+                        {subItemClassified.breakdownPreview.map((row) => (
+                          <div
+                            key={`${row.itemCode}-${row.subName}`}
+                            className="flex items-center justify-between gap-2 px-2.5 py-1.5 text-[11px]"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <span className="mr-1.5 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-slate-700">
+                                {row.itemCode}
+                              </span>
+                              <span className="font-medium text-slate-800">{row.subName}</span>
+                            </div>
+                            <div className="shrink-0 text-right tabular-nums">
+                              <span className="font-semibold text-teal-700">
+                                {row.qtyDelivered}
+                              </span>
+                              <span className="text-slate-400"> / </span>
+                              <span
+                                className={`font-semibold ${
+                                  row.qtyPending > 0 ? 'text-rose-700' : 'text-slate-500'
+                                }`}
+                              >
+                                {row.qtyPending} belum
+                              </span>
+                              <span className="ml-1 text-[10px] text-slate-400">
+                                ({row.qtyTotal} {row.satuan})
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Opsi Kolom Tambahan & Pengelompokan Proposal */}
+              <div className="space-y-2">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                  Opsi Kolom &amp; Tata Letak PDF
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    {
+                      key: 'kelurahan',
+                      label: 'Kolom Kelurahan',
+                      checked: subItemShowKelurahan,
+                      onToggle: () => setSubItemShowKelurahan((p) => !p),
+                    },
+                    {
+                      key: 'pengelola',
+                      label: 'Kolom Pengelola',
+                      checked: subItemShowPengelola,
+                      onToggle: () => setSubItemShowPengelola((p) => !p),
+                    },
+                    {
+                      key: 'kontak',
+                      label: 'Kolom No. HP',
+                      checked: subItemShowKontak,
+                      onToggle: () => setSubItemShowKontak((p) => !p),
+                    },
+                    {
+                      key: 'proposal',
+                      label: 'Kolom Proposal',
+                      checked:
+                        selectedProposal === 'all' &&
+                        !isStandaloneSource &&
+                        subItemSplitByProposal
+                          ? false
+                          : subItemShowProposal,
+                      disabled:
+                        selectedProposal === 'all' &&
+                        !isStandaloneSource &&
+                        subItemSplitByProposal,
+                      onToggle: () => setSubItemShowProposal((p) => !p),
+                    },
+                  ].map((opt) => (
+                    <button
+                      key={opt.key}
+                      type="button"
+                      disabled={opt.disabled}
+                      role="checkbox"
+                      aria-checked={opt.checked}
+                      onClick={opt.onToggle}
+                      className={`flex min-h-[38px] items-center gap-2 rounded-xl border px-3 py-1.5 text-left text-xs transition-colors ${
+                        opt.disabled
+                          ? 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400'
+                          : opt.checked
+                            ? 'border-teal-700/50 bg-teal-50/70 text-slate-900'
+                            : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      <span
+                        className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                          opt.checked
+                            ? 'border-teal-700 bg-teal-700 text-white'
+                            : 'border-slate-300 bg-white'
+                        }`}
+                      >
+                        {opt.checked && <Check className="h-2.5 w-2.5" />}
+                      </span>
+                      <span className="truncate font-semibold">{opt.label}</span>
+                    </button>
+                  ))}
+                </div>
+
+                {selectedProposal === 'all' && !isStandaloneSource && (
+                  <button
+                    type="button"
+                    role="checkbox"
+                    aria-checked={subItemSplitByProposal}
+                    onClick={() => setSubItemSplitByProposal((prev) => !prev)}
+                    className="flex min-h-[40px] w-full items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left hover:bg-slate-50"
+                  >
+                    <span
+                      className={`flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-md border transition-colors ${
+                        subItemSplitByProposal
+                          ? 'border-teal-700 bg-teal-700 text-white'
+                          : 'border-slate-300 bg-white'
+                      }`}
+                    >
+                      {subItemSplitByProposal && <Check className="h-3 w-3" />}
+                    </span>
+                    <span className="text-xs font-medium text-slate-700">
+                      Pisahkan tabel per <strong>Proposal</strong> (tetap sertakan Rekap Total Keseluruhan di paling bawah)
+                    </span>
+                  </button>
+                )}
+              </div>
+
+              {subItemFeedback && (
+                <div
+                  role="status"
+                  className={`flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs ${
+                    subItemFeedback.type === 'success'
+                      ? 'border-teal-200 bg-teal-50 text-teal-900'
+                      : 'border-rose-200 bg-rose-50 text-rose-900'
+                  }`}
+                >
+                  {subItemFeedback.type === 'success' ? (
+                    <Check className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+                  ) : (
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+                  )}
+                  <p className="font-medium leading-snug">{subItemFeedback.message}</p>
+                </div>
+              )}
+
+              <button
+                type="button"
+                disabled={subItemClassified.activeRecords.length === 0 || isGeneratingSubItem}
+                onClick={() => void handleDownloadSubItemPdf()}
+                className="inline-flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-teal-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
+              >
+                {isGeneratingSubItem ? (
+                  <>
+                    <Loader2 className="h-4.5 w-4.5 animate-spin" />
+                    <span>Menyiapkan PDF Rekap Sub-Item...</span>
+                  </>
+                ) : (
+                  <>
+                    <Package className="h-4.5 w-4.5" />
+                    <span>
+                      Download Rekap Sub-Item F4 ({subItemClassified.activeRecords.length} KPM)
+                    </span>
+                  </>
+                )}
+              </button>
+
+              <p className="text-center text-[11px] leading-relaxed text-slate-500">
+                Kertas F4 Portrait (216 × 310 mm) · Margin Kiri 2 cm · Kanan 1,5 cm · Atas &amp; Bawah 1 cm
+              </p>
+            </section>
+          )}
         </div>
       </div>
 
@@ -3075,6 +3687,7 @@ export function MenuDownloadView({
           setPengelolaChecklistQuery('');
           setKelurahanChecklistQuery('');
           setPdfFeedback(null);
+          setSubItemFeedback(null);
           setKuponFeedback(null);
           setBastFeedback(null);
           setSptjmFeedback(null);

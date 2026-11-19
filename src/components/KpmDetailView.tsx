@@ -2007,17 +2007,33 @@ export function KpmDetailView({
           <h1 className="truncate text-base font-bold text-slate-900">Detail KPM</h1>
         </div>
 
-        {canDelete && (
-          <button
-            type="button"
-            disabled={isProposalLocked}
-            onClick={() => setConfirmDelete(true)}
-            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-200 bg-rose-50 text-rose-600 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-            aria-label="Hapus Data KPM"
-            title={isProposalLocked ? 'Proposal Terkunci' : 'Hapus Data KPM'}
-          >
-            <Trash2 className="h-4.5 w-4.5" />
-          </button>
+        {(canUpdate || canDelete) && (
+          <div className="flex shrink-0 items-center gap-1.5">
+            {canUpdate && (
+              <button
+                type="button"
+                disabled={isProposalLocked}
+                onClick={() => onEditRecord(record)}
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-teal-200 bg-teal-50 text-teal-700 transition-colors hover:bg-teal-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                aria-label="Edit Data KPM"
+                title={isProposalLocked ? 'Proposal Terkunci' : 'Edit Data KPM'}
+              >
+                <Pencil className="h-4.5 w-4.5" />
+              </button>
+            )}
+            {canDelete && (
+              <button
+                type="button"
+                disabled={isProposalLocked}
+                onClick={() => setConfirmDelete(true)}
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-200 bg-rose-50 text-rose-600 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                aria-label="Hapus Data KPM"
+                title={isProposalLocked ? 'Proposal Terkunci' : 'Hapus Data KPM'}
+              >
+                <Trash2 className="h-4.5 w-4.5" />
+              </button>
+            )}
+          </div>
         )}
 
         {isHeroScrolledOut && (
@@ -2078,18 +2094,35 @@ export function KpmDetailView({
               </h1>
             </div>
 
-            {canDelete && (
-              <button
-                type="button"
-                disabled={isProposalLocked}
-                onClick={() => setConfirmDelete(true)}
-                className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-                aria-label="Hapus Data KPM"
-                title={isProposalLocked ? 'Proposal Terkunci' : 'Hapus Data KPM'}
-              >
-                <Trash2 className="h-4 w-4" />
-                <span>Hapus Data</span>
-              </button>
+            {(canUpdate || canDelete) && (
+              <div className="flex shrink-0 items-center gap-2">
+                {canUpdate && (
+                  <button
+                    type="button"
+                    disabled={isProposalLocked}
+                    onClick={() => onEditRecord(record)}
+                    className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3 text-xs font-semibold text-teal-700 transition-colors hover:bg-teal-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                    aria-label="Edit Data KPM"
+                    title={isProposalLocked ? 'Proposal Terkunci' : 'Edit Data KPM'}
+                  >
+                    <Pencil className="h-4 w-4" />
+                    <span>Edit Data</span>
+                  </button>
+                )}
+                {canDelete && (
+                  <button
+                    type="button"
+                    disabled={isProposalLocked}
+                    onClick={() => setConfirmDelete(true)}
+                    className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                    aria-label="Hapus Data KPM"
+                    title={isProposalLocked ? 'Proposal Terkunci' : 'Hapus Data KPM'}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    <span>Hapus Data</span>
+                  </button>
+                )}
+              </div>
             )}
           </div>
           {lockedBannerBlock}

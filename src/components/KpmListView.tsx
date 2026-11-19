@@ -8,6 +8,7 @@ import {
   Eye,
   Lock,
   Package,
+  Pencil,
   Plus,
   Search,
   SlidersHorizontal,
@@ -87,6 +88,7 @@ interface KpmListViewProps {
     slotNumber: number
   ) => void;
   onSelectRecord: (record: KpmRecord) => void;
+  onEditRecord?: (record: KpmRecord) => void;
   onDeleteRecord: (id: string, slotHandling?: SlotRemovalMode) => void;
   onBulkUpdateKpms?: (
     ids: string[],
@@ -123,6 +125,7 @@ export function KpmListView({
   onRemoveEmptySlot,
   onFillEmptySlotFromDatabase,
   onSelectRecord,
+  onEditRecord,
   onDeleteRecord,
   onBulkUpdateKpms,
 }: KpmListViewProps) {
@@ -1215,10 +1218,30 @@ export function KpmListView({
                                 type="button"
                                 onClick={() => onSelectRecord(rec)}
                                 title="Lihat Detail KPM"
+                                aria-label={`Lihat Detail ${rec.nama}`}
                                 className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 hover:text-teal-700"
                               >
                                 <Eye className="h-3.5 w-3.5" />
                               </button>
+                              {canUpdate && onEditRecord && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    locked
+                                      ? setLockedNoticeRecord(rec)
+                                      : onEditRecord(rec)
+                                  }
+                                  title={locked ? 'Proposal Terkunci' : 'Edit Data KPM'}
+                                  aria-label={locked ? 'Proposal Terkunci' : `Edit ${rec.nama}`}
+                                  className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition-colors ${
+                                    locked
+                                      ? 'border-slate-200 bg-slate-50 text-slate-400'
+                                      : 'border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100'
+                                  }`}
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </button>
+                              )}
                               {canDelete && (
                                 <button
                                   type="button"
@@ -1436,17 +1459,30 @@ export function KpmListView({
                       onClick: () => setLockedNoticeRecord(rec),
                     },
                   ]
-                : canDelete
-                  ? [
-                      {
-                        key: 'delete',
-                        label: 'Hapus',
-                        icon: <Trash2 className="h-4 w-4" />,
-                        tone: 'danger',
-                        onClick: () => setPendingDeleteRecord(rec),
-                      },
-                    ]
-                  : [];
+                : [
+                    ...(canUpdate && onEditRecord
+                      ? [
+                          {
+                            key: 'edit',
+                            label: 'Edit',
+                            icon: <Pencil className="h-4 w-4" />,
+                            tone: 'teal' as const,
+                            onClick: () => onEditRecord(rec),
+                          },
+                        ]
+                      : []),
+                    ...(canDelete
+                      ? [
+                          {
+                            key: 'delete',
+                            label: 'Hapus',
+                            icon: <Trash2 className="h-4 w-4" />,
+                            tone: 'danger' as const,
+                            onClick: () => setPendingDeleteRecord(rec),
+                          },
+                        ]
+                      : []),
+                  ];
 
               const isSelected = selectedIds.includes(rec.id);
               const showMobileMoveArrows = Boolean(
