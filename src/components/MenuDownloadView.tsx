@@ -11,6 +11,7 @@ import {
   Package,
   Printer,
   Search,
+  Tag,
   Ticket,
   Trash2,
 } from 'lucide-react';
@@ -61,6 +62,7 @@ import {
   exportKpmSubItemChecklistToPdf,
   exportKpmTableToPdf,
   exportKuponPdf,
+  exportNomorDinsosToPdf,
   formatIndonesianDDMonthYYYY,
   formatIndonesianDateWords,
   formatScheduleDateTimeForCoupon,
@@ -76,7 +78,7 @@ import {
 import { SelectionPickerModal, SelectionPickerOption } from './SelectionPickerModal';
 import { useIsDesktopWeb } from '../utils/platform';
 
-type DownloadPrintMode = 'kpm' | 'subitem' | 'kupon' | 'bast' | 'sptjm';
+type DownloadPrintMode = 'kpm' | 'subitem' | 'kupon' | 'bast' | 'sptjm' | 'dinsos';
 
 interface MenuDownloadViewProps {
   records: KpmRecord[];
@@ -205,7 +207,11 @@ export function MenuDownloadView({
   const [isGeneratingKupon, setIsGeneratingKupon] = useState(false);
   const [isGeneratingBast, setIsGeneratingBast] = useState(false);
   const [isGeneratingSptjm, setIsGeneratingSptjm] = useState(false);
+  const [isGeneratingDinsos, setIsGeneratingDinsos] = useState(false);
   const [limitNotice, setLimitNotice] = useState(false);
+
+  const [dinsosProvinsi, setDinsosProvinsi] = useState('PROVINSI KALIMANTAN BARAT');
+  const [dinsosPrefix, setDinsosPrefix] = useState('DINSOS');
 
   const [subItemStatusFilter, setSubItemStatusFilter] = useState<KpmSubItemStatusFilter>('all');
   const [subItemSelectedCode, setSubItemSelectedCode] = useState<string>('all');
@@ -233,6 +239,10 @@ export function MenuDownloadView({
     message: string;
   } | null>(null);
   const [sptjmFeedback, setSptjmFeedback] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
+  const [dinsosFeedback, setDinsosFeedback] = useState<{
     type: 'success' | 'error';
     message: string;
   } | null>(null);
@@ -1099,6 +1109,39 @@ export function MenuDownloadView({
     }
   };
 
+  const handleDownloadDinsosPdf = async () => {
+    if (eligibleKuponRecords.length === 0 || isGeneratingDinsos) return;
+    setDinsosFeedback(null);
+    setIsGeneratingDinsos(true);
+    try {
+      const { fileName } = buildScopeTitleAndFileName('Nomor_DINSOS');
+      const res = await exportNomorDinsosToPdf({
+        records: eligibleKuponRecords,
+        allRecords: records,
+        proposals,
+        items,
+        wilayahList,
+        proposalSlotMap,
+        provinsiLabel: dinsosProvinsi,
+        prefixLabel: dinsosPrefix,
+        fileName,
+      });
+      setDinsosFeedback({
+        type: 'success',
+        message: res.openedNative
+          ? `Nomor DINSOS "${res.savedFileName}" (${res.count} label · F4 216×330 mm) berhasil dibuat dan dibuka.`
+          : `Nomor DINSOS "${res.savedFileName}" (${res.count} label · F4 216×330 mm) berhasil diunduh.`,
+      });
+    } catch (err) {
+      setDinsosFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Gagal membuat file PDF Nomor DINSOS.',
+      });
+    } finally {
+      setIsGeneratingDinsos(false);
+    }
+  };
+
   const handleDownloadSubItemPdf = async () => {
     const targetRecs = subItemClassified.activeRecords;
     if (targetRecs.length === 0 || isGeneratingSubItem) return;
@@ -1295,11 +1338,13 @@ export function MenuDownloadView({
               <div>
                 <h2 className="text-sm font-bold text-slate-900">Pilih Jenis Cetak PDF</h2>
                 <p className="mt-0.5 text-[11px] text-slate-500">
-                  Ukuran kertas F4 Portrait (216 × 310 mm)
+                  {printMode === 'dinsos'
+                    ? 'Ukuran kertas F4 (216 × 330 mm · 2 Label/Lembar)'
+                    : 'Ukuran kertas F4 Portrait (216 × 310 mm)'}
                 </p>
               </div>
               <span className="shrink-0 rounded-lg bg-teal-50 px-2 py-1 text-[10px] font-bold text-teal-800 border border-teal-200/70">
-                5 Format
+                6 Format
               </span>
             </div>
             <div className="grid grid-cols-2 gap-2">
@@ -1310,38 +1355,39 @@ export function MenuDownloadView({
                     label: 'Data KPM',
                     subtitle: 'Tabel daftar penerima',
                     Icon: Printer,
-                    fullSpan: false,
                   },
                   {
                     id: 'subitem',
                     label: 'Rekap Sub-Item',
                     subtitle: 'Sudah & belum diterima',
                     Icon: Package,
-                    fullSpan: false,
                   },
                   {
                     id: 'kupon',
                     label: 'Cetak Kupon',
                     subtitle: 'Kartu & QR Code',
                     Icon: Ticket,
-                    fullSpan: false,
                   },
                   {
                     id: 'bast',
                     label: 'BAST Massal',
                     subtitle: 'Berita acara F4',
                     Icon: FileCheck2,
-                    fullSpan: false,
                   },
                   {
                     id: 'sptjm',
                     label: 'SPTJM Massal',
-                    subtitle: 'Surat Pernyataan Tanggung Jawab Mutlak',
+                    subtitle: 'Surat tanggung jawab',
                     Icon: FileText,
-                    fullSpan: true,
+                  },
+                  {
+                    id: 'dinsos',
+                    label: 'Nomor DINSOS',
+                    subtitle: 'Tag nomor barang F4',
+                    Icon: Tag,
                   },
                 ] as const
-              ).map(({ id, label, subtitle, Icon, fullSpan }) => {
+              ).map(({ id, label, subtitle, Icon }) => {
                 const active = printMode === id;
                 return (
                   <button
@@ -1349,8 +1395,6 @@ export function MenuDownloadView({
                     type="button"
                     onClick={() => setPrintMode(id)}
                     className={`flex items-center gap-2.5 rounded-xl border p-2.5 text-left transition-all ${
-                      fullSpan ? 'col-span-2' : ''
-                    } ${
                       active
                         ? 'border-teal-700 bg-teal-700 text-white shadow-xs'
                         : 'border-slate-200 bg-slate-50/70 text-slate-800 hover:border-teal-300 hover:bg-teal-50/50'
@@ -3593,6 +3637,184 @@ export function MenuDownloadView({
               </p>
             </section>
           )}
+
+          {/* MODE 6: CETAK PDF NOMOR DINSOS (F4 216x330MM LIPAT 2 + GARIS POTONG TENGAH) */}
+          {printMode === 'dinsos' && (() => {
+            const sampleRec = previewKuponSample;
+            const sampleDom = sampleRec
+              ? resolveKpmDomicile(sampleRec, proposals, wilayahList)
+              : { kabKota: 'Kota Pontianak', kecamatan: 'Pontianak Selatan', kelurahan: 'Benua Melayu Laut' };
+            const rawKel = (sampleRec?.kelurahan || sampleDom.kelurahan || '').trim();
+            const sampleKel = rawKel
+              ? /^(kelurahan|desa)\s+/i.test(rawKel)
+                ? rawKel
+                : `Kelurahan ${rawKel}`
+              : 'Kelurahan Benua Melayu Laut';
+            const rawKec = (sampleRec?.kecamatan || sampleDom.kecamatan || '')
+              .replace(/^kecamatan\s+/i, '')
+              .trim();
+            const sampleKec = rawKec ? `Kecamatan ${rawKec}` : 'Kecamatan Pontianak Selatan';
+            const sampleKab = (sampleRec?.kabKota || sampleDom.kabKota || '').trim() || 'Kota Pontianak';
+            const sampleTahun =
+              (sampleRec?.tahun || (selectedTahun !== 'all' ? selectedTahun : '') || '2026').trim();
+            const cleanPrefixText = (dinsosPrefix || 'DINSOS').trim().toUpperCase();
+            const cleanProvText = (dinsosProvinsi || 'PROVINSI KALIMANTAN BARAT')
+              .trim()
+              .toUpperCase();
+
+            return (
+              <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-3.5 md:p-5">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <h2 className="text-sm font-bold text-slate-900">
+                      Cetak PDF Nomor DINSOS
+                    </h2>
+                    <p className="mt-0.5 text-[11px] text-slate-500">
+                      Kertas F4 (216 × 330 mm), format lipat dua (2 label per lembar · 216 × 165 mm/label) dengan posisi center-middle alignment dan garis potong tipis di tengah lipatan.
+                    </p>
+                  </div>
+                  <span className="shrink-0 text-xs font-bold text-teal-700 tabular-nums">
+                    {eligibleKuponRecords.length} Label
+                  </span>
+                </div>
+
+                {/* Live Mini Preview 1 Lembar F4 (2 Label Lipat Dua) */}
+                <div className="rounded-xl border border-slate-300 bg-slate-50/70 p-3">
+                  <div className="mb-2 flex items-center justify-between text-[10px] font-semibold text-slate-500">
+                    <span>Pratinjau 1 Lembar F4 (216 × 330 mm)</span>
+                    <span className="tabular-nums">
+                      ~{Math.ceil(eligibleKuponRecords.length / 2)} Lembar
+                    </span>
+                  </div>
+
+                  <div className="mx-auto max-w-[300px] overflow-hidden rounded-lg border border-slate-300 bg-white shadow-xs">
+                    {/* Bagian Atas (165mm) */}
+                    <div className="flex flex-col items-center justify-center px-4 py-6 text-center">
+                      <p className="text-[10px] font-bold tracking-wide text-slate-900 uppercase">
+                        {cleanProvText}
+                      </p>
+                      <p className="text-[10px] font-bold text-slate-900">
+                        TAHUN {sampleTahun}
+                      </p>
+                      <p className="my-2.5 text-2xl font-extrabold tracking-tight text-slate-950">
+                        {cleanPrefixText} 01
+                      </p>
+                      <div className="space-y-0.5 text-[10px] font-bold text-slate-800 leading-tight">
+                        <p>{sampleKel}</p>
+                        <p>{sampleKec}</p>
+                        <p>{sampleKab}</p>
+                      </div>
+                    </div>
+
+                    {/* Garis Potong Tengah (165mm) */}
+                    <div className="relative flex items-center justify-center">
+                      <div className="w-full border-t border-dashed border-slate-400" />
+                      <span className="absolute bg-white px-2 text-[9px] font-medium text-slate-400">
+                        Garis Potong Tengah (165 mm)
+                      </span>
+                    </div>
+
+                    {/* Bagian Bawah (165mm) */}
+                    <div className="flex flex-col items-center justify-center px-4 py-6 text-center">
+                      <p className="text-[10px] font-bold tracking-wide text-slate-900 uppercase">
+                        {cleanProvText}
+                      </p>
+                      <p className="text-[10px] font-bold text-slate-900">
+                        TAHUN {sampleTahun}
+                      </p>
+                      <p className="my-2.5 text-2xl font-extrabold tracking-tight text-slate-950">
+                        {cleanPrefixText} 02
+                      </p>
+                      <div className="space-y-0.5 text-[10px] font-bold text-slate-800 leading-tight">
+                        <p>{sampleKel}</p>
+                        <p>{sampleKec}</p>
+                        <p>{sampleKab}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Pengaturan Teks Label */}
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-[1fr_140px]">
+                  <div>
+                    <label
+                      htmlFor="dinsos-prov-input"
+                      className="block text-[10px] font-bold uppercase tracking-wider text-slate-500"
+                    >
+                      Header Provinsi
+                    </label>
+                    <input
+                      id="dinsos-prov-input"
+                      type="text"
+                      value={dinsosProvinsi}
+                      onChange={(e) => setDinsosProvinsi(e.target.value)}
+                      placeholder="PROVINSI KALIMANTAN BARAT"
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-900 focus:border-teal-700 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="dinsos-prefix-input"
+                      className="block text-[10px] font-bold uppercase tracking-wider text-slate-500"
+                    >
+                      Prefix Nomor
+                    </label>
+                    <input
+                      id="dinsos-prefix-input"
+                      type="text"
+                      value={dinsosPrefix}
+                      onChange={(e) => setDinsosPrefix(e.target.value)}
+                      placeholder="DINSOS"
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-900 focus:border-teal-700 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                {dinsosFeedback && (
+                  <div
+                    role="status"
+                    className={`flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs ${
+                      dinsosFeedback.type === 'success'
+                        ? 'border-teal-200 bg-teal-50 text-teal-900'
+                        : 'border-rose-200 bg-rose-50 text-rose-900'
+                    }`}
+                  >
+                    {dinsosFeedback.type === 'success' ? (
+                      <Check className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+                    ) : (
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+                    )}
+                    <p className="font-medium leading-snug">{dinsosFeedback.message}</p>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  disabled={eligibleKuponRecords.length === 0 || isGeneratingDinsos}
+                  onClick={() => void handleDownloadDinsosPdf()}
+                  className="inline-flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-teal-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
+                >
+                  {isGeneratingDinsos ? (
+                    <>
+                      <Loader2 className="h-4.5 w-4.5 animate-spin" />
+                      <span>Menyiapkan PDF Nomor DINSOS...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Tag className="h-4.5 w-4.5" />
+                      <span>
+                        Download Nomor DINSOS F4 ({eligibleKuponRecords.length} Label)
+                      </span>
+                    </>
+                  )}
+                </button>
+
+                <p className="text-center text-[11px] leading-relaxed text-slate-500">
+                  Kertas F4 (216 × 330 mm) · 2 Label per Lembar · Center-Middle Alignment · Garis Potong Tengah (165 mm)
+                </p>
+              </section>
+            );
+          })()}
         </div>
       </div>
 

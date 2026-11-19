@@ -8,9 +8,16 @@ import {
   Loader2,
   Package,
   Users,
+  X,
 } from 'lucide-react';
 import { TAHUN_OPTIONS } from '../data/kpmOptions';
-import { ItemBantuan, KpmRecord, ProposalRecord, ReportTemplateConfig } from '../types/kpm';
+import {
+  ItemBantuan,
+  KpmRecord,
+  ProposalRecord,
+  ProposalTipe,
+  ReportTemplateConfig,
+} from '../types/kpm';
 import {
   computeSubItemRecap,
   getItemHierarchyRank,
@@ -44,6 +51,17 @@ interface SubItemRecapViewProps {
 }
 
 type RecapMainTab = 'item' | 'subitem';
+type ProposalTipeFilter = 'all' | ProposalTipe;
+
+type PendingPdfDownload =
+  | { kind: 'item_recap' }
+  | {
+      kind: 'kpm_checklist';
+      sourceRecords: KpmRecord[];
+      customTitle?: string;
+      statusFilter?: 'all' | 'incomplete' | 'complete';
+    }
+  | null;
 
 export function SubItemRecapView({
   records,
@@ -62,6 +80,7 @@ export function SubItemRecapView({
   const [selectedItemCode, setSelectedItemCode] = useState<string>('OV');
   const [exportingPdf, setExportingPdf] = useState(false);
   const [exportingKpmPdf, setExportingKpmPdf] = useState(false);
+  const [pendingPdfDownload, setPendingPdfDownload] = useState<PendingPdfDownload>(null);
   const [pdfNotice, setPdfNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(
     null
   );
@@ -87,6 +106,26 @@ export function SubItemRecapView({
     return Array.from(set).sort((a, b) => b.localeCompare(a));
   }, [records, items]);
 
+  const proposalLookup = useMemo(() => {
+    const byId = new Map<string, ProposalRecord>();
+    const byNameYear = new Map<string, ProposalRecord>();
+    const byName = new Map<string, ProposalRecord>();
+    for (const p of proposals) {
+      if (p.id) byId.set(p.id, p);
+      const name = (p.namaProposal || '').trim();
+      const year = (p.tahun || '').trim();
+      if (name) {
+        if (year && !byNameYear.has(`${name}__${year}`)) {
+          byNameYear.set(`${name}__${year}`, p);
+        }
+        if (!byName.has(name)) {
+          byName.set(name, p);
+        }
+      }
+    }
+    return { byId, byNameYear, byName };
+  }, [proposals]);
+
   // Scope: KPM Diterima pada tahun terpilih
   const scopedRecords = useMemo(() => {
     return records.filter((rec) => {
@@ -94,6 +133,24 @@ export function SubItemRecapView({
       return rec.validasi === 'accepted';
     });
   }, [records, selectedYear]);
+
+  const filterRecordsByProposalTipe = (
+    list: KpmRecord[],
+    tipeFilter: ProposalTipeFilter
+  ): KpmRecord[] => {
+    if (tipeFilter === 'all') return list;
+    return list.filter((rec) => {
+      const propName = (rec.proposal || '').trim();
+      const propYear = (rec.tahun || '').trim();
+      const matched =
+        (rec.proposalId ? proposalLookup.byId.get(rec.proposalId) : undefined) ??
+        (propName && propYear
+          ? proposalLookup.byNameYear.get(`${propName}__${propYear}`)
+          : undefined) ??
+        (propName ? proposalLookup.byName.get(propName) : undefined);
+      return matched?.tipe === tipeFilter;
+    });
+  };
 
   const recap = useMemo(
     () => computeSubItemRecap(scopedRecords, items),
@@ -205,15 +262,18 @@ export function SubItemRecapView({
   const pctSubDelivered =
     recap.totalUnits > 0 ? Math.round((recap.totalDelivered / recap.totalUnits) * 100) : 0;
 
-  const handleExportPdf = async () => {
+  const handleExportPdf = async (tipeFilter: ProposalTipeFilter = 'all') => {
     if (exportingPdf) return;
+    const filtered = filterRecordsByProposalTipe(scopedRecords, tipeFilter);
+    if (filtered.length === 0) return;
     setExportingPdf(true);
     setPdfNotice(null);
     try {
       const res = await exportSubItemRecapToPdf({
-        records,
+        records: filtered,
         items,
         selectedYear,
+        proposalTypeFilter: tipeFilter,
         reportTemplate,
       });
       setPdfNotice({
@@ -232,21 +292,28 @@ export function SubItemRecapView({
 
   const handleExportKpmChecklistPdf = async (
     targetRecs: KpmRecord[],
+    tipeFilter: ProposalTipeFilter = 'all',
     customTitle?: string,
     statusFilter: 'all' | 'incomplete' | 'complete' = 'all'
   ) => {
-    if (exportingKpmPdf || targetRecs.length === 0) return;
+    const filtered = filterRecordsByProposalTipe(targetRecs, tipeFilter);
+    if (exportingKpmPdf || filtered.length === 0) return;
     setExportingKpmPdf(true);
     setPdfNotice(null);
     try {
       const yearLabel = selectedYear === 'all' ? 'Semua Tahun' : selectedYear;
+      const tipeLabel = tipeFilter === 'all' ? 'Semua' : tipeFilter;
+      const tipeSuffixSlug = tipeFilter === 'all' ? '' : `-${tipeFilter.toLowerCase()}`;
+      const tipeTitleSuffix = tipeFilter === 'all' ? '' : ` · ${tipeFilter}`;
       const res = await exportKpmSubItemChecklistToPdf({
-        records: targetRecs,
+        records: filtered,
         proposals,
         items,
-        title: customTitle || `Rekap KPM Sub-Item (${yearLabel})`,
-        subtitle: `Tahun Anggaran: ${yearLabel}  ·  Total: ${targetRecs.length} KPM`,
-        fileName: `masdeta-rekap-kpm-subitem-${selectedYear === 'all' ? 'semua-tahun' : selectedYear}`,
+        title: customTitle
+          ? `${customTitle}${tipeTitleSuffix}`
+          : `Rekap KPM Sub-Item (${yearLabel}${tipeTitleSuffix})`,
+        subtitle: `Tahun Anggaran: ${yearLabel}  ·  Tipe Proposal: ${tipeLabel}  ·  Total: ${filtered.length} KPM`,
+        fileName: `masdeta-rekap-kpm-subitem-${selectedYear === 'all' ? 'semua-tahun' : selectedYear}${tipeSuffixSlug}`,
         statusFilter,
         reportTemplate,
         splitByProposal: false,
@@ -267,6 +334,145 @@ export function SubItemRecapView({
       setExportingKpmPdf(false);
     }
   };
+
+  const downloadTypeModal = pendingPdfDownload ? (() => {
+    const baseRecords =
+      pendingPdfDownload.kind === 'item_recap'
+        ? scopedRecords
+        : pendingPdfDownload.sourceRecords;
+    const allCount = baseRecords.length;
+    const murniCount = filterRecordsByProposalTipe(baseRecords, 'Murni').length;
+    const perubahanCount = filterRecordsByProposalTipe(baseRecords, 'Perubahan').length;
+    const yearText = selectedYear === 'all' ? 'Semua Tahun' : selectedYear;
+    const modalSubtitle =
+      pendingPdfDownload.kind === 'item_recap'
+        ? `Download Rekap Item & Sub-Item (${yearText})`
+        : pendingPdfDownload.customTitle || `Download Rekap KPM Sub-Item (${yearText})`;
+
+    const options: {
+      key: ProposalTipeFilter;
+      label: string;
+      desc: string;
+      count: number;
+    }[] = [
+      {
+        key: 'all',
+        label: 'Semua',
+        desc: 'Gabungan seluruh proposal Murni & Perubahan',
+        count: allCount,
+      },
+      {
+        key: 'Murni',
+        label: 'Murni',
+        desc: 'Hanya KPM dari proposal tipe Murni',
+        count: murniCount,
+      },
+      {
+        key: 'Perubahan',
+        label: 'Perubahan',
+        desc: 'Hanya KPM dari proposal tipe Perubahan',
+        count: perubahanCount,
+      },
+    ];
+
+    const triggerChoice = (tipe: ProposalTipeFilter) => {
+      const target = pendingPdfDownload;
+      setPendingPdfDownload(null);
+      if (target.kind === 'item_recap') {
+        void handleExportPdf(tipe);
+      } else {
+        void handleExportKpmChecklistPdf(
+          target.sourceRecords,
+          tipe,
+          target.customTitle,
+          target.statusFilter ?? 'all'
+        );
+      }
+    };
+
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/50 p-4 backdrop-blur-[2px] sm:items-center"
+        onClick={() => setPendingPdfDownload(null)}
+      >
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="recap-download-modal-title"
+          onClick={(e) => e.stopPropagation()}
+          className="w-full max-w-sm overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl"
+        >
+          <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3.5">
+            <div className="min-w-0">
+              <h2
+                id="recap-download-modal-title"
+                className="text-sm font-bold text-slate-900"
+              >
+                Pilih Tipe Proposal PDF
+              </h2>
+              <p className="mt-0.5 truncate text-[11px] text-slate-500">
+                {modalSubtitle}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setPendingPdfDownload(null)}
+              aria-label="Tutup pilihan download"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="space-y-2 p-3.5">
+            {options.map((opt) => {
+              const disabled = opt.count === 0;
+              return (
+                <button
+                  key={opt.key}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => triggerChoice(opt.key)}
+                  className={`flex w-full items-center justify-between gap-3 rounded-xl border px-3.5 py-3 text-left transition-colors ${
+                    disabled
+                      ? 'cursor-not-allowed border-slate-200 bg-slate-50 opacity-50'
+                      : 'border-slate-200 bg-white hover:border-teal-600 hover:bg-teal-50/50 active:bg-teal-50'
+                  }`}
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-bold text-slate-900">{opt.label}</p>
+                    <p className="mt-0.5 text-[11px] text-slate-500">{opt.desc}</p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <span
+                      className={`rounded-lg px-2 py-0.5 text-[11px] font-bold tabular-nums ${
+                        disabled
+                          ? 'bg-slate-200 text-slate-500'
+                          : 'bg-teal-50 text-teal-800 border border-teal-200/70'
+                      }`}
+                    >
+                      {opt.count} KPM
+                    </span>
+                    <ChevronRight className="h-4 w-4 text-slate-400" />
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="flex justify-end border-t border-slate-100 bg-slate-50/70 px-4 py-2.5">
+            <button
+              type="button"
+              onClick={() => setPendingPdfDownload(null)}
+              className="inline-flex min-h-[36px] items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+            >
+              Batal
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  })() : null;
 
   // Drill-down KPM rows
   const drillKpmRows = useMemo(() => {
@@ -354,11 +560,12 @@ export function SubItemRecapView({
                     type="button"
                     disabled={exportingKpmPdf}
                     onClick={() =>
-                      void handleExportKpmChecklistPdf(
-                        drillKpmRows.map((r) => r.record),
-                        `Rekap Sub-Item KPM · ${drillTitle}`,
-                        drillTarget.kind === 'pending_all' ? 'incomplete' : 'all'
-                      )
+                      setPendingPdfDownload({
+                        kind: 'kpm_checklist',
+                        sourceRecords: drillKpmRows.map((r) => r.record),
+                        customTitle: `Rekap Sub-Item KPM · ${drillTitle}`,
+                        statusFilter: drillTarget.kind === 'pending_all' ? 'incomplete' : 'all',
+                      })
                     }
                     className="inline-flex min-h-[38px] shrink-0 items-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:opacity-60"
                   >
@@ -449,6 +656,7 @@ export function SubItemRecapView({
             </div>
           )}
         </main>
+        {downloadTypeModal}
       </div>
     );
   }
@@ -470,8 +678,8 @@ export function SubItemRecapView({
           </div>
           <button
             type="button"
-            disabled={exportingPdf}
-            onClick={() => void handleExportPdf()}
+            disabled={exportingPdf || scopedRecords.length === 0}
+            onClick={() => setPendingPdfDownload({ kind: 'item_recap' })}
             className="inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
           >
             {exportingPdf ? (
@@ -499,7 +707,12 @@ export function SubItemRecapView({
               <button
                 type="button"
                 disabled={exportingKpmPdf || scopedRecords.length === 0}
-                onClick={() => void handleExportKpmChecklistPdf(scopedRecords)}
+                onClick={() =>
+                  setPendingPdfDownload({
+                    kind: 'kpm_checklist',
+                    sourceRecords: scopedRecords,
+                  })
+                }
                 className="inline-flex min-h-[42px] shrink-0 items-center gap-2 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-teal-800 disabled:opacity-60"
               >
                 {exportingKpmPdf ? (
@@ -516,8 +729,8 @@ export function SubItemRecapView({
 
               <button
                 type="button"
-                disabled={exportingPdf}
-                onClick={() => void handleExportPdf()}
+                disabled={exportingPdf || scopedRecords.length === 0}
+                onClick={() => setPendingPdfDownload({ kind: 'item_recap' })}
                 className="inline-flex min-h-[42px] shrink-0 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-800 shadow-xs transition-colors hover:border-teal-600 hover:bg-teal-50/40 disabled:opacity-60"
               >
                 {exportingPdf ? (
@@ -640,6 +853,40 @@ export function SubItemRecapView({
                 </button>
               </div>
             </section>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                disabled={exportingKpmPdf || scopedRecords.length === 0}
+                onClick={() =>
+                  setPendingPdfDownload({
+                    kind: 'kpm_checklist',
+                    sourceRecords: scopedRecords,
+                  })
+                }
+                className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-teal-800 disabled:opacity-60"
+              >
+                {exportingKpmPdf ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                ) : (
+                  <Users className="h-3.5 w-3.5 shrink-0" />
+                )}
+                <span className="truncate">KPM Sub-Item ({scopedRecords.length})</span>
+              </button>
+              <button
+                type="button"
+                disabled={exportingPdf || scopedRecords.length === 0}
+                onClick={() => setPendingPdfDownload({ kind: 'item_recap' })}
+                className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 shadow-xs transition-colors hover:bg-slate-50 disabled:opacity-60"
+              >
+                {exportingPdf ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0 text-teal-700" />
+                ) : (
+                  <FileText className="h-3.5 w-3.5 shrink-0 text-teal-700" />
+                )}
+                <span className="truncate">Rekap Item PDF</span>
+              </button>
+            </div>
 
             {activeTab === 'item' && (
               <section className="space-y-3">
@@ -1042,6 +1289,7 @@ export function SubItemRecapView({
           </div>
         )}
       </main>
+      {downloadTypeModal}
     </div>
   );
 }

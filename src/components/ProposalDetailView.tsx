@@ -22,6 +22,7 @@ import {
   RotateCcw,
   Search,
   SlidersHorizontal,
+  Tag,
   Trash2,
   Unlock,
   Upload,
@@ -60,6 +61,7 @@ import {
 } from '../utils/imageProcessor';
 import {
   exportKpmBastBulkToPdf,
+  exportNomorDinsosToPdf,
   formatBastProposalLocation,
   formatIndonesianDateWords,
   formatScheduleDateTimeForCoupon,
@@ -186,6 +188,7 @@ export function ProposalDetailView({
   const [isBastModalOpen, setIsBastModalOpen] = useState(false);
   const [bastDraft, setBastDraft] = useState<BastTemplateConfig>(effectiveBastConfig);
   const [bastBusy, setBastBusy] = useState(false);
+  const [dinsosBusy, setDinsosBusy] = useState(false);
   const [bastFeedback, setBastFeedback] = useState<{
     type: 'success' | 'error';
     text: string;
@@ -251,6 +254,33 @@ export function ProposalDetailView({
       });
     } finally {
       setBastBusy(false);
+    }
+  };
+
+  const handleExportProposalDinsos = async () => {
+    if (proposalRecords.length === 0 || dinsosBusy) return;
+    setDinsosBusy(true);
+    setBastFeedback(null);
+    try {
+      const result = await exportNomorDinsosToPdf({
+        records: proposalRecords,
+        allRecords: records,
+        proposals: allProposals,
+        items,
+        proposalSlotMap,
+        fileName: `Nomor_DINSOS_${proposal.tahun}_${proposal.namaProposal}`,
+      });
+      setBastFeedback({
+        type: 'success',
+        text: `PDF Nomor DINSOS (${result.count} label · F4 216×330 mm) disimpan: ${result.savedFileName}`,
+      });
+    } catch (err) {
+      setBastFeedback({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Gagal membuat PDF Nomor DINSOS proposal.',
+      });
+    } finally {
+      setDinsosBusy(false);
     }
   };
 
@@ -1141,6 +1171,20 @@ export function ProposalDetailView({
               <span>Cetak BAST ({kpmCounts.accepted} KPM)</span>
             </button>
           </div>
+
+          <button
+            type="button"
+            disabled={proposalRecords.length === 0 || dinsosBusy}
+            onClick={() => void handleExportProposalDinsos()}
+            className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50/70 px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100 disabled:opacity-50"
+          >
+            {dinsosBusy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Tag className="h-3.5 w-3.5" />
+            )}
+            <span>Cetak Nomor DINSOS ({kpmCounts.accepted} Label · F4 216×330)</span>
+          </button>
         </section>
     </>
   );
