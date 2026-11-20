@@ -19,6 +19,7 @@ import { DriveImage } from './DriveImage';
 import { PresenceDot, getPresenceMeta } from './PresenceDot';
 import { isNativeAppPlatform, useIsDesktopWeb } from '../utils/platform';
 import { getPushSupportMeta, usePWAInstall } from '../utils/pwaPush';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 interface ChatViewProps {
   currentUser: InternalUser;
@@ -81,6 +82,7 @@ export function ChatView({
   onRequestPushPermission,
   onBack,
 }: ChatViewProps) {
+  const { isOffline } = useOfflineStatus();
   const isNativeApp = isNativeAppPlatform();
   const isDesktopWeb = useIsDesktopWeb();
   const pushMeta = getPushSupportMeta();
@@ -232,7 +234,7 @@ export function ChatView({
 
   const handleSend = async (e: FormEvent) => {
     e.preventDefault();
-    if (!activePeer || !draft.trim() || sending) return;
+    if (isOffline || !activePeer || !draft.trim() || sending) return;
     const text = draft.trim();
     setDraft('');
     setSending(true);
@@ -460,10 +462,11 @@ export function ChatView({
             {onSaveUserAlias && (
               <button
                 type="button"
+                disabled={isOffline}
                 onClick={() => openRenameModal(peer)}
                 aria-label={`Ubah nama pribadi ${displayName}`}
-                title="Ubah nama pribadi"
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Ubah nama pribadi'}
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Edit3 className="h-4 w-4" />
               </button>
@@ -710,10 +713,11 @@ export function ChatView({
                   {onSaveUserAlias && (
                     <button
                       type="button"
+                      disabled={isOffline}
                       onClick={() => openRenameModal(activePeer)}
                       aria-label={`Ubah nama pribadi ${activePeerDisplayName}`}
-                      title="Ubah nama panggilan pribadi"
-                      className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                      title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Ubah nama panggilan pribadi'}
+                      className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       <Edit3 className="h-4 w-4" />
                     </button>
@@ -731,15 +735,21 @@ export function ChatView({
                 >
                   <input
                     type="text"
+                    disabled={isOffline}
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
-                    placeholder={`Tulis pesan untuk ${activePeerDisplayName}...`}
-                    className="min-h-[44px] flex-1 rounded-xl border border-slate-300 bg-slate-50 px-4 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:bg-white focus:outline-none"
+                    placeholder={
+                      isOffline
+                        ? 'Mode offline (hanya baca) — koneksi internet dibutuhkan untuk mengirim pesan'
+                        : `Tulis pesan untuk ${activePeerDisplayName}...`
+                    }
+                    className="min-h-[44px] flex-1 rounded-xl border border-slate-300 bg-slate-50 px-4 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:bg-white focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                   />
                   <button
                     type="submit"
-                    disabled={!draft.trim() || sending}
+                    disabled={isOffline || !draft.trim() || sending}
                     aria-label="Kirim pesan"
+                    title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Kirim pesan'}
                     className="inline-flex h-11 items-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
                   >
                     <Send className="h-4 w-4" />
@@ -827,10 +837,11 @@ export function ChatView({
             {onSaveUserAlias && (
               <button
                 type="button"
+                disabled={isOffline}
                 onClick={() => openRenameModal(activePeer)}
                 aria-label={`Ubah nama pribadi ${activePeerDisplayName}`}
-                title="Ubah nama panggilan pribadi"
-                className="inline-flex min-h-[40px] min-w-[40px] shrink-0 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Ubah nama panggilan pribadi'}
+                className="inline-flex min-h-[40px] min-w-[40px] shrink-0 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Edit3 className="h-4 w-4" />
               </button>
@@ -876,10 +887,11 @@ export function ChatView({
             {onSaveUserAlias && (
               <button
                 type="button"
+                disabled={isOffline}
                 onClick={() => openRenameModal(activePeer)}
                 aria-label={`Ubah nama pribadi ${activePeerDisplayName}`}
-                title="Ubah nama panggilan pribadi"
-                className="inline-flex min-h-[38px] min-w-[38px] shrink-0 items-center justify-center rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50"
+                title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Ubah nama panggilan pribadi'}
+                className="inline-flex min-h-[38px] min-w-[38px] shrink-0 items-center justify-center rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Edit3 className="h-4 w-4" />
               </button>
@@ -902,15 +914,21 @@ export function ChatView({
         >
           <input
             type="text"
+            disabled={isOffline}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder={`Tulis pesan untuk ${activePeerDisplayName}...`}
-            className="min-h-[44px] flex-1 rounded-xl border border-slate-300 bg-slate-50 px-3.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:bg-white focus:outline-none"
+            placeholder={
+              isOffline
+                ? 'Mode offline (hanya baca)...'
+                : `Tulis pesan untuk ${activePeerDisplayName}...`
+            }
+            className="min-h-[44px] flex-1 rounded-xl border border-slate-300 bg-slate-50 px-3.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:bg-white focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
           />
           <button
             type="submit"
-            disabled={!draft.trim() || sending}
+            disabled={isOffline || !draft.trim() || sending}
             aria-label="Kirim pesan"
+            title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Kirim pesan'}
             className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-teal-700 text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             <Send className="h-4 w-4" />

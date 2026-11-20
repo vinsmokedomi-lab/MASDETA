@@ -99,6 +99,7 @@ import {
 } from '../utils/pdfExporter';
 import { openCekBansosWithNik } from '../services/cekBansos';
 import { isNativeAppPlatform, useIsDesktopWeb } from '../utils/platform';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 interface KpmDetailViewProps {
   record: KpmRecord;
@@ -245,6 +246,7 @@ export function KpmDetailView({
 }: KpmDetailViewProps) {
   const isNativeApp = isNativeAppPlatform();
   const isDesktopWeb = useIsDesktopWeb();
+  const { isOffline } = useOfflineStatus();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [shareRecipientId, setShareRecipientId] = useState<string>('');
@@ -397,7 +399,7 @@ export function KpmDetailView({
   );
 
   const handleClickStatus = (nextStatus: ValidationStatus) => {
-    if (isProposalLocked || !canUpdate || nextStatus === record.validasi) return;
+    if (isProposalLocked || !canUpdate || isOffline || nextStatus === record.validasi) return;
     if (nextStatus === 'accepted' && isStandalone) {
       setIsProposalPickerOpen(true);
       return;
@@ -583,6 +585,7 @@ export function KpmDetailView({
   }, [internalUsers, currentUserId, userAliases]);
 
   const handleOpenShareModal = () => {
+    if (isOffline) return;
     setShareRecipientId(chatRecipients[0]?.id || '');
     setShareMessage(`Mohon info terkait data KPM atas nama ${record.nama}.`);
     setIsShareModalOpen(true);
@@ -593,7 +596,7 @@ export function KpmDetailView({
     label: string,
     existingDoc?: KpmDocumentFile
   ) => {
-    if (isProposalLocked || !canUpdate || docBusySlot) return;
+    if (isProposalLocked || !canUpdate || isOffline || docBusySlot) return;
     setDocError(null);
     setPendingUploadTarget({ category, label, existingDoc });
     detailFileInputRef.current?.click();
@@ -644,7 +647,7 @@ export function KpmDetailView({
   };
 
   const handleConfirmDeleteDocument = async () => {
-    if (!pendingDeleteDoc || !onUpdateKpmDocuments || docBusySlot) return;
+    if (!pendingDeleteDoc || !onUpdateKpmDocuments || docBusySlot || isOffline) return;
     const { category, label, doc } = pendingDeleteDoc;
     setDocError(null);
     setDocBusySlot(`${category}:${doc.id}`);
@@ -683,7 +686,7 @@ export function KpmDetailView({
   };
 
   const handleConfirmShare = async () => {
-    if (!shareRecipientId || sharingChat) return;
+    if (!shareRecipientId || sharingChat || isOffline) return;
     setSharingChat(true);
     const card: SharedKpmCard = {
       kpmId: record.id,
@@ -775,7 +778,7 @@ export function KpmDetailView({
     setPdfNotice(null);
     setIsDownloadingKuponPdf(true);
     try {
-      if (saveCouponDefault && onSaveCouponConfig) {
+      if (saveCouponDefault && !isOffline && onSaveCouponConfig) {
         onSaveCouponConfig(couponDraft);
       }
       const res = await exportKuponPdf({
@@ -820,7 +823,7 @@ export function KpmDetailView({
     setPdfNotice(null);
     setIsDownloadingBastPdf(true);
     try {
-      if (saveBastDefault) {
+      if (saveBastDefault && !isOffline) {
         if (matchingProposal && onSaveProposalBastConfig) {
           onSaveProposalBastConfig(matchingProposal.id, bastDraft);
         } else if (onSaveBastTemplate) {
@@ -874,7 +877,7 @@ export function KpmDetailView({
     setPdfNotice(null);
     setIsDownloadingSptjmPdf(true);
     try {
-      if (saveSptjmDefault && onSaveSptjmTemplate) {
+      if (saveSptjmDefault && !isOffline && onSaveSptjmTemplate) {
         onSaveSptjmTemplate(sptjmDraft);
       }
       const effectiveKopBast = resolveEffectiveBastConfig(
@@ -1047,7 +1050,7 @@ export function KpmDetailView({
                     <button
                       key={st.key}
                       type="button"
-                      disabled={isProposalLocked || !canUpdate}
+                      disabled={isProposalLocked || !canUpdate || isOffline}
                       onClick={() => handleClickStatus(st.key)}
                       className={`min-h-[38px] rounded-xl px-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                         record.validasi === st.key
@@ -1103,8 +1106,9 @@ export function KpmDetailView({
 
             <button
               type="button"
+              disabled={isOffline}
               onClick={handleOpenShareModal}
-              className="inline-flex min-h-[42px] items-center justify-center gap-1 rounded-xl border border-teal-200 bg-teal-50/70 px-2 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100"
+              className="inline-flex min-h-[42px] items-center justify-center gap-1 rounded-xl border border-teal-200 bg-teal-50/70 px-2 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
             >
               <Share2 className="h-3.5 w-3.5 shrink-0" />
               <span className="truncate">Chat</span>
@@ -1319,7 +1323,7 @@ export function KpmDetailView({
                       role="switch"
                       aria-checked={sub.delivered}
                       aria-label={`Status terima ${sub.name}`}
-                      disabled={isProposalLocked || !canUpdate}
+                      disabled={isProposalLocked || !canUpdate || isOffline}
                       onClick={() =>
                         onToggleSubItem(record.id, sub.key, sub.name, !sub.delivered)
                       }
@@ -1341,13 +1345,14 @@ export function KpmDetailView({
                 <div className="border-t border-slate-100 bg-slate-50/70 px-4 py-2.5">
                   <button
                     type="button"
+                    disabled={isOffline}
                     onClick={() =>
                       onMarkAllSubItemsDelivered(
                         record.id,
                         subItemStatuses.map((s) => ({ key: s.key, name: s.name }))
                       )
                     }
-                    className="inline-flex min-h-[38px] w-full items-center justify-center gap-1.5 rounded-xl border border-teal-200 bg-white px-3 text-xs font-semibold text-teal-800 hover:bg-teal-50"
+                    className="inline-flex min-h-[38px] w-full items-center justify-center gap-1.5 rounded-xl border border-teal-200 bg-white px-3 text-xs font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                   >
                     <CheckCircle2 className="h-3.5 w-3.5" />
                     <span>Tandai Semua Sub-Item Sudah Diterima</span>
@@ -1429,7 +1434,7 @@ export function KpmDetailView({
               {onSaveBast && (
                 <button
                   type="button"
-                  disabled={isProposalLocked || !canUpdate}
+                  disabled={isProposalLocked || !canUpdate || isOffline}
                   onClick={() => setIsSignatureOpen(true)}
                   className="inline-flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
                 >
@@ -1753,18 +1758,18 @@ export function KpmDetailView({
                         <div className="mt-auto flex items-center gap-1 border-t border-slate-200 bg-white p-1.5">
                           <button
                             type="button"
-                            disabled={Boolean(docBusySlot)}
+                            disabled={Boolean(docBusySlot) || isOffline}
                             onClick={() =>
                               handleTriggerSingleOrMultiUpload(item.key, item.label, doc)
                             }
-                            className="inline-flex min-h-[30px] flex-1 items-center justify-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                            className="inline-flex min-h-[30px] flex-1 items-center justify-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             <Upload className="h-3 w-3" />
                             <span>Ganti</span>
                           </button>
                           <button
                             type="button"
-                            disabled={Boolean(docBusySlot)}
+                            disabled={Boolean(docBusySlot) || isOffline}
                             onClick={() =>
                               setPendingDeleteDoc({
                                 category: item.key,
@@ -1774,7 +1779,7 @@ export function KpmDetailView({
                             }
                             aria-label={`Hapus Foto ${item.label}`}
                             title="Hapus Foto"
-                            className="inline-flex min-h-[30px] items-center justify-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                            className="inline-flex min-h-[30px] items-center justify-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             <Trash2 className="h-3 w-3" />
                             <span>Hapus</span>
@@ -1795,9 +1800,9 @@ export function KpmDetailView({
                       {editableDocs && !isSlotBusy && (
                         <button
                           type="button"
-                          disabled={Boolean(docBusySlot)}
+                          disabled={Boolean(docBusySlot) || isOffline}
                           onClick={() => handleTriggerSingleOrMultiUpload(item.key, item.label)}
-                          className="mt-2 inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-[11px] font-semibold text-teal-800 hover:bg-teal-100"
+                          className="mt-2 inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-[11px] font-semibold text-teal-800 hover:bg-teal-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                         >
                           <Camera className="h-3 w-3" />
                           <span>Unggah</span>
@@ -1840,7 +1845,7 @@ export function KpmDetailView({
                     <div className="mt-auto flex items-center justify-end border-t border-slate-200 bg-white p-1.5">
                       <button
                         type="button"
-                        disabled={Boolean(docBusySlot)}
+                        disabled={Boolean(docBusySlot) || isOffline}
                         onClick={() =>
                           setPendingDeleteDoc({
                             category: 'lainnya',
@@ -1848,7 +1853,7 @@ export function KpmDetailView({
                             doc,
                           })
                         }
-                        className="inline-flex min-h-[28px] w-full items-center justify-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100"
+                        className="inline-flex min-h-[28px] w-full items-center justify-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <Trash2 className="h-3 w-3" />
                         <span>Hapus Foto</span>
@@ -1890,7 +1895,7 @@ export function KpmDetailView({
                     <div className="mt-auto flex items-center justify-end border-t border-slate-200 bg-white p-1.5">
                       <button
                         type="button"
-                        disabled={Boolean(docBusySlot)}
+                        disabled={Boolean(docBusySlot) || isOffline}
                         onClick={() =>
                           setPendingDeleteDoc({
                             category: 'rumah',
@@ -1898,7 +1903,7 @@ export function KpmDetailView({
                             doc,
                           })
                         }
-                        className="inline-flex min-h-[28px] w-full items-center justify-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100"
+                        className="inline-flex min-h-[28px] w-full items-center justify-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <Trash2 className="h-3 w-3" />
                         <span>Hapus Foto</span>
@@ -1915,9 +1920,9 @@ export function KpmDetailView({
               {lainnyaDocs.length < 5 && (
                 <button
                   type="button"
-                  disabled={Boolean(docBusySlot)}
+                  disabled={Boolean(docBusySlot) || isOffline}
                   onClick={() => handleTriggerSingleOrMultiUpload('lainnya', 'Foto Lainnya')}
-                  className="inline-flex min-h-[36px] flex-1 items-center justify-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                  className="inline-flex min-h-[36px] flex-1 items-center justify-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Plus className="h-3.5 w-3.5 text-teal-700" />
                   <span>Tambah Foto Lainnya ({lainnyaDocs.length}/5)</span>
@@ -1926,9 +1931,9 @@ export function KpmDetailView({
               {rumahDocs.length < 3 && (
                 <button
                   type="button"
-                  disabled={Boolean(docBusySlot)}
+                  disabled={Boolean(docBusySlot) || isOffline}
                   onClick={() => handleTriggerSingleOrMultiUpload('rumah', 'Foto Rumah')}
-                  className="inline-flex min-h-[36px] flex-1 items-center justify-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                  className="inline-flex min-h-[36px] flex-1 items-center justify-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Plus className="h-3.5 w-3.5 text-teal-700" />
                   <span>Tambah Foto Rumah ({rumahDocs.length}/3)</span>
@@ -2012,11 +2017,17 @@ export function KpmDetailView({
             {canUpdate && (
               <button
                 type="button"
-                disabled={isProposalLocked}
+                disabled={isProposalLocked || isOffline}
                 onClick={() => onEditRecord(record)}
                 className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-teal-200 bg-teal-50 text-teal-700 transition-colors hover:bg-teal-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                 aria-label="Edit Data KPM"
-                title={isProposalLocked ? 'Proposal Terkunci' : 'Edit Data KPM'}
+                title={
+                  isProposalLocked
+                    ? 'Proposal Terkunci'
+                    : isOffline
+                      ? 'Mode Read-Only (Offline)'
+                      : 'Edit Data KPM'
+                }
               >
                 <Pencil className="h-4.5 w-4.5" />
               </button>
@@ -2024,11 +2035,17 @@ export function KpmDetailView({
             {canDelete && (
               <button
                 type="button"
-                disabled={isProposalLocked}
+                disabled={isProposalLocked || isOffline}
                 onClick={() => setConfirmDelete(true)}
                 className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-200 bg-rose-50 text-rose-600 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                 aria-label="Hapus Data KPM"
-                title={isProposalLocked ? 'Proposal Terkunci' : 'Hapus Data KPM'}
+                title={
+                  isProposalLocked
+                    ? 'Proposal Terkunci'
+                    : isOffline
+                      ? 'Mode Read-Only (Offline)'
+                      : 'Hapus Data KPM'
+                }
               >
                 <Trash2 className="h-4.5 w-4.5" />
               </button>
@@ -2099,11 +2116,17 @@ export function KpmDetailView({
                 {canUpdate && (
                   <button
                     type="button"
-                    disabled={isProposalLocked}
+                    disabled={isProposalLocked || isOffline}
                     onClick={() => onEditRecord(record)}
                     className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3 text-xs font-semibold text-teal-700 transition-colors hover:bg-teal-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                     aria-label="Edit Data KPM"
-                    title={isProposalLocked ? 'Proposal Terkunci' : 'Edit Data KPM'}
+                    title={
+                      isProposalLocked
+                        ? 'Proposal Terkunci'
+                        : isOffline
+                          ? 'Mode Read-Only (Offline)'
+                          : 'Edit Data KPM'
+                    }
                   >
                     <Pencil className="h-4 w-4" />
                     <span>Edit Data</span>
@@ -2112,11 +2135,17 @@ export function KpmDetailView({
                 {canDelete && (
                   <button
                     type="button"
-                    disabled={isProposalLocked}
+                    disabled={isProposalLocked || isOffline}
                     onClick={() => setConfirmDelete(true)}
                     className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                     aria-label="Hapus Data KPM"
-                    title={isProposalLocked ? 'Proposal Terkunci' : 'Hapus Data KPM'}
+                    title={
+                      isProposalLocked
+                        ? 'Proposal Terkunci'
+                        : isOffline
+                          ? 'Mode Read-Only (Offline)'
+                          : 'Hapus Data KPM'
+                    }
                   >
                     <Trash2 className="h-4 w-4" />
                     <span>Hapus Data</span>
@@ -2156,28 +2185,32 @@ export function KpmDetailView({
         <button
           type="button"
           onClick={() => onEditRecord(record)}
-          disabled={isProposalLocked || !canUpdate}
+          disabled={isProposalLocked || !canUpdate || isOffline}
           aria-label={
             isProposalLocked
               ? 'Proposal Terkunci'
-              : !canUpdate
-                ? 'Akses Edit Dinonaktifkan'
-                : 'Edit Data KPM'
+              : isOffline
+                ? 'Mode Read-Only (Offline)'
+                : !canUpdate
+                  ? 'Akses Edit Dinonaktifkan'
+                  : 'Edit Data KPM'
           }
           title={
             isProposalLocked
               ? 'Proposal Terkunci'
-              : !canUpdate
-                ? 'Akses Edit Dinonaktifkan'
-                : 'Edit Data KPM'
+              : isOffline
+                ? 'Mode Read-Only (Offline)'
+                : !canUpdate
+                  ? 'Akses Edit Dinonaktifkan'
+                  : 'Edit Data KPM'
           }
           className={`pointer-events-auto inline-flex h-[52px] w-[52px] items-center justify-center rounded-full shadow-lg transition-all active:scale-95 ${
-            isProposalLocked || !canUpdate
+            isProposalLocked || !canUpdate || isOffline
               ? 'cursor-not-allowed border border-slate-300 bg-slate-200 text-slate-500 shadow-slate-900/10'
               : 'bg-teal-700 text-white shadow-teal-900/25 hover:bg-teal-800'
           }`}
         >
-          {isProposalLocked || !canUpdate ? (
+          {isProposalLocked || !canUpdate || isOffline ? (
             <Lock className="h-[22px] w-[22px]" />
           ) : (
             <Pencil className="h-[22px] w-[22px]" />
@@ -2309,9 +2342,9 @@ export function KpmDetailView({
 
                 <button
                   type="button"
-                  disabled={!shareRecipientId || sharingChat}
+                  disabled={!shareRecipientId || sharingChat || isOffline}
                   onClick={handleConfirmShare}
-                  className="inline-flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-60"
+                  className="inline-flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Send className="h-4 w-4" />
                   <span>{sharingChat ? 'Mengirim...' : 'Kirim Kartu ke Chat'}</span>
@@ -2323,7 +2356,7 @@ export function KpmDetailView({
       )}
 
       {/* Confirmation Modal for Deleting KPM Photo from Drive + Supabase */}
-      {pendingDeleteDoc && (
+      {pendingDeleteDoc && !isOffline && (
         <div
           className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-4 backdrop-blur-xs sm:items-center"
           onClick={() => !docBusySlot && setPendingDeleteDoc(null)}
@@ -2358,7 +2391,7 @@ export function KpmDetailView({
               </button>
               <button
                 type="button"
-                disabled={Boolean(docBusySlot)}
+                disabled={Boolean(docBusySlot) || isOffline}
                 onClick={() => void handleConfirmDeleteDocument()}
                 className="inline-flex min-h-[42px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-rose-600 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
               >
@@ -2376,7 +2409,7 @@ export function KpmDetailView({
 
       {/* 2-Step Confirmation Modal for Deleting KPM Record */}
       <SlotHandlingConfirmModal
-        isOpen={Boolean(confirmDelete && canDelete && !isProposalLocked)}
+        isOpen={Boolean(confirmDelete && canDelete && !isProposalLocked && !isOffline)}
         actionType="delete"
         kpmName={record.nama}
         registerCode={record.registerCode}
@@ -2393,7 +2426,7 @@ export function KpmDetailView({
       {/* Digital Signature & GPS Modal for BAST */}
       {onSaveBast && (
         <SignaturePadModal
-          isOpen={isSignatureOpen}
+          isOpen={isSignatureOpen && !isOffline}
           defaultRecipientName={record.nama}
           registerCode={record.registerCode}
           onClose={() => setIsSignatureOpen(false)}
@@ -2410,7 +2443,7 @@ export function KpmDetailView({
 
       {/* Proposal Picker Modal when accepting standalone KPM */}
       <ProposalPickerModal
-        isOpen={isProposalPickerOpen}
+        isOpen={isProposalPickerOpen && !isOffline}
         title="Pilih Proposal untuk KPM Diterima"
         subtitle={`Menyetujui "${record.nama}" menjadi Diterima mewajibkan pemilihan proposal aktif (Murni / Perubahan).`}
         confirmLabel="Terima & Masukkan"
@@ -2611,18 +2644,20 @@ export function KpmDetailView({
                     <div className="flex items-center gap-1">
                       <button
                         type="button"
+                        disabled={isOffline}
                         onClick={() => kuponKalbarInputRef.current?.click()}
-                        className="flex-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[10px] font-semibold text-teal-800 hover:bg-teal-100"
+                        className="flex-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[10px] font-semibold text-teal-800 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {couponDraft.logoKalbarUrl ? 'Ganti' : 'Unggah'}
                       </button>
                       {couponDraft.logoKalbarUrl && (
                         <button
                           type="button"
+                          disabled={isOffline}
                           onClick={() =>
                             setCouponDraft((prev) => ({ ...prev, logoKalbarUrl: '' }))
                           }
-                          className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700 hover:bg-rose-100"
+                          className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           Hapus
                         </button>
@@ -2650,18 +2685,20 @@ export function KpmDetailView({
                     <div className="flex items-center gap-1">
                       <button
                         type="button"
+                        disabled={isOffline}
                         onClick={() => kuponGerindraInputRef.current?.click()}
-                        className="flex-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[10px] font-semibold text-teal-800 hover:bg-teal-100"
+                        className="flex-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[10px] font-semibold text-teal-800 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {couponDraft.logoGerindraUrl ? 'Ganti' : 'Unggah'}
                       </button>
                       {couponDraft.logoGerindraUrl && (
                         <button
                           type="button"
+                          disabled={isOffline}
                           onClick={() =>
                             setCouponDraft((prev) => ({ ...prev, logoGerindraUrl: '' }))
                           }
-                          className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700 hover:bg-rose-100"
+                          className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           Hapus
                         </button>
@@ -2676,11 +2713,15 @@ export function KpmDetailView({
               <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
                 <input
                   type="checkbox"
-                  checked={saveCouponDefault}
+                  disabled={isOffline}
+                  checked={saveCouponDefault && !isOffline}
                   onChange={(e) => setSaveCouponDefault(e.target.checked)}
-                  className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-600"
+                  className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-600 disabled:cursor-not-allowed disabled:opacity-50"
                 />
-                <span>Simpan jadwal &amp; lokasi ini sebagai pengaturan default</span>
+                <span>
+                  Simpan jadwal &amp; lokasi ini sebagai pengaturan default
+                  {isOffline ? ' (nonaktif saat offline)' : ''}
+                </span>
               </label>
             )}
 
@@ -2935,14 +2976,16 @@ export function KpmDetailView({
               <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
                 <input
                   type="checkbox"
-                  checked={saveBastDefault}
+                  disabled={isOffline}
+                  checked={saveBastDefault && !isOffline}
                   onChange={(e) => setSaveBastDefault(e.target.checked)}
-                  className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-600"
+                  className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-600 disabled:cursor-not-allowed disabled:opacity-50"
                 />
                 <span>
                   {matchingProposal && onSaveProposalBastConfig
                     ? `Simpan perubahan ini untuk Proposal "${matchingProposal.namaProposal}"`
                     : 'Simpan perubahan ini sebagai template BAST default'}
+                  {isOffline ? ' (nonaktif saat offline)' : ''}
                 </span>
               </label>
             ) : null}
@@ -3163,11 +3206,15 @@ export function KpmDetailView({
               <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
                 <input
                   type="checkbox"
-                  checked={saveSptjmDefault}
+                  disabled={isOffline}
+                  checked={saveSptjmDefault && !isOffline}
                   onChange={(e) => setSaveSptjmDefault(e.target.checked)}
-                  className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-600"
+                  className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-600 disabled:cursor-not-allowed disabled:opacity-50"
                 />
-                <span>Simpan perubahan ini sebagai template SPTJM default</span>
+                <span>
+                  Simpan perubahan ini sebagai template SPTJM default
+                  {isOffline ? ' (nonaktif saat offline)' : ''}
+                </span>
               </label>
             ) : null}
 
@@ -3192,7 +3239,7 @@ export function KpmDetailView({
 
       {/* 2-Step Confirmation Modal when detaching KPM from an active proposal */}
       <SlotHandlingConfirmModal
-        isOpen={Boolean(pendingStatusConfirm)}
+        isOpen={Boolean(pendingStatusConfirm && !isOffline)}
         actionType="move"
         kpmName={record.nama}
         registerCode={record.registerCode}

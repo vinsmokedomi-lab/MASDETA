@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { AppNotificationItem, InternalUser } from '../types/kpm';
 import { formatUploadDateTime } from '../utils/imageProcessor';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 interface NotificationPageViewProps {
   currentUser: InternalUser;
@@ -37,6 +38,7 @@ export function NotificationPageView({
   onOpenUserApproval,
   onOpenProposalList,
 }: NotificationPageViewProps) {
+  const { isOffline } = useOfflineStatus();
   const visibleNotifications = useMemo(
     () =>
       appNotifications.filter(
@@ -79,8 +81,9 @@ export function NotificationPageView({
             {unreadAppNotifCount > 0 && (
               <button
                 type="button"
+                disabled={isOffline}
                 onClick={onMarkNotificationsRead}
-                className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+                className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <CheckCheck className="h-4 w-4 text-teal-700" />
                 <span>Tandai Semua Dibaca</span>
@@ -89,8 +92,9 @@ export function NotificationPageView({
             {hasAnyItem && (
               <button
                 type="button"
+                disabled={isOffline}
                 onClick={onClearNotifications}
-                className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3.5 text-xs font-semibold text-rose-700 transition-colors hover:bg-rose-100"
+                className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3.5 text-xs font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Trash2 className="h-4 w-4" />
                 <span>Bersihkan Notifikasi</span>
@@ -253,9 +257,10 @@ export function NotificationPageView({
 
                     <button
                       type="button"
+                      disabled={isOffline}
                       onClick={() => onDismissNotification(notif.id)}
                       aria-label="Hapus notifikasi"
-                      className="mt-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                      className="mt-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       <X className="h-4 w-4" />
                     </button>

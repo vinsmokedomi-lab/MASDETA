@@ -44,6 +44,7 @@ import { formatScheduleIndonesianDate } from '../utils/pdfExporter';
 import { useIsDesktopWeb } from '../utils/platform';
 import { DriveImage } from './DriveImage';
 import { PresenceDot } from './PresenceDot';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 interface DashboardViewProps {
   logo: React.ReactNode;
@@ -430,6 +431,7 @@ export function DashboardView({
       ? bellHasUnread
       : unreadChatCount > 0 || unreadAppNotifCount > 0;
 
+  const { isOffline } = useOfflineStatus();
   const isDesktopWeb = useIsDesktopWeb();
   const acceptedPct =
     kpmStats.total > 0 ? Math.round((kpmStats.accepted / kpmStats.total) * 100) : 0;
@@ -1368,8 +1370,10 @@ export function DashboardView({
               {onOpenAddProposal && (
                 <button
                   type="button"
+                  disabled={isOffline}
                   onClick={onOpenAddProposal}
-                  className="mt-3 inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-[#0F766E] px-4 text-xs font-semibold text-white hover:bg-teal-800"
+                  title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Tambah Proposal'}
+                  className="mt-3 inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-[#0F766E] px-4 text-xs font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
                 >
                   <FolderPlus className="h-3.5 w-3.5" />
                   <span>Tambah Proposal</span>

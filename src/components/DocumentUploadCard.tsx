@@ -24,6 +24,7 @@ import {
   removeDocumentFromDrive,
   uploadImageDocumentToDrive,
 } from '../utils/imageProcessor';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 interface DocumentUploadCardProps {
   id: string;
@@ -62,10 +63,12 @@ export function DocumentUploadCard({
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
+  const { isOffline } = useOfflineStatus();
+  const effectiveDisabled = disabled || isOffline;
   const activeError = localError || error;
 
   const handleFile = async (file?: File) => {
-    if (!file || disabled || isProcessing) return;
+    if (!file || effectiveDisabled || isProcessing) return;
     setLocalError(null);
     setConfirmDeleteOpen(false);
     setStatusLabel(
@@ -89,7 +92,7 @@ export function DocumentUploadCard({
   };
 
   const handleConfirmDelete = async () => {
-    if (!value || disabled || isProcessing) return;
+    if (!value || effectiveDisabled || isProcessing) return;
     setLocalError(null);
     setStatusLabel('Menghapus foto dari Google Drive...');
     setIsProcessing(true);
@@ -113,7 +116,7 @@ export function DocumentUploadCard({
 
   const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
-    if (!disabled) setIsDragging(true);
+    if (!effectiveDisabled) setIsDragging(true);
   };
 
   const handleDragLeave = (e: DragEvent<HTMLDivElement>) => {
@@ -124,7 +127,7 @@ export function DocumentUploadCard({
   const handleDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setIsDragging(false);
-    if (disabled) return;
+    if (effectiveDisabled) return;
     const file = e.dataTransfer.files?.[0];
     void handleFile(file);
   };
@@ -240,7 +243,7 @@ export function DocumentUploadCard({
             </div>
           </div>
 
-          {!disabled && (
+          {!effectiveDisabled && (
             <div className="border-t border-slate-100 bg-slate-50/70 px-3 py-2">
               {confirmDeleteOpen ? (
                 <div className="flex flex-col gap-2 rounded-xl border border-rose-200 bg-rose-50 p-2.5">
@@ -314,7 +317,7 @@ export function DocumentUploadCard({
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           className={`rounded-2xl border-2 border-dashed p-4 transition-colors ${
-            disabled
+            effectiveDisabled
               ? 'border-slate-200 bg-slate-100/70 opacity-75'
               : isDragging
                 ? 'border-teal-600 bg-teal-50/60'
@@ -339,11 +342,13 @@ export function DocumentUploadCard({
             </div>
 
             <p className="text-xs font-medium text-slate-700">
-              {disabled
-                ? 'Proposal terkunci — unggahan dinonaktifkan'
-                : isProcessing
-                  ? statusLabel
-                  : helperText}
+              {isOffline
+                ? 'Mode Read-Only (Offline) — unggahan dinonaktifkan'
+                : disabled
+                  ? 'Proposal terkunci — unggahan dinonaktifkan'
+                  : isProcessing
+                    ? statusLabel
+                    : helperText}
             </p>
             <p className="mt-0.5 text-[11px] text-slate-500">
               Format JPG, PNG, WebP · Maks 15 MB
@@ -352,7 +357,7 @@ export function DocumentUploadCard({
             <div className="mt-3.5 grid w-full grid-cols-2 gap-2">
               <button
                 type="button"
-                disabled={isProcessing || disabled}
+                disabled={isProcessing || effectiveDisabled}
                 onClick={() => cameraInputRef.current?.click()}
                 className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-700 whitespace-nowrap"
               >
@@ -362,7 +367,7 @@ export function DocumentUploadCard({
 
               <button
                 type="button"
-                disabled={isProcessing || disabled}
+                disabled={isProcessing || effectiveDisabled}
                 onClick={() => fileInputRef.current?.click()}
                 className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-700 whitespace-nowrap"
               >

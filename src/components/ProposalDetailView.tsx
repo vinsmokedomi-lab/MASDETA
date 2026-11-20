@@ -71,6 +71,7 @@ import {
 } from '../utils/pdfExporter';
 import { DriveImage } from './DriveImage';
 import { isNativeAppPlatform, useIsDesktopWeb } from '../utils/platform';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 interface ProposalDetailViewProps {
   proposal: ProposalRecord;
@@ -131,6 +132,7 @@ export function ProposalDetailView({
   onPreviewDocument,
   onUpdateProposalDocuments,
 }: ProposalDetailViewProps) {
+  const { isOffline } = useOfflineStatus();
   const isNativeApp = isNativeAppPlatform();
   const isDesktopWeb = useIsDesktopWeb();
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
@@ -201,13 +203,13 @@ export function ProposalDetailView({
   };
 
   const handleSaveProposalBastOnly = () => {
-    if (!onSaveProposalBastConfig) return;
+    if (!onSaveProposalBastConfig || isOffline) return;
     onSaveProposalBastConfig(proposal.id, bastDraft);
     setIsBastModalOpen(false);
   };
 
   const handleResetProposalBastToDefault = () => {
-    if (!onSaveProposalBastConfig) return;
+    if (!onSaveProposalBastConfig || isOffline) return;
     onSaveProposalBastConfig(proposal.id, null);
     const defaultResolved = resolveEffectiveBastConfig(
       bastTemplate,
@@ -689,7 +691,7 @@ export function ProposalDetailView({
     accept: string,
     existingDoc?: KpmDocumentFile
   ) => {
-    if (proposal.status === 'locked' || !canUpdate || !onUpdateProposalDocuments || docBusySlot) {
+    if (isOffline || proposal.status === 'locked' || !canUpdate || !onUpdateProposalDocuments || docBusySlot) {
       return;
     }
     setDocError(null);
@@ -923,8 +925,10 @@ export function ProposalDetailView({
               {proposal.status !== 'locked' && canAdd && (
                 <button
                   type="button"
+                  disabled={isOffline}
                   onClick={() => onAddKpmInProposal(proposal.namaProposal, proposal.tahun)}
-                  className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white transition-colors hover:bg-teal-800 whitespace-nowrap"
+                  title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Tambah KPM'}
+                  className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white transition-colors hover:bg-teal-800 whitespace-nowrap disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
                 >
                   <UserPlus className="h-4 w-4" />
                   <span>Tambah KPM</span>
@@ -956,10 +960,11 @@ export function ProposalDetailView({
                 {proposal.status !== 'locked' && canUpdate && onTransferKpm && (
                   <button
                     type="button"
+                    disabled={isOffline}
                     onClick={openTransferModal}
                     aria-label="Transfer KPM ke Proposal Lain"
-                    title="Transfer KPM ke Proposal Lain"
-                    className="inline-flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-teal-700 transition-colors hover:bg-slate-100 active:scale-[0.98]"
+                    title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Transfer KPM ke Proposal Lain'}
+                    className="inline-flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-teal-700 transition-colors hover:bg-slate-100 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                   >
                     <ArrowRightLeft className="h-4 w-4" />
                   </button>
@@ -1150,10 +1155,12 @@ export function ProposalDetailView({
             {onSaveProposalBastConfig && canUpdate && (
               <button
                 type="button"
+                disabled={isOffline}
                 onClick={openProposalBastModal}
-                className="inline-flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Setting BAST Proposal'}
+                className="inline-flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
               >
-                <SlidersHorizontal className="h-3.5 w-3.5 text-teal-700" />
+                <SlidersHorizontal className={`h-3.5 w-3.5 ${isOffline ? 'text-slate-400' : 'text-teal-700'}`} />
                 <span>Setting BAST Proposal</span>
               </button>
             )}
@@ -1491,18 +1498,19 @@ export function ProposalDetailView({
                             <>
                               <button
                                 type="button"
-                                disabled={Boolean(docBusySlot)}
+                                disabled={Boolean(docBusySlot) || isOffline}
                                 onClick={() =>
                                   handleTriggerDocUpload(slot.key, slot.label, slot.accept, doc)
                                 }
-                                className="inline-flex min-h-[30px] flex-1 items-center justify-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                                title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Ganti berkas'}
+                                className="inline-flex min-h-[30px] flex-1 items-center justify-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                               >
                                 <Upload className="h-3 w-3" />
                                 <span>Ganti</span>
                               </button>
                               <button
                                 type="button"
-                                disabled={Boolean(docBusySlot)}
+                                disabled={Boolean(docBusySlot) || isOffline}
                                 onClick={() =>
                                   setPendingDeleteDoc({
                                     key: slot.key,
@@ -1511,8 +1519,8 @@ export function ProposalDetailView({
                                   })
                                 }
                                 aria-label={`Hapus ${slot.label}`}
-                                title="Hapus Berkas"
-                                className="inline-flex min-h-[30px] items-center justify-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                                title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Hapus Berkas'}
+                                className="inline-flex min-h-[30px] items-center justify-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                               >
                                 <Trash2 className="h-3 w-3" />
                                 <span>Hapus</span>
@@ -1640,8 +1648,10 @@ export function ProposalDetailView({
         {proposal.status !== 'locked' && canAdd && (
           <button
             type="button"
+            disabled={isOffline}
             onClick={() => onAddKpmInProposal(proposal.namaProposal, proposal.tahun)}
-            className="inline-flex min-h-[38px] shrink-0 items-center gap-1.5 rounded-xl bg-teal-700 px-3.5 text-xs font-semibold text-white transition-colors hover:bg-teal-800"
+            title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Tambah KPM'}
+            className="inline-flex min-h-[38px] shrink-0 items-center gap-1.5 rounded-xl bg-teal-700 px-3.5 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
           >
             <UserPlus className="h-3.5 w-3.5" />
             <span>Tambah KPM</span>
@@ -1827,10 +1837,15 @@ export function ProposalDetailView({
         >
           <button
             type="button"
+            disabled={isOffline}
             onClick={() => onEditProposal(proposal.id)}
-            aria-label="Edit Proposal"
-            title="Edit Proposal"
-            className="pointer-events-auto inline-flex h-[52px] w-[52px] items-center justify-center rounded-full bg-teal-700 text-white shadow-lg shadow-teal-900/25 transition-all hover:bg-teal-800 active:scale-95"
+            aria-label={isOffline ? 'Mode Offline (Hanya Baca)' : 'Edit Proposal'}
+            title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Edit Proposal'}
+            className={`pointer-events-auto inline-flex h-[52px] w-[52px] items-center justify-center rounded-full shadow-lg transition-all active:scale-95 ${
+              isOffline
+                ? 'cursor-not-allowed border border-slate-300 bg-slate-200 text-slate-400 shadow-slate-900/10'
+                : 'bg-teal-700 text-white shadow-teal-900/25 hover:bg-teal-800'
+            }`}
           >
             <Pencil className="h-[22px] w-[22px]" />
           </button>
@@ -2443,8 +2458,9 @@ export function ProposalDetailView({
               {hasCustomProposalBast && onSaveProposalBastConfig && (
                 <button
                   type="button"
+                  disabled={isOffline}
                   onClick={handleResetProposalBastToDefault}
-                  className="inline-flex min-h-[40px] items-center justify-center gap-1 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                  className="inline-flex min-h-[40px] items-center justify-center gap-1 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                   <span>Reset Default</span>
@@ -2452,8 +2468,9 @@ export function ProposalDetailView({
               )}
               <button
                 type="button"
+                disabled={isOffline}
                 onClick={handleSaveProposalBastOnly}
-                className="inline-flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-xl border border-teal-600 bg-white px-3 text-xs font-semibold text-teal-700 hover:bg-teal-50"
+                className="inline-flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-xl border border-teal-600 bg-white px-3 text-xs font-semibold text-teal-700 hover:bg-teal-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
               >
                 <Check className="h-3.5 w-3.5" />
                 <span>Simpan Info BAST</span>
@@ -2461,13 +2478,13 @@ export function ProposalDetailView({
               {proposalRecords.length > 0 && (
                 <button
                   type="button"
-                  disabled={bastBusy}
+                  disabled={bastBusy || isOffline}
                   onClick={() => {
                     onSaveProposalBastConfig?.(proposal.id, bastDraft);
                     setIsBastModalOpen(false);
                     void handleExportProposalBast(bastDraft);
                   }}
-                  className="inline-flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
+                  className="inline-flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Download className="h-3.5 w-3.5" />
                   <span>Simpan &amp; Cetak ({proposalRecords.length})</span>

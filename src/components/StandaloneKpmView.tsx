@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Archive,
@@ -37,6 +37,7 @@ import { useIsDesktopWeb } from '../utils/platform';
 import { DriveImage } from './DriveImage';
 import { FilterSelect } from './FormControls';
 import { ProposalPickerModal } from './ProposalPickerModal';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 export type StandaloneMode = 'database' | 'arsip';
 
@@ -80,6 +81,7 @@ export function StandaloneKpmView({
   onBulkAssignToProposal,
   onBulkPermanentDelete,
 }: StandaloneKpmViewProps) {
+  const { isOffline } = useOfflineStatus();
   const isDesktopWeb = useIsDesktopWeb();
   const isNativeApp = !isDesktopWeb;
 
@@ -105,6 +107,15 @@ export function StandaloneKpmView({
     | null
   >(null);
   const [isBusy, setIsBusy] = useState(false);
+
+  useEffect(() => {
+    if (isOffline && selectionMode) {
+      setSelectionMode(false);
+      setSelectedIds([]);
+      setPendingConfirm(null);
+      setIsProposalPickerOpen(false);
+    }
+  }, [isOffline, selectionMode]);
 
   // Semua data standalone sesuai mode (tidak terhubung proposal mana pun)
   const modeRecords = useMemo(
@@ -406,9 +417,10 @@ export function StandaloneKpmView({
             {isDatabase && canAdd && onCreateNewStandalone && (
               <button
                 type="button"
+                disabled={isOffline}
                 onClick={onCreateNewStandalone}
                 aria-label="Tambah KPM ke Database"
-                className="inline-flex h-10 items-center gap-1 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 whitespace-nowrap"
+                className="inline-flex h-10 items-center gap-1 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-45"
               >
                 <Plus className="h-4 w-4" />
                 <span>Tambah</span>
@@ -417,11 +429,13 @@ export function StandaloneKpmView({
             {canBulkAct && enrichedRecords.length > 0 && (
               <button
                 type="button"
+                disabled={isOffline}
                 onClick={() => {
+                  if (isOffline) return;
                   setSelectionMode((prev) => !prev);
                   if (selectionMode) setSelectedIds([]);
                 }}
-                className={`inline-flex h-10 items-center gap-1 rounded-xl border px-3 text-xs font-semibold whitespace-nowrap transition-colors ${
+                className={`inline-flex h-10 items-center gap-1 rounded-xl border px-3 text-xs font-semibold whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
                   selectionMode
                     ? 'border-teal-700 bg-teal-50 text-teal-800'
                     : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
@@ -481,11 +495,13 @@ export function StandaloneKpmView({
               {canBulkAct && enrichedRecords.length > 0 && (
                 <button
                   type="button"
+                  disabled={isOffline}
                   onClick={() => {
+                    if (isOffline) return;
                     setSelectionMode((prev) => !prev);
                     if (selectionMode) setSelectedIds([]);
                   }}
-                  className={`inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border px-3.5 text-xs font-semibold whitespace-nowrap transition-colors ${
+                  className={`inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border px-3.5 text-xs font-semibold whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
                     selectionMode
                       ? 'border-teal-700 bg-teal-50 text-teal-800'
                       : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
@@ -499,8 +515,9 @@ export function StandaloneKpmView({
               {isDatabase && canAdd && onCreateNewStandalone && (
                 <button
                   type="button"
+                  disabled={isOffline}
                   onClick={onCreateNewStandalone}
-                  className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-teal-700 px-3.5 text-xs font-semibold text-white transition-colors hover:bg-teal-800 whitespace-nowrap"
+                  className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-teal-700 px-3.5 text-xs font-semibold text-white transition-colors hover:bg-teal-800 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   <Plus className="h-4 w-4" />
                   <span>Input ke Database KPM</span>
@@ -719,8 +736,9 @@ export function StandaloneKpmView({
             {isDatabase && canAdd && onCreateNewStandalone && enrichedRecords.length === 0 && (
               <button
                 type="button"
+                disabled={isOffline}
                 onClick={onCreateNewStandalone}
-                className="mt-4 inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white hover:bg-teal-800"
+                className="mt-4 inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-45"
               >
                 <Plus className="h-4 w-4" />
                 <span>Tambah KPM ke Database</span>
@@ -890,9 +908,9 @@ export function StandaloneKpmView({
                   {canUpdate && onBulkAssignToProposal && (
                     <button
                       type="button"
-                      disabled={isBusy}
+                      disabled={isBusy || isOffline}
                       onClick={() => setIsProposalPickerOpen(true)}
-                      className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-3.5 text-xs font-semibold text-white transition-colors hover:bg-teal-800 whitespace-nowrap disabled:opacity-50"
+                      className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-3.5 text-xs font-semibold text-white transition-colors hover:bg-teal-800 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <FolderPlus className="h-4 w-4 shrink-0" />
                       <span>Masukkan ke Proposal</span>
@@ -902,9 +920,9 @@ export function StandaloneKpmView({
                   {canUpdate && onBulkRejectToArsip && (
                     <button
                       type="button"
-                      disabled={isBusy}
+                      disabled={isBusy || isOffline}
                       onClick={() => setPendingConfirm({ kind: 'reject', ids: selectedIds })}
-                      className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-amber-300 bg-amber-50 px-3.5 text-xs font-semibold text-amber-900 transition-colors hover:bg-amber-100 whitespace-nowrap disabled:opacity-50"
+                      className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-amber-300 bg-amber-50 px-3.5 text-xs font-semibold text-amber-900 transition-colors hover:bg-amber-100 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <Archive className="h-4 w-4 shrink-0" />
                       <span>Tolak ke Arsip</span>
@@ -914,9 +932,9 @@ export function StandaloneKpmView({
                   {canDelete && onBulkPermanentDelete && (
                     <button
                       type="button"
-                      disabled={isBusy}
+                      disabled={isBusy || isOffline}
                       onClick={() => setPendingConfirm({ kind: 'delete', ids: selectedIds })}
-                      className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl bg-rose-600 px-3.5 text-xs font-semibold text-white transition-colors hover:bg-rose-700 whitespace-nowrap disabled:opacity-50"
+                      className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl bg-rose-600 px-3.5 text-xs font-semibold text-white transition-colors hover:bg-rose-700 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <Trash2 className="h-4 w-4 shrink-0" />
                       <span>Hapus Permanen</span>
@@ -928,9 +946,9 @@ export function StandaloneKpmView({
                   {canUpdate && onBulkRecoverToDatabase && (
                     <button
                       type="button"
-                      disabled={isBusy}
+                      disabled={isBusy || isOffline}
                       onClick={() => setPendingConfirm({ kind: 'recover', ids: selectedIds })}
-                      className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-3.5 text-xs font-semibold text-white transition-colors hover:bg-teal-800 whitespace-nowrap disabled:opacity-50"
+                      className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-3.5 text-xs font-semibold text-white transition-colors hover:bg-teal-800 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <RotateCcw className="h-4 w-4 shrink-0" />
                       <span>Pulihkan ke Database KPM</span>
@@ -940,9 +958,9 @@ export function StandaloneKpmView({
                   {canDelete && onBulkPermanentDelete && (
                     <button
                       type="button"
-                      disabled={isBusy}
+                      disabled={isBusy || isOffline}
                       onClick={() => setPendingConfirm({ kind: 'delete', ids: selectedIds })}
-                      className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl bg-rose-600 px-3.5 text-xs font-semibold text-white transition-colors hover:bg-rose-700 whitespace-nowrap disabled:opacity-50"
+                      className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl bg-rose-600 px-3.5 text-xs font-semibold text-white transition-colors hover:bg-rose-700 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <Trash2 className="h-4 w-4 shrink-0" />
                       <span>Hapus Permanen</span>
@@ -1040,9 +1058,9 @@ export function StandaloneKpmView({
               </button>
               <button
                 type="button"
-                disabled={isBusy}
+                disabled={isBusy || isOffline}
                 onClick={() => void executeConfirmedAction()}
-                className={`inline-flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-xl px-4 text-sm font-semibold text-white disabled:opacity-50 ${
+                className={`inline-flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-xl px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 ${
                   pendingConfirm.kind === 'delete'
                     ? 'bg-rose-600 hover:bg-rose-700'
                     : pendingConfirm.kind === 'reject'

@@ -71,6 +71,7 @@ import { SelectionPickerModal, SelectionPickerOption } from './SelectionPickerMo
 import { SlotHandlingConfirmModal } from './SlotHandlingConfirmModal';
 import { PlaceholderSelect } from './FormControls';
 import { useIsDesktopWeb } from '../utils/platform';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 interface KpmRegistrationFormProps {
   editingRecord: KpmRecord | null;
@@ -142,6 +143,7 @@ export function KpmRegistrationForm({
 }: KpmRegistrationFormProps) {
   const isDesktopWeb = useIsDesktopWeb();
   const isNativeApp = !isDesktopWeb;
+  const { isOffline } = useOfflineStatus();
   const isProposalScopeLocked = Boolean(lockedProposalScope && !editingRecord);
 
   const buildInitialFormValues = (): KpmFormValues => {
@@ -481,6 +483,20 @@ export function KpmRegistrationForm({
     return recProp?.status === 'locked';
   }, [editingRecord, proposals]);
 
+  const isFormReadOnly = editingProposalLocked || isOffline;
+
+  useEffect(() => {
+    if (isOffline) {
+      setIsTahunModalOpen(false);
+      setIsProposalModalOpen(false);
+      setIsPekerjaanModalOpen(false);
+      setIsItemModalOpen(false);
+      setIsPengelolaModalOpen(false);
+      setIsDtsenModalOpen(false);
+      setPendingEditMovePayload(null);
+    }
+  }, [isOffline]);
+
   const isStandaloneMode = values.validasi === 'pending' || values.validasi === 'rejected';
 
   const availableEmptySlots = useMemo(() => {
@@ -553,7 +569,7 @@ export function KpmRegistrationForm({
   };
 
   const handleStatusRoutingChange = (nextStatus: ValidationStatus) => {
-    if (isProposalScopeLocked && nextStatus !== 'accepted') return;
+    if (isFormReadOnly || (isProposalScopeLocked && nextStatus !== 'accepted')) return;
     if (!targetSlot && nextStatus !== 'accepted') {
       setSelectedEmptySlotNo(null);
     }
@@ -591,6 +607,7 @@ export function KpmRegistrationForm({
   };
 
   const handleYearChange = (nextYear: string) => {
+    if (isFormReadOnly) return;
     if (!targetSlot) setSelectedEmptySlotNo(null);
     setValues((prev) => {
       const keepProposal =
@@ -623,6 +640,7 @@ export function KpmRegistrationForm({
   };
 
   const handleProposalChange = (nextProposal: string) => {
+    if (isFormReadOnly) return;
     if (nextProposal === '__new_proposal__') {
       onOpenAddProposal();
       return;
@@ -821,7 +839,7 @@ export function KpmRegistrationForm({
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (editingProposalLocked || isSubmitting) return;
+    if (isFormReadOnly || isSubmitting) return;
     const validationErrors = validate();
     if (Object.keys(validationErrors).length > 0) {
       setErrors(validationErrors);
@@ -932,7 +950,7 @@ export function KpmRegistrationForm({
   const handleScanKtpKk = async () => {
     const ktpDoc = values.documents.ktp;
     const kkDoc = values.documents.kk;
-    if (!ktpDoc || !kkDoc || isScanningDocs || editingProposalLocked) return;
+    if (!ktpDoc || !kkDoc || isScanningDocs || isFormReadOnly) return;
 
     setIsScanningDocs(true);
     setScanError(null);
@@ -1098,6 +1116,21 @@ export function KpmRegistrationForm({
             </div>
           )}
 
+          {isOffline && (
+            <div
+              role="alert"
+              className="flex items-start gap-2.5 rounded-2xl border border-amber-300 bg-amber-50 px-3.5 py-3 text-xs text-amber-950"
+            >
+              <Lock className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+              <div>
+                <p className="font-semibold">Mode Read-Only (Offline)</p>
+                <p className="mt-0.5 text-amber-800 leading-relaxed">
+                  Koneksi internet terputus. Formulir hanya dapat dilihat dalam mode baca dan tidak dapat disimpan.
+                </p>
+              </div>
+            </div>
+          )}
+
           {editingProposalLocked && (
             <div
               role="alert"
@@ -1181,7 +1214,7 @@ export function KpmRegistrationForm({
                       <button
                         key={opt.key}
                         type="button"
-                        disabled={editingProposalLocked || (isProposalScopeLocked && opt.key !== 'accepted')}
+                        disabled={isFormReadOnly || (isProposalScopeLocked && opt.key !== 'accepted')}
                         onClick={() => handleStatusRoutingChange(opt.key)}
                         className={`min-h-[40px] rounded-lg px-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                           active ? activeTone : 'text-slate-600 hover:text-slate-900'
@@ -1212,7 +1245,7 @@ export function KpmRegistrationForm({
                     <button
                       type="button"
                       id="input-tahun"
-                      disabled={editingProposalLocked || isProposalScopeLocked}
+                      disabled={isFormReadOnly || isProposalScopeLocked}
                       onClick={() => setIsTahunModalOpen(true)}
                       className={`mt-1.5 flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border bg-white px-3.5 text-left text-sm transition-colors hover:bg-slate-50 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-700 ${
                         errors.tahun ? 'border-rose-400' : 'border-slate-300'
@@ -1236,7 +1269,7 @@ export function KpmRegistrationForm({
                     <button
                       type="button"
                       id="input-proposal"
-                      disabled={editingProposalLocked || isProposalScopeLocked}
+                      disabled={isFormReadOnly || isProposalScopeLocked}
                       onClick={() => setIsProposalModalOpen(true)}
                       className={`mt-1.5 flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border bg-white px-3.5 text-left text-sm transition-colors hover:bg-slate-50 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-700 ${
                         errors.proposal ? 'border-rose-400' : 'border-slate-300'
@@ -1281,6 +1314,7 @@ export function KpmRegistrationForm({
                       </label>
                       <select
                         id="input-empty-slot"
+                        disabled={isFormReadOnly}
                         value={selectedEmptySlotNo ? String(selectedEmptySlotNo) : ''}
                         onChange={(e) => {
                           const nextSlot = e.target.value ? parseInt(e.target.value, 10) : null;
@@ -1294,7 +1328,7 @@ export function KpmRegistrationForm({
                             }
                           }
                         }}
-                        className="mt-1.5 min-h-[42px] w-full rounded-xl border border-amber-300 bg-amber-50/60 px-3 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none"
+                        className="mt-1.5 min-h-[42px] w-full rounded-xl border border-amber-300 bg-amber-50/60 px-3 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         <option value="">Urutan Normal (Tambahkan / Ikuti Hierarki)</option>
                         {availableEmptySlots.map((slot) => (
@@ -1322,9 +1356,10 @@ export function KpmRegistrationForm({
                       <PlaceholderSelect
                         placeholder={`Pilih Kelurahan / Desa di ${values.proposal}`}
                         id="input-kelurahan"
+                        disabled={isFormReadOnly}
                         value={values.kelurahan}
                         onChange={(v) => updateField('kelurahan', v)}
-                        className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                        className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 ${
                           errors.kelurahan ? 'border-rose-400' : 'border-slate-300'
                         }`}
                       >
@@ -1355,6 +1390,7 @@ export function KpmRegistrationForm({
                       <PlaceholderSelect
                         placeholder="Pilih Kabupaten / Kota"
                         id="input-kabkota-standalone"
+                        disabled={isFormReadOnly}
                         value={values.kabKota || standaloneKabKotaOptions[0] || ''}
                         onChange={(v) => {
                           setValues((prev) => ({
@@ -1364,7 +1400,7 @@ export function KpmRegistrationForm({
                             kelurahan: '',
                           }));
                         }}
-                        className="mt-1.5 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3.5 text-sm"
+                        className="mt-1.5 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3.5 text-sm disabled:cursor-not-allowed disabled:bg-slate-100"
                       >
                         {standaloneKabKotaOptions.map((k) => (
                           <option key={k} value={k}>
@@ -1382,6 +1418,7 @@ export function KpmRegistrationForm({
                     <PlaceholderSelect
                       placeholder="Pilih Kecamatan"
                       id="input-kecamatan-standalone"
+                      disabled={isFormReadOnly}
                       value={values.kecamatan || ''}
                       onChange={(v) => {
                         setValues((prev) => ({
@@ -1391,7 +1428,7 @@ export function KpmRegistrationForm({
                         }));
                         setErrors((prev) => ({ ...prev, kecamatan: undefined, kelurahan: undefined }));
                       }}
-                      className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                      className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 ${
                         errors.kecamatan ? 'border-rose-400' : 'border-slate-300'
                       }`}
                     >
@@ -1413,7 +1450,7 @@ export function KpmRegistrationForm({
                     <PlaceholderSelect
                       placeholder={values.kecamatan ? `Pilih Kelurahan / Desa` : 'Pilih Kecamatan terlebih dahulu'}
                       id="input-kelurahan-standalone"
-                      disabled={!values.kecamatan}
+                      disabled={!values.kecamatan || isFormReadOnly}
                       value={values.kelurahan || ''}
                       onChange={(v) => updateField('kelurahan', v)}
                       className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 ${
@@ -1470,11 +1507,12 @@ export function KpmRegistrationForm({
                     pattern="[0-9]*"
                     autoComplete="off"
                     maxLength={16}
+                    disabled={isFormReadOnly}
                     placeholder="16 digit angka Nomor KK"
                     value={values.nikKk}
                     onKeyDown={blockNonNumericKeyDown}
                     onChange={(e) => updateField('nikKk', sanitizeDigits(e.target.value, 16))}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border px-3.5 font-mono text-sm tracking-wide text-slate-900 tabular-nums placeholder:font-sans placeholder:tracking-normal placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border px-3.5 font-mono text-sm tracking-wide text-slate-900 tabular-nums placeholder:font-sans placeholder:tracking-normal placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600 ${
                       errors.nikKk
                         ? 'border-rose-400 bg-white'
                         : scanReport?.blurryFields.includes('nikKk')
@@ -1538,11 +1576,12 @@ export function KpmRegistrationForm({
                     pattern="[0-9]*"
                     autoComplete="off"
                     maxLength={16}
+                    disabled={isFormReadOnly}
                     placeholder="16 digit angka NIK KTP"
                     value={values.nikKtp}
                     onKeyDown={blockNonNumericKeyDown}
                     onChange={(e) => updateField('nikKtp', sanitizeDigits(e.target.value, 16))}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border px-3.5 font-mono text-sm tracking-wide text-slate-900 tabular-nums placeholder:font-sans placeholder:tracking-normal placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border px-3.5 font-mono text-sm tracking-wide text-slate-900 tabular-nums placeholder:font-sans placeholder:tracking-normal placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600 ${
                       errors.nikKtp
                         ? 'border-rose-400 bg-white'
                         : scanReport?.blurryFields.includes('nikKtp')
@@ -1594,10 +1633,11 @@ export function KpmRegistrationForm({
                     id="input-nama"
                     type="text"
                     autoCapitalize="characters"
+                    disabled={isFormReadOnly}
                     placeholder="Sesuai KTP elektronik"
                     value={values.nama}
                     onChange={(e) => updateField('nama', e.target.value.toUpperCase())}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border px-3.5 text-sm uppercase text-slate-900 placeholder:normal-case placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border px-3.5 text-sm uppercase text-slate-900 placeholder:normal-case placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600 ${
                       errors.nama
                         ? 'border-rose-400 bg-white'
                         : scanReport?.blurryFields.includes('nama')
@@ -1619,6 +1659,7 @@ export function KpmRegistrationForm({
                     id="input-alamat"
                     type="text"
                     autoCapitalize="words"
+                    disabled={isFormReadOnly}
                     placeholder="Contoh: Jl. Imam Bonjol Gg. 1 No. 5"
                     value={values.alamat}
                     onChange={(e) => updateField('alamat', formatAlamatLengkap(e.target.value, false))}
@@ -1627,7 +1668,7 @@ export function KpmRegistrationForm({
                         updateField('alamat', formatAlamatLengkap(values.alamat, true));
                       }
                     }}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border px-3.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border px-3.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600 ${
                       errors.alamat
                         ? 'border-rose-400 bg-white'
                         : scanReport?.blurryFields.includes('alamat')
@@ -1656,12 +1697,13 @@ export function KpmRegistrationForm({
                     inputMode="numeric"
                     pattern="[0-9]*"
                     maxLength={3}
+                    disabled={isFormReadOnly}
                     placeholder="001"
                     value={values.rt}
                     onKeyDown={blockNonNumericKeyDown}
                     onChange={(e) => handleRtRwChange('rt', e.target.value)}
                     onBlur={() => handleRtRwBlur('rt')}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border px-3.5 font-mono text-sm text-slate-900 tabular-nums placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border px-3.5 font-mono text-sm text-slate-900 tabular-nums placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600 ${
                       errors.rt
                         ? 'border-rose-400 bg-white'
                         : scanReport?.blurryFields.includes('rt')
@@ -1691,12 +1733,13 @@ export function KpmRegistrationForm({
                     inputMode="numeric"
                     pattern="[0-9]*"
                     maxLength={3}
+                    disabled={isFormReadOnly}
                     placeholder="001"
                     value={values.rw}
                     onKeyDown={blockNonNumericKeyDown}
                     onChange={(e) => handleRtRwChange('rw', e.target.value)}
                     onBlur={() => handleRtRwBlur('rw')}
-                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border px-3.5 font-mono text-sm text-slate-900 tabular-nums placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                    className={`mt-1.5 min-h-[44px] w-full rounded-xl border px-3.5 font-mono text-sm text-slate-900 tabular-nums placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600 ${
                       errors.rw
                         ? 'border-rose-400 bg-white'
                         : scanReport?.blurryFields.includes('rw')
@@ -1718,8 +1761,9 @@ export function KpmRegistrationForm({
                   <button
                     type="button"
                     id="input-pekerjaan"
+                    disabled={isFormReadOnly}
                     onClick={() => setIsPekerjaanModalOpen(true)}
-                    className={`mt-1.5 flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border px-3.5 text-left text-sm transition-colors hover:bg-slate-50 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                    className={`mt-1.5 flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border px-3.5 text-left text-sm transition-colors hover:bg-slate-50 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600 ${
                       errors.pekerjaan
                         ? 'border-rose-400 bg-white'
                         : scanReport?.blurryFields.includes('pekerjaan')
@@ -1752,11 +1796,12 @@ export function KpmRegistrationForm({
                     inputMode="numeric"
                     pattern="[0-9]*"
                     maxLength={15}
+                    disabled={isFormReadOnly}
                     placeholder="08xxxxxxxxxx"
                     value={values.kontak}
                     onKeyDown={blockNonNumericKeyDown}
                     onChange={(e) => updateField('kontak', sanitizeDigits(e.target.value, 15))}
-                    className="mt-1.5 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3.5 font-mono text-sm text-slate-900 tabular-nums placeholder:font-sans placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
+                    className="mt-1.5 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3.5 font-mono text-sm text-slate-900 tabular-nums placeholder:font-sans placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600"
                   />
                 </div>
               </div>
@@ -1783,9 +1828,9 @@ export function KpmRegistrationForm({
                   <button
                     type="button"
                     id="input-item"
-                    disabled={resolvedItemOptions.length === 0}
+                    disabled={resolvedItemOptions.length === 0 || isFormReadOnly}
                     onClick={() => setIsItemModalOpen(true)}
-                    className={`mt-1.5 flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border bg-white px-3.5 text-left text-sm transition-colors hover:bg-slate-50 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-50 ${
+                    className={`mt-1.5 flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border bg-white px-3.5 text-left text-sm transition-colors hover:bg-slate-50 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600 ${
                       errors.item ? 'border-rose-400' : 'border-slate-300'
                     }`}
                   >
@@ -1834,8 +1879,9 @@ export function KpmRegistrationForm({
                   </span>
                   <button
                     type="button"
+                    disabled={isFormReadOnly}
                     onClick={() => setIsPengelolaModalOpen(true)}
-                    className={`mt-1.5 flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border bg-white px-3.5 text-left text-sm transition-colors hover:bg-slate-50 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                    className={`mt-1.5 flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border bg-white px-3.5 text-left text-sm transition-colors hover:bg-slate-50 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600 ${
                       errors.pengelola ? 'border-rose-400' : 'border-slate-300'
                     }`}
                   >
@@ -1871,8 +1917,9 @@ export function KpmRegistrationForm({
                   <button
                     type="button"
                     id="input-dtsen"
+                    disabled={isFormReadOnly}
                     onClick={() => setIsDtsenModalOpen(true)}
-                    className={`mt-1.5 flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border bg-white px-3.5 text-left text-sm transition-colors hover:bg-slate-50 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                    className={`mt-1.5 flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border bg-white px-3.5 text-left text-sm transition-colors hover:bg-slate-50 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600 ${
                       errors.dtsen ? 'border-rose-400' : 'border-slate-300'
                     }`}
                   >
@@ -1921,7 +1968,7 @@ export function KpmRegistrationForm({
                         <button
                           key={opt.key}
                           type="button"
-                          disabled={editingProposalLocked || (isProposalScopeLocked && opt.key !== 'accepted')}
+                          disabled={isFormReadOnly || (isProposalScopeLocked && opt.key !== 'accepted')}
                           onClick={() => handleStatusRoutingChange(opt.key)}
                           className={`min-h-[40px] rounded-lg px-2 text-xs font-semibold transition-colors whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-60 ${
                             active ? activeTone : 'text-slate-600 hover:text-slate-900'
@@ -1960,6 +2007,7 @@ export function KpmRegistrationForm({
                       type="text"
                       inputMode="numeric"
                       pattern="[0-9]*"
+                      disabled={isFormReadOnly}
                       value={values.payment === 0 ? '' : values.payment.toLocaleString('id-ID')}
                       placeholder="0"
                       onKeyDown={blockNonNumericKeyDown}
@@ -1967,7 +2015,7 @@ export function KpmRegistrationForm({
                         const raw = e.target.value.replace(/\D/g, '');
                         updateField('payment', raw ? parseInt(raw, 10) : 0);
                       }}
-                      className="min-h-[44px] w-full rounded-xl border border-slate-300 bg-white pr-3.5 pl-10 font-mono text-sm text-slate-900 tabular-nums placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
+                      className="min-h-[44px] w-full rounded-xl border border-slate-300 bg-white pr-3.5 pl-10 font-mono text-sm text-slate-900 tabular-nums placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600"
                     />
                   </div>
                   <p className="mt-1 text-[11px] text-slate-500">
@@ -1985,10 +2033,11 @@ export function KpmRegistrationForm({
                   <textarea
                     id="input-catatan"
                     rows={2}
+                    disabled={isFormReadOnly}
                     placeholder="Keterangan hasil survei atau kondisi keluarga (jika ada)..."
                     value={values.catatan}
                     onChange={(e) => updateField('catatan', e.target.value)}
-                    className="mt-1.5 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
+                    className="mt-1.5 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600"
                   />
                 </div>
               </div>
@@ -2027,6 +2076,7 @@ export function KpmRegistrationForm({
                 label="Foto KTP"
                 helperText="Foto e-KTP asli dengan NIK terlihat jelas (opsional)"
                 variant="ktp"
+                disabled={isFormReadOnly}
                 value={values.documents.ktp}
                 error={errors.docKtp}
                 onChange={(file) => updateSingleDocument('ktp', file)}
@@ -2040,6 +2090,7 @@ export function KpmRegistrationForm({
                   label="Foto Kartu Keluarga (KK)"
                   helperText="Foto seluruh halaman Kartu Keluarga (opsional)"
                   variant="kk"
+                  disabled={isFormReadOnly}
                   value={values.documents.kk}
                   error={errors.docKk}
                   onChange={(file) => updateSingleDocument('kk', file)}
@@ -2053,7 +2104,7 @@ export function KpmRegistrationForm({
                   <button
                     type="button"
                     onClick={handleScanKtpKk}
-                    disabled={isScanningDocs || editingProposalLocked}
+                    disabled={isScanningDocs || isFormReadOnly}
                     className="flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-slate-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
                   >
                     {isScanningDocs ? (
@@ -2167,6 +2218,7 @@ export function KpmRegistrationForm({
                 label="Foto Penerima"
                 helperText="Foto diri calon penerima bantuan"
                 variant="penerima"
+                disabled={isFormReadOnly}
                 value={values.documents.penerima}
                 onChange={(file) => updateSingleDocument('penerima', file)}
                 onPreview={onPreviewDocument}
@@ -2178,6 +2230,7 @@ export function KpmRegistrationForm({
                   label="Foto Survey"
                   helperText="Foto kegiatan wawancara / survei lapangan"
                   variant="survey"
+                  disabled={isFormReadOnly}
                   value={values.documents.survey}
                   onChange={(file) => updateSingleDocument('survey', file)}
                   onPreview={onPreviewDocument}
@@ -2190,6 +2243,7 @@ export function KpmRegistrationForm({
                   label="Foto Rumah"
                   helperText="Tambahkan foto tampak depan atau kondisi rumah (maks. 3 foto)"
                   maxFiles={3}
+                  disabled={isFormReadOnly}
                   values={values.documents.rumah}
                   onChange={updateRumahDocuments}
                   onPreview={onPreviewDocument}
@@ -2213,6 +2267,7 @@ export function KpmRegistrationForm({
                 label="Foto Lainnya"
                 helperText="Tambahkan satu atau beberapa foto pendukung (maks. 5 foto)"
                 maxFiles={5}
+                disabled={isFormReadOnly}
                 values={values.documents.lainnya}
                 onChange={updateLainnyaDocuments}
                 onPreview={onPreviewDocument}
@@ -2247,7 +2302,7 @@ export function KpmRegistrationForm({
 
             <button
               type="submit"
-              disabled={editingProposalLocked || isSubmitting}
+              disabled={isFormReadOnly || isSubmitting}
               className={`inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-5 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 whitespace-nowrap ${
                 !isNativeApp ? 'md:flex-none md:min-w-[200px]' : ''
               }`}
@@ -2256,6 +2311,11 @@ export function KpmRegistrationForm({
                 <>
                   <Lock className="h-4 w-4" />
                   <span>Terkunci</span>
+                </>
+              ) : isOffline ? (
+                <>
+                  <Lock className="h-4 w-4" />
+                  <span>Mode Read-Only</span>
                 </>
               ) : editingRecord ? (
                 <>

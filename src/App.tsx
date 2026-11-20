@@ -169,6 +169,7 @@ import { ProposalDetailView } from './components/ProposalDetailView';
 import { DocumentLightbox } from './components/DocumentLightbox';
 import { OfflineIndicator } from './components/PWAInstallButton';
 import { useOnlineStatus } from './hooks/usePWAInstall';
+import { OfflineProvider } from './contexts/OfflineContext';
 import { BottomNavBar, MainTab, QuickAddSheet } from './components/BottomNavBar';
 import { DashboardView } from './components/DashboardView';
 import { KpmListView } from './components/KpmListView';
@@ -663,6 +664,8 @@ export default function App() {
     isOnlineRef.current = isOnline;
     if (isOnline) {
       window.dispatchEvent(new CustomEvent('masdeta-network-online'));
+    } else {
+      setIsQuickAddOpen(false);
     }
   }, [isOnline]);
 
@@ -1086,6 +1089,13 @@ export default function App() {
 
   const requirePermission = useCallback(
     (perm: keyof UserPermissions, actionLabel: string): boolean => {
+      if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+        setFeedback({
+          type: 'error',
+          message: 'Mode Offline (Read-Only): Perubahan data dinonaktifkan sampai koneksi kembali aktif.',
+        });
+        return false;
+      }
       if (hasPermission(perm)) return true;
       const permLabel = perm === 'add' ? 'ADD' : perm === 'update' ? 'UPDATE' : 'DELETE';
       setFeedback({
@@ -1898,6 +1908,11 @@ export default function App() {
     let cancelled = false;
 
     async function bootstrapSession() {
+      if (!isOnline || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+        setIsOperationalLoading(false);
+        setAuthReady(true);
+        return;
+      }
       let useSupabase = false;
       if (isSupabaseConfigured) {
         const check = await checkSupabaseSchemaReady();
@@ -2009,7 +2024,7 @@ export default function App() {
       }
 
       if (!sessionToken) {
-        if (sessionUserId) {
+        if (sessionUserId && isOnlineRef.current && (typeof navigator === 'undefined' || navigator.onLine)) {
           clearSessionState();
         }
         setIsOperationalLoading(false);
@@ -2066,6 +2081,7 @@ export default function App() {
     loadOrBootstrapOperationalData,
     sessionUserId,
     seedChatNotificationBaseline,
+    isOnline,
   ]);
 
   const handleMarkChatRead = useCallback(
@@ -4818,6 +4834,7 @@ export default function App() {
     kpmId: string,
     nextDocuments: KpmDocuments
   ) => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) return;
     const target = records.find((r) => r.id === kpmId);
     if (!target) return;
     const now = new Date().toISOString();
@@ -4846,6 +4863,7 @@ export default function App() {
     documents: ProposalDocuments,
     checklist: ProposalChecklist
   ) => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) return;
     const target = proposals.find((p) => p.id === proposalId);
     if (!target) return;
     const updatedProposal: ProposalRecord = {
@@ -6102,6 +6120,13 @@ export default function App() {
   };
 
   const handleRestoreTrashItem = (trashId: string) => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      setFeedback({
+        type: 'error',
+        message: 'Mode Offline (Read-Only): Perubahan data dinonaktifkan sampai koneksi kembali aktif.',
+      });
+      return;
+    }
     if (!currentUser || currentUser.role !== 'SuperAdmin') {
       setFeedback({
         type: 'error',
@@ -6234,6 +6259,13 @@ export default function App() {
   };
 
   const handlePermanentDeleteTrashItem = (trashId: string) => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      setFeedback({
+        type: 'error',
+        message: 'Mode Offline (Read-Only): Perubahan data dinonaktifkan sampai koneksi kembali aktif.',
+      });
+      return;
+    }
     if (!currentUser || currentUser.role !== 'SuperAdmin') {
       setFeedback({
         type: 'error',
@@ -6286,6 +6318,13 @@ export default function App() {
     location?: string;
     notes?: string;
   }) => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      setFeedback({
+        type: 'error',
+        message: 'Mode Offline (Read-Only): Perubahan jadwal dinonaktifkan sampai koneksi kembali aktif.',
+      });
+      return;
+    }
     const resolvedTitle =
       payload.title.trim() || SCHEDULE_CATEGORY_LABELS[payload.category] || 'Agenda Lainnya';
     const newItem: ScheduleEventItem = {
@@ -6330,6 +6369,13 @@ export default function App() {
       notes?: string;
     }
   ) => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      setFeedback({
+        type: 'error',
+        message: 'Mode Offline (Read-Only): Perubahan jadwal dinonaktifkan sampai koneksi kembali aktif.',
+      });
+      return;
+    }
     const resolvedTitle =
       payload.title.trim() || SCHEDULE_CATEGORY_LABELS[payload.category] || 'Agenda Lainnya';
     let updatedItem: ScheduleEventItem | null = null;
@@ -6366,6 +6412,7 @@ export default function App() {
   };
 
   const handleToggleSchedule = (id: string) => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) return;
     const now = new Date().toISOString();
     let toggledItem: ScheduleEventItem | null = null;
     const next = schedules.map((s) => {
@@ -6384,12 +6431,20 @@ export default function App() {
   };
 
   const handleDeleteSchedule = (id: string) => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) return;
     const next = schedules.filter((s) => s.id !== id);
     setSchedules(next);
     void deleteScheduleFromSupabase(id, next);
   };
 
   const handleSaveReportTemplate = (next: ReportTemplateConfig) => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      setFeedback({
+        type: 'error',
+        message: 'Mode Offline (Read-Only): Template tidak dapat disimpan saat offline.',
+      });
+      return;
+    }
     setReportTemplate(next);
     void saveDocumentTemplateInSupabase('report', 'masdeta_report_template_v1', next);
     setFeedback({
@@ -6399,6 +6454,13 @@ export default function App() {
   };
 
   const handleSaveCouponConfig = (next: CouponPrintConfig) => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      setFeedback({
+        type: 'error',
+        message: 'Mode Offline (Read-Only): Pengaturan tidak dapat disimpan saat offline.',
+      });
+      return;
+    }
     setCouponConfig(next);
     void saveDocumentTemplateInSupabase('kupon', 'masdeta_coupon_config_v1', next);
     setFeedback({
@@ -6408,6 +6470,13 @@ export default function App() {
   };
 
   const handleSaveBastTemplate = (next: BastTemplateConfig) => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      setFeedback({
+        type: 'error',
+        message: 'Mode Offline (Read-Only): Template tidak dapat disimpan saat offline.',
+      });
+      return;
+    }
     const normalized: BastTemplateConfig = {
       ...next,
       pejabatNip: normalizePejabatNipNumber(next.pejabatNip).trim(),
@@ -6421,6 +6490,13 @@ export default function App() {
   };
 
   const handleSaveSptjmTemplate = (next: SptjmTemplateConfig) => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      setFeedback({
+        type: 'error',
+        message: 'Mode Offline (Read-Only): Template tidak dapat disimpan saat offline.',
+      });
+      return;
+    }
     const normalized: SptjmTemplateConfig = {
       ...next,
       pejabatNip: normalizePejabatNipNumber(next.pejabatNip).trim(),
@@ -6434,6 +6510,13 @@ export default function App() {
   };
 
   const handleSavePejabatList = (next: PejabatProfile[]) => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      setFeedback({
+        type: 'error',
+        message: 'Mode Offline (Read-Only): Daftar pejabat tidak dapat diubah saat offline.',
+      });
+      return;
+    }
     const normalized = next.map((p) => ({
       ...p,
       nama: p.nama.trim(),
@@ -6453,6 +6536,13 @@ export default function App() {
     proposalId: string,
     config: Partial<BastTemplateConfig> | null
   ) => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      setFeedback({
+        type: 'error',
+        message: 'Mode Offline (Read-Only): Pengaturan BAST proposal dinonaktifkan saat offline.',
+      });
+      return;
+    }
     const next: ProposalBastMap = { ...proposalBastMap };
     if (config === null) {
       delete next[proposalId];
@@ -6478,6 +6568,13 @@ export default function App() {
   };
 
   const handleSaveUserAlias = (targetUserId: string, alias: string) => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      setFeedback({
+        type: 'error',
+        message: 'Mode Offline (Read-Only): Nama panggilan tidak dapat diubah saat offline.',
+      });
+      return;
+    }
     if (!currentUser) return;
     const ownerId = currentUser.id;
     const trimmed = alias.trim();
@@ -7533,6 +7630,12 @@ export default function App() {
   const handleVerifySuperAdminPassword = async (
     password: string
   ): Promise<{ ok: boolean; error?: string }> => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      return {
+        ok: false,
+        error: 'Mode Offline (Read-Only): Verifikasi SuperAdmin memerlukan koneksi internet aktif.',
+      };
+    }
     if (supabaseReadyRef.current && currentUser) {
       return supabaseVerifyUserPassword(currentUser.id, password);
     }
@@ -7594,6 +7697,12 @@ export default function App() {
     presenceManual: boolean;
     presenceStatus: UserPresenceStatus;
   }): Promise<{ ok: boolean; error?: string }> => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      return {
+        ok: false,
+        error: 'Mode Offline (Read-Only): Profil tidak dapat diubah saat offline.',
+      };
+    }
     if (!currentUser) return { ok: false, error: 'Sesi tidak ditemukan.' };
 
     if (supabaseReadyRef.current) {
@@ -7654,6 +7763,13 @@ export default function App() {
       newPassword?: string;
     }
   ) => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      setFeedback({
+        type: 'error',
+        message: 'Mode Offline (Read-Only): Perubahan akses user memerlukan koneksi internet aktif.',
+      });
+      return;
+    }
     if (!currentUser || currentUser.role !== 'SuperAdmin') {
       setFeedback({
         type: 'error',
@@ -7696,6 +7812,13 @@ export default function App() {
   };
 
   const handleDeleteInternalUser = async (userId: string) => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      setFeedback({
+        type: 'error',
+        message: 'Mode Offline (Read-Only): Penghapusan akun memerlukan koneksi internet aktif.',
+      });
+      return;
+    }
     if (!currentUser || currentUser.role !== 'SuperAdmin') {
       setFeedback({
         type: 'error',
@@ -7739,6 +7862,13 @@ export default function App() {
   };
 
   const handleAdminDataAction = async (action: AdminDataActionType) => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      setFeedback({
+        type: 'error',
+        message: 'Mode Offline (Read-Only): Kontrol reset data memerlukan koneksi internet aktif.',
+      });
+      return;
+    }
     if (!currentUser || currentUser.role !== 'SuperAdmin') {
       setFeedback({
         type: 'error',
@@ -7893,6 +8023,12 @@ export default function App() {
     role: InternalUserRole;
     password?: string;
   }): Promise<{ ok: boolean; error?: string }> => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      return {
+        ok: false,
+        error: 'Mode Offline (Read-Only): Pendaftaran user memerlukan koneksi internet aktif.',
+      };
+    }
     const initialPassword = user.password?.trim() || 'masdeta123';
 
     if (supabaseReadyRef.current) {
@@ -8808,6 +8944,7 @@ export default function App() {
   };
 
   const handleAddCustomYear = (year: string) => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) return;
     const clean = year.trim();
     if (!/^\d{4}$/.test(clean)) return;
     setCustomYears((prev) => (prev.includes(clean) ? prev : [...prev, clean]));
@@ -8850,19 +8987,20 @@ export default function App() {
 
   const showBottomNav = subView === 'none' && !(activeTab === 'menu' && menuSection !== 'root');
 
-  if (!onlineVerified || (!currentUser && !isOnline)) {
+  if (!onlineVerified || !idbHydrated) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-100 p-4">
         <div className="flex flex-col items-center gap-3 rounded-3xl border border-slate-200 bg-white px-8 py-6 shadow-xs">
           <MasdetaLogo />
           <p className="text-xs font-semibold text-slate-600">
-            Memeriksa koneksi &amp; sesi MASDETA...
+            Memuat data &amp; sesi MASDETA...
           </p>
         </div>
         <OfflineIndicator
           isOnline={isOnline}
           isChecking={checkingInternet}
           onRetry={checkConnection}
+          isNativeApp={isNativeApp}
         />
         <AppUpdateModal
           updateInfo={appUpdateInfo}
@@ -8875,7 +9013,7 @@ export default function App() {
     );
   }
 
-  if ((sessionToken || supabaseReady) && !authReady && !currentUser) {
+  if (isOnline && (sessionToken || supabaseReady) && !authReady && !currentUser) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-100 p-4">
         <div className="flex flex-col items-center gap-3 rounded-3xl border border-slate-200 bg-white px-8 py-6 shadow-xs">
@@ -8886,6 +9024,7 @@ export default function App() {
           isOnline={isOnline}
           isChecking={checkingInternet}
           onRetry={checkConnection}
+          isNativeApp={isNativeApp}
         />
         <AppUpdateModal
           updateInfo={appUpdateInfo}
@@ -8900,62 +9039,68 @@ export default function App() {
 
   if (!currentUser) {
     return (
+      <OfflineProvider isOnline={isOnline} isChecking={checkingInternet} checkConnection={checkConnection}>
+        <div className={isNativeApp ? 'min-h-screen bg-slate-200/70 sm:py-3' : 'min-h-screen bg-slate-100'}>
+          <OfflineIndicator
+            isOnline={isOnline}
+            isChecking={checkingInternet}
+            onRetry={checkConnection}
+            isNativeApp={isNativeApp}
+          />
+          <div
+            className={
+              isNativeApp
+                ? 'mx-auto min-h-screen w-full max-w-md overflow-x-clip bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm'
+                : 'min-h-screen w-full bg-slate-100'
+            }
+          >
+            {supabaseSchemaMissing && !dismissedSchemaNotice && (
+              <div className={`mx-4 mt-3 flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 ${!isNativeApp ? 'md:mx-auto md:max-w-5xl' : ''}`}>
+                <Database className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-bold">Tabel Supabase belum dibuat</p>
+                  <p className="mt-0.5 leading-snug text-amber-800">
+                    Jalankan skrip <span className="font-mono font-semibold">supabase/schema.sql</span> pada Supabase SQL Editor agar seluruh data multi-admin tersimpan di PostgreSQL. Mode lokal sementara aktif.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDismissedSchemaNotice(true)}
+                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-amber-700 hover:bg-amber-100"
+                  aria-label="Tutup pemberitahuan"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
+            <AuthView
+              logo={<MasdetaLogo />}
+              onLogin={handleLogin}
+              onRegister={handleRegister}
+            />
+            <AppUpdateModal
+              updateInfo={appUpdateInfo}
+              open={isNativeApp && isUpdateModalOpen}
+              onDismissLater={
+                appUpdateInfo && !appUpdateInfo.isMandatory ? handleDismissUpdateLater : undefined
+              }
+            />
+          </div>
+        </div>
+      </OfflineProvider>
+    );
+  }
+
+  return (
+    <OfflineProvider isOnline={isOnline} isChecking={checkingInternet} checkConnection={checkConnection}>
       <div className={isNativeApp ? 'min-h-screen bg-slate-200/70 sm:py-3' : 'min-h-screen bg-slate-100'}>
         <OfflineIndicator
           isOnline={isOnline}
           isChecking={checkingInternet}
           onRetry={checkConnection}
+          withSidebarOffset={!isNativeApp && isDesktopWeb}
+          isNativeApp={isNativeApp}
         />
-        <div
-          className={
-            isNativeApp
-              ? 'mx-auto min-h-screen w-full max-w-md overflow-x-clip bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm'
-              : 'min-h-screen w-full bg-slate-100'
-          }
-        >
-          {supabaseSchemaMissing && !dismissedSchemaNotice && (
-            <div className={`mx-4 mt-3 flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 ${!isNativeApp ? 'md:mx-auto md:max-w-5xl' : ''}`}>
-              <Database className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
-              <div className="min-w-0 flex-1">
-                <p className="font-bold">Tabel Supabase belum dibuat</p>
-                <p className="mt-0.5 leading-snug text-amber-800">
-                  Jalankan skrip <span className="font-mono font-semibold">supabase/schema.sql</span> pada Supabase SQL Editor agar seluruh data multi-admin tersimpan di PostgreSQL. Mode lokal sementara aktif.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setDismissedSchemaNotice(true)}
-                className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-amber-700 hover:bg-amber-100"
-                aria-label="Tutup pemberitahuan"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          )}
-          <AuthView
-            logo={<MasdetaLogo />}
-            onLogin={handleLogin}
-            onRegister={handleRegister}
-          />
-          <AppUpdateModal
-            updateInfo={appUpdateInfo}
-            open={isNativeApp && isUpdateModalOpen}
-            onDismissLater={
-              appUpdateInfo && !appUpdateInfo.isMandatory ? handleDismissUpdateLater : undefined
-            }
-          />
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className={isNativeApp ? 'min-h-screen bg-slate-200/70 sm:py-3' : 'min-h-screen bg-slate-100'}>
-      <OfflineIndicator
-        isOnline={isOnline}
-        isChecking={checkingInternet}
-        onRetry={checkConnection}
-      />
 
       {isDesktopWeb && (
         <DesktopSidebar
@@ -9276,13 +9421,16 @@ export default function App() {
             unreadChatCount={unreadChatCount}
             pendingUsersCount={currentUser.role === 'SuperAdmin' ? pendingUsersCount : 0}
             appNotifications={appNotifications}
-            onMarkNotificationsRead={() =>
-              setAppNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
-            }
-            onDismissNotification={(id) =>
-              setAppNotifications((prev) => prev.filter((n) => n.id !== id))
-            }
+            onMarkNotificationsRead={() => {
+              if (!isOnlineRef.current) return;
+              setAppNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+            }}
+            onDismissNotification={(id) => {
+              if (!isOnlineRef.current) return;
+              setAppNotifications((prev) => prev.filter((n) => n.id !== id));
+            }}
             onClearNotifications={() => {
+              if (!isOnlineRef.current) return;
               setBellAckChatCount(unreadChatCount);
               setAppNotifications([]);
               setAppAlertToast(null);
@@ -9636,18 +9784,22 @@ export default function App() {
             appNotifications={appNotifications}
             bellHasUnread={bellHasUnread}
             onOpenBell={() => {
+              if (!isOnlineRef.current) return;
               setBellAckChatCount(unreadChatCount);
               setAppNotifications((prev) =>
                 prev.some((n) => !n.read) ? prev.map((n) => ({ ...n, read: true })) : prev
               );
             }}
-            onMarkNotificationsRead={() =>
-              setAppNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
-            }
-            onDismissNotification={(id) =>
-              setAppNotifications((prev) => prev.filter((n) => n.id !== id))
-            }
+            onMarkNotificationsRead={() => {
+              if (!isOnlineRef.current) return;
+              setAppNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+            }}
+            onDismissNotification={(id) => {
+              if (!isOnlineRef.current) return;
+              setAppNotifications((prev) => prev.filter((n) => n.id !== id));
+            }}
             onClearNotifications={() => {
+              if (!isOnlineRef.current) return;
               setBellAckChatCount(unreadChatCount);
               setAppNotifications([]);
               setAppAlertToast(null);
@@ -10040,6 +10192,7 @@ export default function App() {
           appUpdateInfo && !appUpdateInfo.isMandatory ? handleDismissUpdateLater : undefined
         }
       />
-    </div>
+      </div>
+    </OfflineProvider>
   );
 }

@@ -22,6 +22,7 @@ import { DriveImage } from './DriveImage';
 import { MainTab } from './BottomNavBar';
 import { MenuSection } from './MenuHubView';
 import { PresenceDot, getPresenceMeta } from './PresenceDot';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 interface DesktopSidebarProps {
   logo: React.ReactNode;
@@ -78,6 +79,7 @@ export function DesktopSidebar({
   onOpenProfile,
   onLogout,
 }: DesktopSidebarProps) {
+  const { isOffline } = useOfflineStatus();
   const visibleNotifications = useMemo(
     () =>
       appNotifications.filter(
@@ -159,8 +161,10 @@ export function DesktopSidebar({
           <div className="px-3.5 pt-3.5 pb-1">
             <button
               type="button"
+              disabled={isOffline}
               onClick={onOpenQuickAdd}
-              className="flex min-h-[42px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-3.5 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-teal-800 active:scale-[0.99]"
+              title={isOffline ? 'Mode Offline (Read-Only) · Tambah data dinonaktifkan' : 'Tambah Data Baru'}
+              className="flex min-h-[42px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-3.5 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-teal-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 disabled:shadow-none disabled:active:scale-100"
             >
               <Plus className="h-4 w-4" strokeWidth={2.5} />
               <span>Tambah Data Baru</span>

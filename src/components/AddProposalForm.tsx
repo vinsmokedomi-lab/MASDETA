@@ -19,6 +19,7 @@ import {
 } from '../utils/imageProcessor';
 import { PlaceholderSelect } from './FormControls';
 import { useIsDesktopWeb } from '../utils/platform';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 interface AddProposalFormProps {
   existingProposals: ProposalRecord[];
@@ -43,6 +44,7 @@ export function AddProposalForm({
 }: AddProposalFormProps) {
   const isDesktopWeb = useIsDesktopWeb();
   const isNativeApp = !isDesktopWeb;
+  const { isOffline } = useOfflineStatus();
   const resolvedYearOptions = useMemo(() => {
     const set = new Set<string>(TAHUN_OPTIONS);
     (yearOptions || []).forEach((y) => {
@@ -111,6 +113,7 @@ export function AddProposalForm({
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
+    if (isOffline) return;
     const nextErrors: AddProposalErrors = {};
     if (!tahun) nextErrors.tahun = 'Tahun anggaran wajib dipilih.';
     if (!tipe) nextErrors.tipe = 'Tipe proposal wajib dipilih.';
@@ -196,6 +199,21 @@ export function AddProposalForm({
           </div>
         )}
 
+        {isOffline && (
+          <div
+            role="alert"
+            className="flex items-start gap-2.5 rounded-2xl border border-amber-300 bg-amber-50 p-3.5 text-xs text-amber-950"
+          >
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+            <div>
+              <p className="font-semibold">Mode Read-Only (Offline)</p>
+              <p className="mt-0.5 text-amber-800 leading-relaxed">
+                Penambahan proposal baru dinonaktifkan saat koneksi internet terputus.
+              </p>
+            </div>
+          </div>
+        )}
+
         <section className="rounded-2xl border border-slate-200 bg-white p-4 md:p-6">
           <h2 className="text-sm font-bold text-slate-900">
             Data Proposal Baru
@@ -217,12 +235,13 @@ export function AddProposalForm({
               <PlaceholderSelect
                 placeholder="Pilih Tahun"
                 id="add-prop-tahun"
+                disabled={isOffline}
                 value={tahun}
                 onChange={(v) => {
                   setTahun(v);
                   setErrors((prev) => ({ ...prev, tahun: undefined, duplicate: undefined }));
                 }}
-                className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500 ${
                   errors.tahun ? 'border-rose-400' : 'border-slate-300'
                 }`}
               >
@@ -243,12 +262,13 @@ export function AddProposalForm({
               <PlaceholderSelect
                 placeholder="Pilih Tipe"
                 id="add-prop-tipe"
+                disabled={isOffline}
                 value={tipe}
                 onChange={(v) => {
                   setTipe(v as ProposalTipe | '');
                   setErrors((prev) => ({ ...prev, tipe: undefined }));
                 }}
-                className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500 ${
                   errors.tipe ? 'border-rose-400' : 'border-slate-300'
                 }`}
               >
@@ -275,6 +295,7 @@ export function AddProposalForm({
                 inputMode="numeric"
                 pattern="[0-9]*"
                 maxLength={5}
+                disabled={isOffline}
                 placeholder="66"
                 value={jumlahKpm}
                 onKeyDown={blockNonNumericKeyDown}
@@ -282,7 +303,7 @@ export function AddProposalForm({
                   setJumlahKpm(sanitizeDigits(e.target.value, 5));
                   setErrors((prev) => ({ ...prev, jumlahKpm: undefined }));
                 }}
-                className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm text-slate-900 tabular-nums placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm text-slate-900 tabular-nums placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500 ${
                   errors.jumlahKpm ? 'border-rose-400' : 'border-slate-300'
                 }`}
               />
@@ -299,9 +320,10 @@ export function AddProposalForm({
               <PlaceholderSelect
                 placeholder="Pilih Kabupaten / Kota"
                 id="add-prop-kabkota"
+                disabled={isOffline}
                 value={kabKota}
                 onChange={(v) => handleKabKotaChange(v)}
-                className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 ${
+                className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500 ${
                   errors.kabKota ? 'border-rose-400' : 'border-slate-300'
                 }`}
               >
@@ -322,7 +344,7 @@ export function AddProposalForm({
               <PlaceholderSelect
                 placeholder={kabKota ? 'Pilih Kecamatan' : 'Pilih Kabupaten / Kota terlebih dahulu'}
                 id="add-prop-kecamatan"
-                disabled={!kabKota}
+                disabled={!kabKota || isOffline}
                 value={kecamatan}
                 onChange={(v) => handleKecamatanChange(v)}
                 className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3.5 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500 ${
@@ -352,7 +374,7 @@ export function AddProposalForm({
                 placeholder={kecamatan ? 'Pilih Kelurahan / Desa (Opsional)' : 'Pilih Kecamatan terlebih dahulu'}
                 clearLabel="Tanpa kelurahan / desa"
                 id="add-prop-kelurahan"
-                disabled={!kecamatan}
+                disabled={!kecamatan || isOffline}
                 value={kelurahan}
                 onChange={(v) => {
                   setKelurahan(v);
@@ -380,13 +402,14 @@ export function AddProposalForm({
                 id="add-prop-jalan"
                 type="text"
                 autoCapitalize="words"
+                disabled={isOffline}
                 placeholder="Contoh: Tanjung Raya 2"
                 value={jalan}
                 onChange={(e) => {
                   setJalan(capitalizeWords(e.target.value));
                   setErrors((prev) => ({ ...prev, duplicate: undefined }));
                 }}
-                className="mt-1.5 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
+                className="mt-1.5 min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
               />
             </div>
 
@@ -440,13 +463,13 @@ export function AddProposalForm({
 
             <button
               type="submit"
-              disabled={isDuplicateProposal}
+              disabled={isDuplicateProposal || isOffline}
               className={`inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-5 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 whitespace-nowrap ${
                 !isNativeApp ? 'md:flex-none md:min-w-[180px]' : ''
               }`}
             >
               <Save className="h-4 w-4" />
-              <span>Simpan</span>
+              <span>{isOffline ? 'Mode Read-Only' : 'Simpan'}</span>
             </button>
           </div>
         </div>

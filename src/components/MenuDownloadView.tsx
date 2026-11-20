@@ -78,6 +78,7 @@ import {
 } from '../utils/pdfExporter';
 import { SelectionPickerModal, SelectionPickerOption } from './SelectionPickerModal';
 import { useIsDesktopWeb } from '../utils/platform';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 type DownloadPrintMode = 'kpm' | 'subitem' | 'kupon' | 'bast' | 'sptjm' | 'dinsos';
 
@@ -164,6 +165,7 @@ export function MenuDownloadView({
 }: MenuDownloadViewProps) {
   const isDesktopWeb = useIsDesktopWeb();
   const isNativeApp = !isDesktopWeb;
+  const { isOffline } = useOfflineStatus();
   const kopLogoInputRef = useRef<HTMLInputElement | null>(null);
   const reportKopLogoInputRef = useRef<HTMLInputElement | null>(null);
   const kuponKalbarInputRef = useRef<HTMLInputElement | null>(null);
@@ -1630,8 +1632,9 @@ export function MenuDownloadView({
                     <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
+                        disabled={isOffline}
                         onClick={() => reportKopLogoInputRef.current?.click()}
-                        className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                        className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <ImagePlus className="h-3.5 w-3.5" />
                         <span>Upload / Ganti Logo</span>
@@ -1639,6 +1642,7 @@ export function MenuDownloadView({
                       {activeKopLogoSrc !== DEFAULT_KOP_LOGO_URL && (
                         <button
                           type="button"
+                          disabled={isOffline}
                           onClick={() => {
                             setTemplateSavedNotice(false);
                             setBastSavedNotice(false);
@@ -1651,7 +1655,7 @@ export function MenuDownloadView({
                               kopLogoDataUrl: DEFAULT_KOP_LOGO_URL,
                             }));
                           }}
-                          className="inline-flex min-h-[36px] items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-semibold text-teal-800 hover:bg-teal-100"
+                          className="inline-flex min-h-[36px] items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-semibold text-teal-800 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           <span>Logo Default Kalbar</span>
                         </button>
@@ -1786,7 +1790,9 @@ export function MenuDownloadView({
                 {onSaveReportTemplate && (
                   <button
                     type="button"
+                    disabled={isOffline}
                     onClick={() => {
+                      if (isOffline) return;
                       onSaveReportTemplate(templateDraft);
                       if (
                         onSaveBastTemplate &&
@@ -1800,10 +1806,10 @@ export function MenuDownloadView({
                       }
                       setTemplateSavedNotice(true);
                     }}
-                    className="inline-flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-4 text-xs font-semibold text-white transition-colors hover:bg-slate-800"
+                    className="inline-flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-4 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
                   >
                     <Check className="h-3.5 w-3.5" />
-                    <span>Simpan Template Laporan</span>
+                    <span>{isOffline ? 'Simpan Template (Mode Read-Only)' : 'Simpan Template Laporan'}</span>
                   </button>
                 )}
               </div>
@@ -2577,8 +2583,9 @@ export function MenuDownloadView({
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
                           <button
                             type="button"
+                            disabled={isOffline}
                             onClick={() => kuponKalbarInputRef.current?.click()}
-                            className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[10px] font-semibold text-teal-800 hover:bg-teal-100"
+                            className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[10px] font-semibold text-teal-800 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             <ImagePlus className="h-3 w-3" />
                             <span>{couponDraft.logoKalbarUrl ? 'Ganti' : 'Unggah'}</span>
@@ -2586,11 +2593,12 @@ export function MenuDownloadView({
                           {couponDraft.logoKalbarUrl && (
                             <button
                               type="button"
+                              disabled={isOffline}
                               onClick={() => {
                                 setCouponSavedNotice(false);
                                 setCouponDraft((prev) => ({ ...prev, logoKalbarUrl: '' }));
                               }}
-                              className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700 hover:bg-rose-100"
+                              className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               <Trash2 className="h-3 w-3" />
                               <span>Hapus</span>
@@ -2620,8 +2628,9 @@ export function MenuDownloadView({
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
                           <button
                             type="button"
+                            disabled={isOffline}
                             onClick={() => kuponGerindraInputRef.current?.click()}
-                            className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[10px] font-semibold text-teal-800 hover:bg-teal-100"
+                            className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-[10px] font-semibold text-teal-800 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             <ImagePlus className="h-3 w-3" />
                             <span>{couponDraft.logoGerindraUrl ? 'Ganti' : 'Unggah'}</span>
@@ -2629,11 +2638,12 @@ export function MenuDownloadView({
                           {couponDraft.logoGerindraUrl && (
                             <button
                               type="button"
+                              disabled={isOffline}
                               onClick={() => {
                                 setCouponSavedNotice(false);
                                 setCouponDraft((prev) => ({ ...prev, logoGerindraUrl: '' }));
                               }}
-                              className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700 hover:bg-rose-100"
+                              className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               <Trash2 className="h-3 w-3" />
                               <span>Hapus</span>
@@ -2656,14 +2666,16 @@ export function MenuDownloadView({
               {onSaveCouponConfig && (
                 <button
                   type="button"
+                  disabled={isOffline}
                   onClick={() => {
+                    if (isOffline) return;
                     onSaveCouponConfig(couponDraft);
                     setCouponSavedNotice(true);
                   }}
-                  className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-slate-300 bg-slate-50 px-4 text-xs font-semibold text-slate-800 hover:bg-slate-100"
+                  className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-slate-300 bg-slate-50 px-4 text-xs font-semibold text-slate-800 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Check className="h-3.5 w-3.5" />
-                  <span>Simpan Pengaturan Kupon Default</span>
+                  <span>{isOffline ? 'Simpan Pengaturan Default (Offline)' : 'Simpan Pengaturan Kupon Default'}</span>
                 </button>
               )}
 
@@ -2778,8 +2790,9 @@ export function MenuDownloadView({
                       <div className="flex flex-wrap gap-2">
                         <button
                           type="button"
+                          disabled={isOffline}
                           onClick={() => kopLogoInputRef.current?.click()}
-                          className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                          className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           <ImagePlus className="h-3.5 w-3.5" />
                           <span>Ganti Logo</span>
@@ -2788,6 +2801,7 @@ export function MenuDownloadView({
                           DEFAULT_KOP_LOGO_URL && (
                           <button
                             type="button"
+                            disabled={isOffline}
                             onClick={() => {
                               setBastSavedNotice(false);
                               setBastDraft((prev) => ({
@@ -2795,7 +2809,7 @@ export function MenuDownloadView({
                                 kopLogoDataUrl: DEFAULT_KOP_LOGO_URL,
                               }));
                             }}
-                            className="inline-flex min-h-[36px] items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-semibold text-teal-800 hover:bg-teal-100"
+                            className="inline-flex min-h-[36px] items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-semibold text-teal-800 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             <span>Reset Logo Kalbar</span>
                           </button>
@@ -3123,14 +3137,16 @@ export function MenuDownloadView({
                 {selectedProposalObj && onSaveProposalBastConfig && (
                   <button
                     type="button"
+                    disabled={isOffline}
                     onClick={() => {
+                      if (isOffline) return;
                       onSaveProposalBastConfig(selectedProposalObj.id, bastDraft);
                       setBastSavedLabel(
                         `Pengaturan BAST khusus "${selectedProposalObj.namaProposal}" berhasil disimpan.`
                       );
                       setBastSavedNotice(true);
                     }}
-                    className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-teal-700/40 bg-teal-50 px-3 text-xs font-semibold text-teal-900 hover:bg-teal-100"
+                    className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-teal-700/40 bg-teal-50 px-3 text-xs font-semibold text-teal-900 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <Check className="h-3.5 w-3.5 shrink-0" />
                     <span className="truncate">Simpan Khusus Proposal Ini</span>
@@ -3140,12 +3156,14 @@ export function MenuDownloadView({
                 {onSaveBastTemplate && (
                   <button
                     type="button"
+                    disabled={isOffline}
                     onClick={() => {
+                      if (isOffline) return;
                       onSaveBastTemplate(bastDraft);
                       setBastSavedLabel('Template BAST berhasil disimpan sebagai default.');
                       setBastSavedNotice(true);
                     }}
-                    className={`inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-slate-300 bg-slate-50 px-3 text-xs font-semibold text-slate-800 hover:bg-slate-100 ${
+                    className={`inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-slate-300 bg-slate-50 px-3 text-xs font-semibold text-slate-800 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 ${
                       !(selectedProposalObj && onSaveProposalBastConfig) ? 'sm:col-span-2' : ''
                     }`}
                   >
@@ -3388,14 +3406,16 @@ export function MenuDownloadView({
               {onSaveSptjmTemplate && (
                 <button
                   type="button"
+                  disabled={isOffline}
                   onClick={() => {
+                    if (isOffline) return;
                     onSaveSptjmTemplate(sptjmDraft);
                     setSptjmSavedNotice(true);
                   }}
-                  className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-slate-300 bg-slate-50 px-3 text-xs font-semibold text-slate-800 hover:bg-slate-100"
+                  className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-slate-300 bg-slate-50 px-3 text-xs font-semibold text-slate-800 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Check className="h-3.5 w-3.5 shrink-0" />
-                  <span>Simpan Template SPTJM Default</span>
+                  <span>{isOffline ? 'Simpan Template Default (Offline)' : 'Simpan Template SPTJM Default'}</span>
                 </button>
               )}
 

@@ -26,6 +26,7 @@ import {
 } from '../utils/imageProcessor';
 import { FilterSelect } from './FormControls';
 import { useIsDesktopWeb } from '../utils/platform';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 interface ItemManagerViewProps {
   items: ItemBantuan[];
@@ -68,6 +69,7 @@ export function ItemManagerView({
   onUpdateItemSubItems,
   onCopyItemsFromYear,
 }: ItemManagerViewProps) {
+  const { isOffline } = useOfflineStatus();
   const isDesktopWeb = useIsDesktopWeb();
   const isNativeApp = !isDesktopWeb;
   const [selectedYear, setSelectedYear] = useState<string>('2026');
@@ -104,7 +106,7 @@ export function ItemManagerView({
     records.filter((r) => r.tahun === tahun && r.item === code).length;
 
   const requestDeleteItem = (item: ItemBantuan) => {
-    if (!canDelete) return;
+    if (!canDelete || isOffline) return;
     setDeleteLayerState({
       layer: 1,
       kind: 'item',
@@ -117,7 +119,7 @@ export function ItemManagerView({
   };
 
   const requestDeleteExpandedSubItem = (item: ItemBantuan, subIdx: number, subName: string) => {
-    if (!canDelete) return;
+    if (!canDelete || isOffline) return;
     setDeleteLayerState({
       layer: 1,
       kind: 'subitem',
@@ -132,7 +134,7 @@ export function ItemManagerView({
   };
 
   const requestDeleteFormSubItem = (subIdx: number, subName: string) => {
-    if (editingOriginalCode && !canDelete) return;
+    if ((editingOriginalCode && !canDelete) || isOffline) return;
     setDeleteLayerState({
       layer: 1,
       kind: 'form-subitem',
@@ -147,7 +149,7 @@ export function ItemManagerView({
   };
 
   const handleConfirmLayeredDelete = () => {
-    if (!deleteLayerState || !deleteLayerState.confirmedCheck) return;
+    if (!deleteLayerState || !deleteLayerState.confirmedCheck || isOffline) return;
     if (deleteLayerState.kind === 'item') {
       onDeleteItem(deleteLayerState.tahun, deleteLayerState.code);
       if (expandedCode === deleteLayerState.code) {
@@ -240,6 +242,7 @@ export function ItemManagerView({
   }, [formYearItems.length, editingOriginalCode]);
 
   const openCreateForm = () => {
+    if (isOffline) return;
     const currentYearItems = getItemsForYear(items, selectedYear);
     setEditingOriginalCode(undefined);
     setFormYear(selectedYear);
@@ -252,6 +255,7 @@ export function ItemManagerView({
   };
 
   const openEditForm = (item: ItemBantuan, index: number) => {
+    if (isOffline) return;
     setEditingOriginalCode(item.code);
     setFormYear(item.tahun);
     setFormName(item.name);
@@ -311,6 +315,7 @@ export function ItemManagerView({
 
   const handleFormSubmit = (e: FormEvent) => {
     e.preventDefault();
+    if (isOffline) return;
     const cleanName = capitalizeWords(formName.trim());
     const cleanCode = formCode.trim().toUpperCase();
 
@@ -356,6 +361,7 @@ export function ItemManagerView({
   };
 
   const handleInlineAddSubItem = (pkg: ItemBantuan) => {
+    if (isOffline) return;
     const raw = inlineSubItemInput.trim();
     if (!raw) return;
     const parsed = parseSubItemSpec(raw, { itemCode: pkg.code, itemName: pkg.name });
@@ -592,7 +598,7 @@ export function ItemManagerView({
                           </select>
                           <button
                             type="button"
-                            disabled={Boolean(editingOriginalCode) && !canDelete}
+                            disabled={isOffline || (Boolean(editingOriginalCode) && !canDelete)}
                             onClick={() => requestDeleteFormSubItem(idx, sub)}
                             aria-label={`Hapus sub-item ${sub}`}
                             className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
@@ -608,14 +614,16 @@ export function ItemManagerView({
 
               <button
                 type="button"
+                disabled={isOffline}
                 onClick={() => {
+                  if (isOffline) return;
                   setSubItemSearch('');
                   setSelectedSubItemDraft('');
                   setSubItemVolume(1);
                   setSubItemSatuan('Unit');
                   setIsSubItemPickerOpen(true);
                 }}
-                className="inline-flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-4 text-xs font-bold text-teal-800 transition-colors hover:bg-teal-100"
+                className="inline-flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-4 text-xs font-bold text-teal-800 transition-colors hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-45"
               >
                 <Plus className="h-4 w-4" />
                 <span>Tambah Sub-Item</span>
@@ -639,7 +647,8 @@ export function ItemManagerView({
             </button>
             <button
               type="submit"
-              className="min-h-[46px] flex-1 rounded-xl bg-teal-700 text-sm font-semibold text-white hover:bg-teal-800"
+              disabled={isOffline}
+              className="min-h-[46px] flex-1 rounded-xl bg-teal-700 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-45"
             >
               Simpan Item
             </button>
@@ -1066,8 +1075,9 @@ export function ItemManagerView({
           {canAdd && (
             <button
               type="button"
+              disabled={isOffline}
               onClick={openCreateForm}
-              className={`inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.99] ${
+              className={`inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-45 ${
                 !isNativeApp ? 'md:flex-none md:px-5' : ''
               }`}
             >
@@ -1096,8 +1106,9 @@ export function ItemManagerView({
               <div className="flex flex-col gap-2 pt-1">
                 <button
                   type="button"
+                  disabled={isOffline}
                   onClick={() => onCopyItemsFromYear(copySourceYear, selectedYear)}
-                  className="inline-flex min-h-[42px] w-full items-center justify-center rounded-xl border border-teal-200 bg-teal-50 px-4 text-xs font-bold text-teal-800 hover:bg-teal-100"
+                  className="inline-flex min-h-[42px] w-full items-center justify-center rounded-xl border border-teal-200 bg-teal-50 px-4 text-xs font-bold text-teal-800 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   Salin Susunan Paket dari Tahun {copySourceYear}
                 </button>
@@ -1165,19 +1176,19 @@ export function ItemManagerView({
                       <div className="flex shrink-0 items-center gap-0.5">
                         <button
                           type="button"
-                          disabled={idx === 0}
+                          disabled={isOffline || idx === 0}
                           onClick={() => onMoveItemOrder(item.tahun, item.code, 'up')}
                           aria-label={`Naikkan urutan ${item.code}`}
-                          className="inline-flex h-8 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30"
+                          className="inline-flex h-8 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-30"
                         >
                           <ArrowUp className="h-3.5 w-3.5" />
                         </button>
                         <button
                           type="button"
-                          disabled={idx === yearCatalogItems.length - 1}
+                          disabled={isOffline || idx === yearCatalogItems.length - 1}
                           onClick={() => onMoveItemOrder(item.tahun, item.code, 'down')}
                           aria-label={`Turunkan urutan ${item.code}`}
-                          className="inline-flex h-8 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30"
+                          className="inline-flex h-8 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-30"
                         >
                           <ArrowDown className="h-3.5 w-3.5" />
                         </button>
@@ -1196,10 +1207,11 @@ export function ItemManagerView({
                             {canUpdate && (
                               <button
                                 type="button"
+                                disabled={isOffline}
                                 onClick={() => openEditForm(item, idx)}
                                 aria-label={`Edit paket ${item.code}`}
                                 title="Ubah Paket"
-                                className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-slate-600 transition-colors hover:bg-teal-50 hover:text-teal-700"
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-slate-600 transition-colors hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-40"
                               >
                                 <Edit3 className="h-[18px] w-[18px]" />
                               </button>
@@ -1207,10 +1219,11 @@ export function ItemManagerView({
                             {canDelete && (
                               <button
                                 type="button"
+                                disabled={isOffline}
                                 onClick={() => requestDeleteItem(item)}
                                 aria-label={`Hapus paket ${item.code} tahun ${item.tahun}`}
                                 title="Hapus Paket"
-                                className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-rose-600 transition-colors hover:bg-rose-50 hover:text-rose-700"
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-rose-600 transition-colors hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-40"
                               >
                                 <Trash2 className="h-[18px] w-[18px]" />
                               </button>
@@ -1241,9 +1254,11 @@ export function ItemManagerView({
                                         type="number"
                                         min={1}
                                         max={999}
+                                        disabled={isOffline}
                                         aria-label={`Volume ${spec.baseName}`}
                                         value={spec.volume}
                                         onChange={(e) => {
+                                          if (isOffline) return;
                                           const vol = Math.max(1, Number(e.target.value) || 1);
                                           const updatedSub = formatSubItemSpec(
                                             spec.baseName,
@@ -1258,12 +1273,14 @@ export function ItemManagerView({
                                             )
                                           );
                                         }}
-                                        className="h-7 w-13 rounded-lg border border-slate-200 bg-slate-50 px-1.5 text-center text-xs font-bold text-slate-900 tabular-nums focus:border-teal-700 focus:bg-white focus:outline-none"
+                                        className="h-7 w-13 rounded-lg border border-slate-200 bg-slate-50 px-1.5 text-center text-xs font-bold text-slate-900 tabular-nums focus:border-teal-700 focus:bg-white focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
                                       />
                                       <select
+                                        disabled={isOffline}
                                         aria-label={`Satuan ${spec.baseName}`}
                                         value={spec.satuan}
                                         onChange={(e) => {
+                                          if (isOffline) return;
                                           const updatedSub = formatSubItemSpec(
                                             spec.baseName,
                                             spec.volume,
@@ -1277,7 +1294,7 @@ export function ItemManagerView({
                                             )
                                           );
                                         }}
-                                        className="h-7 rounded-lg border border-slate-200 bg-slate-50 px-1.5 text-[11px] font-semibold text-slate-700 focus:border-teal-700 focus:bg-white focus:outline-none"
+                                        className="h-7 rounded-lg border border-slate-200 bg-slate-50 px-1.5 text-[11px] font-semibold text-slate-700 focus:border-teal-700 focus:bg-white focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
                                       >
                                         {SUB_ITEM_SATUAN_OPTIONS.map((opt) => (
                                           <option key={opt} value={opt}>
@@ -1294,9 +1311,10 @@ export function ItemManagerView({
                                   {canDelete && (
                                     <button
                                       type="button"
+                                      disabled={isOffline}
                                       onClick={() => requestDeleteExpandedSubItem(item, subIdx, sub)}
                                       aria-label={`Hapus sub-item ${sub}`}
-                                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
                                     >
                                       <X className="h-3.5 w-3.5" />
                                     </button>
@@ -1313,28 +1331,31 @@ export function ItemManagerView({
                           <input
                             type="text"
                             autoCapitalize="words"
+                            disabled={isOffline}
                             list="canonical-subitem-suggestions"
                             value={inlineSubItemInput}
                             onChange={(e) => setInlineSubItemInput(capitalizeWords(e.target.value))}
                             placeholder="Nama sub-item..."
-                            className="min-h-[38px] min-w-[140px] flex-1 rounded-xl border border-slate-300 bg-white px-3 text-xs focus:border-teal-700 focus:outline-none"
+                            className="min-h-[38px] min-w-[140px] flex-1 rounded-xl border border-slate-300 bg-white px-3 text-xs focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-100 disabled:opacity-60"
                           />
                           <input
                             type="number"
                             min={1}
                             max={999}
+                            disabled={isOffline}
                             aria-label="Volume sub-item baru"
                             value={inlineSubItemVolume}
                             onChange={(e) =>
                               setInlineSubItemVolume(Math.max(1, Number(e.target.value) || 1))
                             }
-                            className="min-h-[38px] w-14 rounded-xl border border-slate-300 bg-white px-2 text-center text-xs font-bold text-slate-900 tabular-nums focus:border-teal-700 focus:outline-none"
+                            className="min-h-[38px] w-14 rounded-xl border border-slate-300 bg-white px-2 text-center text-xs font-bold text-slate-900 tabular-nums focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-100 disabled:opacity-60"
                           />
                           <select
+                            disabled={isOffline}
                             aria-label="Satuan sub-item baru"
                             value={inlineSubItemSatuan}
                             onChange={(e) => setInlineSubItemSatuan(e.target.value)}
-                            className="min-h-[38px] rounded-xl border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 focus:border-teal-700 focus:outline-none"
+                            className="min-h-[38px] rounded-xl border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-100 disabled:opacity-60"
                           >
                             {SUB_ITEM_SATUAN_OPTIONS.map((opt) => (
                               <option key={opt} value={opt}>
@@ -1344,8 +1365,9 @@ export function ItemManagerView({
                           </select>
                           <button
                             type="button"
+                            disabled={isOffline}
                             onClick={() => handleInlineAddSubItem(item)}
-                            className="inline-flex min-h-[38px] items-center gap-1 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800"
+                            className="inline-flex min-h-[38px] items-center gap-1 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-45"
                           >
                             <Plus className="h-3.5 w-3.5" />
                             <span>Tambah</span>

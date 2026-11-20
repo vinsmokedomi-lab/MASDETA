@@ -27,6 +27,7 @@ import {
 import { FilterSelect, SegmentedTabs } from './FormControls';
 import { SwipeAction, SwipeableRow } from './SwipeableRow';
 import { useIsDesktopWeb } from '../utils/platform';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 interface ProposalListViewProps {
   proposals: ProposalRecord[];
@@ -57,6 +58,7 @@ export function ProposalListView({
   onBulkSetProposalLock,
   onDeleteProposal,
 }: ProposalListViewProps) {
+  const { isOffline } = useOfflineStatus();
   const [query, setQuery] = useState('');
   const [tipeFilter, setTipeFilter] = useState<'all' | ProposalTipe>('all');
   const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
@@ -189,14 +191,15 @@ export function ProposalListView({
         {canUpdate && onBulkSetProposalLock && proposals.length > 0 && (
           <button
             type="button"
+            disabled={isOffline}
             onClick={() => {
               setOpenSwipeId(null);
               setSettingsScope(selectedYear === 'all' ? 'all' : 'current');
               setIsSettingsOpen(true);
             }}
             aria-label="Pengaturan Kunci Proposal"
-            title="Pengaturan Proposal"
-            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 transition-colors hover:bg-slate-50 active:scale-[0.97]"
+            title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Pengaturan Proposal'}
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 transition-colors hover:bg-slate-50 active:scale-[0.97] disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
           >
             <Settings className="h-4.5 w-4.5" />
           </button>
@@ -218,13 +221,15 @@ export function ProposalListView({
             {canUpdate && onBulkSetProposalLock && proposals.length > 0 && (
               <button
                 type="button"
+                disabled={isOffline}
                 onClick={() => {
                   setOpenSwipeId(null);
                   setSettingsScope(selectedYear === 'all' ? 'all' : 'current');
                   setIsSettingsOpen(true);
                 }}
                 aria-label="Pengaturan Kunci Proposal"
-                className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 active:scale-[0.98]"
+                title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Pengaturan Proposal'}
+                className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
               >
                 <Settings className="h-4 w-4" />
                 <span>Pengaturan Proposal</span>
@@ -395,6 +400,7 @@ export function ProposalListView({
                                   {canUpdate && (
                                     <button
                                       type="button"
+                                      disabled={isOffline}
                                       onClick={() =>
                                         setPendingAction({
                                           type: 'lock',
@@ -402,8 +408,14 @@ export function ProposalListView({
                                           kpmCount: matchingRecords.length,
                                         })
                                       }
-                                      title={isLocked ? 'Buka Kunci' : 'Kunci Proposal'}
-                                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
+                                      title={
+                                        isOffline
+                                          ? 'Mode Offline (Hanya Baca)'
+                                          : isLocked
+                                            ? 'Buka Kunci'
+                                            : 'Kunci Proposal'
+                                      }
+                                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                                     >
                                       {isLocked ? (
                                         <Unlock className="h-3.5 w-3.5" />
@@ -415,6 +427,7 @@ export function ProposalListView({
                                   {canDelete && (
                                     <button
                                       type="button"
+                                      disabled={isOffline}
                                       onClick={() =>
                                         setPendingAction({
                                           type: 'delete',
@@ -422,8 +435,8 @@ export function ProposalListView({
                                           kpmCount: matchingRecords.length,
                                         })
                                       }
-                                      title="Hapus Proposal"
-                                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100"
+                                      title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Hapus Proposal'}
+                                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                                     >
                                       <Trash2 className="h-3.5 w-3.5" />
                                     </button>
@@ -450,6 +463,7 @@ export function ProposalListView({
                             label: isLocked ? 'Buka' : 'Kunci',
                             icon: isLocked ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />,
                             tone: isLocked ? 'amber' : 'neutral',
+                            disabled: isOffline,
                             onClick: () =>
                               setPendingAction({
                                 type: 'lock',
@@ -464,6 +478,7 @@ export function ProposalListView({
                             label: 'Hapus',
                             icon: <Trash2 className="h-4 w-4" />,
                             tone: 'danger',
+                            disabled: isOffline,
                             onClick: () =>
                               setPendingAction({
                                 type: 'delete',
@@ -596,12 +611,13 @@ export function ProposalListView({
                   </button>
                   <button
                     type="button"
+                    disabled={isOffline}
                     onClick={() => {
                       const id = pendingAction.proposal.id;
                       setPendingAction(null);
                       onToggleProposalLock(id);
                     }}
-                    className={`inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl px-4 text-sm font-semibold text-white ${
+                    className={`inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300 ${
                       pendingAction.proposal.status === 'locked'
                         ? 'bg-amber-600 hover:bg-amber-700'
                         : 'bg-slate-900 hover:bg-slate-800'
@@ -666,12 +682,13 @@ export function ProposalListView({
                   </button>
                   <button
                     type="button"
+                    disabled={isOffline}
                     onClick={() => {
                       const id = pendingAction.proposal.id;
                       setPendingAction(null);
                       onDeleteProposal(id);
                     }}
-                    className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-rose-600 px-4 text-sm font-semibold text-white hover:bg-rose-700"
+                    className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-rose-600 px-4 text-sm font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                   >
                     Ya, Hapus
                   </button>
@@ -899,13 +916,14 @@ export function ProposalListView({
               </button>
               <button
                 type="button"
+                disabled={isOffline}
                 onClick={() => {
                   const ids = pendingBulkAction.targetProposals.map((p) => p.id);
                   const nextStatus = pendingBulkAction.nextStatus;
                   setPendingBulkAction(null);
                   onBulkSetProposalLock?.(ids, nextStatus);
                 }}
-                className={`inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl px-4 text-sm font-semibold text-white ${
+                className={`inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300 ${
                   pendingBulkAction.nextStatus === 'locked'
                     ? 'bg-slate-900 hover:bg-slate-800'
                     : 'bg-amber-600 hover:bg-amber-700'

@@ -23,6 +23,7 @@ import {
 } from '../services/driveManager';
 import { capitalizeWords, validateImageUploadFile } from '../utils/imageProcessor';
 import { isNativeAppPlatform } from '../utils/platform';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 const REMEMBER_LOGIN_KEY = 'masdeta_remember_login_v1';
 
@@ -80,6 +81,7 @@ interface AuthViewProps {
 }
 
 export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
+  const { isOffline } = useOfflineStatus();
   const initialSaved = loadRememberedLogin();
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
   const [loginIdentifier, setLoginIdentifier] = useState(initialSaved.identifier);
@@ -361,6 +363,12 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
             </p>
           </div>
 
+        {isOffline && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-900">
+            Koneksi internet sedang terputus. Hubungkan ke internet untuk masuk atau mendaftarkan akun baru.
+          </div>
+        )}
+
         {error && (
           <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-medium text-rose-700">
             {error}
@@ -457,8 +465,8 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
 
               <button
                 type="submit"
-                disabled={submitting}
-                className="min-h-[48px] w-full whitespace-nowrap rounded-xl bg-teal-700 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-teal-800 disabled:opacity-60"
+                disabled={submitting || isOffline}
+                className="min-h-[48px] w-full whitespace-nowrap rounded-xl bg-teal-700 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {submitting ? 'Memverifikasi...' : 'Masuk'}
               </button>
@@ -528,8 +536,8 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
 
               <button
                 type="submit"
-                disabled={submitting}
-                className="inline-flex min-h-[46px] w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-teal-700 text-sm font-semibold text-white transition-colors hover:bg-teal-800 disabled:opacity-60"
+                disabled={submitting || isOffline}
+                className="inline-flex min-h-[46px] w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-teal-700 text-sm font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <KeyRound className="h-4 w-4" />
                 <span>{submitting ? 'Memproses...' : 'Minta Reset Kata Sandi'}</span>
@@ -607,7 +615,7 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
               </div>
 
               <div className="flex flex-wrap items-center justify-center gap-2">
-                <label className="inline-flex min-h-[44px] cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-xl border border-teal-200 bg-teal-50 px-4 py-2 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100">
+                <label className={`inline-flex min-h-[44px] items-center gap-1.5 whitespace-nowrap rounded-xl border border-teal-200 bg-teal-50 px-4 py-2 text-xs font-semibold text-teal-800 transition-colors ${isOffline || uploadingPhoto ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:bg-teal-100'}`}>
                   {uploadingPhoto ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
@@ -617,7 +625,7 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
                   <input
                     type="file"
                     accept="image/*"
-                    disabled={uploadingPhoto}
+                    disabled={uploadingPhoto || isOffline}
                     onChange={handleRegPhotoChange}
                     className="sr-only"
                   />
@@ -625,9 +633,9 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
                 {regFotoDataUrl && (
                   <button
                     type="button"
-                    disabled={uploadingPhoto}
+                    disabled={uploadingPhoto || isOffline}
                     onClick={() => void handleRemoveRegPhoto()}
-                    className="inline-flex min-h-[44px] items-center gap-1.5 whitespace-nowrap rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2 text-xs font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:opacity-50"
+                    className="inline-flex min-h-[44px] items-center gap-1.5 whitespace-nowrap rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2 text-xs font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                     <span>Hapus</span>
@@ -745,8 +753,8 @@ export function AuthView({ logo, onLogin, onRegister }: AuthViewProps) {
 
             <button
               type="submit"
-              disabled={submitting || uploadingPhoto}
-              className="inline-flex min-h-[48px] w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-teal-700 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-teal-800 disabled:opacity-60"
+              disabled={submitting || uploadingPhoto || isOffline}
+              className="inline-flex min-h-[48px] w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-teal-700 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <UserPlus className="h-4 w-4" />
               <span>{submitting ? 'Mengirim...' : 'Daftar Akun Baru'}</span>

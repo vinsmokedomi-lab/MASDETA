@@ -28,6 +28,7 @@ import { PresenceDot, getPresenceMeta } from './PresenceDot';
 import { APP_VERSION } from '../config/appVersion';
 import { useIsDesktopWeb } from '../utils/platform';
 import { getPushSupportMeta, usePWAInstall } from '../utils/pwaPush';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 interface UserProfileViewProps {
   user: InternalUser;
@@ -66,6 +67,7 @@ export function UserProfileView({
   checkingAppUpdate = false,
   appVersion,
 }: UserProfileViewProps) {
+  const { isOffline } = useOfflineStatus();
   const isDesktopWeb = useIsDesktopWeb();
   const pushMeta = getPushSupportMeta();
   const { canPromptInstall, promptInstall } = usePWAInstall();
@@ -105,7 +107,7 @@ export function UserProfileView({
   const handlePhotoChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (!file) return;
+    if (!file || isOffline) return;
     setFeedback(null);
     setConfirmDeleteFoto(false);
     setUploadingPhoto(true);
@@ -148,7 +150,7 @@ export function UserProfileView({
 
   const handleDeletePhoto = async () => {
     const target = fotoFileId || fotoDataUrl;
-    if (!target) return;
+    if (!target || isOffline) return;
     setFeedback(null);
     setUploadingPhoto(true);
     try {
@@ -184,6 +186,7 @@ export function UserProfileView({
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (isOffline) return;
     setFeedback(null);
     if (!nama.trim()) {
       setFeedback({ type: 'error', message: 'Nama lengkap tidak boleh kosong.' });
@@ -222,7 +225,12 @@ export function UserProfileView({
     <>
         {/* Centered Profile Hero Summary */}
         <section className="flex flex-col items-center rounded-2xl border border-slate-200 bg-white px-4 py-6 text-center">
-          <label className="relative flex h-24 w-24 cursor-pointer items-center justify-center overflow-visible">
+          <label
+            className={`relative flex h-24 w-24 items-center justify-center overflow-visible ${
+              isOffline ? 'cursor-not-allowed opacity-75' : 'cursor-pointer'
+            }`}
+            title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Ubah foto profil'}
+          >
             <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-3xl border-2 border-slate-200 bg-slate-100 text-slate-500 shadow-xs">
               {fotoDataUrl ? (
                 <DriveImage
@@ -237,7 +245,11 @@ export function UserProfileView({
                 <User className="h-10 w-10" />
               )}
             </div>
-            <span className="absolute -right-1.5 -bottom-1.5 flex h-8 w-8 items-center justify-center rounded-full border-2 border-white bg-teal-700 text-white shadow-sm">
+            <span
+              className={`absolute -right-1.5 -bottom-1.5 flex h-8 w-8 items-center justify-center rounded-full border-2 border-white shadow-sm ${
+                isOffline ? 'bg-slate-400 text-white' : 'bg-teal-700 text-white'
+              }`}
+            >
               {uploadingPhoto ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
@@ -252,7 +264,7 @@ export function UserProfileView({
             <input
               type="file"
               accept="image/*"
-              disabled={uploadingPhoto}
+              disabled={uploadingPhoto || isOffline}
               className="hidden"
               onChange={handlePhotoChange}
             />
@@ -261,9 +273,10 @@ export function UserProfileView({
           {fotoDataUrl && !confirmDeleteFoto && (
             <button
               type="button"
-              disabled={uploadingPhoto}
+              disabled={uploadingPhoto || isOffline}
               onClick={() => setConfirmDeleteFoto(true)}
-              className="mt-2.5 inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+              title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Hapus Foto'}
+              className="mt-2.5 inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
             >
               <Trash2 className="h-3 w-3" />
               <span>Hapus Foto</span>
@@ -286,9 +299,9 @@ export function UserProfileView({
                 </button>
                 <button
                   type="button"
-                  disabled={uploadingPhoto}
+                  disabled={uploadingPhoto || isOffline}
                   onClick={() => void handleDeletePhoto()}
-                  className="min-h-[32px] flex-1 rounded-lg bg-rose-600 text-[11px] font-semibold text-white"
+                  className="min-h-[32px] flex-1 rounded-lg bg-rose-600 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
                   {uploadingPhoto ? 'Menghapus...' : 'Ya, Hapus'}
                 </button>
@@ -516,10 +529,15 @@ export function UserProfileView({
 
           <button
             type="submit"
-            disabled={saving}
-            className="min-h-[46px] w-full rounded-xl bg-teal-700 text-sm font-semibold text-white transition-colors hover:bg-teal-800 disabled:opacity-60"
+            disabled={saving || isOffline}
+            title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Simpan Perubahan Profil'}
+            className="min-h-[46px] w-full rounded-xl bg-teal-700 text-sm font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
           >
-            {saving ? 'Menyimpan...' : 'Simpan Perubahan Profil'}
+            {saving
+              ? 'Menyimpan...'
+              : isOffline
+                ? 'Mode Offline (Hanya Baca)'
+                : 'Simpan Perubahan Profil'}
           </button>
         </form>
 

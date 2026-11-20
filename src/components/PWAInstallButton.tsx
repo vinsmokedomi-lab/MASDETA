@@ -1,30 +1,22 @@
-import { useEffect, useState } from 'react';
-import { CheckCircle2, Loader2, Lock, RefreshCw, WifiOff } from 'lucide-react';
+import { useState } from 'react';
+import { Eye, Loader2, RefreshCw, WifiOff } from 'lucide-react';
 
 interface OfflineIndicatorProps {
   isOnline: boolean;
   isChecking?: boolean;
   onRetry?: () => Promise<boolean> | void;
+  withSidebarOffset?: boolean;
+  isNativeApp?: boolean;
 }
 
 export function OfflineIndicator({
   isOnline,
   isChecking = false,
   onRetry,
+  withSidebarOffset = false,
+  isNativeApp = false,
 }: OfflineIndicatorProps) {
   const [retryFailed, setRetryFailed] = useState(false);
-
-  useEffect(() => {
-    if (isOnline) {
-      setRetryFailed(false);
-      return;
-    }
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = prevOverflow;
-    };
-  }, [isOnline]);
 
   if (isOnline) return null;
 
@@ -39,85 +31,59 @@ export function OfflineIndicator({
 
   return (
     <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="masdeta-online-required-title"
-      className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/92 p-4 backdrop-blur-md"
+      role="status"
+      aria-live="polite"
+      className={`sticky top-0 z-40 border-b border-amber-300/80 bg-amber-50/95 text-amber-950 shadow-xs backdrop-blur-md ${
+        withSidebarOffset && !isNativeApp ? 'md:pl-64' : ''
+      }`}
     >
       <div
-        className="w-full max-w-sm overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
+        className={`mx-auto flex flex-wrap items-center justify-between gap-2.5 px-3.5 py-2.5 ${
+          isNativeApp ? 'max-w-md' : 'max-w-[1440px] md:px-6'
+        }`}
       >
-        {/* Header Terkunci */}
-        <div className="bg-[#0F766E] px-5 pt-5 pb-4 text-white">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/15">
-              <WifiOff className="h-5.5 w-5.5 text-white" />
+        <div className="flex min-w-0 flex-1 items-center gap-2.5">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-500/15 text-amber-800 border border-amber-300/70">
+            <WifiOff className="h-4 w-4" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-extrabold tracking-tight text-amber-950">
+                Mode Offline · Read-Only
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-white/80 px-1.5 py-0.5 text-[10px] font-bold text-amber-900">
+                <Eye className="h-3 w-3" />
+                Hanya Baca
+              </span>
             </div>
-            <div className="min-w-0">
-              <h2
-                id="masdeta-online-required-title"
-                className="text-base font-bold tracking-tight text-white"
-              >
-                Koneksi Internet Diperlukan
-              </h2>
-              <p className="mt-0.5 text-xs text-teal-100">
-                Akses offline dinonaktifkan
-              </p>
-            </div>
+            <p className="mt-0.5 text-[11px] leading-snug text-amber-900/90">
+              {retryFailed && !isChecking
+                ? 'Koneksi internet belum terdeteksi. Tombol tambah, edit & hapus tetap dinonaktifkan.'
+                : 'Akses melihat data & cetak PDF tetap aktif. Semua tombol tambah, edit & hapus dinonaktifkan.'}
+            </p>
           </div>
         </div>
 
-        {/* Body */}
-        <div className="space-y-4 p-5">
-          <div className="flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950">
-            <Lock className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
-            <p className="leading-relaxed">
-              Aplikasi <span className="font-bold">MASDETA</span> wajib terhubung ke internet aktif untuk dibuka dan dijalankan demi menjaga keaslian data real-time serta mencegah pengoperasian offline.
-            </p>
-          </div>
-
-          <div className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-xs text-slate-600">
-            <p className="font-semibold text-slate-800">Langkah membuka akses:</p>
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-teal-700" />
-              <span>Aktifkan Data Seluler atau sambungkan ke Wi-Fi</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-teal-700" />
-              <span>Pastikan Mode Pesawat tidak aktif</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-teal-700" />
-              <span>Pastikan jaringan memiliki akses internet aktif</span>
-            </div>
-          </div>
-
-          {retryFailed && !isChecking && (
-            <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-center text-xs font-medium text-rose-700">
-              Koneksi internet belum terdeteksi. Periksa jaringan Anda lalu coba lagi.
-            </p>
-          )}
-
+        {onRetry && (
           <button
             type="button"
             disabled={isChecking}
             onClick={() => void handleRetryClick()}
-            className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-[#0F766E] px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-70"
+            className="inline-flex min-h-[34px] shrink-0 items-center gap-1.5 rounded-xl border border-amber-300 bg-white px-3 text-[11px] font-bold text-amber-950 shadow-2xs transition-colors hover:bg-amber-100/70 disabled:cursor-not-allowed disabled:opacity-70"
           >
             {isChecking ? (
               <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Memeriksa Koneksi...</span>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <span>Memeriksa...</span>
               </>
             ) : (
               <>
-                <RefreshCw className="h-4 w-4" />
-                <span>Periksa Koneksi Ulang</span>
+                <RefreshCw className="h-3.5 w-3.5" />
+                <span>Cek Koneksi</span>
               </>
             )}
           </button>
-        </div>
+        )}
       </div>
     </div>
   );

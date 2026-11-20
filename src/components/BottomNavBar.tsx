@@ -1,5 +1,6 @@
 import { FilePlus2, FolderOpen, Home, LayoutGrid, Plus, UserPlus, Users, X } from 'lucide-react';
 import { isNativeAppPlatform } from '../utils/platform';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 export type MainTab = 'dashboard' | 'kpm' | 'proposal' | 'menu';
 
@@ -22,6 +23,7 @@ export function BottomNavBar({
   onSelectTab,
   onOpenQuickAdd,
 }: BottomNavBarProps) {
+  const { isOffline } = useOfflineStatus();
   const menuBadgeCount =
     pendingUsersCount + unreadChatCount + urgentSchedulesCount + (hasAppUpdate ? 1 : 0);
   const isNativeApp = isNativeAppPlatform();
@@ -69,9 +71,11 @@ export function BottomNavBar({
         <div className="flex items-center justify-center">
           <button
             type="button"
+            disabled={isOffline}
             onClick={onOpenQuickAdd}
+            title={isOffline ? 'Mode Offline (Read-Only) · Tambah data dinonaktifkan' : 'Tambah data baru'}
             aria-label="Tambah data baru"
-            className="-mt-6 flex h-14 w-14 items-center justify-center rounded-full bg-teal-700 text-white shadow-lg shadow-teal-900/20 ring-4 ring-slate-50 transition-transform hover:bg-teal-800 active:scale-95"
+            className="-mt-6 flex h-14 w-14 items-center justify-center rounded-full bg-teal-700 text-white shadow-lg shadow-teal-900/20 ring-4 ring-slate-50 transition-transform hover:bg-teal-800 active:scale-95 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none disabled:active:scale-100"
           >
             <Plus className="h-7 w-7" strokeWidth={2.5} />
           </button>
@@ -138,6 +142,7 @@ export function QuickAddSheet({
 }: QuickAddSheetProps) {
   if (!isOpen) return null;
 
+  const { isOffline } = useOfflineStatus();
   const isNativeApp = isNativeAppPlatform();
 
   return (
@@ -173,11 +178,12 @@ export function QuickAddSheet({
         <div className="space-y-2.5">
           <button
             type="button"
+            disabled={isOffline}
             onClick={() => {
               onClose();
               onAddKpm();
             }}
-            className="flex min-h-[64px] w-full items-center gap-3.5 rounded-2xl border border-slate-200 bg-white p-3.5 text-left transition-colors hover:border-teal-600 hover:bg-teal-50/40 active:scale-[0.99]"
+            className="flex min-h-[64px] w-full items-center gap-3.5 rounded-2xl border border-slate-200 bg-white p-3.5 text-left transition-colors hover:border-teal-600 hover:bg-teal-50/40 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-teal-700 text-white">
               <UserPlus className="h-5 w-5" />
@@ -192,11 +198,12 @@ export function QuickAddSheet({
 
           <button
             type="button"
+            disabled={isOffline}
             onClick={() => {
               onClose();
               onAddProposal();
             }}
-            className="flex min-h-[64px] w-full items-center gap-3.5 rounded-2xl border border-slate-200 bg-white p-3.5 text-left transition-colors hover:border-teal-600 hover:bg-teal-50/40 active:scale-[0.99]"
+            className="flex min-h-[64px] w-full items-center gap-3.5 rounded-2xl border border-slate-200 bg-white p-3.5 text-left transition-colors hover:border-teal-600 hover:bg-teal-50/40 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-white">
               <FilePlus2 className="h-5 w-5" />

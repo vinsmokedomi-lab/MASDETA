@@ -102,6 +102,7 @@ import {
   isArchivedKpm,
 } from '../utils/imageProcessor';
 import { useIsDesktopWeb } from '../utils/platform';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 export type MenuSection =
   | 'root'
@@ -346,6 +347,7 @@ export function MenuHubView({
 }: MenuHubViewProps) {
   const isDesktopWeb = useIsDesktopWeb();
   const isNativeApp = !isDesktopWeb;
+  const { isOffline } = useOfflineStatus();
   const isSuperAdminRole = currentUser.role === 'SuperAdmin';
   const canAdd =
     isSuperAdminRole || (currentUser.role !== 'Viewer' && Boolean(currentUser.permissions?.add));
@@ -630,6 +632,29 @@ export function MenuHubView({
       setDuplikasiYearFilter(selectedYear || 'all');
     }
   }, [activeSection, usersOpenedFromSuperAdmin, selectedYear, dtsenDrill]);
+
+  // Tutup modal/aksi mutasi yang sedang terbuka apabila koneksi terputus (Mode Read-Only)
+  useEffect(() => {
+    if (!isOffline) return;
+    setIsAddPekerjaanOpen(false);
+    setIsAddPengelolaOpen(false);
+    setIsRegisterModalOpen(false);
+    setPendingDeleteWilayah(null);
+    setPersonalRenameTarget(null);
+    setEditingUserTarget(null);
+    setPendingDeleteUser(null);
+    setPendingResetAction(null);
+    setOpenPengelolaSwipeId(null);
+    setEditingPengelolaTarget(null);
+    setPendingDeletePengelola(null);
+    setOpenPekerjaanSwipeId(null);
+    setEditingPekerjaanTarget(null);
+    setPendingDeletePekerjaan(null);
+    setIsPejabatFormOpen(false);
+    setPendingDeletePejabat(null);
+    setConfirmResetPejabatOpen(false);
+    setPendingPermanentDeleteTrashId(null);
+  }, [isOffline]);
 
   const refreshGithubReleases = async () => {
     setLoadingGithubReleases(true);
@@ -943,6 +968,7 @@ export function MenuHubView({
 
   const handleAddPekerjaanSubmit = (e: FormEvent) => {
     e.preventDefault();
+    if (isOffline) return;
     const name = capitalizeWords(newPekerjaan.trim());
     if (!name) {
       setPekerjaanError('Nama pekerjaan wajib diisi.');
@@ -960,6 +986,7 @@ export function MenuHubView({
 
   const handleAddKabKotaSubmit = (e: FormEvent) => {
     e.preventDefault();
+    if (isOffline) return;
     const clean = capitalizeWords(newKabKotaInput.trim());
     if (!clean) {
       setWilayahError('Nama Kabupaten / Kota wajib diisi.');
@@ -981,11 +1008,13 @@ export function MenuHubView({
   };
 
   const handleDeleteKabKota = (kabId: string) => {
+    if (isOffline) return;
     onUpdateWilayahList(wilayahList.filter((w) => w.id !== kabId));
     if (expandedKabId === kabId) setExpandedKabId(null);
   };
 
   const handleAddKecamatan = (kabId: string) => {
+    if (isOffline) return;
     const raw = (newKecamatanByKab[kabId] || '').trim().replace(/^(?:kec\.?|kecamatan)\s+/i, '');
     const clean = capitalizeWords(raw);
     if (!clean) return;
@@ -1010,6 +1039,7 @@ export function MenuHubView({
   };
 
   const handleDeleteKecamatan = (kabId: string, kecId: string) => {
+    if (isOffline) return;
     onUpdateWilayahList(
       wilayahList.map((kab) =>
         kab.id === kabId
@@ -1021,6 +1051,7 @@ export function MenuHubView({
   };
 
   const handleAddKelurahan = (kabId: string, kecId: string) => {
+    if (isOffline) return;
     const raw = (newKelurahanByKec[kecId] || '').trim().replace(/^kel\.?\s+/i, 'Kelurahan ');
     const clean = capitalizeWords(raw);
     if (!clean) return;
@@ -1046,6 +1077,7 @@ export function MenuHubView({
   };
 
   const handleDeleteKelurahan = (kabId: string, kecId: string, kelName: string) => {
+    if (isOffline) return;
     onUpdateWilayahList(
       wilayahList.map((kab) => {
         if (kab.id !== kabId) return kab;
@@ -1063,6 +1095,7 @@ export function MenuHubView({
 
   const handleRegisterUserSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (isOffline) return;
     setRegError(null);
     const cleanUsername = regUsername.trim().toLowerCase().replace(/^@+/, '');
     if (!regNama.trim() || !regEmail.trim()) {
@@ -1414,9 +1447,9 @@ export function MenuHubView({
                   {onCheckAppUpdate && (
                     <button
                       type="button"
-                      disabled={checkingAppUpdate}
+                      disabled={checkingAppUpdate || isOffline}
                       onClick={onCheckAppUpdate}
-                      className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 disabled:opacity-60"
+                      className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
                         <RefreshCw
@@ -1758,6 +1791,7 @@ export function MenuHubView({
 
     const handleUnlockSuperAdmin = async (e: FormEvent) => {
       e.preventDefault();
+      if (isOffline) return;
       setSuperAdminPwdError(null);
       if (!superAdminPwdInput) {
         setSuperAdminPwdError('Masukkan kata sandi login SuperAdmin.');
@@ -1803,6 +1837,11 @@ export function MenuHubView({
               onSubmit={handleUnlockSuperAdmin}
               className="rounded-2xl border border-slate-200 bg-white p-5 space-y-4 shadow-xs"
             >
+              {isOffline && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs font-medium text-amber-900">
+                  Mode Offline Read-Only: Verifikasi password &amp; kontrol Super Admin dinonaktifkan saat tidak ada internet.
+                </div>
+              )}
               {pendingUsersCount > 0 && (
                 <div className="flex items-center gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-semibold text-rose-800">
                   <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-rose-600" />
@@ -1837,14 +1876,15 @@ export function MenuHubView({
                   <input
                     id="superadmin-gate-pwd"
                     type={showSuperAdminPwd ? 'text' : 'password'}
-                    autoFocus
+                    autoFocus={!isOffline}
+                    disabled={isOffline}
                     value={superAdminPwdInput}
                     onChange={(e) => {
                       setSuperAdminPwdInput(e.target.value);
                       if (superAdminPwdError) setSuperAdminPwdError(null);
                     }}
                     placeholder="Masukkan password login Anda"
-                    className="min-h-[44px] w-full rounded-xl border border-slate-300 bg-white pr-11 pl-10 text-sm text-slate-900 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
+                    className="min-h-[44px] w-full rounded-xl border border-slate-300 bg-white pr-11 pl-10 text-sm text-slate-900 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
                   />
                   <button
                     type="button"
@@ -1866,8 +1906,8 @@ export function MenuHubView({
 
               <button
                 type="submit"
-                disabled={verifyingSuperAdminPwd}
-                className="min-h-[46px] w-full rounded-xl bg-slate-900 text-sm font-semibold text-white transition-colors hover:bg-slate-800 disabled:opacity-60"
+                disabled={verifyingSuperAdminPwd || isOffline}
+                className="min-h-[46px] w-full rounded-xl bg-slate-900 text-sm font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {verifyingSuperAdminPwd ? 'Memverifikasi...' : 'Buka Kontrol Super Admin'}
               </button>
@@ -2013,14 +2053,16 @@ export function MenuHubView({
                       <button
                         key={actionKey}
                         type="button"
+                        disabled={isOffline}
                         onClick={() => {
+                          if (isOffline) return;
                           setPendingResetAction(actionKey);
                           setResetConfirmStep('confirm');
                           setResetPwdInput('');
                           setResetPwdError(null);
                           setShowResetPwd(false);
                         }}
-                        className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-rose-50/40"
+                        className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-rose-50/40 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <div
                           className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
@@ -2097,13 +2139,15 @@ export function MenuHubView({
                   </button>
                   <button
                     type="button"
+                    disabled={isOffline}
                     onClick={() => {
+                      if (isOffline) return;
                       setResetPwdInput('');
                       setResetPwdError(null);
                       setShowResetPwd(false);
                       setResetConfirmStep('password');
                     }}
-                    className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-rose-600 px-4 text-sm font-semibold text-white hover:bg-rose-700"
+                    className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-rose-600 px-4 text-sm font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Ya, Saya Yakin
                   </button>
@@ -2113,6 +2157,7 @@ export function MenuHubView({
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
+                  if (isOffline) return;
                   setResetPwdError(null);
                   if (!resetPwdInput) {
                     setResetPwdError('Masukkan kata sandi SuperAdmin untuk melanjutkan.');
@@ -2207,8 +2252,8 @@ export function MenuHubView({
                   </button>
                   <button
                     type="submit"
-                    disabled={isRunningReset}
-                    className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-rose-600 px-4 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+                    disabled={isRunningReset || isOffline}
+                    className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-rose-600 px-4 text-sm font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {isRunningReset ? 'Memproses...' : selectedMeta.buttonLabel}
                   </button>
@@ -2295,8 +2340,12 @@ export function MenuHubView({
               {isSuperAdmin && (
                 <button
                   type="button"
-                  onClick={() => setIsRegisterModalOpen(true)}
-                  className="inline-flex min-h-[38px] shrink-0 items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-800 hover:bg-slate-100 whitespace-nowrap"
+                  disabled={isOffline}
+                  onClick={() => {
+                    if (isOffline) return;
+                    setIsRegisterModalOpen(true);
+                  }}
+                  className="inline-flex min-h-[38px] shrink-0 items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-800 hover:bg-slate-100 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <UserPlus className="h-3.5 w-3.5" />
                   <span>Tambah User</span>
@@ -2404,13 +2453,15 @@ export function MenuHubView({
                           {!isSelf && onSaveUserAlias && (
                             <button
                               type="button"
+                              disabled={isOffline}
                               onClick={() => {
+                                if (isOffline) return;
                                 setPersonalRenameTarget(user);
                                 setPersonalRenameDraft((userAliases[user.id] || '').trim());
                               }}
                               title="Ubah nama panggilan pribadi"
                               aria-label={`Ubah nama pribadi ${userDisplayName}`}
-                              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+                              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               <Edit3 className="h-3 w-3" />
                               <span>Nama</span>
@@ -2489,8 +2540,12 @@ export function MenuHubView({
                                 <button
                                   key={preset.label}
                                   type="button"
-                                  onClick={() => onAdminControlUser(user.id, preset.patch)}
-                                  className={`min-h-[32px] rounded-lg border px-1.5 text-[10px] font-semibold transition-colors ${
+                                  disabled={isOffline}
+                                  onClick={() => {
+                                    if (isOffline) return;
+                                    onAdminControlUser(user.id, preset.patch);
+                                  }}
+                                  className={`min-h-[32px] rounded-lg border px-1.5 text-[10px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
                                     preset.active
                                       ? 'border-teal-700 bg-teal-700 text-white'
                                       : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100'
@@ -2517,13 +2572,14 @@ export function MenuHubView({
                                 : user.role === 'Viewer'
                                   ? false
                                   : perms[item.key];
-                            const toggleDisabled = user.role === 'SuperAdmin';
+                            const toggleDisabled = user.role === 'SuperAdmin' || isOffline;
                             return (
                               <button
                                 key={item.key}
                                 type="button"
                                 disabled={toggleDisabled}
                                 onClick={() => {
+                                  if (isOffline) return;
                                   const nextPerms: UserPermissions =
                                     user.role === 'Viewer'
                                       ? {
@@ -2545,7 +2601,7 @@ export function MenuHubView({
                                   checked
                                     ? 'border-teal-200 bg-teal-50 text-teal-900'
                                     : 'border-slate-200 bg-slate-50 text-slate-400'
-                                } disabled:opacity-60`}
+                                } disabled:cursor-not-allowed disabled:opacity-50`}
                               >
                                 <span>{item.label}</span>
                                 <span
@@ -2567,13 +2623,15 @@ export function MenuHubView({
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <select
                             aria-label={`Jabatan / Peran untuk ${user.nama}`}
+                            disabled={isOffline}
                             value={user.role}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              if (isOffline) return;
                               onAdminControlUser(user.id, {
                                 role: e.target.value as InternalUserRole,
-                              })
-                            }
-                            className="min-h-[38px] rounded-xl border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none"
+                              });
+                            }}
+                            className="min-h-[38px] rounded-xl border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             <option value="SuperAdmin">SuperAdmin</option>
                             <option value="Admin">Admin</option>
@@ -2583,7 +2641,9 @@ export function MenuHubView({
                           <div className="flex flex-wrap items-center gap-1.5">
                             <button
                               type="button"
+                              disabled={isOffline}
                               onClick={() => {
+                                if (isOffline) return;
                                 setEditingUserTarget(user);
                                 setEditUserNama(user.nama);
                                 setEditUserJabatan(user.jabatan);
@@ -2591,7 +2651,7 @@ export function MenuHubView({
                                 setEditUserNewPassword('');
                                 setShowEditUserPassword(false);
                               }}
-                              className="inline-flex min-h-[38px] items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                              className="inline-flex min-h-[38px] items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                               aria-label={`Edit ${user.nama}`}
                             >
                               <Edit3 className="h-3.5 w-3.5" />
@@ -2600,8 +2660,12 @@ export function MenuHubView({
                             {user.status !== 'active' && (
                               <button
                                 type="button"
-                                onClick={() => onAdminControlUser(user.id, { status: 'active' })}
-                                className="inline-flex min-h-[38px] items-center gap-1 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 whitespace-nowrap"
+                                disabled={isOffline}
+                                onClick={() => {
+                                  if (isOffline) return;
+                                  onAdminControlUser(user.id, { status: 'active' });
+                                }}
+                                className="inline-flex min-h-[38px] items-center gap-1 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50"
                               >
                                 <Check className="h-3.5 w-3.5" />
                                 <span>Setujui</span>
@@ -2610,8 +2674,12 @@ export function MenuHubView({
                             {user.status !== 'rejected' && (
                               <button
                                 type="button"
-                                onClick={() => onAdminControlUser(user.id, { status: 'rejected' })}
-                                className="inline-flex min-h-[38px] items-center gap-1 rounded-xl border border-amber-200 bg-amber-50 px-2.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 whitespace-nowrap"
+                                disabled={isOffline}
+                                onClick={() => {
+                                  if (isOffline) return;
+                                  onAdminControlUser(user.id, { status: 'rejected' });
+                                }}
+                                className="inline-flex min-h-[38px] items-center gap-1 rounded-xl border border-amber-200 bg-amber-50 px-2.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50"
                               >
                                 <X className="h-3.5 w-3.5" />
                                 <span>{user.status === 'active' ? 'Nonaktif' : 'Tolak'}</span>
@@ -2619,8 +2687,12 @@ export function MenuHubView({
                             )}
                             <button
                               type="button"
-                              onClick={() => setPendingDeleteUser(user)}
-                              className="inline-flex min-h-[38px] min-w-[38px] items-center justify-center rounded-xl border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
+                              disabled={isOffline}
+                              onClick={() => {
+                                if (isOffline) return;
+                                setPendingDeleteUser(user);
+                              }}
+                              className="inline-flex min-h-[38px] min-w-[38px] items-center justify-center rounded-xl border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
                               aria-label={`Hapus akun ${user.nama}`}
                             >
                               <Trash2 className="h-3.5 w-3.5" />
@@ -3055,17 +3127,19 @@ export function MenuHubView({
                   <input
                     type="text"
                     autoCapitalize="words"
+                    disabled={isOffline}
                     value={newKabKotaInput}
                     onChange={(e) => {
                       setNewKabKotaInput(capitalizeWords(e.target.value));
                       if (wilayahError) setWilayahError(null);
                     }}
                     placeholder="Contoh: Kabupaten Kubu Raya"
-                    className="min-h-[44px] flex-1 rounded-xl border border-slate-300 px-3.5 text-sm focus:border-teal-700 focus:outline-none"
+                    className="min-h-[44px] flex-1 rounded-xl border border-slate-300 px-3.5 text-sm focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
                   />
                   <button
                     type="submit"
-                    className="inline-flex min-h-[44px] items-center justify-center gap-1 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white hover:bg-teal-800 whitespace-nowrap"
+                    disabled={isOffline}
+                    className="inline-flex min-h-[44px] items-center justify-center gap-1 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white hover:bg-teal-800 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <Plus className="h-4 w-4" />
                     <span>Tambah</span>
@@ -3113,15 +3187,17 @@ export function MenuHubView({
                       {canDelete && (
                         <button
                           type="button"
-                          onClick={() =>
+                          disabled={isOffline}
+                          onClick={() => {
+                            if (isOffline) return;
                             setPendingDeleteWilayah({
                               kind: 'kab',
                               kabId: kab.id,
                               label: kab.nama,
-                            })
-                          }
+                            });
+                          }}
                           aria-label={`Hapus wilayah ${kab.nama}`}
-                          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
@@ -3135,6 +3211,7 @@ export function MenuHubView({
                             <input
                               type="text"
                               autoCapitalize="words"
+                              disabled={isOffline}
                               value={newKecamatanByKab[kab.id] || ''}
                               onChange={(e) =>
                                 setNewKecamatanByKab((prev) => ({
@@ -3143,12 +3220,13 @@ export function MenuHubView({
                                 }))
                               }
                               placeholder={`Tambah kecamatan di ${kab.nama}...`}
-                              className="min-h-[40px] flex-1 rounded-xl border border-slate-300 bg-white px-3 text-xs focus:border-teal-700 focus:outline-none"
+                              className="min-h-[40px] flex-1 rounded-xl border border-slate-300 bg-white px-3 text-xs focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                             />
                             <button
                               type="button"
+                              disabled={isOffline}
                               onClick={() => handleAddKecamatan(kab.id)}
-                              className="inline-flex min-h-[40px] items-center gap-1 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 whitespace-nowrap"
+                              className="inline-flex min-h-[40px] items-center gap-1 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               <Plus className="h-3.5 w-3.5" />
                               <span>Kecamatan</span>
@@ -3197,16 +3275,18 @@ export function MenuHubView({
                                     {canDelete && (
                                       <button
                                         type="button"
-                                        onClick={() =>
+                                        disabled={isOffline}
+                                        onClick={() => {
+                                          if (isOffline) return;
                                           setPendingDeleteWilayah({
                                             kind: 'kec',
                                             kabId: kab.id,
                                             kecId: kec.id,
                                             label: `${kec.nama} (${kab.nama})`,
-                                          })
-                                        }
+                                          });
+                                        }}
                                         aria-label={`Hapus kecamatan ${kec.nama}`}
-                                        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                                        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
                                       >
                                         <Trash2 className="h-3.5 w-3.5" />
                                       </button>
@@ -3220,6 +3300,7 @@ export function MenuHubView({
                                           <input
                                             type="text"
                                             autoCapitalize="words"
+                                            disabled={isOffline}
                                             value={newKelurahanByKec[kec.id] || ''}
                                             onChange={(e) =>
                                               setNewKelurahanByKec((prev) => ({
@@ -3228,12 +3309,13 @@ export function MenuHubView({
                                               }))
                                             }
                                             placeholder="Contoh: Desa Kapur / Kelurahan Mariana"
-                                            className="min-h-[38px] flex-1 rounded-lg border border-slate-300 bg-white px-2.5 text-xs focus:border-teal-700 focus:outline-none"
+                                            className="min-h-[38px] flex-1 rounded-lg border border-slate-300 bg-white px-2.5 text-xs focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                                           />
                                           <button
                                             type="button"
+                                            disabled={isOffline}
                                             onClick={() => handleAddKelurahan(kab.id, kec.id)}
-                                            className="inline-flex min-h-[38px] items-center gap-1 rounded-lg bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 whitespace-nowrap"
+                                            className="inline-flex min-h-[38px] items-center gap-1 rounded-lg bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50"
                                           >
                                             <Plus className="h-3.5 w-3.5" />
                                             <span>Tambah</span>
@@ -3258,17 +3340,19 @@ export function MenuHubView({
                                               {canDelete && (
                                                 <button
                                                   type="button"
-                                                  onClick={() =>
+                                                  disabled={isOffline}
+                                                  onClick={() => {
+                                                    if (isOffline) return;
                                                     setPendingDeleteWilayah({
                                                       kind: 'kel',
                                                       kabId: kab.id,
                                                       kecId: kec.id,
                                                       kelName: kel,
                                                       label: kel,
-                                                    })
-                                                  }
+                                                    });
+                                                  }}
                                                   aria-label={`Hapus ${kel}`}
-                                                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                                                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-400 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
                                                 >
                                                   <X className="h-3.5 w-3.5" />
                                                 </button>
@@ -3317,7 +3401,9 @@ export function MenuHubView({
                   </button>
                   <button
                     type="button"
+                    disabled={isOffline}
                     onClick={() => {
+                      if (isOffline) return;
                       if (pendingDeleteWilayah.kind === 'kab') {
                         handleDeleteKabKota(pendingDeleteWilayah.kabId);
                       } else if (pendingDeleteWilayah.kind === 'kec') {
@@ -3334,7 +3420,7 @@ export function MenuHubView({
                       }
                       setPendingDeleteWilayah(null);
                     }}
-                    className="min-h-[42px] flex-1 rounded-xl bg-rose-600 text-xs font-semibold text-white hover:bg-rose-700"
+                    className="min-h-[42px] flex-1 rounded-xl bg-rose-600 text-xs font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Ya, Hapus
                   </button>
@@ -4006,8 +4092,12 @@ export function MenuHubView({
           {canAdd && (
             <button
               type="button"
-              onClick={() => setIsAddPengelolaOpen(true)}
-              className={`inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.99] ${
+              disabled={isOffline}
+              onClick={() => {
+                if (isOffline) return;
+                setIsAddPengelolaOpen(true);
+              }}
+              className={`inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 ${
                 !isNativeApp ? 'md:w-auto md:px-5' : ''
               }`}
             >
@@ -4246,13 +4336,15 @@ export function MenuHubView({
                         {!isNativeApp && canUpdate && onUpdatePengelola && (
                           <button
                             type="button"
+                            disabled={isOffline}
                             onClick={(e) => {
                               e.stopPropagation();
+                              if (isOffline) return;
                               setEditingPengelolaTarget(p);
                             }}
                             aria-label={`Edit pengelola ${p.displayName}`}
                             title="Edit pengelola"
-                            className="hidden h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 md:inline-flex"
+                            className="hidden h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-40 md:inline-flex"
                           >
                             <Edit3 className="h-3.5 w-3.5" />
                           </button>
@@ -4260,13 +4352,15 @@ export function MenuHubView({
                         {!isNativeApp && canDelete && onDeletePengelola && (
                           <button
                             type="button"
+                            disabled={isOffline}
                             onClick={(e) => {
                               e.stopPropagation();
+                              if (isOffline) return;
                               setPendingDeletePengelola({ profile: p, kpmCount: count });
                             }}
                             aria-label={`Hapus pengelola ${p.displayName}`}
                             title="Hapus pengelola"
-                            className="hidden h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 md:inline-flex"
+                            className="hidden h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40 md:inline-flex"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
@@ -4458,12 +4552,14 @@ export function MenuHubView({
           {canAdd && (
             <button
               type="button"
+              disabled={isOffline}
               onClick={() => {
+                if (isOffline) return;
                 setNewPekerjaan('');
                 setPekerjaanError(null);
                 setIsAddPekerjaanOpen(true);
               }}
-              className={`inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.99] ${
+              className={`inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 ${
                 !isNativeApp ? 'md:w-auto md:px-5' : ''
               }`}
             >
@@ -4638,15 +4734,17 @@ export function MenuHubView({
                         {!isNativeApp && canUpdate && onUpdatePekerjaan && (
                           <button
                             type="button"
+                            disabled={isOffline}
                             onClick={(e) => {
                               e.stopPropagation();
+                              if (isOffline) return;
                               setEditingPekerjaanTarget(job);
                               setEditPekerjaanValue(job);
                               setEditPekerjaanError(null);
                             }}
                             aria-label={`Edit pekerjaan ${job}`}
                             title="Edit pekerjaan"
-                            className="hidden h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 md:inline-flex"
+                            className="hidden h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-40 md:inline-flex"
                           >
                             <Edit3 className="h-3.5 w-3.5" />
                           </button>
@@ -4654,13 +4752,15 @@ export function MenuHubView({
                         {!isNativeApp && canDelete && onDeletePekerjaan && (
                           <button
                             type="button"
+                            disabled={isOffline}
                             onClick={(e) => {
                               e.stopPropagation();
+                              if (isOffline) return;
                               setPendingDeletePekerjaan({ name: job, kpmCount: count });
                             }}
                             aria-label={`Hapus pekerjaan ${job}`}
                             title="Hapus pekerjaan"
-                            className="hidden h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 md:inline-flex"
+                            className="hidden h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40 md:inline-flex"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
@@ -5004,8 +5104,12 @@ export function MenuHubView({
             {canAdd && onSavePejabatList && (
               <button
                 type="button"
-                onClick={openAddPejabatModal}
-                className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.99] sm:flex-none sm:px-5"
+                disabled={isOffline}
+                onClick={() => {
+                  if (isOffline) return;
+                  openAddPejabatModal();
+                }}
+                className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none sm:px-5"
               >
                 <Plus className="h-4 w-4" />
                 <span>Tambah Pejabat Baru</span>
@@ -5015,8 +5119,12 @@ export function MenuHubView({
             {canUpdate && onSavePejabatList && (
               <button
                 type="button"
-                onClick={() => setConfirmResetPejabatOpen(true)}
-                className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+                disabled={isOffline}
+                onClick={() => {
+                  if (isOffline) return;
+                  setConfirmResetPejabatOpen(true);
+                }}
+                className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
                 <span>Reset Default</span>
@@ -5087,10 +5195,14 @@ export function MenuHubView({
                       {canUpdate && (
                         <button
                           type="button"
-                          onClick={() => openEditPejabatModal(profile)}
+                          disabled={isOffline}
+                          onClick={() => {
+                            if (isOffline) return;
+                            openEditPejabatModal(profile);
+                          }}
                           aria-label={`Edit pejabat ${profile.nama}`}
                           title="Edit pejabat"
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           <Edit3 className="h-3.5 w-3.5" />
                         </button>
@@ -5098,10 +5210,14 @@ export function MenuHubView({
                       {canDelete && (
                         <button
                           type="button"
-                          onClick={() => setPendingDeletePejabat(profile)}
+                          disabled={isOffline}
+                          onClick={() => {
+                            if (isOffline) return;
+                            setPendingDeletePejabat(profile);
+                          }}
                           aria-label={`Hapus pejabat ${profile.nama}`}
                           title="Hapus pejabat"
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -5648,6 +5764,7 @@ export function MenuHubView({
     };
 
     const handleStartEditSchedule = (ev: ScheduleEventItem) => {
+      if (isOffline) return;
       setEditingScheduleId(ev.id);
       setScheduleCategory(ev.category);
       setScheduleDay(ev.targetDay || '');
@@ -5664,7 +5781,7 @@ export function MenuHubView({
 
     const handleSubmitSchedule = (e: FormEvent) => {
       e.preventDefault();
-      if (!scheduleDate) return;
+      if (isOffline || !scheduleDate) return;
       const resolvedTitle = catLabelMap[scheduleCategory] || 'Agenda Lainnya';
       const payload = {
         title: resolvedTitle,
@@ -5751,9 +5868,10 @@ export function MenuHubView({
                   Kategori (Judul Agenda)
                 </label>
                 <select
+                  disabled={isOffline}
                   value={scheduleCategory}
                   onChange={(e) => setScheduleCategory(e.target.value as ScheduleCategory)}
-                  className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none"
+                  className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
                 >
                   {SCHEDULE_CATEGORY_OPTIONS.map((opt) => (
                     <option key={opt.value} value={opt.value}>
@@ -5769,9 +5887,10 @@ export function MenuHubView({
                     Pilih Hari
                   </label>
                   <select
+                    disabled={isOffline}
                     value={scheduleDay}
                     onChange={(e) => setScheduleDay(e.target.value)}
-                    className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none"
+                    className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
                   >
                     <option value="">Otomatis ({autoDayLabel})</option>
                     {SPTJM_DAY_OPTIONS.map((dayName) => (
@@ -5789,9 +5908,10 @@ export function MenuHubView({
                   <input
                     type="date"
                     required
+                    disabled={isOffline}
                     value={scheduleDate}
                     onChange={(e) => setScheduleDate(e.target.value)}
-                    className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none tabular-nums"
+                    className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none tabular-nums disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
                   />
                 </div>
               </div>
@@ -5800,6 +5920,7 @@ export function MenuHubView({
                 <div>
                   <label className="block text-xs font-semibold text-slate-700">Tahun</label>
                   <select
+                    disabled={isOffline}
                     value={scheduleYear}
                     onChange={(e) => {
                       const nextYr = e.target.value;
@@ -5813,7 +5934,7 @@ export function MenuHubView({
                         setScheduleProposal('');
                       }
                     }}
-                    className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none tabular-nums"
+                    className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none tabular-nums disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
                   >
                     {scheduleYearOptions.map((y) => (
                       <option key={y} value={y}>
@@ -5829,9 +5950,10 @@ export function MenuHubView({
                   </label>
                   <input
                     type="time"
+                    disabled={isOffline}
                     value={scheduleTime}
                     onChange={(e) => setScheduleTime(e.target.value)}
-                    className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none tabular-nums"
+                    className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none tabular-nums disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
                   />
                 </div>
               </div>
@@ -5841,9 +5963,10 @@ export function MenuHubView({
                   Proposal Terkait
                 </label>
                 <select
+                  disabled={isOffline}
                   value={scheduleProposal}
                   onChange={(e) => setScheduleProposal(e.target.value)}
-                  className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none"
+                  className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
                 >
                   <option value="">Umum / Tanpa Proposal Spesifik</option>
                   {scheduleProposalOptions.map((prop) => (
@@ -5860,10 +5983,11 @@ export function MenuHubView({
                 </label>
                 <input
                   type="text"
+                  disabled={isOffline}
                   value={scheduleLocation}
                   onChange={(e) => setScheduleLocation(e.target.value)}
                   placeholder="Contoh: Aula Kantor Camat Pontianak Barat"
-                  className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                  className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
                 />
               </div>
 
@@ -5873,16 +5997,18 @@ export function MenuHubView({
                 </label>
                 <input
                   type="text"
+                  disabled={isOffline}
                   value={scheduleNotes}
                   onChange={(e) => setScheduleNotes(e.target.value)}
                   placeholder="Catatan tambahan agenda..."
-                  className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                  className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
                 />
               </div>
 
               <button
                 type="submit"
-                className="inline-flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white hover:bg-teal-800"
+                disabled={isOffline}
+                className="inline-flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {editingScheduleId ? <Check className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
                 <span>{editingScheduleId ? 'Simpan Perubahan Jadwal' : 'Simpan Jadwal'}</span>
@@ -5951,8 +6077,12 @@ export function MenuHubView({
                       {onToggleSchedule && (
                         <button
                           type="button"
-                          onClick={() => onToggleSchedule(ev.id)}
-                          className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border transition-colors ${
+                          disabled={isOffline}
+                          onClick={() => {
+                            if (isOffline) return;
+                            onToggleSchedule(ev.id);
+                          }}
+                          className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
                             ev.completed
                               ? 'border-teal-700 bg-teal-700 text-white'
                               : 'border-slate-300 bg-white text-transparent hover:border-teal-600'
@@ -6022,10 +6152,11 @@ export function MenuHubView({
                         {onUpdateSchedule && canUpdate && (
                           <button
                             type="button"
+                            disabled={isOffline}
                             onClick={() => handleStartEditSchedule(ev)}
                             aria-label="Edit jadwal"
                             title="Edit Jadwal & Lokasi"
-                            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-teal-50 hover:text-teal-700"
+                            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             <Edit3 className="h-4 w-4" />
                           </button>
@@ -6033,9 +6164,13 @@ export function MenuHubView({
                         {onDeleteSchedule && canDelete && (
                           <button
                             type="button"
-                            onClick={() => onDeleteSchedule(ev.id)}
+                            disabled={isOffline}
+                            onClick={() => {
+                              if (isOffline) return;
+                              onDeleteSchedule(ev.id);
+                            }}
                             aria-label="Hapus jadwal"
-                            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             <Trash2 className="h-4 w-4" />
                           </button>
@@ -6108,8 +6243,12 @@ export function MenuHubView({
                       {onRestoreTrashItem && (
                         <button
                           type="button"
-                          onClick={() => onRestoreTrashItem(item.id)}
-                          className="inline-flex min-h-[38px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800"
+                          disabled={isOffline}
+                          onClick={() => {
+                            if (isOffline) return;
+                            onRestoreTrashItem(item.id);
+                          }}
+                          className="inline-flex min-h-[38px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           <RotateCcw className="h-3.5 w-3.5" />
                           <span>Pulihkan</span>
@@ -6118,8 +6257,12 @@ export function MenuHubView({
                       {onPermanentDeleteTrashItem && (
                         <button
                           type="button"
-                          onClick={() => setPendingPermanentDeleteTrashId(item.id)}
-                          className="inline-flex min-h-[38px] flex-1 items-center justify-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+                          disabled={isOffline}
+                          onClick={() => {
+                            if (isOffline) return;
+                            setPendingPermanentDeleteTrashId(item.id);
+                          }}
+                          className="inline-flex min-h-[38px] flex-1 items-center justify-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                           <span>Hapus Permanen</span>
@@ -6159,12 +6302,14 @@ export function MenuHubView({
                 </button>
                 <button
                   type="button"
+                  disabled={isOffline}
                   onClick={() => {
+                    if (isOffline) return;
                     const tid = pendingPermanentDeleteTrashId;
                     setPendingPermanentDeleteTrashId(null);
                     onPermanentDeleteTrashItem(tid);
                   }}
-                  className="min-h-[42px] flex-1 rounded-xl bg-rose-600 text-xs font-semibold text-white hover:bg-rose-700"
+                  className="min-h-[42px] flex-1 rounded-xl bg-rose-600 text-xs font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Ya, Hapus Permanen
                 </button>
@@ -6276,9 +6421,12 @@ export function MenuHubView({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  disabled={loadingGithubReleases}
-                  onClick={() => void refreshGithubReleases()}
-                  className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-60"
+                  disabled={loadingGithubReleases || isOffline}
+                  onClick={() => {
+                    if (isOffline) return;
+                    void refreshGithubReleases();
+                  }}
+                  className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <RefreshCw className={`h-3.5 w-3.5 text-teal-700 ${loadingGithubReleases ? 'animate-spin' : ''}`} />
                   <span>Sinkronkan</span>

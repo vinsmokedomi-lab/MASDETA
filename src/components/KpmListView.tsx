@@ -45,6 +45,7 @@ import { FilterSelect, SegmentedTabs } from './FormControls';
 import { ProposalPickerModal } from './ProposalPickerModal';
 import { SlotHandlingConfirmModal } from './SlotHandlingConfirmModal';
 import { SwipeAction, SwipeableRow } from './SwipeableRow';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 type KpmSortKey = 'absen' | 'item' | 'rtrw' | 'pengelola' | 'pekerjaan' | 'kelurahan';
 
@@ -129,6 +130,7 @@ export function KpmListView({
   onDeleteRecord,
   onBulkUpdateKpms,
 }: KpmListViewProps) {
+  const { isOffline } = useOfflineStatus();
   const [query, setQuery] = useState('');
   const [sortBy, setSortBy] = useState<KpmSortKey>('absen');
   const [kelurahanFilter, setKelurahanFilter] = useState<string>('all');
@@ -152,6 +154,15 @@ export function KpmListView({
     item?: string;
   } | null>(null);
   const [dbPickerQuery, setDbPickerQuery] = useState('');
+
+  useEffect(() => {
+    if (isOffline && bulkMode) {
+      setBulkMode(false);
+      setSelectedIds([]);
+      setBulkSheet('none');
+      setIsBulkProposalPickerOpen(false);
+    }
+  }, [isOffline, bulkMode]);
 
   useEffect(() => {
     setVisibleLimit(40);
@@ -563,7 +574,9 @@ export function KpmListView({
           {canUpdate && onBulkUpdateKpms && (
             <button
               type="button"
+              disabled={isOffline}
               onClick={() => {
+                if (isOffline) return;
                 setBulkMode((prev) => {
                   if (prev) {
                     setSelectedIds([]);
@@ -572,7 +585,7 @@ export function KpmListView({
                   return !prev;
                 });
               }}
-              className={`inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-semibold transition-colors ${
+              className={`inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
                 bulkMode
                   ? 'border-teal-700 bg-teal-700 text-white'
                   : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
@@ -601,7 +614,9 @@ export function KpmListView({
               {canUpdate && onBulkUpdateKpms && (
                 <button
                   type="button"
+                  disabled={isOffline}
                   onClick={() => {
+                    if (isOffline) return;
                     setBulkMode((prev) => {
                       if (prev) {
                         setSelectedIds([]);
@@ -610,7 +625,7 @@ export function KpmListView({
                       return !prev;
                     });
                   }}
-                  className={`inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border px-3 text-xs font-semibold transition-colors ${
+                  className={`inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border px-3 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
                     bulkMode
                       ? 'border-teal-700 bg-teal-700 text-white'
                       : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
@@ -622,8 +637,9 @@ export function KpmListView({
               )}
               <button
                 type="button"
+                disabled={isOffline}
                 onClick={onCreateNew}
-                className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl bg-teal-700 px-3.5 text-xs font-semibold text-white transition-colors hover:bg-teal-800"
+                className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl bg-teal-700 px-3.5 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-45"
               >
                 <Plus className="h-3.5 w-3.5" />
                 <span>Daftarkan KPM</span>
@@ -937,7 +953,7 @@ export function KpmListView({
                                     <>
                                       <button
                                         type="button"
-                                        disabled={!canMoveUp}
+                                        disabled={isOffline || !canMoveUp}
                                         onClick={() =>
                                           onMoveSlot(
                                             activeProposalRecord.namaProposal,
@@ -954,7 +970,7 @@ export function KpmListView({
                                       </button>
                                       <button
                                         type="button"
-                                        disabled={!canMoveDown}
+                                        disabled={isOffline || !canMoveDown}
                                         onClick={() =>
                                           onMoveSlot(
                                             activeProposalRecord.namaProposal,
@@ -974,6 +990,7 @@ export function KpmListView({
                                   {onCreateForEmptySlot && (
                                     <button
                                       type="button"
+                                      disabled={isOffline}
                                       onClick={() =>
                                         onCreateForEmptySlot(
                                           activeProposalRecord.id,
@@ -983,7 +1000,7 @@ export function KpmListView({
                                           entry.emptySlot.item
                                         )
                                       }
-                                      className="inline-flex h-8 items-center gap-1 rounded-lg bg-teal-700 px-2.5 text-[11px] font-semibold text-white hover:bg-teal-800"
+                                      className="inline-flex h-8 items-center gap-1 rounded-lg bg-teal-700 px-2.5 text-[11px] font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-45"
                                     >
                                       <UserPlus className="h-3.5 w-3.5" />
                                       <span>Daftar Baru</span>
@@ -992,7 +1009,9 @@ export function KpmListView({
                                   {onFillEmptySlotFromDatabase && (
                                     <button
                                       type="button"
+                                      disabled={isOffline}
                                       onClick={() => {
+                                        if (isOffline) return;
                                         setDbPickerQuery('');
                                         setDbPickerTargetSlot({
                                           proposalName: activeProposalRecord.namaProposal,
@@ -1001,7 +1020,7 @@ export function KpmListView({
                                           item: entry.emptySlot.item,
                                         });
                                       }}
-                                      className="inline-flex h-8 items-center gap-1 rounded-lg border border-teal-700 bg-white px-2.5 text-[11px] font-semibold text-teal-800 hover:bg-teal-50"
+                                      className="inline-flex h-8 items-center gap-1 rounded-lg border border-teal-700 bg-white px-2.5 text-[11px] font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-45"
                                     >
                                       <Database className="h-3.5 w-3.5" />
                                       <span>Dari Database</span>
@@ -1010,6 +1029,7 @@ export function KpmListView({
                                   {onRemoveEmptySlot && canDelete && (
                                     <button
                                       type="button"
+                                      disabled={isOffline}
                                       onClick={() =>
                                         onRemoveEmptySlot(
                                           activeProposalRecord.namaProposal,
@@ -1019,7 +1039,7 @@ export function KpmListView({
                                       }
                                       title="Hapus Baris Kosong (geser urutan di bawahnya naik)"
                                       aria-label="Hapus Baris Kosong"
-                                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100"
+                                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-45"
                                     >
                                       <Trash2 className="h-3.5 w-3.5" />
                                     </button>
@@ -1180,7 +1200,7 @@ export function KpmListView({
                                   <>
                                     <button
                                       type="button"
-                                      disabled={!canMoveUp}
+                                      disabled={isOffline || !canMoveUp}
                                       onClick={() =>
                                         onMoveSlot(
                                           activeProposalRecord.namaProposal,
@@ -1197,7 +1217,7 @@ export function KpmListView({
                                     </button>
                                     <button
                                       type="button"
-                                      disabled={!canMoveDown}
+                                      disabled={isOffline || !canMoveDown}
                                       onClick={() =>
                                         onMoveSlot(
                                           activeProposalRecord.namaProposal,
@@ -1226,6 +1246,7 @@ export function KpmListView({
                               {canUpdate && onEditRecord && (
                                 <button
                                   type="button"
+                                  disabled={isOffline}
                                   onClick={() =>
                                     locked
                                       ? setLockedNoticeRecord(rec)
@@ -1233,7 +1254,7 @@ export function KpmListView({
                                   }
                                   title={locked ? 'Proposal Terkunci' : 'Edit Data KPM'}
                                   aria-label={locked ? 'Proposal Terkunci' : `Edit ${rec.nama}`}
-                                  className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition-colors ${
+                                  className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
                                     locked
                                       ? 'border-slate-200 bg-slate-50 text-slate-400'
                                       : 'border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100'
@@ -1245,13 +1266,14 @@ export function KpmListView({
                               {canDelete && (
                                 <button
                                   type="button"
+                                  disabled={isOffline}
                                   onClick={() =>
                                     locked
                                       ? setLockedNoticeRecord(rec)
                                       : setPendingDeleteRecord(rec)
                                   }
                                   title={locked ? 'Proposal Terkunci' : 'Hapus KPM'}
-                                  className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition-colors ${
+                                  className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
                                     locked
                                       ? 'border-slate-200 bg-slate-50 text-slate-400'
                                       : 'border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100'
@@ -1327,7 +1349,7 @@ export function KpmListView({
                         <div className="flex shrink-0 items-center gap-1">
                           <button
                             type="button"
-                            disabled={!canMoveUp}
+                            disabled={isOffline || !canMoveUp}
                             onClick={() =>
                               onMoveSlot(
                                 activeProposalRecord.namaProposal,
@@ -1337,13 +1359,13 @@ export function KpmListView({
                               )
                             }
                             aria-label="Naikkan slot"
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 disabled:opacity-35"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 disabled:cursor-not-allowed disabled:opacity-35"
                           >
                             <ArrowUp className="h-3.5 w-3.5" />
                           </button>
                           <button
                             type="button"
-                            disabled={!canMoveDown}
+                            disabled={isOffline || !canMoveDown}
                             onClick={() =>
                               onMoveSlot(
                                 activeProposalRecord.namaProposal,
@@ -1353,7 +1375,7 @@ export function KpmListView({
                               )
                             }
                             aria-label="Turunkan slot"
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 disabled:opacity-35"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 disabled:cursor-not-allowed disabled:opacity-35"
                           >
                             <ArrowDown className="h-3.5 w-3.5" />
                           </button>
@@ -1366,6 +1388,7 @@ export function KpmListView({
                         {onCreateForEmptySlot && (
                           <button
                             type="button"
+                            disabled={isOffline}
                             onClick={() =>
                               onCreateForEmptySlot(
                                 activeProposalRecord.id,
@@ -1375,7 +1398,7 @@ export function KpmListView({
                                 entry.emptySlot.item
                               )
                             }
-                            className="inline-flex min-h-[34px] flex-1 items-center justify-center gap-1 rounded-xl bg-teal-700 px-2.5 text-[11px] font-semibold text-white hover:bg-teal-800"
+                            className="inline-flex min-h-[34px] flex-1 items-center justify-center gap-1 rounded-xl bg-teal-700 px-2.5 text-[11px] font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-45"
                           >
                             <UserPlus className="h-3.5 w-3.5" />
                             <span>Daftar Baru</span>
@@ -1384,7 +1407,9 @@ export function KpmListView({
                         {onFillEmptySlotFromDatabase && (
                           <button
                             type="button"
+                            disabled={isOffline}
                             onClick={() => {
+                              if (isOffline) return;
                               setDbPickerQuery('');
                               setDbPickerTargetSlot({
                                 proposalName: activeProposalRecord.namaProposal,
@@ -1393,7 +1418,7 @@ export function KpmListView({
                                 item: entry.emptySlot.item,
                               });
                             }}
-                            className="inline-flex min-h-[34px] flex-1 items-center justify-center gap-1 rounded-xl border border-teal-700 bg-white px-2.5 text-[11px] font-semibold text-teal-800 hover:bg-teal-50"
+                            className="inline-flex min-h-[34px] flex-1 items-center justify-center gap-1 rounded-xl border border-teal-700 bg-white px-2.5 text-[11px] font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-45"
                           >
                             <Database className="h-3.5 w-3.5" />
                             <span>Dari Database</span>
@@ -1402,6 +1427,7 @@ export function KpmListView({
                         {onRemoveEmptySlot && canDelete && (
                           <button
                             type="button"
+                            disabled={isOffline}
                             onClick={() =>
                               onRemoveEmptySlot(
                                 activeProposalRecord.namaProposal,
@@ -1410,7 +1436,7 @@ export function KpmListView({
                               )
                             }
                             aria-label="Hapus Baris Kosong"
-                            className="inline-flex min-h-[34px] items-center justify-center gap-1 rounded-xl border border-rose-200 bg-rose-50 px-2.5 text-[11px] font-semibold text-rose-700 hover:bg-rose-100"
+                            className="inline-flex min-h-[34px] items-center justify-center gap-1 rounded-xl border border-rose-200 bg-rose-50 px-2.5 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-45"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                             <span>Hapus</span>
@@ -1456,6 +1482,7 @@ export function KpmListView({
                       label: 'Terkunci',
                       icon: <Lock className="h-4 w-4" />,
                       tone: 'locked',
+                      disabled: isOffline,
                       onClick: () => setLockedNoticeRecord(rec),
                     },
                   ]
@@ -1467,6 +1494,7 @@ export function KpmListView({
                             label: 'Edit',
                             icon: <Pencil className="h-4 w-4" />,
                             tone: 'teal' as const,
+                            disabled: isOffline,
                             onClick: () => onEditRecord(rec),
                           },
                         ]
@@ -1478,6 +1506,7 @@ export function KpmListView({
                             label: 'Hapus',
                             icon: <Trash2 className="h-4 w-4" />,
                             tone: 'danger' as const,
+                            disabled: isOffline,
                             onClick: () => setPendingDeleteRecord(rec),
                           },
                         ]
@@ -1604,7 +1633,7 @@ export function KpmListView({
                       <div className="flex shrink-0 flex-col items-center justify-center gap-1 py-1.5 pr-2.5">
                         <button
                           type="button"
-                          disabled={!canMoveUp}
+                          disabled={isOffline || !canMoveUp}
                           onClick={() =>
                             onMoveSlot(
                               activeProposalRecord.namaProposal,
@@ -1614,13 +1643,13 @@ export function KpmListView({
                             )
                           }
                           aria-label="Naikkan urutan KPM"
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 disabled:opacity-30"
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
                         >
                           <ArrowUp className="h-3.5 w-3.5" />
                         </button>
                         <button
                           type="button"
-                          disabled={!canMoveDown}
+                          disabled={isOffline || !canMoveDown}
                           onClick={() =>
                             onMoveSlot(
                               activeProposalRecord.namaProposal,
@@ -1630,7 +1659,7 @@ export function KpmListView({
                             )
                           }
                           aria-label="Turunkan urutan KPM"
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 disabled:opacity-30"
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
                         >
                           <ArrowDown className="h-3.5 w-3.5" />
                         </button>

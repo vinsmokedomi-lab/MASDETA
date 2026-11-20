@@ -29,6 +29,7 @@ import { DocumentUploadCard } from './DocumentUploadCard';
 import { ProposalDocumentUploadCard } from './ProposalDocumentUploadCard';
 import { PlaceholderSelect } from './FormControls';
 import { useIsDesktopWeb } from '../utils/platform';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 interface ProposalFormProps {
   proposal: ProposalRecord;
@@ -175,6 +176,7 @@ export function ProposalForm({
 }: ProposalFormProps) {
   const isDesktopWeb = useIsDesktopWeb();
   const isNativeApp = !isDesktopWeb;
+  const { isOffline } = useOfflineStatus();
   const normalizeTipe = (t: string): ProposalTipe =>
     t === 'Perubahan' ? 'Perubahan' : 'Murni';
 
@@ -233,6 +235,7 @@ export function ProposalForm({
   }, [proposal]);
 
   const isPersistedLocked = proposal.status === 'locked';
+  const isFormReadOnly = isPersistedLocked || isOffline;
 
   const resolvedYearOptions = useMemo(() => {
     const set = new Set<string>(TAHUN_OPTIONS);
@@ -247,7 +250,7 @@ export function ProposalForm({
   }, [yearOptions, existingProposals, values.tahun]);
 
   const updateChecklist = (key: ToggleRowConfig['key'], nextVal: boolean) => {
-    if (key !== 'dinas' || isPersistedLocked) return;
+    if (key !== 'dinas' || isFormReadOnly) return;
     setValues((prev) => {
       const nextChecklist: ProposalChecklist = {
         ...prev.checklist,
@@ -265,7 +268,7 @@ export function ProposalForm({
     docKey: keyof ProposalDocuments,
     file?: KpmDocumentFile
   ) => {
-    if (isPersistedLocked) return;
+    if (isFormReadOnly) return;
     setValues((prev) => {
       const nextDocs: ProposalDocuments = {
         ...prev.documents,
@@ -300,7 +303,7 @@ export function ProposalForm({
   };
 
   const handleTipeChange = (nextTipe: ProposalTipe | '') => {
-    if (isPersistedLocked) return;
+    if (isFormReadOnly) return;
     setValues((prev) => ({
       ...prev,
       tipe: nextTipe,
@@ -334,7 +337,7 @@ export function ProposalForm({
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (isPersistedLocked) return;
+    if (isFormReadOnly) return;
 
     const validationErrors = validate();
     if (Object.keys(validationErrors).length > 0) {
@@ -395,6 +398,21 @@ export function ProposalForm({
           </div>
         )}
 
+        {isOffline && (
+          <div
+            role="alert"
+            className="flex items-start gap-2.5 rounded-2xl border border-amber-300 bg-amber-50 p-3.5 text-xs text-amber-950"
+          >
+            <Lock className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+            <div>
+              <p className="font-semibold">Mode Read-Only (Offline)</p>
+              <p className="mt-0.5 text-amber-800 leading-relaxed">
+                Koneksi internet terputus. Anda tetap dapat meninjau data dan berkas proposal, namun pengeditan dan penyimpanan dinonaktifkan.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Locked Proposal Guard Banner */}
         {isPersistedLocked && (
           <div
@@ -413,8 +431,9 @@ export function ProposalForm({
 
             <button
               type="button"
+              disabled={isOffline}
               onClick={() => onToggleProposalLock(proposal.id)}
-              className="inline-flex min-h-[40px] w-full items-center justify-center gap-2 rounded-xl border border-amber-400 bg-white px-4 text-xs font-semibold text-amber-900 transition-colors hover:bg-amber-100"
+              className="inline-flex min-h-[40px] w-full items-center justify-center gap-2 rounded-xl border border-amber-400 bg-white px-4 text-xs font-semibold text-amber-900 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Unlock className="h-4 w-4" />
               <span>Buka Kunci Proposal</span>
@@ -450,7 +469,7 @@ export function ProposalForm({
                   <PlaceholderSelect
                     placeholder="Tahun"
                     id="prop-tahun"
-                    disabled={isPersistedLocked}
+                    disabled={isFormReadOnly}
                     value={values.tahun}
                     onChange={(v) => {
                       setValues((prev) => ({ ...prev, tahun: v }));
@@ -476,7 +495,7 @@ export function ProposalForm({
                   <PlaceholderSelect
                     placeholder="Tipe"
                     id="prop-tipe"
-                    disabled={isPersistedLocked}
+                    disabled={isFormReadOnly}
                     value={values.tipe}
                     onChange={(v) => handleTipeChange(v as ProposalTipe | '')}
                     className={`mt-1.5 min-h-[44px] w-full rounded-xl border bg-white px-3 text-sm transition-colors focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600 ${
@@ -524,7 +543,7 @@ export function ProposalForm({
                   inputMode="numeric"
                   pattern="[0-9]*"
                   maxLength={5}
-                  disabled={isPersistedLocked}
+                  disabled={isFormReadOnly}
                   placeholder="66"
                   value={jumlahKpmInput}
                   onKeyDown={blockNonNumericKeyDown}
@@ -554,7 +573,7 @@ export function ProposalForm({
                 <div className="mt-1.5 grid grid-cols-2 gap-1.5 rounded-xl bg-slate-100 p-1">
                   <button
                     type="button"
-                    disabled={isPersistedLocked}
+                    disabled={isFormReadOnly}
                     onClick={() => setValues((prev) => ({ ...prev, status: 'unlocked' }))}
                     className={`inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed ${
                       values.status === 'unlocked'
@@ -568,7 +587,7 @@ export function ProposalForm({
 
                   <button
                     type="button"
-                    disabled={isPersistedLocked}
+                    disabled={isFormReadOnly}
                     onClick={() => setValues((prev) => ({ ...prev, status: 'locked' }))}
                     className={`inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed ${
                       values.status === 'locked'
@@ -596,7 +615,7 @@ export function ProposalForm({
                 <textarea
                   id="prop-catatan"
                   rows={2}
-                  disabled={isPersistedLocked}
+                  disabled={isFormReadOnly}
                   placeholder="Keterangan tambahan progres proposal..."
                   value={values.catatan}
                   onChange={(e) => setValues((prev) => ({ ...prev, catatan: e.target.value }))}
@@ -647,7 +666,7 @@ export function ProposalForm({
                     <SwitchToggle
                       checked={isOn}
                       readOnly={row.readOnly}
-                      disabled={isPersistedLocked}
+                      disabled={isFormReadOnly}
                       label={row.label}
                       onToggle={() => updateChecklist(row.key, !isOn)}
                     />
@@ -676,7 +695,7 @@ export function ProposalForm({
                 accept=".pdf,.doc,.docx,image/*"
                 formatLabel="PDF, Word (.doc/.docx), atau Gambar · Maks 15 MB"
                 variant="pdf"
-                disabled={isPersistedLocked}
+                disabled={isFormReadOnly}
                 value={values.documents.proposalOpd}
                 onChange={(file) => handleProposalDocChange('proposalOpd', file)}
                 onPreview={onPreviewDocument}
@@ -690,7 +709,7 @@ export function ProposalForm({
                   accept=".pdf,.doc,.docx,image/*"
                   formatLabel="PDF, Word (.doc/.docx), atau Gambar · Maks 15 MB"
                   variant="pdf"
-                  disabled={isPersistedLocked}
+                  disabled={isFormReadOnly}
                   value={values.documents.proposalLurahCamat}
                   onChange={(file) => handleProposalDocChange('proposalLurahCamat', file)}
                   onPreview={onPreviewDocument}
@@ -705,7 +724,7 @@ export function ProposalForm({
                   accept=".pdf,.xls,.xlsx,.doc,.docx,image/*"
                   formatLabel="PDF, Excel (.xls/.xlsx), Word, atau Gambar · Maks 15 MB"
                   variant="rab"
-                  disabled={isPersistedLocked}
+                  disabled={isFormReadOnly}
                   value={values.documents.rab}
                   onChange={(file) => handleProposalDocChange('rab', file)}
                   onPreview={onPreviewDocument}
@@ -730,7 +749,7 @@ export function ProposalForm({
                 helperText="Foto bukti cap & tanda tangan RT"
                 variant="photo"
                 showUploadTime
-                disabled={isPersistedLocked}
+                disabled={isFormReadOnly}
                 value={values.documents.capRt}
                 onChange={(file) => handleProposalDocChange('capRt', file)}
                 onPreview={onPreviewDocument}
@@ -743,7 +762,7 @@ export function ProposalForm({
                   helperText="Foto bukti cap & tanda tangan RW"
                   variant="photo"
                   showUploadTime
-                  disabled={isPersistedLocked}
+                  disabled={isFormReadOnly}
                   value={values.documents.capRw}
                   onChange={(file) => handleProposalDocChange('capRw', file)}
                   onPreview={onPreviewDocument}
@@ -757,7 +776,7 @@ export function ProposalForm({
                   helperText="Foto bukti cap & tanda tangan Lurah"
                   variant="photo"
                   showUploadTime
-                  disabled={isPersistedLocked}
+                  disabled={isFormReadOnly}
                   value={values.documents.capLurah}
                   onChange={(file) => handleProposalDocChange('capLurah', file)}
                   onPreview={onPreviewDocument}
@@ -771,7 +790,7 @@ export function ProposalForm({
                   helperText="Foto bukti cap & tanda tangan Camat"
                   variant="photo"
                   showUploadTime
-                  disabled={isPersistedLocked}
+                  disabled={isFormReadOnly}
                   value={values.documents.capCamat}
                   onChange={(file) => handleProposalDocChange('capCamat', file)}
                   onPreview={onPreviewDocument}
@@ -803,7 +822,7 @@ export function ProposalForm({
 
               <button
                 type="submit"
-                disabled={isPersistedLocked}
+                disabled={isFormReadOnly}
                 className={`inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-5 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 whitespace-nowrap ${
                   !isNativeApp ? 'md:flex-none md:min-w-[200px]' : ''
                 }`}
@@ -812,6 +831,11 @@ export function ProposalForm({
                   <>
                     <Lock className="h-4 w-4" />
                     <span>Terkunci</span>
+                  </>
+                ) : isOffline ? (
+                  <>
+                    <Lock className="h-4 w-4" />
+                    <span>Mode Read-Only</span>
                   </>
                 ) : (
                   <>

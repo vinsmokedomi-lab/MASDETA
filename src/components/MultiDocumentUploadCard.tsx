@@ -17,12 +17,14 @@ import {
   removeDocumentFromDrive,
   uploadImageDocumentToDrive,
 } from '../utils/imageProcessor';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 interface MultiDocumentUploadCardProps {
   id: string;
   label: string;
   helperText: string;
   maxFiles?: number;
+  disabled?: boolean;
   values: KpmDocumentFile[];
   onChange: (files: KpmDocumentFile[]) => void;
   onPreview: (file: KpmDocumentFile, title: string) => void;
@@ -33,10 +35,13 @@ export function MultiDocumentUploadCard({
   label,
   helperText,
   maxFiles = 5,
+  disabled = false,
   values,
   onChange,
   onPreview,
 }: MultiDocumentUploadCardProps) {
+  const { isOffline } = useOfflineStatus();
+  const effectiveDisabled = disabled || isOffline;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -49,7 +54,7 @@ export function MultiDocumentUploadCard({
   const isAtLimit = remainingSlots === 0;
 
   const handleFiles = async (fileList: FileList | null) => {
-    if (!fileList || fileList.length === 0 || isProcessing) return;
+    if (!fileList || fileList.length === 0 || isProcessing || effectiveDisabled) return;
 
     if (values.length >= maxFiles) {
       setLocalError(
@@ -104,7 +109,7 @@ export function MultiDocumentUploadCard({
 
   const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
-    if (!isAtLimit) setIsDragging(true);
+    if (!isAtLimit && !effectiveDisabled) setIsDragging(true);
   };
 
   const handleDragLeave = (e: DragEvent<HTMLDivElement>) => {
@@ -115,11 +120,12 @@ export function MultiDocumentUploadCard({
   const handleDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setIsDragging(false);
+    if (effectiveDisabled) return;
     void handleFiles(e.dataTransfer.files);
   };
 
   const handleConfirmRemove = async () => {
-    if (!confirmDeleteDoc || deletingDocId) return;
+    if (!confirmDeleteDoc || deletingDocId || effectiveDisabled) return;
     setLocalError(null);
     setDeletingDocId(confirmDeleteDoc.id);
     try {
@@ -216,9 +222,9 @@ export function MultiDocumentUploadCard({
                   </div>
                   <button
                     type="button"
-                    disabled={Boolean(deletingDocId)}
+                    disabled={Boolean(deletingDocId) || effectiveDisabled}
                     onClick={() => setConfirmDeleteDoc(doc)}
-                    className="inline-flex min-h-[36px] min-w-[36px] items-center justify-center rounded-lg text-rose-600 transition-colors hover:bg-rose-50 shrink-0 disabled:opacity-50"
+                    className="inline-flex min-h-[36px] min-w-[36px] items-center justify-center rounded-lg text-rose-600 transition-colors hover:bg-rose-50 shrink-0 disabled:cursor-not-allowed disabled:opacity-40"
                     aria-label={`Hapus ${label} ${idx + 1}`}
                   >
                     <Trash2 className="h-4 w-4" />
@@ -269,9 +275,11 @@ export function MultiDocumentUploadCard({
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           className={`rounded-2xl border-2 border-dashed p-4 transition-colors ${
-            isDragging
-              ? 'border-teal-600 bg-teal-50/60'
-              : 'border-slate-200 bg-slate-50/70 hover:border-slate-300'
+            effectiveDisabled
+              ? 'border-slate-200 bg-slate-100/70 opacity-75'
+              : isDragging
+                ? 'border-teal-600 bg-teal-50/60'
+                : 'border-slate-200 bg-slate-50/70 hover:border-slate-300'
           }`}
         >
           <div className="flex flex-col items-center text-center">
@@ -286,11 +294,13 @@ export function MultiDocumentUploadCard({
             )}
 
             <p className="text-xs font-medium text-slate-700">
-              {isProcessing
-                ? 'Mengunggah foto ke Google Drive...'
-                : values.length > 0
-                  ? `Tambah foto lagi (sisa kuota ${remainingSlots} dari ${maxFiles} foto)`
-                  : helperText}
+              {isOffline
+                ? 'Mode Read-Only (Offline) — unggahan dinonaktifkan'
+                : isProcessing
+                  ? 'Mengunggah foto ke Google Drive...'
+                  : values.length > 0
+                    ? `Tambah foto lagi (sisa kuota ${remainingSlots} dari ${maxFiles} foto)`
+                    : helperText}
             </p>
             <p className="mt-0.5 text-[11px] text-slate-500">
               Maksimal {maxFiles} foto · JPG, PNG, WebP · Maks 15 MB/file
@@ -299,9 +309,9 @@ export function MultiDocumentUploadCard({
             <div className="mt-3 grid w-full grid-cols-2 gap-2">
               <button
                 type="button"
-                disabled={isProcessing}
+                disabled={isProcessing || effectiveDisabled}
                 onClick={() => cameraInputRef.current?.click()}
-                className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.98] disabled:opacity-50 whitespace-nowrap"
+                className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap"
               >
                 <Camera className="h-4 w-4 shrink-0" />
                 <span>{values.length > 0 ? 'Tambah Kamera' : 'Ambil Foto'}</span>
@@ -309,9 +319,9 @@ export function MultiDocumentUploadCard({
 
               <button
                 type="button"
-                disabled={isProcessing}
+                disabled={isProcessing || effectiveDisabled}
                 onClick={() => fileInputRef.current?.click()}
-                className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 active:scale-[0.98] disabled:opacity-50 whitespace-nowrap"
+                className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap"
               >
                 {values.length > 0 ? (
                   <Plus className="h-4 w-4 shrink-0" />

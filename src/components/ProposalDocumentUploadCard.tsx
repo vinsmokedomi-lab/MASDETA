@@ -20,6 +20,7 @@ import {
   removeDocumentFromDrive,
   uploadProposalDocumentToDrive,
 } from '../utils/imageProcessor';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 interface ProposalDocumentUploadCardProps {
   id: string;
@@ -46,6 +47,8 @@ export function ProposalDocumentUploadCard({
   onChange,
   onPreview,
 }: ProposalDocumentUploadCardProps) {
+  const { isOffline } = useOfflineStatus();
+  const effectiveDisabled = disabled || isOffline;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -54,7 +57,7 @@ export function ProposalDocumentUploadCard({
   const [localError, setLocalError] = useState<string | null>(null);
 
   const handleFile = async (file?: File) => {
-    if (!file || disabled || isProcessing) return;
+    if (!file || effectiveDisabled || isProcessing) return;
     setLocalError(null);
     setConfirmDeleteOpen(false);
     setStatusLabel(
@@ -72,7 +75,7 @@ export function ProposalDocumentUploadCard({
   };
 
   const handleConfirmDelete = async () => {
-    if (!value || disabled || isProcessing) return;
+    if (!value || effectiveDisabled || isProcessing) return;
     setLocalError(null);
     setStatusLabel('Menghapus berkas dari Google Drive...');
     setIsProcessing(true);
@@ -95,7 +98,7 @@ export function ProposalDocumentUploadCard({
 
   const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
-    if (!disabled) setIsDragging(true);
+    if (!effectiveDisabled) setIsDragging(true);
   };
 
   const handleDragLeave = (e: DragEvent<HTMLDivElement>) => {
@@ -106,7 +109,7 @@ export function ProposalDocumentUploadCard({
   const handleDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setIsDragging(false);
-    if (disabled) return;
+    if (effectiveDisabled) return;
     const file = e.dataTransfer.files?.[0];
     void handleFile(file);
   };
@@ -237,7 +240,7 @@ export function ProposalDocumentUploadCard({
                 <span>Unduh</span>
               </a>
 
-              {!disabled && (
+              {!effectiveDisabled && (
                 <>
                   <button
                     type="button"
@@ -268,7 +271,7 @@ export function ProposalDocumentUploadCard({
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           className={`rounded-2xl border-2 border-dashed p-4 transition-colors ${
-            disabled
+            effectiveDisabled
               ? 'border-slate-200 bg-slate-100/70 opacity-75'
               : isDragging
                 ? 'border-teal-600 bg-teal-50/60'
@@ -286,11 +289,13 @@ export function ProposalDocumentUploadCard({
               </div>
               <div>
                 <p className="text-xs font-medium text-slate-800">
-                  {disabled
-                    ? 'Proposal terkunci — unggahan dinonaktifkan'
-                    : isProcessing
-                      ? statusLabel
-                      : helperText}
+                  {isOffline
+                    ? 'Mode Read-Only (Offline) — unggahan dinonaktifkan'
+                    : disabled
+                      ? 'Proposal terkunci — unggahan dinonaktifkan'
+                      : isProcessing
+                        ? statusLabel
+                        : helperText}
                 </p>
                 <p className="mt-0.5 text-[11px] text-slate-500">{formatLabel}</p>
               </div>
@@ -298,7 +303,7 @@ export function ProposalDocumentUploadCard({
 
             <button
               type="button"
-              disabled={isProcessing || disabled}
+              disabled={isProcessing || effectiveDisabled}
               onClick={() => fileInputRef.current?.click()}
               className="mt-3 inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 sm:mt-0 sm:w-auto whitespace-nowrap shrink-0"
             >

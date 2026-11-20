@@ -10,6 +10,7 @@ import {
 import * as XLSX from 'xlsx';
 import { KpmRecord, ProposalRecord } from '../types/kpm';
 import { ImportPreviewSummary, previewImportFile } from '../utils/csvImporter';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 interface ExcelImportWizardModalProps {
   isOpen: boolean;
@@ -26,6 +27,7 @@ export const ExcelImportWizardModal: React.FC<ExcelImportWizardModalProps> = ({
   onClose,
   onConfirmImport,
 }) => {
+  const { isOffline } = useOfflineStatus();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [fileName, setFileName] = useState('');
   const [csvText, setCsvText] = useState('');
@@ -91,7 +93,7 @@ export const ExcelImportWizardModal: React.FC<ExcelImportWizardModalProps> = ({
   };
 
   const handleExecuteImport = async () => {
-    if (!csvText || !preview || preview.error || isImporting) return;
+    if (isOffline || !csvText || !preview || preview.error || isImporting) return;
     setIsImporting(true);
     try {
       await onConfirmImport(csvText, skipDuplicates);
@@ -268,7 +270,7 @@ export const ExcelImportWizardModal: React.FC<ExcelImportWizardModalProps> = ({
           </button>
           <button
             type="button"
-            disabled={!preview || Boolean(preview.error) || countToImport === 0 || isImporting}
+            disabled={isOffline || !preview || Boolean(preview.error) || countToImport === 0 || isImporting}
             onClick={handleExecuteImport}
             className="flex-[1.5] h-11 rounded-xl bg-teal-700 text-white text-xs font-semibold hover:bg-teal-800 disabled:opacity-45 disabled:cursor-not-allowed inline-flex items-center justify-center gap-1.5"
           >

@@ -1,4 +1,5 @@
 import { ReactNode, TouchEvent, useRef, useState } from 'react';
+import { useOfflineStatus } from '../contexts/OfflineContext';
 
 export interface SwipeAction {
   key: string;
@@ -36,6 +37,7 @@ export function SwipeableRow({
   actions,
   children,
 }: SwipeableRowProps) {
+  const { isOffline } = useOfflineStatus();
   const totalWidth = actions.length * ACTION_WIDTH;
   const [dragOffset, setDragOffset] = useState<number | null>(null);
 
@@ -132,25 +134,30 @@ export function SwipeableRow({
           className="absolute inset-y-0 right-0 flex items-stretch"
           style={{ width: `${totalWidth}px` }}
         >
-          {actions.map((action) => (
-            <button
-              key={action.key}
-              type="button"
-              disabled={action.disabled}
-              onClick={(e) => {
-                e.stopPropagation();
-                onClose();
-                action.onClick();
-              }}
-              style={{ width: `${ACTION_WIDTH}px` }}
-              className={`flex flex-col items-center justify-center gap-1 px-1 text-[11px] font-semibold transition-colors ${TONE_CLASSES[action.tone]} ${
-                action.disabled ? 'cursor-not-allowed opacity-60' : ''
-              }`}
-            >
-              {action.icon}
-              <span className="truncate">{action.label}</span>
-            </button>
-          ))}
+          {actions.map((action) => {
+            const isDisabled = Boolean(action.disabled || isOffline);
+            return (
+              <button
+                key={action.key}
+                type="button"
+                disabled={isDisabled}
+                title={isOffline ? 'Mode Offline (Read-Only)' : action.label}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (isDisabled) return;
+                  onClose();
+                  action.onClick();
+                }}
+                style={{ width: `${ACTION_WIDTH}px` }}
+                className={`flex flex-col items-center justify-center gap-1 px-1 text-[11px] font-semibold transition-colors ${TONE_CLASSES[action.tone]} ${
+                  isDisabled ? 'cursor-not-allowed opacity-45 grayscale' : ''
+                }`}
+              >
+                {action.icon}
+                <span className="truncate">{action.label}</span>
+              </button>
+            );
+          })}
         </div>
       )}
 
