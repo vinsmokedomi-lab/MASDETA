@@ -1069,6 +1069,20 @@ export function MenuDownloadView({
         selectedProposal === 'all' &&
         selectedTahun !== 'database' &&
         selectedTahun !== 'arsip';
+      const includeEmptySlots =
+        !isStandaloneSource &&
+        selectedPengelola === 'all' &&
+        !onlyCompleteCheckedColumns &&
+        activeExcludedPengelolaCount === 0 &&
+        activeExcludedKelurahanCount === 0;
+      const selectedProposalMeta =
+        !isStandaloneSource && selectedProposal !== 'all'
+          ? proposals.find(
+              (p) =>
+                p.namaProposal === selectedProposal &&
+                (selectedTahun === 'all' || p.tahun === selectedTahun)
+            )
+          : undefined;
       const res = await exportKpmTableToPdf({
         records: pdfPrintRecords,
         proposals,
@@ -1083,6 +1097,15 @@ export function MenuDownloadView({
         splitByProposal: shouldSplitByProposal,
         autoExcludeKelurahanWhenInProposalTitle: shouldSplitByProposal && !isStandaloneSource,
         selectedPengelolaLabel: selectedPengelola !== 'all' ? selectedPengelola : undefined,
+        proposalSlotMap,
+        includeEmptySlots,
+        proposalMeta: selectedProposalMeta
+          ? {
+              id: selectedProposalMeta.id,
+              namaProposal: selectedProposalMeta.namaProposal,
+              tahun: selectedProposalMeta.tahun,
+            }
+          : undefined,
       });
       setPdfFeedback({
         type: 'success',

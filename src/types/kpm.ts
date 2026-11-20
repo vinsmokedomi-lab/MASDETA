@@ -578,3 +578,41 @@ export const DEFAULT_PEJABAT_LIST: PejabatProfile[] = [
     createdAt: '2025-01-01T00:00:00.000Z',
   },
 ];
+
+export interface TroubleshootingKpmPreApplyState {
+  id: string;
+  validasi: ValidationStatus;
+  proposalId: string | null;
+  proposal: string;
+  tahun: string;
+  registerCode: string;
+  alamat: string;
+  rt: string;
+  rw: string;
+  catatan: string;
+  kabKota: string;
+  kecamatan: string;
+  kelurahan: string;
+}
+
+export interface TroubleshootingReconcileSnapshot {
+  id: string;
+  proposalId: string;
+  proposalName: string;
+  tahun: string;
+  appliedAt: string;
+  appliedBy: string;
+  summary: {
+    shiftedCount: number;
+    emptySlotsCount: number;
+    movedToDatabaseCount: number;
+    addressUpdatedCount: number;
+  };
+  slotKey: string;
+  hadPreviousSlotState: boolean;
+  previousSlotState: ProposalSlotState | null;
+  previousKpmStates: TroubleshootingKpmPreApplyState[];
+  movedOverQuotaKpmIds: string[];
+  filledFromDatabaseKpmIds: string[];
+}
+

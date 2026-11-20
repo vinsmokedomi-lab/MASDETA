@@ -28,6 +28,7 @@ import {
   resolveScheduleBookId,
 } from '../types/kpm';
 import {
+  buildMergedProposalSlots,
   computeSubItemRecap,
   formatRupiah,
   formatUploadDateTime,
@@ -44,7 +45,9 @@ import {
   resolvePackageForKpm,
   resolveProposalDomicile,
   resolveProposalKecamatanCategory,
+  resolveProposalSlotStateForGroup,
 } from './imageProcessor';
+import type { TroubleshootingReconcileResult } from './troubleshootingReconciler';
 
 // Ukuran kertas F4: 216mm x 310mm
 export const F4_PAPER_WIDTH_MM = 216;
@@ -889,6 +892,9 @@ export interface ExportKpmTablePdfOptions {
   splitByProposal?: boolean;
   autoExcludeKelurahanWhenInProposalTitle?: boolean;
   selectedPengelolaLabel?: string;
+  proposalSlotMap?: ProposalSlotMap;
+  includeEmptySlots?: boolean;
+  proposalMeta?: { id?: string; namaProposal: string; tahun: string };
 }
 
 export async function exportKpmTableToPdf({
@@ -905,6 +911,9 @@ export async function exportKpmTableToPdf({
   splitByProposal = false,
   autoExcludeKelurahanWhenInProposalTitle = false,
   selectedPengelolaLabel,
+  proposalSlotMap = {},
+  includeEmptySlots = true,
+  proposalMeta,
 }: ExportKpmTablePdfOptions): Promise<{ savedFileName: string; openedNative: boolean; count: number }> {
   // Urutkan data KPM berdasarkan tahun, proposal, nomor absen, & hierarki item
   const sortedRecords = [...records].sort((a, b) => {
@@ -937,6 +946,7 @@ export async function exportKpmTableToPdf({
     sectionTitle: string;
     sectionSubtitle?: string;
     proposalTitleForAutoKel?: string;
+    proposalInfo?: { id?: string; namaProposal: string; tahun: string };
     grandTotalMoney?: { totalNominal: number; paidCount: number; totalCount: number };
   }) => {
     const {
@@ -944,6 +954,7 @@ export async function exportKpmTableToPdf({
       sectionTitle,
       sectionSubtitle,
       proposalTitleForAutoKel,
+      proposalInfo,
       grandTotalMoney,
     } = sectionOpts;
 
@@ -1070,10 +1081,66 @@ export async function exportKpmTableToPdf({
       };
     });
 
+    let slotEntries:
+      | Array<
+          | { kind: 'kpm'; slotNumber: number; record: KpmRecord }
+          | { kind: 'empty'; slotNumber: number }
+        >
+      | null = null;
+
+    if (includeEmptySlots && proposalInfo && proposalInfo.namaProposal?.trim()) {
+      const propObj =
+        (proposalInfo.id ? proposals.find((p) => p.id === proposalInfo.id) : undefined) ??
+        proposals.find(
+          (p) =>
+            p.namaProposal === proposalInfo.namaProposal &&
+            (!proposalInfo.tahun || p.tahun === proposalInfo.tahun)
+        ) ??
+        proposals.find((p) => p.namaProposal === proposalInfo.namaProposal);
+
+      const { state: slotState } = resolveProposalSlotStateForGroup(
+        proposalSlotMap,
+        propObj?.id ?? proposalInfo.id,
+        proposalInfo.namaProposal,
+        proposalInfo.tahun,
+        proposals
+      );
+
+      if (slotState && slotState.emptySlots.length > 0) {
+        const merged = buildMergedProposalSlots({
+          groupRecords: sectionRecords,
+          slotState,
+          proposals,
+          catalog: items,
+          wilayahList,
+        });
+        slotEntries = merged.map((item) =>
+          item.kind === 'empty'
+            ? { kind: 'empty' as const, slotNumber: item.slotNumber }
+            : { kind: 'kpm' as const, slotNumber: item.slotNumber, record: item.record }
+        );
+      }
+    }
+
+    const renderRows = slotEntries
+      ? slotEntries
+      : sectionRecords.map((rec, rowIdx) => {
+          const seq = getAbsenSeq(rec.registerCode);
+          return {
+            kind: 'kpm' as const,
+            slotNumber: seq < 999999 ? seq : rowIdx + 1,
+            record: rec,
+          };
+        });
+
     const headRow = activeCols.map((c) => c.pdfHeader);
-    const bodyRows = sectionRecords.map((rec, rowIdx) => {
-      const seq = getAbsenSeq(rec.registerCode);
-      const absenText = seq < 999999 ? String(seq).padStart(2, '0') : String(rowIdx + 1).padStart(2, '0');
+    const bodyRows = renderRows.map((entry) => {
+      const absenText = String(entry.slotNumber).padStart(2, '0');
+      if (entry.kind === 'empty') {
+        return activeCols.map((col) => (col.key === 'no' ? absenText : ''));
+      }
+
+      const rec = entry.record;
       const domicile = resolveKpmDomicile(rec, proposals, wilayahList);
       const resolvedKel = (domicile.kelurahan || '-').trim();
       const resolvedKec = (
@@ -1424,14 +1491,36 @@ export async function exportKpmTableToPdf({
         sectionTitle,
         sectionSubtitle,
         proposalTitleForAutoKel: group.proposalName,
+        proposalInfo: !group.isStandalone
+          ? { namaProposal: group.proposalName, tahun: group.tahun }
+          : undefined,
         grandTotalMoney: idx === groups.length - 1 ? grandTotalMoney : undefined,
       });
     });
   } else {
+    const singleProposalInfo =
+      proposalMeta && proposalMeta.namaProposal?.trim()
+        ? proposalMeta
+        : sortedRecords.length > 0 &&
+            sortedRecords.every(
+              (r) =>
+                r.validasi === 'accepted' &&
+                Boolean(r.proposal?.trim()) &&
+                r.proposal === sortedRecords[0].proposal &&
+                r.tahun === sortedRecords[0].tahun
+            )
+          ? {
+              id: sortedRecords[0].proposalId || undefined,
+              namaProposal: sortedRecords[0].proposal,
+              tahun: sortedRecords[0].tahun,
+            }
+          : undefined;
+
     renderSection({
       sectionRecords: sortedRecords,
       sectionTitle: title,
       sectionSubtitle: subtitle,
+      proposalInfo: singleProposalInfo,
     });
   }
 
@@ -5710,3 +5799,414 @@ export async function exportNomorDinsosToPdf({
   const res = await saveOrOpenPdfDocument(doc, fileName || defaultName);
   return { ...res, count: targetRecords.length };
 }
+
+export async function exportTroubleshootingToPdf(
+  result: TroubleshootingReconcileResult,
+  options?: {
+    fileName?: string;
+    reportTemplate?: ReportTemplateConfig;
+  }
+): Promise<{ savedFileName: string; openedNative: boolean; count: number }> {
+  // Kertas F4 Landscape (330mm x 216mm) agar 7 kolom lengkap beserta Keterangan Perubahan terbaca lega & siap cetak
+  const PAGE_W = 330;
+  const PAGE_H = 216;
+  const MARGIN = { top: 12, right: 12, bottom: 13, left: 12 };
+  const PRINT_W = PAGE_W - MARGIN.left - MARGIN.right; // 306mm
+
+  const doc = new jsPDF({
+    orientation: 'landscape',
+    unit: 'mm',
+    format: [PAGE_W, PAGE_H],
+    compress: true,
+  }) as AutoTableDoc;
+
+  const tpl = options?.reportTemplate;
+  const loadedLogo = tpl?.enabled
+    ? await loadSingleImageForPdf((tpl.kopLogoDataUrl || '').trim() || DEFAULT_KOP_LOGO_URL)
+    : null;
+
+  let cursorY = MARGIN.top;
+
+  // Kop Surat opsional jika diaktifkan di Pengaturan Template Laporan
+  if (tpl?.enabled) {
+    const logoSpaceW = loadedLogo ? 16 : 0;
+    if (loadedLogo) {
+      const ratio = loadedLogo.width / Math.max(loadedLogo.height, 1);
+      let drawW = 13;
+      let drawH = 16;
+      if (ratio > drawW / drawH) {
+        drawH = drawW / ratio;
+      } else {
+        drawW = drawH * ratio;
+      }
+      doc.addImage(
+        loadedLogo.dataUrl,
+        loadedLogo.format,
+        MARGIN.left + (logoSpaceW - drawW) / 2,
+        cursorY,
+        drawW,
+        drawH
+      );
+    }
+
+    const centerX = MARGIN.left + logoSpaceW + (PRINT_W - logoSpaceW) / 2;
+    let textY = cursorY + 4;
+    if (tpl.orgHeaderLine1?.trim()) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor(15, 23, 42);
+      doc.text(tpl.orgHeaderLine1.trim().toUpperCase(), centerX, textY, { align: 'center' });
+      textY += 4.8;
+    }
+    if (tpl.orgHeaderLine2?.trim()) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9.5);
+      doc.setTextColor(15, 118, 110);
+      doc.text(tpl.orgHeaderLine2.trim(), centerX, textY, { align: 'center' });
+      textY += 4.5;
+    }
+    if (tpl.orgAddress?.trim()) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(71, 85, 105);
+      doc.text(tpl.orgAddress.trim(), centerX, textY, { align: 'center' });
+      textY += 4;
+    }
+    cursorY = Math.max(textY + 1, loadedLogo ? cursorY + 17 : textY + 1);
+    doc.setDrawColor(15, 23, 42);
+    doc.setLineWidth(0.45);
+    doc.line(MARGIN.left, cursorY, PAGE_W - MARGIN.right, cursorY);
+    cursorY += 5;
+  }
+
+  // Judul Dokumen Resmi Hasil Penyesuaian
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text('HASIL REKONSILIASI & PENYESUAIAN URUTAN KPM TERHADAP KUOTA BAST DINAS', MARGIN.left, cursorY + 3.5);
+  cursorY += 7.5;
+
+  const generatedDate = new Intl.DateTimeFormat('id-ID', {
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(result.generatedAt || Date.now()));
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(51, 65, 85);
+  doc.text(
+    `Proposal: ${result.proposalTitle}   ·   BAST Dinas: ${result.bastTitle}   ·   Dicetak: ${generatedDate}`,
+    MARGIN.left,
+    cursorY
+  );
+  cursorY += 4.5;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.2);
+  doc.setTextColor(15, 118, 110);
+  doc.text(
+    `Ringkasan: Kuota BAST ${result.totals.kuotaBast} Unit  |  Usulan Proposal ${result.totals.usulanKpm} KPM  |  Terisi ${result.totals.terisi} KPM  |  Baris Kosong ${result.totals.barisKosong}  |  Dikeluarkan (Over Limit) ${result.totals.dikeluarkan}`,
+    MARGIN.left,
+    cursorY
+  );
+  cursorY += 6;
+
+  // BAGIAN 1: TABEL UTAMA DAFTAR KPM HASIL PENYESUAIAN KUOTA BAST
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(15, 23, 42);
+  doc.text(
+    `1. Tabel Utama Daftar KPM Hasil Penyesuaian Kuota BAST (No. 01 s.d. ${String(
+      result.totals.kuotaBast
+    ).padStart(2, '0')})`,
+    MARGIN.left,
+    cursorY
+  );
+  cursorY += 2.8;
+
+  const mainBody = result.mainRows.map((r) => [
+    r.noUrutText,
+    r.kodeItem,
+    r.isEmpty ? '-' : r.nama,
+    r.isEmpty ? '-' : r.nik,
+    r.isEmpty ? '-' : r.alamat,
+    r.isEmpty ? '-' : r.pengelola,
+    r.keterangan,
+  ]);
+
+  autoTable(doc, {
+    startY: cursorY,
+    margin: { top: MARGIN.top, right: MARGIN.right, bottom: MARGIN.bottom, left: MARGIN.left },
+    head: [
+      [
+        'No. Urut',
+        'Kode Item',
+        'Nama Penerima (KPM)',
+        'NIK',
+        'Alamat & Kelurahan',
+        'Pengelola',
+        'Keterangan Perubahan',
+      ],
+    ],
+    body: mainBody,
+    theme: 'grid',
+    styles: {
+      font: 'helvetica',
+      fontSize: 7.4,
+      cellPadding: { top: 1.8, right: 2, bottom: 1.8, left: 2 },
+      lineColor: [203, 213, 225],
+      lineWidth: 0.2,
+      textColor: [15, 23, 42],
+      valign: 'middle',
+      overflow: 'linebreak',
+    },
+    headStyles: {
+      fillColor: [15, 118, 110],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      fontSize: 7.6,
+      halign: 'center',
+    },
+    columnStyles: {
+      0: { cellWidth: 14, halign: 'center', fontStyle: 'bold' },
+      1: { cellWidth: 17, halign: 'center', fontStyle: 'bold' },
+      2: { cellWidth: 38, halign: 'left', fontStyle: 'bold' },
+      3: { cellWidth: 28, halign: 'center' },
+      4: { cellWidth: 68, halign: 'left' },
+      5: { cellWidth: 25, halign: 'left' },
+      6: { cellWidth: 116, halign: 'left' },
+    },
+    didParseCell: (hookData) => {
+      if (hookData.section === 'body') {
+        const rowData = result.mainRows[hookData.row.index];
+        if (rowData?.isEmpty) {
+          hookData.cell.styles.fillColor = [254, 252, 232]; // #FEFCE8
+          if (hookData.column.index >= 2 && hookData.column.index <= 5) {
+            hookData.cell.styles.textColor = [148, 163, 184];
+            hookData.cell.styles.halign = 'center';
+          } else if (hookData.column.index === 6) {
+            hookData.cell.styles.textColor = [146, 64, 14];
+            hookData.cell.styles.fontStyle = 'bold';
+          }
+        }
+      }
+    },
+  });
+
+  // BAGIAN 2: TABEL TERPISAH KPM YANG DIKELUARKAN (OVER LIMIT BAST)
+  let nextY = (doc.lastAutoTable?.finalY ?? cursorY) + 8;
+  if (nextY + 26 > PAGE_H - MARGIN.bottom) {
+    doc.addPage([PAGE_W, PAGE_H], 'landscape');
+    nextY = MARGIN.top + 4;
+  }
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(15, 23, 42);
+  doc.text(
+    '2. Daftar KPM yang Dikeluarkan (Melebihi Kuota/Limit BAST)',
+    MARGIN.left,
+    nextY
+  );
+  nextY += 2.8;
+
+  if (result.excludedRows.length === 0) {
+    autoTable(doc, {
+      startY: nextY,
+      margin: { top: MARGIN.top, right: MARGIN.right, bottom: MARGIN.bottom, left: MARGIN.left },
+      head: [
+        [
+          'No.',
+          'No. Asal Proposal',
+          'Kode Item',
+          'Nama Penerima (KPM)',
+          'Alamat & Kelurahan',
+          'Pengelola',
+          'Keterangan Alasan Pengeluaran',
+        ],
+      ],
+      body: [
+        [
+          {
+            content: `Tidak ada KPM yang dikeluarkan — seluruh ${result.totals.usulanKpm} KPM usulan Proposal masuk dalam batas kuota BAST Dinas.`,
+            colSpan: 7,
+            styles: { halign: 'center', textColor: [15, 118, 110], fontStyle: 'bold' },
+          },
+        ],
+      ],
+      theme: 'grid',
+      styles: {
+        font: 'helvetica',
+        fontSize: 7.6,
+        cellPadding: 2.5,
+        lineColor: [203, 213, 225],
+        lineWidth: 0.2,
+      },
+      headStyles: {
+        fillColor: [180, 83, 9],
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+        halign: 'center',
+      },
+    });
+  } else {
+    autoTable(doc, {
+      startY: nextY,
+      margin: { top: MARGIN.top, right: MARGIN.right, bottom: MARGIN.bottom, left: MARGIN.left },
+      head: [
+        [
+          'No.',
+          'No. Asal Proposal',
+          'Kode Item',
+          'Nama Penerima (KPM)',
+          'Alamat & Kelurahan',
+          'Pengelola',
+          'Keterangan Alasan Pengeluaran',
+        ],
+      ],
+      body: result.excludedRows.map((r) => [
+        r.noText,
+        r.noAsalProposal,
+        r.kodeItem,
+        r.nama,
+        r.alamat,
+        r.pengelola,
+        r.keterangan,
+      ]),
+      theme: 'grid',
+      styles: {
+        font: 'helvetica',
+        fontSize: 7.5,
+        cellPadding: { top: 2, right: 2, bottom: 2, left: 2 },
+        lineColor: [203, 213, 225],
+        lineWidth: 0.2,
+        textColor: [15, 23, 42],
+        valign: 'middle',
+        overflow: 'linebreak',
+      },
+      headStyles: {
+        fillColor: [190, 18, 60],
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+        fontSize: 7.6,
+        halign: 'center',
+      },
+      columnStyles: {
+        0: { cellWidth: 12, halign: 'center', fontStyle: 'bold' },
+        1: { cellWidth: 22, halign: 'center' },
+        2: { cellWidth: 17, halign: 'center', fontStyle: 'bold' },
+        3: { cellWidth: 42, halign: 'left', fontStyle: 'bold' },
+        4: { cellWidth: 74, halign: 'left' },
+        5: { cellWidth: 26, halign: 'left' },
+        6: { cellWidth: 113, halign: 'left' },
+      },
+    });
+  }
+
+  // BAGIAN 3: SATU TABEL REKAPITULASI PERBANDINGAN KUOTA ITEM (BAST VS PROPOSAL)
+  let recapY = (doc.lastAutoTable?.finalY ?? nextY) + 9;
+  const estimatedRecapHeight = 22 + (result.itemComparisons.length + 1) * 7;
+  if (recapY + estimatedRecapHeight > PAGE_H - MARGIN.bottom) {
+    doc.addPage([PAGE_W, PAGE_H], 'landscape');
+    recapY = MARGIN.top + 4;
+  }
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(15, 23, 42);
+  doc.text('3. Rekapitulasi Perbandingan Kuota Item (BAST vs Proposal)', MARGIN.left, recapY);
+  recapY += 2.8;
+
+  const recapRows = result.itemComparisons.map((item) => [
+    item.kodeItem,
+    item.rincianBarangBast,
+    String(item.kuotaBast),
+    String(item.usulanKpm),
+    String(item.terisi),
+    String(item.barisKosong),
+    String(item.dikeluarkan),
+  ]);
+
+  recapRows.push([
+    'TOTAL',
+    `Seluruh Paket Item (${result.itemComparisons.length} Kode)`,
+    String(result.totals.kuotaBast),
+    String(result.totals.usulanKpm),
+    String(result.totals.terisi),
+    String(result.totals.barisKosong),
+    String(result.totals.dikeluarkan),
+  ]);
+
+  autoTable(doc, {
+    startY: recapY,
+    margin: { top: MARGIN.top, right: MARGIN.right, bottom: MARGIN.bottom, left: MARGIN.left },
+    head: [
+      [
+        'Kode Item',
+        'Rincian Paket Barang BAST',
+        'Kuota BAST',
+        'Usulan KPM',
+        'Terisi (Masuk)',
+        'Baris Kosong',
+        'Dikeluarkan (Over Limit)',
+      ],
+    ],
+    body: recapRows,
+    theme: 'grid',
+    styles: {
+      font: 'helvetica',
+      fontSize: 8,
+      cellPadding: { top: 2.2, right: 2.4, bottom: 2.2, left: 2.4 },
+      lineColor: [203, 213, 225],
+      lineWidth: 0.2,
+      textColor: [15, 23, 42],
+      valign: 'middle',
+    },
+    headStyles: {
+      fillColor: [15, 23, 42],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      fontSize: 8,
+      halign: 'center',
+    },
+    columnStyles: {
+      0: { cellWidth: 24, halign: 'center', fontStyle: 'bold' },
+      1: { cellWidth: 132, halign: 'left' },
+      2: { cellWidth: 28, halign: 'center', fontStyle: 'bold' },
+      3: { cellWidth: 28, halign: 'center' },
+      4: { cellWidth: 30, halign: 'center', fontStyle: 'bold' },
+      5: { cellWidth: 28, halign: 'center' },
+      6: { cellWidth: 36, halign: 'center' },
+    },
+    didParseCell: (hookData) => {
+      if (hookData.section === 'body' && hookData.row.index === recapRows.length - 1) {
+        hookData.cell.styles.fillColor = [241, 245, 249];
+        hookData.cell.styles.fontStyle = 'bold';
+        hookData.cell.styles.textColor = [15, 23, 42];
+      }
+    },
+  });
+
+  // Footer nomor halaman di tiap halaman
+  const pageCount = doc.getNumberOfPages();
+  for (let p = 1; p <= pageCount; p += 1) {
+    doc.setPage(p);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      `MASDETA · Rekonsiliasi KPM & BAST Dinas   ·   Halaman ${p} dari ${pageCount}`,
+      PAGE_W - MARGIN.right,
+      PAGE_H - 5,
+      { align: 'right' }
+    );
+  }
+
+  const defaultFileName = `Troubleshooting_Rekonsiliasi_${result.proposalTitle}`;
+  const saved = await saveOrOpenPdfDocument(doc, options?.fileName || defaultFileName);
+  return { ...saved, count: result.mainRows.length };
+}
+

@@ -1,4 +1,4 @@
-import { ChangeEvent, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowDownLeft,
@@ -9,7 +9,9 @@ import {
   Camera,
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
+  Database,
   Download,
   FileCheck2,
   FileSpreadsheet,
@@ -22,6 +24,7 @@ import {
   RotateCcw,
   Search,
   SlidersHorizontal,
+  StickyNote,
   Tag,
   Trash2,
   Unlock,
@@ -30,6 +33,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import { INITIAL_WILAYAH_LIST } from '../data/kpmOptions';
 import {
   BastTemplateConfig,
   DEFAULT_PEJABAT_LIST,
@@ -45,8 +49,11 @@ import {
   ProposalSlotMap,
   ReportTemplateConfig,
   ScheduleEventItem,
+  TroubleshootingReconcileSnapshot,
+  WilayahKabKota,
 } from '../types/kpm';
 import {
+  buildMergedProposalSlots,
   computeSubItemRecap,
   formatNikDisplay,
   formatUploadDateTime,
@@ -55,12 +62,16 @@ import {
   getItemHierarchyRank,
   getKpmSlotNumberInProposal,
   removeDocumentFromDrive,
+  resolveKpmDomicile,
   resolvePackageForKpm,
+  resolveProposalDomicile,
   resolveProposalSlotStateForGroup,
   uploadProposalDocumentToDrive,
 } from '../utils/imageProcessor';
 import {
+  DEFAULT_PDF_COLUMN_KEYS,
   exportKpmBastBulkToPdf,
+  exportKpmTableToPdf,
   exportNomorDinsosToPdf,
   formatBastProposalLocation,
   formatIndonesianDateWords,
@@ -68,6 +79,7 @@ import {
   normalizePejabatNipNumber,
   resolveEffectiveBastConfig,
   resolveScheduleForProposal,
+  shouldAutoIncludeKelurahanColumn,
 } from '../utils/pdfExporter';
 import { DriveImage } from './DriveImage';
 import { isNativeAppPlatform, useIsDesktopWeb } from '../utils/platform';
@@ -78,6 +90,7 @@ interface ProposalDetailViewProps {
   allProposals: ProposalRecord[];
   records: KpmRecord[];
   items: ItemBantuan[];
+  wilayahList?: WilayahKabKota[];
   proposalSlotMap?: ProposalSlotMap;
   schedules?: ScheduleEventItem[];
   reportTemplate?: ReportTemplateConfig;
@@ -105,6 +118,18 @@ interface ProposalDetailViewProps {
     documents: ProposalDocuments,
     checklist: ProposalChecklist
   ) => Promise<void> | void;
+  onFillEmptySlotFromDatabase?: (
+    kpmId: string,
+    proposalName: string,
+    tahun: string,
+    slotNumber: number
+  ) => void;
+  activeReconcileSnapshot?: TroubleshootingReconcileSnapshot | null;
+  onUndoReconcileSnapshot?: (
+    snapshotOrProposalId: string
+  ) => Promise<{ ok: boolean; message?: string; warning?: string }>;
+  highlightEmptySlots?: boolean;
+  onDismissHighlightEmptySlots?: () => void;
 }
 
 export function ProposalDetailView({
@@ -112,6 +137,7 @@ export function ProposalDetailView({
   allProposals,
   records,
   items,
+  wilayahList = INITIAL_WILAYAH_LIST,
   proposalSlotMap = {},
   schedules = [],
   reportTemplate,
@@ -131,10 +157,25 @@ export function ProposalDetailView({
   onOpenFullHistory,
   onPreviewDocument,
   onUpdateProposalDocuments,
+  onFillEmptySlotFromDatabase,
+  activeReconcileSnapshot = null,
+  onUndoReconcileSnapshot,
+  highlightEmptySlots = false,
+  onDismissHighlightEmptySlots,
 }: ProposalDetailViewProps) {
   const { isOffline } = useOfflineStatus();
   const isNativeApp = isNativeAppPlatform();
   const isDesktopWeb = useIsDesktopWeb();
+  const kpmListSectionRef = useRef<HTMLElement | null>(null);
+  const firstEmptySlotRef = useRef<HTMLDivElement | null>(null);
+  const [confirmUndoOpen, setConfirmUndoOpen] = useState(false);
+  const [undoBusy, setUndoBusy] = useState(false);
+  const [dbPickerTargetSlot, setDbPickerTargetSlot] = useState<{
+    slotNumber: number;
+    item?: string;
+  } | null>(null);
+  const [dbPickerQuery, setDbPickerQuery] = useState('');
+  const [dbPickerAreaFilterEnabled, setDbPickerAreaFilterEnabled] = useState(true);
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
   const [transferYear, setTransferYear] = useState<string>(proposal.tahun);
   const [transferTargetId, setTransferTargetId] = useState<string>('');
@@ -161,6 +202,22 @@ export function ProposalDetailView({
   const [allowTitleWrap, setAllowTitleWrap] = useState(false);
   const [kpmListQuery, setKpmListQuery] = useState('');
   const [kpmListItemFilter, setKpmListItemFilter] = useState<string>('all');
+  const [expandedSections, setExpandedSections] = useState({
+    item: true,
+    subItem: true,
+    pengelola: true,
+    pekerjaan: true,
+  });
+  const toggleBreakdownSection = (key: keyof typeof expandedSections) => {
+    setExpandedSections((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+  const [kpmFilterDrill, setKpmFilterDrill] = useState<{
+    kind: 'item' | 'pengelola' | 'pekerjaan';
+    key: string;
+    title: string;
+    subtitle: string;
+  } | null>(null);
+  const [drillQuery, setDrillQuery] = useState('');
 
   const effectiveBastConfig = useMemo(
     () => resolveEffectiveBastConfig(bastTemplate, proposalBastMap, proposal.id, reportTemplate),
@@ -191,6 +248,7 @@ export function ProposalDetailView({
   const [bastDraft, setBastDraft] = useState<BastTemplateConfig>(effectiveBastConfig);
   const [bastBusy, setBastBusy] = useState(false);
   const [dinsosBusy, setDinsosBusy] = useState(false);
+  const [kpmPdfBusy, setKpmPdfBusy] = useState(false);
   const [bastFeedback, setBastFeedback] = useState<{
     type: 'success' | 'error';
     text: string;
@@ -283,6 +341,55 @@ export function ProposalDetailView({
       });
     } finally {
       setDinsosBusy(false);
+    }
+  };
+
+  const handleExportProposalKpmPdf = async () => {
+    if ((proposalRecords.length === 0 && emptySlotsCount === 0) || kpmPdfBusy) return;
+    setKpmPdfBusy(true);
+    setBastFeedback(null);
+    try {
+      const selectedColumns = shouldAutoIncludeKelurahanColumn(proposal.namaProposal)
+        ? [...DEFAULT_PDF_COLUMN_KEYS, 'kelurahan' as const]
+        : DEFAULT_PDF_COLUMN_KEYS;
+      const subtitleParts = [
+        `Tipe: ${proposal.tipe}`,
+        `Total: ${proposalRecords.length} KPM`,
+        emptySlotsCount > 0 ? `${emptySlotsCount} Baris Kosong` : '',
+      ].filter(Boolean);
+      const result = await exportKpmTableToPdf({
+        records: proposalRecords,
+        proposals: allProposals,
+        items,
+        wilayahList,
+        selectedColumns,
+        title: `${proposal.namaProposal} ${proposal.tahun}`.trim(),
+        subtitle: subtitleParts.join('  ·  '),
+        fileName: `KPM_${proposal.tahun}_${proposal.namaProposal}`,
+        includeSummary: true,
+        reportTemplate,
+        splitByProposal: false,
+        proposalSlotMap,
+        includeEmptySlots: true,
+        proposalMeta: {
+          id: proposal.id,
+          namaProposal: proposal.namaProposal,
+          tahun: proposal.tahun,
+        },
+      });
+      setBastFeedback({
+        type: 'success',
+        text: `PDF Daftar KPM (${result.count} KPM${
+          emptySlotsCount > 0 ? ` + ${emptySlotsCount} baris kosong` : ''
+        }) disimpan: ${result.savedFileName}`,
+      });
+    } catch (err) {
+      setBastFeedback({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Gagal membuat PDF Daftar KPM proposal.',
+      });
+    } finally {
+      setKpmPdfBusy(false);
     }
   };
 
@@ -493,7 +600,7 @@ export function ProposalDetailView({
           records,
           allProposals,
           items,
-          undefined,
+          wilayahList,
           proposalSlotMap
         );
         const absen = getAbsenSeq(rec.registerCode);
@@ -506,7 +613,31 @@ export function ProposalDetailView({
         if (a.displaySeq !== b.displaySeq) return a.displaySeq - b.displaySeq;
         return a.record.nama.localeCompare(b.record.nama, 'id');
       });
-  }, [proposalRecords, records, allProposals, items, proposalSlotMap]);
+  }, [proposalRecords, records, allProposals, items, wilayahList, proposalSlotMap]);
+
+  const drillFilteredRecords = useMemo(() => {
+    if (!kpmFilterDrill) return [];
+    const base = orderedProposalRecords.filter(({ record: rec }) => {
+      if (kpmFilterDrill.kind === 'item') {
+        return (rec.item || '').trim() === kpmFilterDrill.key;
+      }
+      if (kpmFilterDrill.kind === 'pengelola') {
+        return (rec.pengelola?.trim() || 'Tanpa Pengelola') === kpmFilterDrill.key;
+      }
+      return (rec.pekerjaan?.trim() || 'Lainnya') === kpmFilterDrill.key;
+    });
+    const q = drillQuery.trim().toLowerCase();
+    if (!q) return base;
+    return base.filter(
+      ({ record: rec }) =>
+        rec.nama.toLowerCase().includes(q) ||
+        rec.nikKtp.toLowerCase().includes(q) ||
+        rec.alamat.toLowerCase().includes(q) ||
+        rec.kelurahan.toLowerCase().includes(q) ||
+        rec.pengelola.toLowerCase().includes(q) ||
+        rec.item.toLowerCase().includes(q)
+    );
+  }, [kpmFilterDrill, orderedProposalRecords, drillQuery]);
 
   const filteredProposalRecords = useMemo(() => {
     const q = kpmListQuery.trim().toLowerCase();
@@ -526,6 +657,138 @@ export function ProposalDetailView({
       );
     });
   }, [orderedProposalRecords, kpmListQuery, kpmListItemFilter]);
+
+  const mergedProposalSlots = useMemo(() => {
+    const { state: slotState } = resolveProposalSlotStateForGroup(
+      proposalSlotMap,
+      proposal.id,
+      proposal.namaProposal,
+      proposal.tahun,
+      allProposals
+    );
+    return buildMergedProposalSlots({
+      groupRecords: proposalRecords,
+      slotState,
+      proposals: allProposals,
+      catalog: items,
+      wilayahList,
+    });
+  }, [proposalSlotMap, proposal.id, proposal.namaProposal, proposal.tahun, allProposals, proposalRecords, items, wilayahList]);
+
+  const filteredProposalSlots = useMemo(() => {
+    const q = kpmListQuery.trim().toLowerCase();
+    return mergedProposalSlots.filter((entry) => {
+      if (entry.kind === 'empty') {
+        const slotItem = (entry.emptySlot.item || '').trim();
+        if (kpmListItemFilter !== 'all' && slotItem && slotItem !== kpmListItemFilter) {
+          return false;
+        }
+        if (!q) return true;
+        const slotNumText = String(entry.slotNumber).padStart(2, '0');
+        return (
+          'baris kosong'.includes(q) ||
+          slotNumText.includes(q) ||
+          slotItem.toLowerCase().includes(q) ||
+          (entry.emptySlot.previousKpmName || '').toLowerCase().includes(q)
+        );
+      }
+      const rec = entry.record;
+      if (kpmListItemFilter !== 'all' && (rec.item || '').trim() !== kpmListItemFilter) {
+        return false;
+      }
+      if (!q) return true;
+      return (
+        rec.nama.toLowerCase().includes(q) ||
+        rec.nikKtp.toLowerCase().includes(q) ||
+        rec.nikKk.toLowerCase().includes(q) ||
+        rec.alamat.toLowerCase().includes(q) ||
+        rec.kelurahan.toLowerCase().includes(q) ||
+        rec.item.toLowerCase().includes(q) ||
+        rec.pengelola.toLowerCase().includes(q)
+      );
+    });
+  }, [mergedProposalSlots, kpmListQuery, kpmListItemFilter]);
+
+  const proposalDomicile = useMemo(
+    () => resolveProposalDomicile(proposal.namaProposal, allProposals, proposal.tahun, wilayahList),
+    [proposal.namaProposal, allProposals, proposal.tahun, wilayahList]
+  );
+
+  const hasProposalAreaScope = Boolean(
+    proposalDomicile.kelurahan?.trim() || proposalDomicile.kecamatan?.trim()
+  );
+
+  const databasePickerCandidates = useMemo(() => {
+    if (!dbPickerTargetSlot) return [];
+    const q = dbPickerQuery.trim().toLowerCase();
+    const targetKel = (proposalDomicile.kelurahan || '').trim().toLowerCase();
+    const targetKec = (proposalDomicile.kecamatan || '').trim().toLowerCase();
+
+    return records
+      .filter((r) => {
+        if (r.validasi !== 'pending') return false;
+        const dom = resolveKpmDomicile(r, allProposals, wilayahList);
+        if (dbPickerAreaFilterEnabled && hasProposalAreaScope) {
+          const candKel = (dom.kelurahan || '').trim().toLowerCase();
+          const candKec = (dom.kecamatan || '').trim().toLowerCase();
+          if (targetKel) {
+            if (candKel !== targetKel) return false;
+          } else if (targetKec) {
+            if (candKec !== targetKec) return false;
+          }
+        }
+        if (!q) return true;
+        return (
+          r.nama.toLowerCase().includes(q) ||
+          r.nikKtp.includes(q) ||
+          r.item.toLowerCase().includes(q) ||
+          dom.kelurahan.toLowerCase().includes(q) ||
+          dom.kecamatan.toLowerCase().includes(q) ||
+          r.pengelola.toLowerCase().includes(q) ||
+          (r.catatan || '').toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => {
+        if (dbPickerTargetSlot.item) {
+          const aMatch = a.item === dbPickerTargetSlot.item ? 0 : 1;
+          const bMatch = b.item === dbPickerTargetSlot.item ? 0 : 1;
+          if (aMatch !== bMatch) return aMatch - bMatch;
+        }
+        return a.nama.localeCompare(b.nama, 'id');
+      });
+  }, [
+    dbPickerTargetSlot,
+    dbPickerQuery,
+    dbPickerAreaFilterEnabled,
+    hasProposalAreaScope,
+    proposalDomicile.kelurahan,
+    proposalDomicile.kecamatan,
+    records,
+    allProposals,
+    wilayahList,
+  ]);
+
+  useEffect(() => {
+    if (!highlightEmptySlots) return;
+    const timer = window.setTimeout(() => {
+      const targetEl = firstEmptySlotRef.current ?? kpmListSectionRef.current;
+      targetEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [highlightEmptySlots, proposal.id]);
+
+  const handleConfirmUndoProposal = async () => {
+    if (!onUndoReconcileSnapshot || !activeReconcileSnapshot || undoBusy) return;
+    setUndoBusy(true);
+    try {
+      const res = await onUndoReconcileSnapshot(activeReconcileSnapshot.id);
+      if (res.ok) {
+        setConfirmUndoOpen(false);
+      }
+    } finally {
+      setUndoBusy(false);
+    }
+  };
 
   // Pengelola Breakdown
   const pengelolaBreakdown = useMemo(() => {
@@ -985,6 +1248,39 @@ export function ProposalDetailView({
           )}
         </section>
 
+        {/* Catatan Proposal (tepat di bawah container heading) */}
+        <section className="rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-700">
+                <StickyNote className="h-3.5 w-3.5" />
+              </div>
+              <h2 className="text-sm font-bold text-slate-900">Catatan Proposal</h2>
+            </div>
+            {canUpdate && (
+              <button
+                type="button"
+                disabled={isOffline}
+                onClick={() => onEditProposal(proposal.id)}
+                title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Edit Catatan Proposal'}
+                className="inline-flex min-h-[30px] items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-[11px] font-semibold text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                <Pencil className="h-3 w-3" />
+                <span>{proposal.catatan?.trim() ? 'Edit' : 'Tambah'}</span>
+              </button>
+            )}
+          </div>
+          {proposal.catatan?.trim() ? (
+            <div className="mt-2.5 rounded-xl border border-slate-100 bg-slate-50/80 px-3.5 py-2.5 text-xs leading-relaxed text-slate-700 whitespace-pre-wrap break-words">
+              {proposal.catatan.trim()}
+            </div>
+          ) : (
+            <p className="mt-2 text-xs text-slate-400">
+              Belum ada catatan pada proposal ini.
+            </p>
+          )}
+        </section>
+
         {/* Proporsi DTSEN Donut Ring */}
         <section className="rounded-2xl border border-slate-200 bg-white p-4">
           <h2 className="text-sm font-bold text-slate-900">Klasifikasi DTSEN</h2>
@@ -1151,47 +1447,66 @@ export function ProposalDetailView({
             </p>
           )}
 
-          <div className="flex flex-wrap gap-2">
-            {onSaveProposalBastConfig && canUpdate && (
-              <button
-                type="button"
-                disabled={isOffline}
-                onClick={openProposalBastModal}
-                title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Setting BAST Proposal'}
-                className="inline-flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-              >
-                <SlidersHorizontal className={`h-3.5 w-3.5 ${isOffline ? 'text-slate-400' : 'text-teal-700'}`} />
-                <span>Setting BAST Proposal</span>
-              </button>
-            )}
+          <div className="space-y-2">
             <button
               type="button"
-              disabled={proposalRecords.length === 0 || bastBusy}
-              onClick={() => void handleExportProposalBast()}
-              className="inline-flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
+              disabled={(proposalRecords.length === 0 && emptySlotsCount === 0) || kpmPdfBusy}
+              onClick={() => void handleExportProposalKpmPdf()}
+              className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-teal-700 bg-white px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {bastBusy ? (
+              {kpmPdfBusy ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
-                <FileCheck2 className="h-3.5 w-3.5" />
+                <Download className="h-3.5 w-3.5" />
               )}
-              <span>Cetak BAST ({kpmCounts.accepted} KPM)</span>
+              <span>
+                Download KPM PDF ({kpmCounts.accepted} KPM
+                {emptySlotsCount > 0 ? ` + ${emptySlotsCount} Kosong` : ''} · F4)
+              </span>
+            </button>
+
+            <div className="flex flex-wrap gap-2">
+              {onSaveProposalBastConfig && canUpdate && (
+                <button
+                  type="button"
+                  disabled={isOffline}
+                  onClick={openProposalBastModal}
+                  title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Setting BAST Proposal'}
+                  className="inline-flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                >
+                  <SlidersHorizontal className={`h-3.5 w-3.5 ${isOffline ? 'text-slate-400' : 'text-teal-700'}`} />
+                  <span>Setting BAST Proposal</span>
+                </button>
+              )}
+              <button
+                type="button"
+                disabled={proposalRecords.length === 0 || bastBusy}
+                onClick={() => void handleExportProposalBast()}
+                className="inline-flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
+              >
+                {bastBusy ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <FileCheck2 className="h-3.5 w-3.5" />
+                )}
+                <span>Cetak BAST ({kpmCounts.accepted} KPM)</span>
+              </button>
+            </div>
+
+            <button
+              type="button"
+              disabled={proposalRecords.length === 0 || dinsosBusy}
+              onClick={() => void handleExportProposalDinsos()}
+              className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50/70 px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100 disabled:opacity-50"
+            >
+              {dinsosBusy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Tag className="h-3.5 w-3.5" />
+              )}
+              <span>Cetak Nomor DINSOS ({kpmCounts.accepted} Label · F4 216×330)</span>
             </button>
           </div>
-
-          <button
-            type="button"
-            disabled={proposalRecords.length === 0 || dinsosBusy}
-            onClick={() => void handleExportProposalDinsos()}
-            className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50/70 px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100 disabled:opacity-50"
-          >
-            {dinsosBusy ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Tag className="h-3.5 w-3.5" />
-            )}
-            <span>Cetak Nomor DINSOS ({kpmCounts.accepted} Label · F4 216×330)</span>
-          </button>
         </section>
     </>
   );
@@ -1246,127 +1561,244 @@ export function ProposalDetailView({
           </section>
         )}
 
-        {/* Rekap Item */}
+        {/* Rekap Item (Collapsible + Clickable KPM list) */}
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-            <h2 className="text-sm font-bold text-slate-900">Item</h2>
-            <span className="text-xs font-medium text-slate-500 tabular-nums">
-              {itemBreakdown.length} Item
-            </span>
-          </div>
-          {itemBreakdown.length === 0 ? (
-            <p className="px-4 py-6 text-center text-xs text-slate-400">
-              Belum ada item bantuan tercatat.
-            </p>
-          ) : (
-            <div className="divide-y divide-slate-100">
-              {itemBreakdown.map((row) => (
-                <div key={row.code} className="flex items-center justify-between gap-3 px-4 py-3">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <span className="flex h-9 w-11 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-xs font-semibold text-teal-800">
-                      {row.code}
-                    </span>
+          <button
+            type="button"
+            aria-expanded={expandedSections.item}
+            onClick={() => toggleBreakdownSection('item')}
+            className={`flex w-full items-center justify-between gap-2 px-4 py-3 text-left transition-colors hover:bg-slate-50/80 ${
+              expandedSections.item ? 'border-b border-slate-100' : ''
+            }`}
+          >
+            <div className="flex min-w-0 items-center gap-2">
+              <h2 className="text-sm font-bold text-slate-900">Item</h2>
+              <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 tabular-nums">
+                {itemBreakdown.length} Item
+              </span>
+            </div>
+            <ChevronDown
+              className={`h-4 w-4 shrink-0 text-slate-500 transition-transform duration-200 ${
+                expandedSections.item ? 'rotate-180' : ''
+              }`}
+            />
+          </button>
+          {expandedSections.item && (
+            itemBreakdown.length === 0 ? (
+              <p className="px-4 py-6 text-center text-xs text-slate-400">
+                Belum ada item bantuan tercatat.
+              </p>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {itemBreakdown.map((row) => (
+                  <button
+                    key={row.code}
+                    type="button"
+                    onClick={() => {
+                      setDrillQuery('');
+                      setKpmFilterDrill({
+                        kind: 'item',
+                        key: row.code,
+                        title: `${row.code} — ${row.name}`,
+                        subtitle: `${row.total} KPM · Item Bantuan`,
+                      });
+                    }}
+                    className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-teal-50/50 active:bg-teal-50"
+                  >
+                    <div className="flex min-w-0 items-center gap-3">
+                      <span className="flex h-9 w-11 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-xs font-semibold text-teal-800">
+                        {row.code}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-normal text-slate-800">{row.name}</p>
+                        <p className="text-[11px] text-slate-500 tabular-nums">
+                          {row.accepted} Diterima · Ketuk untuk lihat KPM
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <span className="text-sm font-semibold text-slate-700 tabular-nums">
+                        {row.total}
+                      </span>
+                      <ChevronRight className="h-4 w-4 text-slate-400" />
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )
+          )}
+        </section>
+
+        {/* Akumulasi Sub-Item dalam Proposal (Collapsible) */}
+        {subItemRecap.aggregates.length > 0 && (
+          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+            <button
+              type="button"
+              aria-expanded={expandedSections.subItem}
+              onClick={() => toggleBreakdownSection('subItem')}
+              className={`flex w-full items-center justify-between gap-2 px-4 py-3 text-left transition-colors hover:bg-slate-50/80 ${
+                expandedSections.subItem ? 'border-b border-slate-100' : ''
+              }`}
+            >
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-sm font-bold text-slate-900">Akumulasi Sub-Item</h2>
+                  <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 tabular-nums">
+                    {subItemRecap.aggregates.length} Sub-Item
+                  </span>
+                </div>
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  Total gabungan barang lintas paket pada proposal ini
+                </p>
+              </div>
+              <ChevronDown
+                className={`h-4 w-4 shrink-0 text-slate-500 transition-transform duration-200 ${
+                  expandedSections.subItem ? 'rotate-180' : ''
+                }`}
+              />
+            </button>
+            {expandedSections.subItem && (
+              <div className="divide-y divide-slate-100">
+                {subItemRecap.aggregates.map((sub) => (
+                  <div key={sub.key} className="flex items-center justify-between gap-3 px-4 py-3">
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-normal text-slate-800">{row.name}</p>
-                      <p className="text-[11px] text-slate-500 tabular-nums">
-                        {row.accepted} Diterima
+                      <p className="truncate text-sm font-normal text-slate-800">{sub.name}</p>
+                      <p className="truncate text-[11px] text-slate-500 tabular-nums">
+                        {sub.packageSources.map((p) => `${p.code} (${p.total})`).join(' · ')}
+                      </p>
+                    </div>
+                    <div className="shrink-0 text-right tabular-nums">
+                      <p className="text-sm font-medium text-slate-800">
+                        {sub.totalNeeded} {sub.satuan || 'Unit'}
+                      </p>
+                      <p
+                        className={`text-[11px] font-medium ${
+                          sub.pendingCount > 0 ? 'text-amber-700' : 'text-teal-700'
+                        }`}
+                      >
+                        {sub.pendingCount > 0 ? `Belum dibagi ${sub.pendingCount}` : 'Lengkap'}
                       </p>
                     </div>
                   </div>
-                  <span className="shrink-0 text-sm font-medium text-slate-700 tabular-nums">
-                    {row.total}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-
-        {/* Akumulasi Sub-Item dalam Proposal */}
-        {subItemRecap.aggregates.length > 0 && (
-          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-            <div className="border-b border-slate-100 px-4 py-3">
-              <h2 className="text-sm font-bold text-slate-900">Akumulasi Sub-Item</h2>
-              <p className="text-[11px] text-slate-500">
-                Total gabungan barang lintas paket pada proposal ini
-              </p>
-            </div>
-            <div className="divide-y divide-slate-100">
-              {subItemRecap.aggregates.map((sub) => (
-                <div key={sub.key} className="flex items-center justify-between gap-3 px-4 py-3">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-normal text-slate-800">{sub.name}</p>
-                    <p className="truncate text-[11px] text-slate-500 tabular-nums">
-                      {sub.packageSources.map((p) => `${p.code} (${p.total})`).join(' · ')}
-                    </p>
-                  </div>
-                  <div className="shrink-0 text-right tabular-nums">
-                    <p className="text-sm font-medium text-slate-800">
-                      {sub.totalNeeded} {sub.satuan || 'Unit'}
-                    </p>
-                    <p
-                      className={`text-[11px] font-medium ${
-                        sub.pendingCount > 0 ? 'text-amber-700' : 'text-teal-700'
-                      }`}
-                    >
-                      {sub.pendingCount > 0 ? `Belum dibagi ${sub.pendingCount}` : 'Lengkap'}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </section>
         )}
 
-        {/* Rekap Pengelola */}
+        {/* Rekap Pengelola (Collapsible + Clickable KPM list) */}
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-            <h2 className="text-sm font-bold text-slate-900">Pengelola</h2>
-            <span className="text-xs font-medium text-slate-500 tabular-nums">
-              {pengelolaBreakdown.length} Pengelola
-            </span>
-          </div>
-          {pengelolaBreakdown.length === 0 ? (
-            <p className="px-4 py-6 text-center text-xs text-slate-400">
-              Belum ada pengelola tercatat.
-            </p>
-          ) : (
-            <div className="divide-y divide-slate-100">
-              {pengelolaBreakdown.map((row) => (
-                <div key={row.name} className="flex items-center justify-between gap-3 px-4 py-3">
-                  <span className="truncate text-sm font-normal text-slate-800">{row.name}</span>
-                  <span className="shrink-0 text-sm font-medium text-slate-700 tabular-nums">
-                    {row.count}
-                  </span>
-                </div>
-              ))}
+          <button
+            type="button"
+            aria-expanded={expandedSections.pengelola}
+            onClick={() => toggleBreakdownSection('pengelola')}
+            className={`flex w-full items-center justify-between gap-2 px-4 py-3 text-left transition-colors hover:bg-slate-50/80 ${
+              expandedSections.pengelola ? 'border-b border-slate-100' : ''
+            }`}
+          >
+            <div className="flex min-w-0 items-center gap-2">
+              <h2 className="text-sm font-bold text-slate-900">Pengelola</h2>
+              <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 tabular-nums">
+                {pengelolaBreakdown.length} Pengelola
+              </span>
             </div>
+            <ChevronDown
+              className={`h-4 w-4 shrink-0 text-slate-500 transition-transform duration-200 ${
+                expandedSections.pengelola ? 'rotate-180' : ''
+              }`}
+            />
+          </button>
+          {expandedSections.pengelola && (
+            pengelolaBreakdown.length === 0 ? (
+              <p className="px-4 py-6 text-center text-xs text-slate-400">
+                Belum ada pengelola tercatat.
+              </p>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {pengelolaBreakdown.map((row) => (
+                  <button
+                    key={row.name}
+                    type="button"
+                    onClick={() => {
+                      setDrillQuery('');
+                      setKpmFilterDrill({
+                        kind: 'pengelola',
+                        key: row.name,
+                        title: row.name,
+                        subtitle: `${row.count} KPM · Pengelola`,
+                      });
+                    }}
+                    className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-teal-50/50 active:bg-teal-50"
+                  >
+                    <span className="truncate text-sm font-normal text-slate-800">{row.name}</span>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <span className="text-sm font-semibold text-slate-700 tabular-nums">
+                        {row.count}
+                      </span>
+                      <ChevronRight className="h-4 w-4 text-slate-400" />
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )
           )}
         </section>
 
-        {/* Rekap Pekerjaan */}
+        {/* Rekap Pekerjaan (Collapsible + Clickable KPM list) */}
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-            <h2 className="text-sm font-bold text-slate-900">Pekerjaan</h2>
-            <span className="text-xs font-medium text-slate-500 tabular-nums">
-              {pekerjaanBreakdown.length} Jenis
-            </span>
-          </div>
-          {pekerjaanBreakdown.length === 0 ? (
-            <p className="px-4 py-6 text-center text-xs text-slate-400">
-              Belum ada data pekerjaan tercatat.
-            </p>
-          ) : (
-            <div className="divide-y divide-slate-100">
-              {pekerjaanBreakdown.map((row) => (
-                <div key={row.name} className="flex items-center justify-between gap-3 px-4 py-3">
-                  <span className="truncate text-sm font-normal text-slate-800">{row.name}</span>
-                  <span className="shrink-0 text-sm font-medium text-slate-700 tabular-nums">
-                    {row.count}
-                  </span>
-                </div>
-              ))}
+          <button
+            type="button"
+            aria-expanded={expandedSections.pekerjaan}
+            onClick={() => toggleBreakdownSection('pekerjaan')}
+            className={`flex w-full items-center justify-between gap-2 px-4 py-3 text-left transition-colors hover:bg-slate-50/80 ${
+              expandedSections.pekerjaan ? 'border-b border-slate-100' : ''
+            }`}
+          >
+            <div className="flex min-w-0 items-center gap-2">
+              <h2 className="text-sm font-bold text-slate-900">Pekerjaan</h2>
+              <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 tabular-nums">
+                {pekerjaanBreakdown.length} Jenis
+              </span>
             </div>
+            <ChevronDown
+              className={`h-4 w-4 shrink-0 text-slate-500 transition-transform duration-200 ${
+                expandedSections.pekerjaan ? 'rotate-180' : ''
+              }`}
+            />
+          </button>
+          {expandedSections.pekerjaan && (
+            pekerjaanBreakdown.length === 0 ? (
+              <p className="px-4 py-6 text-center text-xs text-slate-400">
+                Belum ada data pekerjaan tercatat.
+              </p>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {pekerjaanBreakdown.map((row) => (
+                  <button
+                    key={row.name}
+                    type="button"
+                    onClick={() => {
+                      setDrillQuery('');
+                      setKpmFilterDrill({
+                        kind: 'pekerjaan',
+                        key: row.name,
+                        title: row.name,
+                        subtitle: `${row.count} KPM · Pekerjaan`,
+                      });
+                    }}
+                    className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-teal-50/50 active:bg-teal-50"
+                  >
+                    <span className="truncate text-sm font-normal text-slate-800">{row.name}</span>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <span className="text-sm font-semibold text-slate-700 tabular-nums">
+                        {row.count}
+                      </span>
+                      <ChevronRight className="h-4 w-4 text-slate-400" />
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )
           )}
         </section>
 
@@ -1631,33 +2063,110 @@ export function ProposalDetailView({
     </>
   );
 
+  const proposalUndoBannerBlock =
+    activeReconcileSnapshot && onUndoReconcileSnapshot ? (
+      <section className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-950">
+        <div className="flex min-w-0 flex-1 items-start gap-2.5">
+          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-800">
+            <RotateCcw className="h-4 w-4" />
+          </div>
+          <div className="min-w-0 flex-1 space-y-0.5">
+            <p className="font-bold text-amber-950">
+              Rekonsiliasi BAST Terakhir Aktif (Bisa Di-Undo)
+            </p>
+            <p className="text-[11px] leading-relaxed text-amber-900 tabular-nums">
+              Diterapkan {formatUploadDateTime(activeReconcileSnapshot.appliedAt)} oleh{' '}
+              <strong>{activeReconcileSnapshot.appliedBy}</strong> ·{' '}
+              {activeReconcileSnapshot.summary.shiftedCount} bergeser ·{' '}
+              {activeReconcileSnapshot.summary.emptySlotsCount} baris kosong ·{' '}
+              {activeReconcileSnapshot.summary.movedToDatabaseCount} ke Database
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          disabled={isOffline || !canUpdate || proposal.status === 'locked' || undoBusy}
+          onClick={() => setConfirmUndoOpen(true)}
+          className="inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-xl bg-amber-600 px-3.5 text-xs font-bold text-white transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+          <span>Batalkan Apply Terakhir</span>
+        </button>
+      </section>
+    ) : null;
+
+  let firstEmptySlotAssigned = false;
+
   const proposalKpmListBlock = (
-    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+    <section
+      ref={kpmListSectionRef}
+      className="overflow-hidden rounded-2xl border border-slate-200 bg-white"
+    >
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-5 py-4">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-base font-bold text-slate-900">Daftar KPM</h2>
             <span className="rounded-lg bg-teal-50 px-2 py-0.5 text-xs font-bold text-teal-800 tabular-nums">
               {proposalRecords.length} KPM
             </span>
+            {emptySlotsCount > 0 && (
+              <span className="rounded-lg bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900 tabular-nums">
+                {emptySlotsCount} Baris Kosong
+              </span>
+            )}
           </div>
           <p className="mt-0.5 truncate text-xs text-slate-500">
-            Klik baris KPM untuk membuka detail lengkap, sub-item, dan cetak kupon/BAST
+            Klik baris KPM untuk membuka detail lengkap, atau isi Baris Kosong dari Database KPM
           </p>
         </div>
-        {proposal.status !== 'locked' && canAdd && (
+        <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"
-            disabled={isOffline}
-            onClick={() => onAddKpmInProposal(proposal.namaProposal, proposal.tahun)}
-            title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Tambah KPM'}
-            className="inline-flex min-h-[38px] shrink-0 items-center gap-1.5 rounded-xl bg-teal-700 px-3.5 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+            disabled={(proposalRecords.length === 0 && emptySlotsCount === 0) || kpmPdfBusy}
+            onClick={() => void handleExportProposalKpmPdf()}
+            className="inline-flex min-h-[38px] shrink-0 items-center gap-1.5 rounded-xl border border-teal-700 bg-white px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <UserPlus className="h-3.5 w-3.5" />
-            <span>Tambah KPM</span>
+            {kpmPdfBusy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Download className="h-3.5 w-3.5" />
+            )}
+            <span>Download PDF</span>
           </button>
-        )}
+          {proposal.status !== 'locked' && canAdd && (
+            <button
+              type="button"
+              disabled={isOffline}
+              onClick={() => onAddKpmInProposal(proposal.namaProposal, proposal.tahun)}
+              title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Tambah KPM'}
+              className="inline-flex min-h-[38px] shrink-0 items-center gap-1.5 rounded-xl bg-teal-700 px-3.5 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+            >
+              <UserPlus className="h-3.5 w-3.5" />
+              <span>Tambah KPM</span>
+            </button>
+          )}
+        </div>
       </div>
+
+      {highlightEmptySlots && emptySlotsCount > 0 && (
+        <div className="flex items-center justify-between gap-2 border-b border-amber-200 bg-amber-50 px-5 py-2.5 text-xs text-amber-950">
+          <p className="font-medium">
+            <strong>{emptySlotsCount} Baris Kosong</strong> disorot. Klik{' '}
+            <strong>+ Isi dari Database</strong> pada slot kosong untuk memilih KPM pengganti dari
+            wilayah sesuai proposal.
+          </p>
+          {onDismissHighlightEmptySlots && (
+            <button
+              type="button"
+              onClick={onDismissHighlightEmptySlots}
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-amber-800 hover:bg-amber-100"
+              aria-label="Tutup sorotan"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="space-y-2.5 border-b border-slate-100 bg-slate-50/70 px-5 py-3">
         <div className="relative">
@@ -1712,26 +2221,99 @@ export function ProposalDetailView({
         )}
       </div>
 
-      {filteredProposalRecords.length === 0 ? (
+      {filteredProposalSlots.length === 0 ? (
         <div className="px-6 py-14 text-center">
           <Users className="mx-auto h-9 w-9 text-slate-300" />
           <p className="mt-2.5 text-sm font-semibold text-slate-900">
-            {proposalRecords.length === 0
+            {proposalRecords.length === 0 && emptySlotsCount === 0
               ? 'Belum ada KPM terdaftar di proposal ini'
-              : 'Tidak ada KPM yang cocok dengan pencarian'}
+              : 'Tidak ada KPM atau slot yang cocok dengan pencarian'}
           </p>
           <p className="mt-1 text-xs text-slate-500">
-            {proposalRecords.length === 0
+            {proposalRecords.length === 0 && emptySlotsCount === 0
               ? 'Tambahkan KPM baru atau terima dari Database KPM ke proposal ini.'
               : 'Coba ubah kata kunci pencarian atau pilih filter item lain.'}
           </p>
         </div>
       ) : (
         <div className="max-h-[calc(100vh-16rem)] divide-y divide-slate-100 overflow-y-auto">
-          {filteredProposalRecords.map(({ record: rec, displaySeq }, idx) => {
+          {filteredProposalSlots.map((entry, idx) => {
+            if (entry.kind === 'empty') {
+              const seqLabel = String(entry.slotNumber).padStart(2, '0');
+              const assignFirstRef = !firstEmptySlotAssigned;
+              if (assignFirstRef) firstEmptySlotAssigned = true;
+              const canFillEmpty =
+                Boolean(onFillEmptySlotFromDatabase) &&
+                proposal.status !== 'locked' &&
+                canUpdate &&
+                !isOffline;
+
+              return (
+                <div
+                  key={`empty-slot-${entry.slotNumber}`}
+                  ref={assignFirstRef ? firstEmptySlotRef : undefined}
+                  className={`flex min-h-[68px] flex-wrap items-center justify-between gap-3 px-5 py-3 ${
+                    highlightEmptySlots
+                      ? 'bg-amber-100/75 ring-1 ring-inset ring-amber-300'
+                      : 'bg-amber-50/70'
+                  }`}
+                >
+                  <div className="flex min-w-0 flex-1 items-center gap-3">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-amber-300 bg-amber-100 font-mono text-xs font-bold text-amber-900 tabular-nums">
+                      {seqLabel}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="rounded-md border border-amber-300 bg-white px-1.5 py-0.5 text-[11px] font-bold text-amber-900">
+                          Baris Kosong
+                        </span>
+                        {entry.emptySlot.item && (
+                          <span className="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-slate-700">
+                            {entry.emptySlot.item}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-0.5 truncate text-xs text-amber-900/80">
+                        {entry.emptySlot.previousKpmName
+                          ? `Slot bekas ${entry.emptySlot.previousKpmName}`
+                          : 'Slot kuota BAST belum terisi · siap diisi dari Database KPM'}
+                      </p>
+                    </div>
+                  </div>
+
+                  {onFillEmptySlotFromDatabase && (
+                    <button
+                      type="button"
+                      disabled={!canFillEmpty}
+                      onClick={() => {
+                        setDbPickerQuery('');
+                        setDbPickerAreaFilterEnabled(true);
+                        setDbPickerTargetSlot({
+                          slotNumber: entry.slotNumber,
+                          item: entry.emptySlot.item,
+                        });
+                      }}
+                      title={
+                        isOffline
+                          ? 'Mode Offline (Hanya Baca)'
+                          : proposal.status === 'locked'
+                            ? 'Proposal Terkunci'
+                            : 'Isi slot kosong dari Database KPM'
+                      }
+                      className="inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-bold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+                    >
+                      <Database className="h-3.5 w-3.5" />
+                      <span>+ Isi dari Database</span>
+                    </button>
+                  )}
+                </div>
+              );
+            }
+
+            const rec = entry.record;
             const seqLabel =
-              displaySeq < 999999
-                ? String(displaySeq).padStart(2, '0')
+              entry.slotNumber < 999999
+                ? String(entry.slotNumber).padStart(2, '0')
                 : String(idx + 1).padStart(2, '0');
             return (
               <button
@@ -1811,6 +2393,7 @@ export function ProposalDetailView({
             </button>
             <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">Proposal</h1>
           </div>
+          {proposalUndoBannerBlock && <div className="col-span-12">{proposalUndoBannerBlock}</div>}
           <div className="col-span-5 space-y-5">
             {overviewAndDtsenBlock}
             {breakdownsBlock}
@@ -1822,7 +2405,9 @@ export function ProposalDetailView({
         </main>
       ) : (
         <main className="space-y-4 px-4 pt-4">
+          {proposalUndoBannerBlock}
           {overviewAndDtsenBlock}
+          {(emptySlotsCount > 0 || highlightEmptySlots) && proposalKpmListBlock}
           {breakdownsBlock}
           {historyBlock}
         </main>
@@ -2490,6 +3075,315 @@ export function ProposalDetailView({
                   <span>Simpan &amp; Cetak ({proposalRecords.length})</span>
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Modal Daftar KPM Berdasarkan Klik Pengelola / Item / Pekerjaan */}
+      {kpmFilterDrill && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-[2px] sm:items-center sm:p-4"
+          onClick={() => setKpmFilterDrill(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Daftar KPM ${kpmFilterDrill.title}`}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="flex max-h-[88vh] w-full max-w-lg flex-col overflow-hidden rounded-t-3xl border border-slate-200 bg-white shadow-2xl sm:rounded-3xl"
+          >
+            <div className="mx-auto mt-2.5 h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+            <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-teal-700">
+                  {kpmFilterDrill.subtitle}
+                </p>
+                <h3 className="mt-0.5 truncate text-base font-bold text-slate-900">
+                  {kpmFilterDrill.title}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setKpmFilterDrill(null)}
+                aria-label="Tutup daftar KPM"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="border-b border-slate-100 bg-slate-50/70 px-5 py-3">
+              <div className="relative">
+                <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="search"
+                  value={drillQuery}
+                  onChange={(e) => setDrillQuery(e.target.value)}
+                  placeholder="Cari nama, NIK, alamat, atau kelurahan..."
+                  className="min-h-[40px] w-full rounded-xl border border-slate-200 bg-white py-2 pr-3 pl-9 text-xs text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex-1 divide-y divide-slate-100 overflow-y-auto">
+              {drillFilteredRecords.length === 0 ? (
+                <div className="px-6 py-12 text-center">
+                  <Users className="mx-auto h-8 w-8 text-slate-300" />
+                  <p className="mt-2 text-xs font-semibold text-slate-700">
+                    Tidak ada KPM yang cocok dengan pencarian.
+                  </p>
+                </div>
+              ) : (
+                drillFilteredRecords.map(({ record: rec, displaySeq }, idx) => {
+                  const seqLabel =
+                    displaySeq < 999999
+                      ? String(displaySeq).padStart(2, '0')
+                      : String(idx + 1).padStart(2, '0');
+                  return (
+                    <button
+                      key={rec.id}
+                      type="button"
+                      onClick={() => {
+                        setKpmFilterDrill(null);
+                        if (onSelectKpm) {
+                          onSelectKpm(rec);
+                        } else {
+                          onViewKpmInProposal(proposal.namaProposal, proposal.tahun);
+                        }
+                      }}
+                      className="flex w-full items-center justify-between gap-3 px-5 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100"
+                    >
+                      <div className="flex min-w-0 flex-1 items-center gap-3">
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-teal-50 font-mono text-xs font-bold text-teal-800 tabular-nums">
+                          {seqLabel}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <p className="truncate text-sm font-semibold text-slate-900">
+                              {rec.nama}
+                            </p>
+                            {rec.item && (
+                              <span className="shrink-0 rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-slate-700">
+                                {rec.item}
+                              </span>
+                            )}
+                            {rec.dtsen && (
+                              <span className="shrink-0 rounded-md bg-teal-50 px-1.5 py-0.5 text-[10px] font-semibold text-teal-800">
+                                {['1', '2', '3', '4', '5'].includes(rec.dtsen.trim())
+                                  ? `Desil ${rec.dtsen}`
+                                  : rec.dtsen}
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-0.5 truncate text-xs text-slate-500 tabular-nums">
+                            {[
+                              formatNikDisplay(rec.nikKtp),
+                              rec.kelurahan,
+                              rec.pengelola,
+                              rec.pekerjaan,
+                            ]
+                              .filter(Boolean)
+                              .join(' · ')}
+                          </p>
+                        </div>
+                      </div>
+                      <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Picker Database KPM untuk Mengisi Baris Kosong (Auto-Filter Wilayah Proposal) */}
+      {dbPickerTargetSlot && onFillEmptySlotFromDatabase && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-xs sm:items-center sm:p-4"
+          onClick={() => setDbPickerTargetSlot(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Isi Baris Kosong dari Database KPM"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-lg space-y-3.5 rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl"
+          >
+            <div className="mx-auto h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <h2 className="text-base font-bold text-slate-900">
+                  Isi Baris Kosong #{String(dbPickerTargetSlot.slotNumber).padStart(2, '0')} dari
+                  Database
+                </h2>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  {proposal.namaProposal}
+                  {dbPickerTargetSlot.item ? ` · Item BAST: ${dbPickerTargetSlot.item}` : ''}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDbPickerTargetSlot(null)}
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-400 hover:bg-slate-100"
+                aria-label="Tutup"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {hasProposalAreaScope && (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-teal-200 bg-teal-50/70 px-3 py-2 text-xs text-teal-900">
+                <span className="font-medium">
+                  Filter otomatis:{' '}
+                  <strong>
+                    {proposalDomicile.kelurahan
+                      ? `Kel. ${proposalDomicile.kelurahan}`
+                      : `Kec. ${proposalDomicile.kecamatan}`}
+                  </strong>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setDbPickerAreaFilterEnabled((prev) => !prev)}
+                  className="shrink-0 rounded-lg border border-teal-300 bg-white px-2.5 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50"
+                >
+                  {dbPickerAreaFilterEnabled ? 'Tampilkan Semua Wilayah' : 'Filter Wilayah Proposal'}
+                </button>
+              </div>
+            )}
+
+            <div className="relative">
+              <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                type="search"
+                autoFocus
+                value={dbPickerQuery}
+                onChange={(e) => setDbPickerQuery(e.target.value)}
+                placeholder="Cari nama, NIK, item, kelurahan, catatan..."
+                className="min-h-[42px] w-full rounded-xl border border-slate-200 bg-slate-50 pr-3.5 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:bg-white focus:outline-none"
+              />
+            </div>
+
+            <div className="max-h-72 divide-y divide-slate-100 overflow-y-auto rounded-2xl border border-slate-200">
+              {databasePickerCandidates.length === 0 ? (
+                <div className="px-4 py-8 text-center">
+                  <p className="text-xs font-medium text-slate-600">
+                    Tidak ada KPM berstatus Database yang cocok di filter saat ini.
+                  </p>
+                  {hasProposalAreaScope && dbPickerAreaFilterEnabled && (
+                    <button
+                      type="button"
+                      onClick={() => setDbPickerAreaFilterEnabled(false)}
+                      className="mt-2 inline-flex min-h-[32px] items-center rounded-lg border border-teal-700 bg-white px-3 text-[11px] font-bold text-teal-800 hover:bg-teal-50"
+                    >
+                      Lihat KPM Database dari Semua Wilayah
+                    </button>
+                  )}
+                </div>
+              ) : (
+                databasePickerCandidates.slice(0, 60).map((cand) => {
+                  const dom = resolveKpmDomicile(cand, allProposals, wilayahList);
+                  const isSameItem =
+                    Boolean(dbPickerTargetSlot.item) && cand.item === dbPickerTargetSlot.item;
+                  const isExOverQuota = Boolean(
+                    cand.catatan && cand.catatan.includes('Over Kuota BAST')
+                  );
+                  return (
+                    <button
+                      key={cand.id}
+                      type="button"
+                      onClick={() => {
+                        onFillEmptySlotFromDatabase(
+                          cand.id,
+                          proposal.namaProposal,
+                          proposal.tahun,
+                          dbPickerTargetSlot.slotNumber
+                        );
+                        setDbPickerTargetSlot(null);
+                      }}
+                      className="flex w-full items-center justify-between gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-teal-50/70"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="truncate text-sm font-semibold text-slate-900">
+                            {cand.nama}
+                          </span>
+                          {isSameItem && (
+                            <span className="shrink-0 rounded bg-teal-100 px-1.5 py-0.5 text-[10px] font-bold text-teal-800">
+                              Item Cocok
+                            </span>
+                          )}
+                          {isExOverQuota && (
+                            <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-900">
+                              Over Kuota
+                            </span>
+                          )}
+                        </div>
+                        <p className="truncate text-[11px] text-slate-500">
+                          {cand.item || 'Tanpa Item'}
+                          {dom.kelurahan ? ` · ${dom.kelurahan}` : ''}
+                          {dom.kecamatan ? ` · ${dom.kecamatan}` : ''}
+                          {cand.pengelola ? ` · ${cand.pengelola}` : ''}
+                        </p>
+                      </div>
+                      <span className="shrink-0 rounded-lg bg-teal-700 px-2.5 py-1 text-[11px] font-semibold text-white">
+                        Pilih
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi Undo Apply Terakhir dari Detail Proposal */}
+      {confirmUndoOpen && activeReconcileSnapshot && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Konfirmasi Undo Apply Terakhir"
+          onClick={() => !undoBusy && setConfirmUndoOpen(false)}
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-xs sm:items-center sm:p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md space-y-4 rounded-t-3xl border border-slate-200 bg-white p-5 shadow-2xl sm:rounded-3xl"
+          >
+            <div className="mx-auto h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-800">
+                <RotateCcw className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-sm font-bold text-slate-900">Batalkan Apply Terakhir?</h3>
+                <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                  Batalkan perubahan Apply terakhir dan kembalikan susunan Proposal{' '}
+                  <strong>{activeReconcileSnapshot.proposalName}</strong> &amp; Database ke kondisi
+                  sebelum Apply?
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2.5">
+              <button
+                type="button"
+                disabled={undoBusy}
+                onClick={() => setConfirmUndoOpen(false)}
+                className="inline-flex min-h-[42px] flex-1 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                Tutup
+              </button>
+              <button
+                type="button"
+                disabled={undoBusy}
+                onClick={() => void handleConfirmUndoProposal()}
+                className="inline-flex min-h-[42px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-amber-600 px-4 text-xs font-bold text-white hover:bg-amber-700 disabled:opacity-60"
+              >
+                {undoBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                <span>{undoBusy ? 'Mengembalikan...' : 'Ya, Batalkan Apply'}</span>
+              </button>
             </div>
           </div>
         </div>

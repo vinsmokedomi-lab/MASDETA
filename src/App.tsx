@@ -92,11 +92,13 @@ import {
   ProposalBastMap,
   ProposalChecklist,
   ProposalDocuments,
+  ProposalEmptySlot,
   ProposalFormValues,
   ProposalKpmHistoryEntry,
   ProposalLockStatus,
   ProposalRecord,
   ProposalSlotMap,
+  ProposalSlotState,
   ReportTemplateConfig,
   SCHEDULE_CATEGORY_LABELS,
   ScheduleBook,
@@ -107,12 +109,18 @@ import {
   SlotRemovalMode,
   SptjmTemplateConfig,
   TrashRecordItem,
+  TroubleshootingKpmPreApplyState,
+  TroubleshootingReconcileSnapshot,
   UserPermissions,
   UserPresenceStatus,
   ValidationStatus,
   WilayahKabKota,
   resolveScheduleBookId,
 } from './types/kpm';
+import {
+  TroubleshootingReconcileResult,
+  computeKpmAddressEnrichmentFromBast,
+} from './utils/troubleshootingReconciler';
 import { normalizePejabatNipNumber } from './utils/pdfExporter';
 import {
   assignKpmToProposalSlot,
@@ -640,6 +648,29 @@ export default function App() {
   const [proposalBastMap, setProposalBastMap] = useState<ProposalBastMap>({});
   const [kpmBastMap, setKpmBastMap] = useState<Record<string, KpmBastInfo>>({});
   const [proposalSlotMap, setProposalSlotMap] = useState<ProposalSlotMap>({});
+  const [reconcileSnapshots, setReconcileSnapshots] = useState<
+    Record<string, TroubleshootingReconcileSnapshot>
+  >(() => {
+    try {
+      const raw = localStorage.getItem('masdeta_slice_masdeta_reconcile_snapshots_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed as Record<string, TroubleshootingReconcileSnapshot>;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return {};
+  });
+  const reconcileSnapshotsRef = useRef<Record<string, TroubleshootingReconcileSnapshot>>(
+    reconcileSnapshots
+  );
+  reconcileSnapshotsRef.current = reconcileSnapshots;
+  const [highlightEmptySlotsProposalId, setHighlightEmptySlotsProposalId] = useState<string | null>(
+    null
+  );
   const [targetKpmFormSlot, setTargetKpmFormSlot] = useState<{
     proposalId: string;
     proposalName: string;
@@ -1032,6 +1063,7 @@ export default function App() {
         tahun?: string;
         action?: ProposalKpmHistoryEntry['action'];
         actorName?: string;
+        toProposalOverride?: string;
       }
     ): ProposalKpmHistoryEntry => ({
       id: `act-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -1042,7 +1074,7 @@ export default function App() {
       registerCode: `ACTLOG::${eventKey}`,
       action: params.action || 'entered',
       fromProposal: currentUser?.role || 'Admin',
-      toProposal: eventKey,
+      toProposal: params.toProposalOverride || eventKey,
       actorName: params.actorName || currentActor.nama,
       timestamp: new Date().toISOString(),
     }),
@@ -1498,6 +1530,7 @@ export default function App() {
         fetchedWatermarks,
         fetchedAliases,
         fetchedSlotMap,
+        fetchedReconcileSnapshots,
         fetchedProposalBastMap,
         fetchedPejabatList,
       ] = await Promise.all([
@@ -1531,6 +1564,10 @@ export default function App() {
         fetchChatDeliveryWatermarks(),
         fetchAppStateSlice<Record<string, Record<string, string>>>('masdeta_user_aliases_v1', {}),
         fetchAppStateSlice<ProposalSlotMap>('masdeta_proposal_slots_v1', {}),
+        fetchAppStateSlice<Record<string, TroubleshootingReconcileSnapshot>>(
+          'masdeta_reconcile_snapshots_v1',
+          {}
+        ),
         fetchDocumentTemplateFromSupabase<ProposalBastMap>(
           'proposal_bast',
           'masdeta_proposal_bast_v1',
@@ -1650,6 +1687,14 @@ export default function App() {
       );
       setKpmBastMap(safeBastMap);
       setProposalSlotMap(safeSlotMap);
+      const safeSnapshots =
+        fetchedReconcileSnapshots &&
+        typeof fetchedReconcileSnapshots === 'object' &&
+        !Array.isArray(fetchedReconcileSnapshots)
+          ? fetchedReconcileSnapshots
+          : {};
+      reconcileSnapshotsRef.current = safeSnapshots;
+      setReconcileSnapshots(safeSnapshots);
       const normalizedProposalBastMap: ProposalBastMap = {};
       if (
         fetchedProposalBastMap &&
@@ -8932,14 +8977,576 @@ export default function App() {
         );
     if (!ok) return;
 
-    persistProposalSlotMap(nextSlotMap);
+    persistProposalSlotMap(nextSlotMap, nextRecords);
     setKpmAuditLogs([auditEntry, ...kpmAuditLogs]);
     setProposalHistory([histEntry, ...proposalHistory]);
     setRecords(nextRecords);
+
+    // Catat ke snapshot rekonsiliasi aktif agar Undo juga mengembalikan KPM hasil Option 2 ke Database
+    const activeSnap = reconcileSnapshotsRef.current[prop.id];
+    if (activeSnap && !activeSnap.filledFromDatabaseKpmIds.includes(kpmId)) {
+      const nextSnapshots: Record<string, TroubleshootingReconcileSnapshot> = {
+        ...reconcileSnapshotsRef.current,
+        [prop.id]: {
+          ...activeSnap,
+          filledFromDatabaseKpmIds: [...activeSnap.filledFromDatabaseKpmIds, kpmId],
+        },
+      };
+      reconcileSnapshotsRef.current = nextSnapshots;
+      setReconcileSnapshots(nextSnapshots);
+      void saveAppStateSlice('masdeta_reconcile_snapshots_v1', nextSnapshots);
+    }
+
     setFeedback({
       type: 'success',
       message: `"${target.nama}" ditempatkan ke nomor urut #${String(slotNumber).padStart(2, '0')} di ${prop.namaProposal}.`,
     });
+  };
+
+  const persistReconcileSnapshots = (
+    nextSnapshots: Record<string, TroubleshootingReconcileSnapshot>
+  ) => {
+    reconcileSnapshotsRef.current = nextSnapshots;
+    setReconcileSnapshots(nextSnapshots);
+    void saveAppStateSlice('masdeta_reconcile_snapshots_v1', nextSnapshots);
+  };
+
+  const handleApplyTroubleshootingReconciliation = async (params: {
+    proposalId: string;
+    result: TroubleshootingReconcileResult;
+    goToProposalDetail: boolean;
+  }): Promise<{
+    ok: boolean;
+    snapshot?: TroubleshootingReconcileSnapshot;
+    error?: string;
+  }> => {
+    if (!requirePermission('update', 'menerapkan hasil rekonsiliasi BAST ke proposal')) {
+      return { ok: false, error: 'Akses ditolak atau aplikasi sedang dalam mode Offline.' };
+    }
+
+    const prop = proposals.find((p) => p.id === params.proposalId);
+    if (!prop) {
+      const msg = 'Proposal tujuan tidak ditemukan di database.';
+      setFeedback({ type: 'error', message: msg });
+      return { ok: false, error: msg };
+    }
+    if (prop.status === 'locked') {
+      const msg = `Proposal "${prop.namaProposal}" berstatus Terkunci dan tidak dapat dimodifikasi.`;
+      setFeedback({ type: 'error', message: msg });
+      return { ok: false, error: msg };
+    }
+    if (params.result.proposalSourceType !== 'database') {
+      const msg = 'Apply hanya dapat dijalankan pada mode sumber Database Proposal.';
+      setFeedback({ type: 'error', message: msg });
+      return { ok: false, error: msg };
+    }
+    if (params.result.matchMetrics.isMismatch) {
+      const msg =
+        'File BAST tidak cocok dengan Proposal yang dipilih! Periksa kembali dokumen BAST Anda.';
+      setFeedback({ type: 'error', message: msg });
+      return { ok: false, error: msg };
+    }
+
+    const now = new Date().toISOString();
+    const proposalRecords = records.filter(
+      (r) =>
+        r.validasi === 'accepted' &&
+        (r.proposalId
+          ? r.proposalId === prop.id
+          : r.proposal === prop.namaProposal && r.tahun === prop.tahun)
+    );
+
+    const slotKey = getProposalSlotKey(prop.id, prop.namaProposal, prop.tahun, proposals);
+    const prevSlotEntry = proposalSlotMapRef.current[slotKey];
+    const hadPreviousSlotState = Boolean(prevSlotEntry);
+    const previousSlotState: ProposalSlotState | null = prevSlotEntry
+      ? {
+          pinnedOrder: [...prevSlotEntry.pinnedOrder],
+          emptySlots: prevSlotEntry.emptySlots.map((es) => ({ ...es })),
+          updatedAt: prevSlotEntry.updatedAt,
+        }
+      : null;
+
+    const previousKpmStates: TroubleshootingKpmPreApplyState[] = proposalRecords.map((r) => ({
+      id: r.id,
+      validasi: r.validasi,
+      proposalId: r.proposalId ?? null,
+      proposal: r.proposal,
+      tahun: r.tahun,
+      registerCode: r.registerCode,
+      alamat: r.alamat,
+      rt: r.rt,
+      rw: r.rw,
+      catatan: r.catatan,
+      kabKota: r.kabKota || '',
+      kecamatan: r.kecamatan || '',
+      kelurahan: r.kelurahan || '',
+    }));
+
+    const mainRowByKpmId = new Map<
+      string,
+      (typeof params.result.mainRows)[number]
+    >();
+    const keptKpmIdsOrdered: string[] = [];
+    const newEmptySlots: ProposalEmptySlot[] = [];
+
+    for (const row of params.result.mainRows) {
+      if (row.isEmpty) {
+        newEmptySlots.push({
+          slotNumber: row.noUrut,
+          item: row.kodeItem,
+          vacatedAt: now,
+        });
+      } else if (row.sourceKpmId) {
+        keptKpmIdsOrdered.push(row.sourceKpmId);
+        mainRowByKpmId.set(row.sourceKpmId, row);
+      }
+    }
+
+    const excludedByKpmId = new Map<
+      string,
+      (typeof params.result.excludedRows)[number]
+    >();
+    const movedOverQuotaKpmIds: string[] = [];
+    for (const ex of params.result.excludedRows) {
+      if (ex.sourceKpmId) {
+        excludedByKpmId.set(ex.sourceKpmId, ex);
+        movedOverQuotaKpmIds.push(ex.sourceKpmId);
+      }
+    }
+
+    let addressUpdatedCount = 0;
+    const newAuditLogs: KpmAuditLogEntry[] = [];
+
+    const mappedRecords = records.map((rec) => {
+      const excludedRow = excludedByKpmId.get(rec.id);
+      if (excludedRow) {
+        const tag = `Eks Proposal ${prop.namaProposal} — Over Kuota BAST ${excludedRow.kodeItem}`;
+        const prevNote = (rec.catatan || '').trim();
+        const nextCatatan = prevNote ? `${tag}\n${prevNote}` : tag;
+        newAuditLogs.push({
+          id: `audit-reconcile-out-${rec.id}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+          kpmId: rec.id,
+          action: 'status_changed',
+          actorName: currentActor.nama,
+          actorEmail: currentActor.email,
+          timestamp: now,
+          proposal: prop.namaProposal,
+          tahun: prop.tahun,
+          changes: [
+            {
+              field: 'Rekonsiliasi BAST',
+              before: `${prop.namaProposal} (${rec.item})`,
+              after: `Dipindahkan ke Database KPM (${tag})`,
+            },
+          ],
+        });
+        return {
+          ...rec,
+          validasi: 'pending' as ValidationStatus,
+          proposalId: null,
+          proposal: '',
+          tahun: '',
+          registerCode: '',
+          catatan: nextCatatan,
+          updatedAt: now,
+        };
+      }
+
+      const mainRow = mainRowByKpmId.get(rec.id);
+      if (mainRow) {
+        const enrich = computeKpmAddressEnrichmentFromBast(rec, mainRow.bastRawAlamat);
+        if (enrich.changed) {
+          addressUpdatedCount += 1;
+          const addrChanges: { field: string; before: string; after: string }[] = [];
+          if (enrich.nextRt !== rec.rt) {
+            addrChanges.push({ field: 'RT', before: rec.rt || '-', after: enrich.nextRt });
+          }
+          if (enrich.nextRw !== rec.rw) {
+            addrChanges.push({ field: 'RW', before: rec.rw || '-', after: enrich.nextRw });
+          }
+          if (enrich.nextAlamat !== rec.alamat) {
+            addrChanges.push({
+              field: 'Alamat',
+              before: rec.alamat || '-',
+              after: enrich.nextAlamat,
+            });
+          }
+          if (addrChanges.length > 0) {
+            newAuditLogs.push({
+              id: `audit-reconcile-addr-${rec.id}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+              kpmId: rec.id,
+              action: 'updated',
+              actorName: currentActor.nama,
+              actorEmail: currentActor.email,
+              timestamp: now,
+              proposal: prop.namaProposal,
+              tahun: prop.tahun,
+              changes: addrChanges,
+            });
+          }
+          return {
+            ...rec,
+            alamat: enrich.nextAlamat,
+            rt: enrich.nextRt,
+            rw: enrich.nextRw,
+            updatedAt: now,
+          };
+        }
+      }
+
+      return rec;
+    });
+
+    const nextSlotMap: ProposalSlotMap = {
+      ...proposalSlotMapRef.current,
+      [slotKey]: {
+        pinnedOrder: keptKpmIdsOrdered,
+        emptySlots: newEmptySlots.sort((a, b) => a.slotNumber - b.slotNumber),
+        updatedAt: now,
+      },
+    };
+
+    const nextRecords = mergeBastIntoRecords(
+      recalculateProposalRegisterCodes(mappedRecords, proposals, items, wilayahList, nextSlotMap),
+      kpmBastMapRef.current
+    );
+
+    const snapshotId = `recon-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const snapshot: TroubleshootingReconcileSnapshot = {
+      id: snapshotId,
+      proposalId: prop.id,
+      proposalName: prop.namaProposal,
+      tahun: prop.tahun,
+      appliedAt: now,
+      appliedBy: currentActor.nama,
+      summary: {
+        shiftedCount: params.result.totals.shiftedCount,
+        emptySlotsCount: newEmptySlots.length,
+        movedToDatabaseCount: movedOverQuotaKpmIds.length,
+        addressUpdatedCount,
+      },
+      slotKey,
+      hadPreviousSlotState,
+      previousSlotState,
+      previousKpmStates,
+      movedOverQuotaKpmIds,
+      filledFromDatabaseKpmIds: [],
+    };
+
+    const actDetailParts = [
+      `Penyesuaian BAST diterapkan pada ${prop.namaProposal} (${prop.tahun}):`,
+      `${params.result.totals.shiftedCount} KPM bergeser urutan`,
+      `${newEmptySlots.length} baris kosong`,
+      `${movedOverQuotaKpmIds.length} KPM over-kuota dipindah ke Database`,
+      `${addressUpdatedCount} alamat RT/RW dilengkapi`,
+    ];
+
+    const actEntry = createActivityHistoryEntry('reconcile_apply', {
+      proposalName: prop.namaProposal,
+      detail: `${actDetailParts[0]} ${actDetailParts.slice(1).join(', ')}.`,
+      tahun: prop.tahun,
+      action: 'entered',
+      toProposalOverride: snapshotId,
+    });
+
+    const prevById = new Map(records.map((r) => [r.id, r]));
+    const changedRecords = nextRecords.filter((r) => {
+      const prev = prevById.get(r.id);
+      if (!prev) return false;
+      return (
+        prev.validasi !== r.validasi ||
+        (prev.proposalId ?? null) !== (r.proposalId ?? null) ||
+        prev.proposal !== r.proposal ||
+        prev.tahun !== r.tahun ||
+        prev.registerCode !== r.registerCode ||
+        prev.alamat !== r.alamat ||
+        prev.rt !== r.rt ||
+        prev.rw !== r.rw ||
+        prev.catatan !== r.catatan
+      );
+    });
+
+    const nextAuditLogs = [...newAuditLogs, ...kpmAuditLogs];
+    const nextHistory = [actEntry, ...proposalHistory];
+
+    const ok = supabaseReadyRef.current
+      ? await runSupabaseMutation(
+          () =>
+            upsertKpmRecordsBatchInSupabase({
+              records: changedRecords,
+              proposals,
+              pengelolaList,
+              auditLogs: newAuditLogs,
+              historyEntries: [actEntry],
+              includeDeliveries: false,
+            }),
+          'Gagal menerapkan rekonsiliasi BAST ke Supabase'
+        )
+      : await syncOperationalData(
+          {
+            records: nextRecords,
+            kpmAuditLogs: nextAuditLogs,
+            proposalHistory: nextHistory,
+          },
+          'update'
+        );
+
+    if (!ok) {
+      return { ok: false, error: 'Gagal menyimpan hasil penyesuaian ke server.' };
+    }
+
+    const nextSnapshots: Record<string, TroubleshootingReconcileSnapshot> = {
+      ...reconcileSnapshotsRef.current,
+      [prop.id]: snapshot,
+    };
+
+    persistProposalSlotMap(nextSlotMap, nextRecords);
+    persistReconcileSnapshots(nextSnapshots);
+    setKpmAuditLogs(nextAuditLogs);
+    setProposalHistory(nextHistory);
+    setRecords(nextRecords);
+
+    if (params.goToProposalDetail) {
+      setHighlightEmptySlotsProposalId(prop.id);
+      openProposalDetailById(prop.id, 'menu');
+    }
+
+    setFeedback({
+      type: 'success',
+      message: `Hasil rekonsiliasi BAST berhasil diterapkan ke "${prop.namaProposal}" (${movedOverQuotaKpmIds.length} ke Database, ${newEmptySlots.length} baris kosong).`,
+    });
+
+    return { ok: true, snapshot };
+  };
+
+  const handleUndoTroubleshootingSnapshot = async (
+    snapshotOrProposalId: string
+  ): Promise<{ ok: boolean; message?: string; warning?: string }> => {
+    if (!requirePermission('update', 'membatalkan hasil rekonsiliasi BAST (Undo)')) {
+      return { ok: false, message: 'Akses ditolak atau aplikasi sedang dalam mode Offline.' };
+    }
+
+    const allSnapshots = Object.values(reconcileSnapshotsRef.current);
+    const snapshot =
+      reconcileSnapshotsRef.current[snapshotOrProposalId] ??
+      allSnapshots.find((s) => s.id === snapshotOrProposalId);
+
+    if (!snapshot) {
+      const msg = 'Snapshot rekonsiliasi tidak ditemukan atau sudah dibatalkan.';
+      setFeedback({ type: 'error', message: msg });
+      return { ok: false, message: msg };
+    }
+
+    const prop = proposals.find((p) => p.id === snapshot.proposalId);
+    if (prop && prop.status === 'locked') {
+      const msg = `Proposal "${prop.namaProposal}" berstatus Terkunci. Undo dibatalkan.`;
+      setFeedback({ type: 'error', message: msg });
+      return { ok: false, message: msg };
+    }
+
+    const now = new Date().toISOString();
+    const prevStateById = new Map<string, TroubleshootingKpmPreApplyState>(
+      snapshot.previousKpmStates.map((st) => [st.id, st])
+    );
+    const overQuotaSet = new Set(snapshot.movedOverQuotaKpmIds);
+    const filledFromDbSet = new Set(snapshot.filledFromDatabaseKpmIds);
+    const conflictNames: string[] = [];
+    const newAuditLogs: KpmAuditLogEntry[] = [];
+
+    const mappedRecords = records.map((rec) => {
+      // 1. Cek KPM yang diisi melalui Option 2 ("Apply & Isi dari Database") -> kembalikan ke Database
+      if (filledFromDbSet.has(rec.id)) {
+        const stillInSameProp =
+          rec.validasi === 'accepted' &&
+          (rec.proposalId
+            ? rec.proposalId === snapshot.proposalId
+            : rec.proposal === snapshot.proposalName && rec.tahun === snapshot.tahun);
+        if (stillInSameProp) {
+          newAuditLogs.push({
+            id: `audit-undo-fill-${rec.id}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+            kpmId: rec.id,
+            action: 'status_changed',
+            actorName: currentActor.nama,
+            actorEmail: currentActor.email,
+            timestamp: now,
+            proposal: snapshot.proposalName,
+            tahun: snapshot.tahun,
+            changes: [
+              {
+                field: 'Undo Rekonsiliasi BAST',
+                before: `Terpasang di ${snapshot.proposalName}`,
+                after: 'Dikembalikan ke Database KPM',
+              },
+            ],
+          });
+          return {
+            ...rec,
+            validasi: 'pending' as ValidationStatus,
+            proposalId: null,
+            proposal: '',
+            tahun: '',
+            registerCode: '',
+            updatedAt: now,
+          };
+        }
+        return rec;
+      }
+
+      // 2. Pulihkan KPM asal proposal dari snapshot
+      const prevSt = prevStateById.get(rec.id);
+      if (!prevSt) return rec;
+
+      // Guard konflik: jika KPM over-kuota sudah diterima di proposal lain, jangan tarik paksa
+      const isInOtherAcceptedProposal =
+        overQuotaSet.has(rec.id) &&
+        rec.validasi === 'accepted' &&
+        (rec.proposalId
+          ? rec.proposalId !== snapshot.proposalId
+          : rec.proposal !== snapshot.proposalName);
+
+      if (isInOtherAcceptedProposal) {
+        conflictNames.push(`${rec.nama} (kini di ${rec.proposal || 'Proposal lain'})`);
+        return rec;
+      }
+
+      newAuditLogs.push({
+        id: `audit-undo-restore-${rec.id}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+        kpmId: rec.id,
+        action: overQuotaSet.has(rec.id) ? 'status_changed' : 'updated',
+        actorName: currentActor.nama,
+        actorEmail: currentActor.email,
+        timestamp: now,
+        proposal: snapshot.proposalName,
+        tahun: snapshot.tahun,
+        changes: [
+          {
+            field: 'Undo Rekonsiliasi BAST',
+            before: overQuotaSet.has(rec.id) ? 'Database KPM (Over Kuota)' : 'Penyesuaian BAST',
+            after: `Dikembalikan ke kondisi sebelum Apply pada ${snapshot.proposalName}`,
+          },
+        ],
+      });
+
+      return {
+        ...rec,
+        validasi: prevSt.validasi,
+        proposalId: prevSt.proposalId,
+        proposal: prevSt.proposal,
+        tahun: prevSt.tahun,
+        registerCode: prevSt.registerCode,
+        alamat: prevSt.alamat,
+        rt: prevSt.rt,
+        rw: prevSt.rw,
+        catatan: prevSt.catatan,
+        kabKota: prevSt.kabKota || rec.kabKota,
+        kecamatan: prevSt.kecamatan || rec.kecamatan,
+        kelurahan: prevSt.kelurahan || rec.kelurahan,
+        updatedAt: now,
+      };
+    });
+
+    const nextSlotMap: ProposalSlotMap = { ...proposalSlotMapRef.current };
+    if (snapshot.hadPreviousSlotState && snapshot.previousSlotState) {
+      nextSlotMap[snapshot.slotKey] = {
+        pinnedOrder: [...snapshot.previousSlotState.pinnedOrder],
+        emptySlots: snapshot.previousSlotState.emptySlots.map((es) => ({ ...es })),
+        updatedAt: now,
+      };
+    } else {
+      delete nextSlotMap[snapshot.slotKey];
+      const legacyKey = `prop::${snapshot.proposalName.trim()}__${snapshot.tahun.trim() || 'NON'}`;
+      if (legacyKey !== snapshot.slotKey) {
+        delete nextSlotMap[legacyKey];
+      }
+    }
+
+    const nextRecords = mergeBastIntoRecords(
+      recalculateProposalRegisterCodes(mappedRecords, proposals, items, wilayahList, nextSlotMap),
+      kpmBastMapRef.current
+    );
+
+    const conflictNote =
+      conflictNames.length > 0
+        ? ` Catatan: ${conflictNames.length} KPM sudah masuk ke proposal lain sehingga tetap dipertahankan di proposal barunya (${conflictNames.slice(0, 3).join(', ')}${conflictNames.length > 3 ? '...' : ''}).`
+        : '';
+
+    const actEntry = createActivityHistoryEntry('reconcile_undo', {
+      proposalName: snapshot.proposalName,
+      detail: `Undo Rekonsiliasi BAST pada ${snapshot.proposalName} (${snapshot.tahun}): susunan KPM, slot, alamat, dan Database dikembalikan ke kondisi sebelum Apply.${conflictNote}`,
+      tahun: snapshot.tahun,
+      action: 'entered',
+    });
+
+    const prevById = new Map(records.map((r) => [r.id, r]));
+    const changedRecords = nextRecords.filter((r) => {
+      const prev = prevById.get(r.id);
+      if (!prev) return false;
+      return (
+        prev.validasi !== r.validasi ||
+        (prev.proposalId ?? null) !== (r.proposalId ?? null) ||
+        prev.proposal !== r.proposal ||
+        prev.tahun !== r.tahun ||
+        prev.registerCode !== r.registerCode ||
+        prev.alamat !== r.alamat ||
+        prev.rt !== r.rt ||
+        prev.rw !== r.rw ||
+        prev.catatan !== r.catatan
+      );
+    });
+
+    const nextAuditLogs = [...newAuditLogs, ...kpmAuditLogs];
+    const nextHistory = [actEntry, ...proposalHistory];
+
+    const ok = supabaseReadyRef.current
+      ? await runSupabaseMutation(
+          () =>
+            upsertKpmRecordsBatchInSupabase({
+              records: changedRecords,
+              proposals,
+              pengelolaList,
+              auditLogs: newAuditLogs,
+              historyEntries: [actEntry],
+              includeDeliveries: false,
+            }),
+          'Gagal membatalkan rekonsiliasi BAST ke Supabase'
+        )
+      : await syncOperationalData(
+          {
+            records: nextRecords,
+            kpmAuditLogs: nextAuditLogs,
+            proposalHistory: nextHistory,
+          },
+          'update'
+        );
+
+    if (!ok) {
+      return { ok: false, message: 'Gagal menyimpan pembatalan rekonsiliasi ke server.' };
+    }
+
+    const nextSnapshots = { ...reconcileSnapshotsRef.current };
+    delete nextSnapshots[snapshot.proposalId];
+
+    persistProposalSlotMap(nextSlotMap, nextRecords);
+    persistReconcileSnapshots(nextSnapshots);
+    if (highlightEmptySlotsProposalId === snapshot.proposalId) {
+      setHighlightEmptySlotsProposalId(null);
+    }
+    setKpmAuditLogs(nextAuditLogs);
+    setProposalHistory(nextHistory);
+    setRecords(nextRecords);
+
+    const successMsg = `Apply terakhir pada "${snapshot.proposalName}" berhasil dibatalkan.${conflictNote}`;
+    setFeedback({
+      type: conflictNames.length > 0 ? 'error' : 'success',
+      message: successMsg,
+    });
+
+    return {
+      ok: true,
+      message: successMsg,
+      warning: conflictNames.length > 0 ? conflictNote.trim() : undefined,
+    };
   };
 
   const handleToggleBerkasDikembalikan = (kpmId: string, nextValue: boolean) => {
@@ -9889,6 +10496,7 @@ export default function App() {
               allProposals={proposals}
               records={records}
               items={items}
+              wilayahList={wilayahList}
               historyEntries={proposalHistory}
               proposalSlotMap={proposalSlotMap}
               schedules={schedulesWithBooks}
@@ -9930,6 +10538,13 @@ export default function App() {
               onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
               onUpdateProposalDocuments={handleQuickSyncProposalDocuments}
               onSelectKpm={(rec) => openKpmDetail(rec, returnToTab, false, null, true)}
+              onFillEmptySlotFromDatabase={(kpmId, proposalName, tahun, slotNumber) =>
+                void handleFillEmptySlotFromDatabase(kpmId, proposalName, tahun, slotNumber)
+              }
+              activeReconcileSnapshot={reconcileSnapshots[activeProposal.id] ?? null}
+              onUndoReconcileSnapshot={handleUndoTroubleshootingSnapshot}
+              highlightEmptySlots={highlightEmptySlotsProposalId === activeProposal.id}
+              onDismissHighlightEmptySlots={() => setHighlightEmptySlotsProposalId(null)}
             />
           </div>
         )}
@@ -10327,6 +10942,12 @@ export default function App() {
             onBulkRejectToArsip={handleBulkRejectToArsip}
             onBulkAssignToProposal={handleBulkAssignToProposal}
             onBulkPermanentDeleteKpms={handleBulkPermanentDeleteKpms}
+            reconcileSnapshots={reconcileSnapshots}
+            onApplyTroubleshootingReconciliation={handleApplyTroubleshootingReconciliation}
+            onUndoTroubleshootingSnapshot={handleUndoTroubleshootingSnapshot}
+            onOpenProposalDetailFromTroubleshooting={(proposalId) =>
+              openProposalDetailById(proposalId, 'menu')
+            }
           />
         </div>
         </div>

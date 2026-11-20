@@ -1797,6 +1797,202 @@ async function startServer() {
     }
   });
 
+  app.post('/api/troubleshooting/extract-pdf', async (req: Request, res: Response) => {
+    const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+    if (!apiKey) {
+      res.status(503).json({
+        error:
+          'Layanan ekstraksi PDF Troubleshooting belum aktif karena GEMINI_API_KEY belum terpasang di Settings > Secrets.',
+      });
+      return;
+    }
+
+    const kind = req.body?.kind === 'bast' ? 'bast' : req.body?.kind === 'proposal' ? 'proposal' : '';
+    const fileName = String(req.body?.fileName || 'dokumen.pdf').trim();
+    const rawBase64 = String(req.body?.base64 || '')
+      .replace(/^data:application\/pdf;base64,/i, '')
+      .replace(/\s+/g, '')
+      .trim();
+
+    if (!kind || !rawBase64) {
+      res.status(400).json({
+        error: 'Jenis dokumen (proposal/bast) dan isi file PDF wajib dikirimkan.',
+      });
+      return;
+    }
+
+    const estimatedBytes = Math.floor((rawBase64.length * 3) / 4);
+    if (estimatedBytes > 20 * 1024 * 1024) {
+      res.status(400).json({
+        error: `Ukuran file "${fileName}" melebihi batas maksimal 20 MB.`,
+      });
+      return;
+    }
+
+    try {
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+
+      const pdfPart = {
+        inlineData: {
+          mimeType: 'application/pdf',
+          data: rawBase64,
+        },
+      };
+
+      if (kind === 'bast') {
+        const bastPrompt = [
+          'Ekstrak SELURUH tabel penerima bantuan dari dokumen PDF BAST Dinas ini mulai dari halaman pertama hingga halaman terakhir.',
+          'ATURAN WAJIB:',
+          '1. Baca setiap nomor urut (kolom NO) dari baris ke-1 hingga baris terakhir secara berurutan tanpa ada yang terlewat.',
+          '2. Setiap penerima memiliki kolom NO (angka), NAMA, NIK (16 digit), ALAMAT, dan daftar rincian barang pada kolom BARANG / NAMA BARANG.',
+          '3. PENANGANAN PINDAH HALAMAN (PAGE BREAK): Sering kali daftar barang untuk satu penerima terpotong ke bagian atas halaman berikutnya (kolom NO, NAMA, NIK, ALAMAT kosong di baris lanjutan atas halaman baru). WAJIB gabungkan barang-barang lanjutan tersebut ke dalam array barangList milik nomor urut penerima sebelumnya! Jangan membuat baris baru tanpa nomor urut dan jangan menghilangkan barang lanjutan.',
+          '4. Gabungkan alamat atau nama yang terbungkus beberapa baris dalam sel yang sama menjadi satu string bersih dipisahkan spasi.',
+          '5. Ekstrak nama setiap item barang di kolom BARANG/NAMA BARANG secara lengkap apa adanya (contoh: "MIXER", "OVEN GAS", "BLENDER", "TEFLON KUE", "SELANG GAS", "REGULATOR", "KOMPOR GAS", "DISPENSER", "RICE COOKER", "MESIN JAHIT", "MESIN CUCI", "KERANJANG PAKAIAN", "MESIN POTONG PAPAN", "MESIN GERINDA KAYU", "MESIN SERUT KAYU", "MESIN AMPLAS", "MESIN BOR", "ALAT CUP ES", "ALAT SERUT ES", "TERMOS ES", "MESIN CUCI KENDARAAN", "MESIN POTONG RUMPUT", "MINI CHAINSAW", "ALAT SEMPROT", "KOMPOR 1000", "PANCI 30 CM", "PANCI 28 CM", "PANCI 26 CM", "PANCI 24 CM", "TEKO SIUL", "TERMOS").',
+        ].join('\n');
+
+        const response = await ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: {
+            parts: [pdfPart, { text: bastPrompt }],
+          },
+          config: {
+            systemInstruction:
+              'Anda adalah mesin ekstraksi tabel dokumen resmi BAST Dinas Indonesia yang sangat presisi. Selalu ekstrak semua baris dari halaman 1 sampai halaman terakhir secara lengkap dan akurat.',
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                documentTitle: {
+                  type: Type.STRING,
+                  description: 'Judul atau nama wilayah dokumen BAST jika ada, atau nama ringkas dokumen',
+                },
+                rows: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      no: { type: Type.INTEGER, description: 'Nomor urut integer dari kolom NO' },
+                      nama: { type: Type.STRING, description: 'Nama lengkap penerima' },
+                      nik: { type: Type.STRING, description: 'NIK 16 digit tanpa spasi' },
+                      alamat: { type: Type.STRING, description: 'Alamat lengkap 1 baris rapi' },
+                      barangList: {
+                        type: Type.ARRAY,
+                        items: { type: Type.STRING },
+                        description: 'Daftar semua nama barang untuk penerima ini (termasuk lanjutan lintas halaman)',
+                      },
+                    },
+                    required: ['no', 'nama', 'nik', 'alamat', 'barangList'],
+                  },
+                },
+              },
+              required: ['documentTitle', 'rows'],
+            },
+          },
+        });
+
+        const parsed = JSON.parse((response.text || '{}').trim());
+        res.json(parsed);
+        return;
+      }
+
+      // kind === 'proposal'
+      const proposalPrompt = [
+        'Ekstrak SELURUH baris KPM penerima bantuan dari dokumen PDF Daftar KPM Proposal ini mulai dari halaman pertama hingga halaman terakhir.',
+        'ATURAN WAJIB:',
+        '1. Ambil judul dokumen di bagian atas halaman 1 ke field documentTitle (contoh: "Kecamatan Pontianak Barat 2026" atau "Kelurahan Pal Lima 2026").',
+        '2. Format kolom PDF bisa bervariasi: bisa 4 kolom (NO, ITEM, NAMA, ALAMAT) atau 9 kolom (NO, ITEM, DESIL, NAMA, ALAMAT, RT / RW, KONTAK, PENGELOLA, KELURAHAN).',
+        '3. ABAIKAN BARIS KOSONG: Jika ada baris yang memiliki nomor urut di kolom NO (misal 15, 30, 32, 49, 61, 65) tetapi kolom ITEM dan NAMA-nya kosong/blank, JANGAN masukkan baris kosong tersebut ke dalam rows!',
+        '4. Hanya ekstrak baris yang benar-benar berisi NAMA dan KODE ITEM (misal OV, KPR, JHT, MC, TKG, ES, CMT, TBS, MSK).',
+        '5. Gabungkan teks sel yang terbungkus beberapa baris (misalnya nama atau alamat panjang) menjadi satu baris teks rapi dipisahkan spasi. Jangan memasukkan isi kolom lain ke kolom yang salah.',
+        '6. Jika kolom RT/RW, KELURAHAN, atau PENGELOLA tidak ada di tabel, isi dengan string kosong "".',
+        '7. JANGAN memasukkan daftar ringkasan di bagian paling bawah dokumen ("DAFTAR ITEM :" dan "PENGELOLA :") ke dalam rows. Jika terdapat daftar "PENGELOLA :" di ringkasan bawah, masukkan ke array summaryPengelola.',
+      ].join('\n');
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-4-hydrogen',
+        contents: {
+          parts: [pdfPart, { text: proposalPrompt }],
+        },
+        config: {
+          systemInstruction:
+            'Anda adalah mesin ekstraksi tabel Daftar KPM Proposal yang sangat teliti. Ekstrak seluruh baris KPM non-kosong dari halaman 1 hingga halaman terakhir sesuai urutan tabel asli.',
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              documentTitle: {
+                type: Type.STRING,
+                description: 'Judul proposal pada header halaman pertama',
+              },
+              rows: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    no: { type: Type.STRING, description: 'Nomor urut di tabel Proposal (misal "01")' },
+                    item: { type: Type.STRING, description: 'Kode item (OV, KPR, JHT, MC, TKG, ES, CMT, TBS, MSK, dll.)' },
+                    nama: { type: Type.STRING, description: 'Nama KPM lengkap' },
+                    alamat: { type: Type.STRING, description: 'Alamat jalan/gang/no rumah' },
+                    rtRw: { type: Type.STRING, description: 'Isi kolom RT / RW jika tersedia, atau ""' },
+                    kelurahan: { type: Type.STRING, description: 'Isi kolom Kelurahan jika tersedia, atau ""' },
+                    pengelola: { type: Type.STRING, description: 'Nama Pengelola jika tersedia di kolom tabel, atau ""' },
+                  },
+                  required: ['no', 'item', 'nama', 'alamat', 'rtRw', 'kelurahan', 'pengelola'],
+                },
+              },
+              summaryPengelola: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    name: { type: Type.STRING },
+                    count: { type: Type.INTEGER },
+                  },
+                },
+              },
+            },
+            required: ['documentTitle', 'rows'],
+          },
+        },
+      });
+
+      const parsed = JSON.parse((response.text || '{}').trim());
+      res.json(parsed);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[Troubleshooting PDF Extract] Error:', msg);
+
+      if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
+        res.status(429).json({
+          error:
+            'Kuota permintaan API Gemini sedang penuh (429 RESOURCE_EXHAUSTED). Tunggu beberapa saat atau tingkatkan paket API key di Settings > Secrets.',
+        });
+        return;
+      }
+
+      if (msg.includes('403') || msg.includes('PERMISSION_DENIED') || msg.includes('API_KEY_INVALID')) {
+        res.status(403).json({
+          error:
+            'Kunci API Gemini tidak valid atau belum memiliki izin. Periksa GEMINI_API_KEY pada panel Settings > Secrets.',
+        });
+        return;
+      }
+
+      res.status(500).json({
+        error: msg || 'Terjadi gangguan saat membaca file PDF. Silakan coba lagi.',
+      });
+    }
+  });
+
   app.get('/api/supabase-files/:filename', (req: Request, res: Response) => {
     const allowedFiles = new Set([
       'fix_standalone_kpm_no_year.sql',

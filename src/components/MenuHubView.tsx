@@ -42,12 +42,14 @@ import {
   UserCheck,
   UserPlus,
   Users,
+  Wrench,
   X,
 } from 'lucide-react';
 import { DriveImage } from './DriveImage';
 import { FilterSelect, SegmentedTabs } from './FormControls';
 import { ItemManagerView } from './ItemManagerView';
 import { MenuDownloadView } from './MenuDownloadView';
+import { TroubleshootingView } from './TroubleshootingView';
 import { AddPengelolaModal } from './PengelolaSelectorModal';
 import { PresenceDot, getPresenceMeta } from './PresenceDot';
 import { SwipeAction, SwipeableRow } from './SwipeableRow';
@@ -91,10 +93,12 @@ import {
   ScheduleEventItem,
   SptjmTemplateConfig,
   TrashRecordItem,
+  TroubleshootingReconcileSnapshot,
   UserPermissions,
   WilayahKabKota,
   resolveScheduleBookId,
 } from '../types/kpm';
+import { TroubleshootingReconcileResult } from '../utils/troubleshootingReconciler';
 import {
   capitalizeWords,
   formatNikDisplay,
@@ -128,6 +132,7 @@ export type MenuSection =
   | 'jadwal'
   | 'sampah'
   | 'changelog'
+  | 'troubleshooting'
   | 'laporan';
 
 export type AdminDataActionType =
@@ -269,6 +274,16 @@ interface MenuHubViewProps {
   onBulkRejectToArsip?: (kpmIds: string[]) => Promise<void> | void;
   onBulkAssignToProposal?: (kpmIds: string[], targetProposal: ProposalRecord) => Promise<void> | void;
   onBulkPermanentDeleteKpms?: (kpmIds: string[]) => Promise<void> | void;
+  reconcileSnapshots?: Record<string, TroubleshootingReconcileSnapshot>;
+  onApplyTroubleshootingReconciliation?: (params: {
+    proposalId: string;
+    result: TroubleshootingReconcileResult;
+    goToProposalDetail: boolean;
+  }) => Promise<{ ok: boolean; snapshot?: TroubleshootingReconcileSnapshot; error?: string }>;
+  onUndoTroubleshootingSnapshot?: (
+    snapshotOrProposalId: string
+  ) => Promise<{ ok: boolean; message?: string; warning?: string }>;
+  onOpenProposalDetailFromTroubleshooting?: (proposalId: string) => void;
 }
 
 export function MenuHubView({
@@ -356,6 +371,10 @@ export function MenuHubView({
   onBulkRejectToArsip,
   onBulkAssignToProposal,
   onBulkPermanentDeleteKpms,
+  reconcileSnapshots = {},
+  onApplyTroubleshootingReconciliation,
+  onUndoTroubleshootingSnapshot,
+  onOpenProposalDetailFromTroubleshooting,
 }: MenuHubViewProps) {
   const isDesktopWeb = useIsDesktopWeb();
   const isNativeApp = !isDesktopWeb;
@@ -494,6 +513,13 @@ export function MenuHubView({
   const [activitySearch, setActivitySearch] = useState('');
   const [activityCategory, setActivityCategory] = useState<'all' | 'proposal' | 'kpm' | 'catalog'>('all');
   const [activityYear, setActivityYear] = useState<string>('all');
+  const [pendingLogUndoSnapshot, setPendingLogUndoSnapshot] =
+    useState<TroubleshootingReconcileSnapshot | null>(null);
+  const [logUndoBusy, setLogUndoBusy] = useState(false);
+  const [logUndoFeedback, setLogUndoFeedback] = useState<{
+    tone: 'teal' | 'amber' | 'rose';
+    text: string;
+  } | null>(null);
 
   const unifiedActivityLogs = useMemo(() => {
     interface ActivityTimelineItem {
@@ -506,11 +532,15 @@ export function MenuHubView({
       actorName: string;
       tahun: string;
       timestamp: string;
+      undoSnapshotId?: string;
     }
 
     const itemsList: ActivityTimelineItem[] = [];
     const kpmNameById = new Map<string, string>();
     records.forEach((r) => kpmNameById.set(r.id, r.nama));
+    const activeSnapshotIds = new Set(
+      Object.values(reconcileSnapshots).map((s) => s.id)
+    );
 
     const actLabelMap: Record<
       string,
@@ -521,6 +551,8 @@ export function MenuHubView({
       proposal_locked: { badge: 'Kunci Proposal', category: 'proposal', tone: 'amber' },
       proposal_unlocked: { badge: 'Buka Kunci', category: 'proposal', tone: 'teal' },
       proposal_deleted: { badge: 'Hapus Proposal', category: 'proposal', tone: 'rose' },
+      reconcile_apply: { badge: 'Apply BAST', category: 'proposal', tone: 'teal' },
+      reconcile_undo: { badge: 'Undo BAST', category: 'proposal', tone: 'amber' },
       kpm_accept_all: { badge: 'Terima Semua KPM', category: 'kpm', tone: 'teal' },
       kpm_transfer: { badge: 'Transfer KPM', category: 'kpm', tone: 'amber' },
       csv_imported: { badge: 'Import CSV', category: 'kpm', tone: 'teal' },
@@ -546,6 +578,10 @@ export function MenuHubView({
           category: 'catalog',
           tone: 'slate',
         };
+        const matchingSnapshotId =
+          key === 'reconcile_apply' && h.toProposal && activeSnapshotIds.has(h.toProposal)
+            ? h.toProposal
+            : undefined;
         itemsList.push({
           id: `hist-${h.id}`,
           category: meta.category,
@@ -556,6 +592,7 @@ export function MenuHubView({
           actorName: h.actorName || 'Petugas Internal',
           tahun: h.tahun || '',
           timestamp: h.timestamp,
+          undoSnapshotId: matchingSnapshotId,
         });
       } else {
         const badge =
@@ -623,7 +660,7 @@ export function MenuHubView({
     }
 
     return itemsList.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
-  }, [proposalHistory, kpmAuditLogs, records]);
+  }, [proposalHistory, kpmAuditLogs, records, reconcileSnapshots]);
 
   // Re-lock Kontrol Super Admin whenever navigating away from SuperAdmin flow
   useEffect(() => {
@@ -665,6 +702,7 @@ export function MenuHubView({
     setIsPejabatFormOpen(false);
     setPendingDeletePejabat(null);
     setConfirmResetPejabatOpen(false);
+    setPendingLogUndoSnapshot(null);
     setPendingPermanentDeleteTrashId(null);
     setIsBookModalOpen(false);
   }, [isOffline]);
@@ -1616,6 +1654,23 @@ export function MenuHubView({
                       <p className="text-sm font-semibold text-slate-900">Log Aktivitas Umum</p>
                       <p className="mt-0.5 truncate text-xs text-slate-500">
                         Rekam pergerakan proposal, KPM &amp; pelaku
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onChangeSection('troubleshooting')}
+                    className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                      <Wrench className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-slate-900">Troubleshooting</p>
+                      <p className="mt-0.5 truncate text-xs text-slate-500">
+                        Rekonsiliasi &amp; penyesuaian urutan KPM terhadap kuota BAST Dinas
                       </p>
                     </div>
                     <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -5567,6 +5622,28 @@ export function MenuHubView({
             </div>
           </div>
 
+          {logUndoFeedback && (
+            <div
+              className={`flex items-start justify-between gap-3 rounded-2xl border px-4 py-3 text-xs ${
+                logUndoFeedback.tone === 'amber'
+                  ? 'border-amber-200 bg-amber-50 text-amber-900'
+                  : logUndoFeedback.tone === 'rose'
+                    ? 'border-rose-200 bg-rose-50 text-rose-900'
+                    : 'border-teal-200 bg-teal-50 text-teal-900'
+              }`}
+            >
+              <p className="font-medium leading-relaxed">{logUndoFeedback.text}</p>
+              <button
+                type="button"
+                onClick={() => setLogUndoFeedback(null)}
+                className="shrink-0 rounded-lg p-1 hover:bg-black/5"
+                aria-label="Tutup notifikasi"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+
           <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
             {filteredActivities.length === 0 ? (
               <div className="px-4 py-10 text-center">
@@ -5576,31 +5653,114 @@ export function MenuHubView({
                 </p>
               </div>
             ) : (
-              filteredActivities.slice(0, 200).map((entry) => (
-                <div key={entry.id} className="space-y-1.5 px-4 py-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <span
-                      className={`inline-flex items-center rounded-lg border px-2 py-0.5 text-[10px] font-bold ${toneBadgeClass[entry.tone]}`}
-                    >
-                      {entry.badge}
-                    </span>
-                    <span className="text-[10px] font-medium text-slate-400 tabular-nums">
-                      {formatUploadDateTime(entry.timestamp)}
-                    </span>
+              filteredActivities.slice(0, 200).map((entry) => {
+                const matchedSnap = entry.undoSnapshotId
+                  ? Object.values(reconcileSnapshots).find(
+                      (s) => s.id === entry.undoSnapshotId
+                    )
+                  : undefined;
+                return (
+                  <div key={entry.id} className="space-y-1.5 px-4 py-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className={`inline-flex items-center rounded-lg border px-2 py-0.5 text-[10px] font-bold ${toneBadgeClass[entry.tone]}`}
+                      >
+                        {entry.badge}
+                      </span>
+                      <span className="text-[10px] font-medium text-slate-400 tabular-nums">
+                        {formatUploadDateTime(entry.timestamp)}
+                      </span>
+                    </div>
+                    <p className="text-xs font-bold text-slate-900">{entry.title}</p>
+                    <p className="text-xs leading-relaxed text-slate-600">{entry.detail}</p>
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-500">
+                        <span>
+                          Pelaku:{' '}
+                          <strong className="font-semibold text-slate-700">{entry.actorName}</strong>
+                        </span>
+                        {entry.tahun && <span>· Tahun {entry.tahun}</span>}
+                      </div>
+                      {matchedSnap && onUndoTroubleshootingSnapshot && canUpdate && !isOffline && (
+                        <button
+                          type="button"
+                          onClick={() => setPendingLogUndoSnapshot(matchedSnap)}
+                          className="inline-flex min-h-[30px] items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-900 transition hover:bg-amber-100"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                          Batalkan Apply Terakhir
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <p className="text-xs font-bold text-slate-900">{entry.title}</p>
-                  <p className="text-xs leading-relaxed text-slate-600">{entry.detail}</p>
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 pt-0.5 text-[11px] text-slate-500">
-                    <span>
-                      Pelaku: <strong className="font-semibold text-slate-700">{entry.actorName}</strong>
-                    </span>
-                    {entry.tahun && <span>· Tahun {entry.tahun}</span>}
-                  </div>
-                </div>
-              ))
+                );
+              })
             )}
           </section>
         </div>
+
+        {pendingLogUndoSnapshot && onUndoTroubleshootingSnapshot && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+            <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-xl">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                  <RotateCcw className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-sm font-bold text-slate-900">
+                    Konfirmasi Batalkan Apply
+                  </h3>
+                  <p className="mt-1.5 text-xs leading-relaxed text-slate-600">
+                    Batalkan perubahan Apply terakhir dan kembalikan susunan Proposal{' '}
+                    <span className="font-semibold text-slate-900">
+                      {pendingLogUndoSnapshot.proposalName}
+                    </span>{' '}
+                    &amp; Database ke kondisi sebelum Apply?
+                  </p>
+                </div>
+              </div>
+              <div className="mt-5 flex items-center gap-2.5">
+                <button
+                  type="button"
+                  disabled={logUndoBusy}
+                  onClick={() => setPendingLogUndoSnapshot(null)}
+                  className="inline-flex min-h-[42px] flex-1 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={logUndoBusy}
+                  onClick={async () => {
+                    const snap = pendingLogUndoSnapshot;
+                    setLogUndoBusy(true);
+                    try {
+                      const res = await onUndoTroubleshootingSnapshot(snap.id);
+                      setPendingLogUndoSnapshot(null);
+                      if (res.ok) {
+                        setLogUndoFeedback({
+                          tone: res.warning ? 'amber' : 'teal',
+                          text: [res.message, res.warning].filter(Boolean).join(' '),
+                        });
+                      } else {
+                        setLogUndoFeedback({
+                          tone: 'rose',
+                          text: res.message || 'Gagal membatalkan Apply.',
+                        });
+                      }
+                    } finally {
+                      setLogUndoBusy(false);
+                    }
+                  }}
+                  className="inline-flex min-h-[42px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-amber-600 px-4 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  {logUndoBusy ? 'Memulihkan...' : 'Ya, Batalkan Apply'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -6842,6 +7002,26 @@ export function MenuHubView({
         pejabatList={pejabatList}
         proposalBastMap={proposalBastMap}
         onSaveProposalBastConfig={onSaveProposalBastConfig}
+        onBack={() => onChangeSection('root')}
+      />
+    );
+  }
+
+  // 12B. TROUBLESHOOTING (REKONSILIASI PROPOSAL VS BAST DINAS)
+  if (activeSection === 'troubleshooting') {
+    return (
+      <TroubleshootingView
+        records={records}
+        proposals={proposals}
+        items={items}
+        wilayahList={wilayahList}
+        proposalSlotMap={proposalSlotMap}
+        reportTemplate={reportTemplate}
+        reconcileSnapshots={reconcileSnapshots}
+        canUpdate={canUpdate}
+        onApplyReconciliation={onApplyTroubleshootingReconciliation}
+        onUndoSnapshot={onUndoTroubleshootingSnapshot}
+        onOpenProposalDetail={onOpenProposalDetailFromTroubleshooting}
         onBack={() => onChangeSection('root')}
       />
     );
