@@ -1,5 +1,7 @@
 export type ValidationStatus = 'pending' | 'accepted' | 'rejected';
 
+export type KpmDeleteAction = 'database' | 'rejected' | 'permanent';
+
 export type SingleDocumentKey = 'ktp' | 'kk' | 'penerima' | 'survey';
 
 export interface KpmDocumentFile {
@@ -349,10 +351,38 @@ export const SCHEDULE_CATEGORY_LABELS: Record<ScheduleCategory, string> = {
   lainnya: 'Agenda Lainnya',
 };
 
+export interface ScheduleBook {
+  id: string;
+  title: string; // contoh: "Buku 1", "Buku 2"
+  subtitle: string; // contoh: "Agenda BAST (Laporan)", "Kegiatan Penyaluran"
+  defaultCategory: ScheduleCategory;
+}
+
+export interface ScheduleBooksState {
+  books: ScheduleBook[];
+  scheduleBookMap: Record<string, string>;
+}
+
+export const DEFAULT_SCHEDULE_BOOKS: ScheduleBook[] = [
+  {
+    id: 'book-1',
+    title: 'Buku 1',
+    subtitle: 'Agenda BAST (Laporan)',
+    defaultCategory: 'pemberkasan',
+  },
+  {
+    id: 'book-2',
+    title: 'Buku 2',
+    subtitle: 'Kegiatan Penyaluran',
+    defaultCategory: 'distribusi',
+  },
+];
+
 export interface ScheduleEventItem {
   id: string;
   title: string;
   category: ScheduleCategory;
+  bookId?: string;
   targetDay?: string; // Senin, Selasa, Rabu, Kamis, Jum'at, Sabtu, Minggu
   targetDate: string; // YYYY-MM-DD
   targetTime?: string; // HH:mm
@@ -365,6 +395,21 @@ export interface ScheduleEventItem {
   completedAt?: string;
   createdBy: string;
   createdAt: string;
+}
+
+export function resolveScheduleBookId(
+  ev: Pick<ScheduleEventItem, 'id' | 'bookId' | 'category'>,
+  scheduleBookMap: Record<string, string> = {},
+  books: ScheduleBook[] = DEFAULT_SCHEDULE_BOOKS
+): string {
+  const mapped = ev.bookId || scheduleBookMap[ev.id];
+  if (mapped && books.some((b) => b.id === mapped)) {
+    return mapped;
+  }
+  if (ev.category === 'distribusi' && books.some((b) => b.id === 'book-2')) {
+    return 'book-2';
+  }
+  return books[0]?.id || 'book-1';
 }
 
 export interface ProposalEmptySlot {

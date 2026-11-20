@@ -4,6 +4,7 @@ import {
   Archive,
   ArrowLeft,
   Banknote,
+  BookOpen,
   Briefcase,
   CalendarClock,
   Check,
@@ -68,6 +69,7 @@ import {
   CouponPrintConfig,
   DEFAULT_COUPON_CONFIG,
   DEFAULT_PEJABAT_LIST,
+  DEFAULT_SCHEDULE_BOOKS,
   InternalUser,
   InternalUserRole,
   InternalUserStatus,
@@ -84,12 +86,14 @@ import {
   ReportTemplateConfig,
   SCHEDULE_CATEGORY_LABELS,
   SCHEDULE_CATEGORY_OPTIONS,
+  ScheduleBook,
   ScheduleCategory,
   ScheduleEventItem,
   SptjmTemplateConfig,
   TrashRecordItem,
   UserPermissions,
   WilayahKabKota,
+  resolveScheduleBookId,
 } from '../types/kpm';
 import {
   capitalizeWords,
@@ -209,9 +213,13 @@ interface MenuHubViewProps {
   onSelectKpmFromDuplicate: (record: KpmRecord) => void;
   onPreviewDocument: (file: KpmDocumentFile, title: string) => void;
   schedules?: ScheduleEventItem[];
+  scheduleBooks?: ScheduleBook[];
+  scheduleBookMap?: Record<string, string>;
+  onSaveScheduleBooks?: (nextBooks: ScheduleBook[]) => void;
   onAddSchedule?: (payload: {
     title: string;
     category: ScheduleCategory;
+    bookId?: string;
     targetDay?: string;
     targetDate: string;
     targetTime?: string;
@@ -225,6 +233,7 @@ interface MenuHubViewProps {
     payload: {
       title: string;
       category: ScheduleCategory;
+      bookId?: string;
       targetDay?: string;
       targetDate: string;
       targetTime?: string;
@@ -319,6 +328,9 @@ export function MenuHubView({
   onSelectKpmFromDuplicate,
   onPreviewDocument,
   schedules = [],
+  scheduleBooks = DEFAULT_SCHEDULE_BOOKS,
+  scheduleBookMap = {},
+  onSaveScheduleBooks,
   onAddSchedule,
   onUpdateSchedule,
   onToggleSchedule,
@@ -654,6 +666,7 @@ export function MenuHubView({
     setPendingDeletePejabat(null);
     setConfirmResetPejabatOpen(false);
     setPendingPermanentDeleteTrashId(null);
+    setIsBookModalOpen(false);
   }, [isOffline]);
 
   const refreshGithubReleases = async () => {
@@ -782,7 +795,16 @@ export function MenuHubView({
   const [matrixQuery, setMatrixQuery] = useState('');
   const [matrixFilter, setMatrixFilter] = useState<'all' | 'incomplete'>('incomplete');
 
-  // Jadwal & Target Proposal form state
+  // Jadwal & Target Proposal form + Buku/Bab state
+  const [activeScheduleBookId, setActiveScheduleBookId] = useState<string>('auto');
+  const [scheduleFormBookOverride, setScheduleFormBookOverride] = useState<string | null>(null);
+  const [isBookModalOpen, setIsBookModalOpen] = useState(false);
+  const [editingBookId, setEditingBookId] = useState<string | null>(null);
+  const [bookTitleDraft, setBookTitleDraft] = useState('');
+  const [bookSubtitleDraft, setBookSubtitleDraft] = useState('');
+  const [bookDefaultCategoryDraft, setBookDefaultCategoryDraft] =
+    useState<ScheduleCategory>('pemberkasan');
+  const [bookModalError, setBookModalError] = useState<string | null>(null);
   const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
   const [scheduleCategory, setScheduleCategory] = useState<ScheduleCategory>('distribusi');
   const [scheduleDay, setScheduleDay] = useState<string>('');
@@ -5732,6 +5754,48 @@ export function MenuHubView({
     const todayStr = new Date().toISOString().slice(0, 10);
     const catLabelMap = SCHEDULE_CATEGORY_LABELS;
     const autoDayLabel = getSptjmAutoDayFromIso(scheduleDate);
+    const effectiveBooks =
+      scheduleBooks.length > 0 ? scheduleBooks : DEFAULT_SCHEDULE_BOOKS;
+
+    const bookCounts = new Map<string, { total: number; pending: number }>();
+    effectiveBooks.forEach((b) => bookCounts.set(b.id, { total: 0, pending: 0 }));
+    schedules.forEach((ev) => {
+      const bId = resolveScheduleBookId(ev, scheduleBookMap, effectiveBooks);
+      const prev = bookCounts.get(bId) || { total: 0, pending: 0 };
+      bookCounts.set(bId, {
+        total: prev.total + 1,
+        pending: prev.pending + (ev.completed ? 0 : 1),
+      });
+    });
+
+    const resolvedActiveBookId =
+      activeScheduleBookId === 'all'
+        ? 'all'
+        : activeScheduleBookId !== 'auto' &&
+            effectiveBooks.some((b) => b.id === activeScheduleBookId)
+          ? activeScheduleBookId
+          : effectiveBooks.find((b) => (bookCounts.get(b.id)?.total || 0) > 0)?.id ||
+            effectiveBooks[0].id;
+
+    const activeBookObj =
+      resolvedActiveBookId === 'all'
+        ? null
+        : effectiveBooks.find((b) => b.id === resolvedActiveBookId) || effectiveBooks[0];
+
+    const effectiveFormBookId = editingScheduleId
+      ? scheduleFormBookOverride || effectiveBooks[0].id
+      : scheduleFormBookOverride ||
+        (resolvedActiveBookId === 'all' ? effectiveBooks[0].id : resolvedActiveBookId);
+
+    const effectiveFormBookObj =
+      effectiveBooks.find((b) => b.id === effectiveFormBookId) || effectiveBooks[0];
+
+    const effectiveFormCategory =
+      !editingScheduleId &&
+      scheduleFormBookOverride === null &&
+      activeScheduleBookId === 'auto'
+        ? effectiveFormBookObj.defaultCategory
+        : scheduleCategory;
 
     const scheduleYearOptions = Array.from(
       new Set([
@@ -5747,15 +5811,121 @@ export function MenuHubView({
       .filter((p) => !scheduleYear || p.tahun === scheduleYear)
       .sort((a, b) => a.namaProposal.localeCompare(b.namaProposal, 'id'));
 
-    const sortedSchedules = [...schedules].sort((a, b) => {
+    const filteredByBookSchedules =
+      resolvedActiveBookId === 'all'
+        ? schedules
+        : schedules.filter(
+            (ev) =>
+              resolveScheduleBookId(ev, scheduleBookMap, effectiveBooks) ===
+              resolvedActiveBookId
+          );
+
+    const sortedSchedules = [...filteredByBookSchedules].sort((a, b) => {
       if (a.completed !== b.completed) return a.completed ? 1 : -1;
       const dateCmp = a.targetDate.localeCompare(b.targetDate);
       if (dateCmp !== 0) return dateCmp;
       return (a.targetTime || '99:99').localeCompare(b.targetTime || '99:99');
     });
 
+    const handleSelectBookTab = (book: ScheduleBook) => {
+      setActiveScheduleBookId(book.id);
+      if (!editingScheduleId) {
+        setScheduleFormBookOverride(book.id);
+        setScheduleCategory(book.defaultCategory);
+      }
+    };
+
+    const openAddBookModal = () => {
+      if (isOffline) return;
+      setEditingBookId(null);
+      setBookTitleDraft(`Buku ${effectiveBooks.length + 1}`);
+      setBookSubtitleDraft('');
+      setBookDefaultCategoryDraft('lainnya');
+      setBookModalError(null);
+      setIsBookModalOpen(true);
+    };
+
+    const openEditBookModal = (book: ScheduleBook) => {
+      if (isOffline) return;
+      setEditingBookId(book.id);
+      setBookTitleDraft(book.title);
+      setBookSubtitleDraft(book.subtitle);
+      setBookDefaultCategoryDraft(book.defaultCategory);
+      setBookModalError(null);
+      setIsBookModalOpen(true);
+    };
+
+    const handleSaveBookModal = (e: FormEvent) => {
+      e.preventDefault();
+      if (isOffline || !onSaveScheduleBooks) return;
+      const cleanTitle = bookTitleDraft.trim();
+      const cleanSubtitle = bookSubtitleDraft.trim();
+      if (!cleanTitle) {
+        setBookModalError('Nama buku/bab wajib diisi (contoh: Buku 1).');
+        return;
+      }
+      if (editingBookId) {
+        const nextBooks = effectiveBooks.map((b) =>
+          b.id === editingBookId
+            ? {
+                ...b,
+                title: cleanTitle,
+                subtitle: cleanSubtitle,
+                defaultCategory: bookDefaultCategoryDraft,
+              }
+            : b
+        );
+        onSaveScheduleBooks(nextBooks);
+        if (!editingScheduleId && effectiveFormBookId === editingBookId) {
+          setScheduleCategory(bookDefaultCategoryDraft);
+        }
+      } else {
+        const newBook: ScheduleBook = {
+          id: `book-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+          title: cleanTitle,
+          subtitle: cleanSubtitle || SCHEDULE_CATEGORY_LABELS[bookDefaultCategoryDraft],
+          defaultCategory: bookDefaultCategoryDraft,
+        };
+        const nextBooks = [...effectiveBooks, newBook];
+        onSaveScheduleBooks(nextBooks);
+        setActiveScheduleBookId(newBook.id);
+        if (!editingScheduleId) {
+          setScheduleFormBookOverride(newBook.id);
+          setScheduleCategory(newBook.defaultCategory);
+        }
+      }
+      setIsBookModalOpen(false);
+    };
+
+    const handleDeleteEditingBook = () => {
+      if (isOffline || !editingBookId || !onSaveScheduleBooks || effectiveBooks.length <= 1) return;
+      const countInBook = bookCounts.get(editingBookId)?.total || 0;
+      if (countInBook > 0) {
+        setBookModalError(
+          `Buku ini masih berisi ${countInBook} agenda. Pindahkan atau hapus agendanya terlebih dahulu.`
+        );
+        return;
+      }
+      const nextBooks = effectiveBooks.filter((b) => b.id !== editingBookId);
+      onSaveScheduleBooks(nextBooks);
+      if (resolvedActiveBookId === editingBookId) {
+        setActiveScheduleBookId(nextBooks[0].id);
+        if (!editingScheduleId) {
+          setScheduleFormBookOverride(nextBooks[0].id);
+          setScheduleCategory(nextBooks[0].defaultCategory);
+        }
+      }
+      setIsBookModalOpen(false);
+    };
+
     const resetScheduleForm = () => {
       setEditingScheduleId(null);
+      setScheduleFormBookOverride(
+        resolvedActiveBookId === 'all' ? null : resolvedActiveBookId
+      );
+      if (activeBookObj) {
+        setScheduleCategory(activeBookObj.defaultCategory);
+      }
       setScheduleDay('');
       setScheduleTime('');
       setScheduleProposal('');
@@ -5765,7 +5935,9 @@ export function MenuHubView({
 
     const handleStartEditSchedule = (ev: ScheduleEventItem) => {
       if (isOffline) return;
+      const evBookId = resolveScheduleBookId(ev, scheduleBookMap, effectiveBooks);
       setEditingScheduleId(ev.id);
+      setScheduleFormBookOverride(evBookId);
       setScheduleCategory(ev.category);
       setScheduleDay(ev.targetDay || '');
       setScheduleDate(ev.targetDate);
@@ -5782,10 +5954,12 @@ export function MenuHubView({
     const handleSubmitSchedule = (e: FormEvent) => {
       e.preventDefault();
       if (isOffline || !scheduleDate) return;
-      const resolvedTitle = catLabelMap[scheduleCategory] || 'Agenda Lainnya';
+      const chosenCategory = effectiveFormCategory;
+      const resolvedTitle = catLabelMap[chosenCategory] || 'Agenda Lainnya';
       const payload = {
         title: resolvedTitle,
-        category: scheduleCategory,
+        category: chosenCategory,
+        bookId: effectiveFormBookId,
         targetDay: scheduleDay.trim() || undefined,
         targetDate: scheduleDate,
         targetTime: scheduleTime.trim() || undefined,
@@ -5801,6 +5975,9 @@ export function MenuHubView({
       }
       if (!onAddSchedule) return;
       onAddSchedule(payload);
+      if (resolvedActiveBookId !== 'all' && resolvedActiveBookId !== effectiveFormBookId) {
+        setActiveScheduleBookId(effectiveFormBookId);
+      }
       resetScheduleForm();
     };
 
@@ -5809,8 +5986,20 @@ export function MenuHubView({
       setExportingSchedulePdf(true);
       setSchedulePdfError(null);
       try {
+        const bookLabelText = activeBookObj
+          ? activeBookObj.subtitle
+            ? `${activeBookObj.title} — ${activeBookObj.subtitle}`
+            : activeBookObj.title
+          : 'Semua Buku Agenda';
         await exportSchedulesToPdf({
           schedules: sortedSchedules,
+          title: activeBookObj
+            ? `JADWAL KEGIATAN — ${bookLabelText.toUpperCase()}`
+            : 'JADWAL KEGIATAN & TARGET PROPOSAL (SEMUA BUKU)',
+          bookLabel: bookLabelText,
+          books: effectiveBooks,
+          scheduleBookMap,
+          showBookColumn: resolvedActiveBookId === 'all',
           selectedYear: scheduleYear || selectedYear,
           reportTemplate,
         });
@@ -5822,6 +6011,9 @@ export function MenuHubView({
         setExportingSchedulePdf(false);
       }
     };
+
+    const showScheduleFormColumn =
+      (editingScheduleId && onUpdateSchedule && canUpdate) || (onAddSchedule && canAdd);
 
     return (
       <div className="min-h-screen pb-24">
@@ -5835,43 +6027,618 @@ export function MenuHubView({
         <div
           className={`space-y-4 px-4 pt-4 ${
             !isNativeApp
-              ? `md:mx-auto ${(onAddSchedule || onUpdateSchedule) && (canAdd || canUpdate) ? 'md:max-w-[1440px] md:grid md:grid-cols-12 md:items-start md:gap-6 md:space-y-0' : 'md:max-w-5xl'} md:px-6 md:pt-6`
+              ? `md:mx-auto ${(onAddSchedule || onUpdateSchedule) && (canAdd || canUpdate) ? 'md:max-w-[1440px]' : 'md:max-w-5xl'} md:px-6 md:pt-6`
               : ''
           }`}
         >
-          {((editingScheduleId && onUpdateSchedule && canUpdate) ||
-            (onAddSchedule && canAdd)) && (
-            <form
-              onSubmit={handleSubmitSchedule}
-              className={`rounded-2xl border border-slate-200 bg-white p-4 space-y-3 ${
-                !isNativeApp ? 'md:col-span-5' : ''
+          {/* Buku / Bab Agenda Switcher */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-3.5 shadow-xs">
+            <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-50 text-teal-700">
+                  <BookOpen className="h-4 w-4" />
+                </div>
+                <div>
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                    Buku / Bab Agenda
+                  </h2>
+                  <p className="text-[11px] text-slate-500">
+                    Pisahkan catatan jadwal per buku kegiatan (contoh: Buku 1 BAST &amp; Buku 2 Penyaluran)
+                  </p>
+                </div>
+              </div>
+              {onSaveScheduleBooks && canAdd && (
+                <button
+                  type="button"
+                  disabled={isOffline}
+                  onClick={openAddBookModal}
+                  className="inline-flex min-h-[34px] items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Plus className="h-3.5 w-3.5 text-teal-700" />
+                  <span>Tambah Buku</span>
+                </button>
+              )}
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {effectiveBooks.map((book) => {
+                const counts = bookCounts.get(book.id) || { total: 0, pending: 0 };
+                const isActive = resolvedActiveBookId === book.id;
+                return (
+                  <div
+                    key={book.id}
+                    className={`flex min-w-[200px] flex-1 items-center justify-between gap-2 rounded-xl border px-3 py-2.5 transition-all sm:flex-initial sm:min-w-[240px] ${
+                      isActive
+                        ? 'border-teal-600 bg-teal-50/70 ring-1 ring-teal-600/20'
+                        : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => handleSelectBookTab(book)}
+                      className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                    >
+                      <div
+                        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
+                          isActive
+                            ? 'bg-teal-700 text-white'
+                            : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        <BookOpen className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className={`truncate text-xs font-bold ${
+                              isActive ? 'text-teal-950' : 'text-slate-900'
+                            }`}
+                          >
+                            {book.title}
+                          </span>
+                          <span
+                            className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${
+                              isActive
+                                ? 'bg-teal-700 text-white'
+                                : 'bg-slate-100 text-slate-600'
+                            }`}
+                          >
+                            {counts.total}
+                          </span>
+                        </div>
+                        <p
+                          className={`mt-0.5 truncate text-[11px] ${
+                            isActive ? 'font-medium text-teal-800' : 'text-slate-500'
+                          }`}
+                        >
+                          {book.subtitle || SCHEDULE_CATEGORY_LABELS[book.defaultCategory]}
+                        </p>
+                      </div>
+                    </button>
+                    {onSaveScheduleBooks && canUpdate && (
+                      <button
+                        type="button"
+                        disabled={isOffline}
+                        onClick={() => openEditBookModal(book)}
+                        title={`Edit ${book.title}`}
+                        aria-label={`Edit ${book.title}`}
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-white hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <Edit3 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+
+              <button
+                type="button"
+                onClick={() => setActiveScheduleBookId('all')}
+                className={`inline-flex min-h-[58px] items-center gap-2 rounded-xl border px-3.5 py-2 text-xs font-semibold transition-all ${
+                  resolvedActiveBookId === 'all'
+                    ? 'border-teal-700 bg-teal-700 text-white'
+                    : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <span>Semua Buku</span>
+                <span
+                  className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${
+                    resolvedActiveBookId === 'all'
+                      ? 'bg-white/20 text-white'
+                      : 'bg-slate-200/80 text-slate-700'
+                  }`}
+                >
+                  {schedules.length}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <div
+            className={`space-y-4 ${
+              !isNativeApp && showScheduleFormColumn
+                ? 'md:grid md:grid-cols-12 md:items-start md:gap-6 md:space-y-0'
+                : ''
+            }`}
+          >
+            {showScheduleFormColumn && (
+              <form
+                onSubmit={handleSubmitSchedule}
+                className={`rounded-2xl border border-slate-200 bg-white p-4 space-y-3 ${
+                  !isNativeApp ? 'md:col-span-5' : ''
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className="text-sm font-bold text-slate-900">
+                    {editingScheduleId ? 'Edit Agenda Jadwal' : 'Tambah Agenda Baru'}
+                  </h2>
+                  {editingScheduleId && (
+                    <button
+                      type="button"
+                      onClick={resetScheduleForm}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-100"
+                    >
+                      <X className="h-3 w-3" />
+                      <span>Batal Edit</span>
+                    </button>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Buku / Bab Agenda
+                  </label>
+                  <select
+                    disabled={isOffline}
+                    value={effectiveFormBookId}
+                    onChange={(e) => {
+                      const nextBookId = e.target.value;
+                      setScheduleFormBookOverride(nextBookId);
+                      if (!editingScheduleId) {
+                        const targetBook = effectiveBooks.find((b) => b.id === nextBookId);
+                        if (targetBook) {
+                          setScheduleCategory(targetBook.defaultCategory);
+                        }
+                      }
+                    }}
+                    className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                  >
+                    {effectiveBooks.map((book) => (
+                      <option key={book.id} value={book.id}>
+                        {book.title}
+                        {book.subtitle ? ` — ${book.subtitle}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Kategori (Jenis Kegiatan)
+                  </label>
+                  <select
+                    disabled={isOffline}
+                    value={effectiveFormCategory}
+                    onChange={(e) => {
+                      if (scheduleFormBookOverride === null) {
+                        setScheduleFormBookOverride(effectiveFormBookId);
+                      }
+                      setScheduleCategory(e.target.value as ScheduleCategory);
+                    }}
+                    className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                  >
+                    {SCHEDULE_CATEGORY_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Pilih Hari
+                    </label>
+                    <select
+                      disabled={isOffline}
+                      value={scheduleDay}
+                      onChange={(e) => setScheduleDay(e.target.value)}
+                      className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                    >
+                      <option value="">Otomatis ({autoDayLabel})</option>
+                      {SPTJM_DAY_OPTIONS.map((dayName) => (
+                        <option key={dayName} value={dayName}>
+                          {dayName}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Tanggal Target
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      disabled={isOffline}
+                      value={scheduleDate}
+                      onChange={(e) => setScheduleDate(e.target.value)}
+                      className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none tabular-nums disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700">Tahun</label>
+                    <select
+                      disabled={isOffline}
+                      value={scheduleYear}
+                      onChange={(e) => {
+                        const nextYr = e.target.value;
+                        setScheduleYear(nextYr);
+                        if (
+                          scheduleProposal &&
+                          !proposals.some(
+                            (p) => p.tahun === nextYr && p.namaProposal === scheduleProposal
+                          )
+                        ) {
+                          setScheduleProposal('');
+                        }
+                      }}
+                      className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none tabular-nums disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                    >
+                      {scheduleYearOptions.map((y) => (
+                        <option key={y} value={y}>
+                          {y}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Jam Agenda (opsional)
+                    </label>
+                    <input
+                      type="time"
+                      disabled={isOffline}
+                      value={scheduleTime}
+                      onChange={(e) => setScheduleTime(e.target.value)}
+                      className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none tabular-nums disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Kelurahan / Proposal Terkait
+                  </label>
+                  <select
+                    disabled={isOffline}
+                    value={scheduleProposal}
+                    onChange={(e) => setScheduleProposal(e.target.value)}
+                    className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                  >
+                    <option value="">Umum / Tanpa Proposal Spesifik</option>
+                    {scheduleProposalOptions.map((prop) => (
+                      <option key={prop.id} value={prop.namaProposal}>
+                        {prop.namaProposal} ({prop.tipe})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Lokasi Penyaluran / Tempat (otomatis ke Kupon)
+                  </label>
+                  <input
+                    type="text"
+                    disabled={isOffline}
+                    value={scheduleLocation}
+                    onChange={(e) => setScheduleLocation(e.target.value)}
+                    placeholder="Contoh: Aula Kantor Camat Pontianak Barat"
+                    className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Catatan Singkat Internal (opsional)
+                  </label>
+                  <input
+                    type="text"
+                    disabled={isOffline}
+                    value={scheduleNotes}
+                    onChange={(e) => setScheduleNotes(e.target.value)}
+                    placeholder="Catatan tambahan agenda..."
+                    className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isOffline}
+                  className="inline-flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {editingScheduleId ? <Check className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+                  <span>{editingScheduleId ? 'Simpan Perubahan Jadwal' : 'Simpan Jadwal'}</span>
+                </button>
+              </form>
+            )}
+
+            <div
+              className={`overflow-hidden rounded-2xl border border-slate-200 bg-white ${
+                !isNativeApp && showScheduleFormColumn ? 'md:col-span-7' : ''
               }`}
             >
-              <div className="flex items-center justify-between gap-2">
-                <h2 className="text-sm font-bold text-slate-900">
-                  {editingScheduleId ? 'Edit Agenda Jadwal' : 'Tambah Agenda Baru'}
-                </h2>
-                {editingScheduleId && (
-                  <button
-                    type="button"
-                    onClick={resetScheduleForm}
-                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-100"
-                  >
-                    <X className="h-3 w-3" />
-                    <span>Batal Edit</span>
-                  </button>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50/70 px-4 py-3">
+                <div className="min-w-0">
+                  <h2 className="text-sm font-bold text-slate-900">
+                    {activeBookObj
+                      ? `${activeBookObj.title}${activeBookObj.subtitle ? ` · ${activeBookObj.subtitle}` : ''} (${sortedSchedules.length})`
+                      : `Daftar Agenda Semua Buku (${sortedSchedules.length})`}
+                  </h2>
+                  <p className="text-[11px] text-slate-500">
+                    Jadwal &amp; lokasi penyaluran otomatis terhubung ke Cetak Kupon
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={exportingSchedulePdf || sortedSchedules.length === 0}
+                  onClick={() => void handleExportSchedulePdf()}
+                  className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl border border-teal-700 bg-teal-700 px-3 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-200 disabled:text-slate-400"
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                  <span>{exportingSchedulePdf ? 'Membuat PDF...' : 'Export PDF'}</span>
+                </button>
+              </div>
+
+              {schedulePdfError && (
+                <div className="border-b border-rose-200 bg-rose-50 px-4 py-2 text-xs text-rose-700">
+                  {schedulePdfError}
+                </div>
+              )}
+
+              <div className="divide-y divide-slate-100">
+                {sortedSchedules.length === 0 ? (
+                  <div className="px-4 py-10 text-center">
+                    <CalendarClock className="mx-auto h-8 w-8 text-slate-300" />
+                    <p className="mt-2 text-xs font-medium text-slate-600">
+                      {activeBookObj
+                        ? `Belum ada agenda pada ${activeBookObj.title}${activeBookObj.subtitle ? ` (${activeBookObj.subtitle})` : ''}.`
+                        : 'Belum ada jadwal kegiatan atau tenggat proposal.'}
+                    </p>
+                  </div>
+                ) : (
+                  sortedSchedules.map((ev) => {
+                    const isOverdue = !ev.completed && ev.targetDate < todayStr;
+                    const itemBookId = resolveScheduleBookId(
+                      ev,
+                      scheduleBookMap,
+                      effectiveBooks
+                    );
+                    const itemBook = effectiveBooks.find((b) => b.id === itemBookId);
+                    const categoryTitle =
+                      catLabelMap[ev.category] || ev.title || 'Agenda Lainnya';
+                    const trimmedEvTitle = (ev.title || '').trim();
+                    const legacyNoteTitle =
+                      trimmedEvTitle &&
+                      trimmedEvTitle.toLowerCase() !== categoryTitle.toLowerCase()
+                        ? trimmedEvTitle
+                        : '';
+                    const proposalTitle = (ev.proposalName || '').trim();
+                    const primaryTitle = proposalTitle || legacyNoteTitle || categoryTitle;
+                    const subtitleParts = proposalTitle
+                      ? [categoryTitle, legacyNoteTitle, ev.notes].filter(Boolean)
+                      : [
+                          legacyNoteTitle ? categoryTitle : '',
+                          'Umum / Tanpa Proposal Spesifik',
+                          ev.notes,
+                        ].filter(Boolean);
+                    const formattedScheduleDate = formatScheduleIndonesianDate(
+                      ev.targetDate,
+                      ev.targetDay
+                    );
+                    return (
+                      <div key={ev.id} className="flex items-start gap-3 px-4 py-3">
+                        {onToggleSchedule && (
+                          <button
+                            type="button"
+                            disabled={isOffline}
+                            onClick={() => {
+                              if (isOffline) return;
+                              onToggleSchedule(ev.id);
+                            }}
+                            className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                              ev.completed
+                                ? 'border-teal-700 bg-teal-700 text-white'
+                                : 'border-slate-300 bg-white text-transparent hover:border-teal-600'
+                            }`}
+                            aria-label={ev.completed ? 'Tandai belum selesai' : 'Tandai selesai'}
+                          >
+                            <Check className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span
+                                className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                                  ev.completed
+                                    ? 'bg-emerald-50 text-emerald-700'
+                                    : isOverdue
+                                      ? 'bg-rose-50 text-rose-700'
+                                      : 'bg-teal-50 text-teal-800'
+                                }`}
+                              >
+                                {ev.completed ? 'Selesai' : isOverdue ? 'Terlambat' : 'Terjadwal'}
+                              </span>
+                              {ev.tahun && (
+                                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 tabular-nums">
+                                  {ev.tahun}
+                                </span>
+                              )}
+                              {resolvedActiveBookId === 'all' && itemBook && (
+                                <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+                                  {itemBook.title}
+                                </span>
+                              )}
+                            </div>
+                            <span
+                              className={`text-[11px] font-bold tabular-nums ${
+                                ev.completed
+                                  ? 'text-slate-400'
+                                  : isOverdue
+                                    ? 'text-rose-600'
+                                    : 'text-slate-700'
+                              }`}
+                            >
+                              {formattedScheduleDate}
+                              {ev.targetTime ? ` · ${ev.targetTime}` : ''}
+                            </span>
+                          </div>
+                          <p
+                            className={`mt-1 text-sm font-bold ${
+                              ev.completed ? 'line-through text-slate-400' : 'text-slate-900'
+                            }`}
+                          >
+                            {primaryTitle}
+                          </p>
+                          {subtitleParts.length > 0 && (
+                            <p className="mt-0.5 text-xs text-slate-500">
+                              {subtitleParts.join(' · ')}
+                            </p>
+                          )}
+                          {ev.location && (
+                            <div className="mt-1 space-y-0.5 text-[11px] text-slate-600">
+                              <p className="flex items-center gap-1">
+                                <MapPin className="h-3 w-3 shrink-0 text-teal-700" />
+                                <span className="truncate">{ev.location}</span>
+                              </p>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex shrink-0 items-center gap-1">
+                          {onUpdateSchedule && canUpdate && (
+                            <button
+                              type="button"
+                              disabled={isOffline}
+                              onClick={() => handleStartEditSchedule(ev)}
+                              aria-label="Edit jadwal"
+                              title="Edit Jadwal & Lokasi"
+                              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              <Edit3 className="h-4 w-4" />
+                            </button>
+                          )}
+                          {onDeleteSchedule && canDelete && (
+                            <button
+                              type="button"
+                              disabled={isOffline}
+                              onClick={() => {
+                                if (isOffline) return;
+                                onDeleteSchedule(ev.id);
+                              }}
+                              aria-label="Hapus jadwal"
+                              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
                 )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Modal Tambah / Edit Buku Agenda */}
+        {isBookModalOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-4 backdrop-blur-xs sm:items-center"
+            onClick={() => setIsBookModalOpen(false)}
+            role="dialog"
+            aria-modal="true"
+          >
+            <form
+              onSubmit={handleSaveBookModal}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl space-y-3.5"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                    <BookOpen className="h-4 w-4" />
+                  </div>
+                  <h3 className="text-sm font-bold text-slate-900">
+                    {editingBookId ? 'Edit Buku / Bab Agenda' : 'Tambah Buku / Bab Baru'}
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsBookModalOpen(false)}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100"
+                  aria-label="Tutup"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {bookModalError && (
+                <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                  {bookModalError}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Nama Buku / Bab
+                </label>
+                <input
+                  type="text"
+                  required
+                  disabled={isOffline}
+                  value={bookTitleDraft}
+                  onChange={(e) => setBookTitleDraft(e.target.value)}
+                  placeholder="Contoh: Buku 1 / Buku 3"
+                  className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs font-semibold text-slate-900 focus:border-teal-700 focus:outline-none"
+                />
               </div>
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700">
-                  Kategori (Judul Agenda)
+                  Keterangan / Fungsi Buku
+                </label>
+                <input
+                  type="text"
+                  disabled={isOffline}
+                  value={bookSubtitleDraft}
+                  onChange={(e) => setBookSubtitleDraft(e.target.value)}
+                  placeholder="Contoh: Agenda BAST (Laporan) atau Kegiatan Penyaluran"
+                  className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Kategori Kegiatan Default
                 </label>
                 <select
                   disabled={isOffline}
-                  value={scheduleCategory}
-                  onChange={(e) => setScheduleCategory(e.target.value as ScheduleCategory)}
-                  className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                  value={bookDefaultCategoryDraft}
+                  onChange={(e) =>
+                    setBookDefaultCategoryDraft(e.target.value as ScheduleCategory)
+                  }
+                  className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none"
                 >
                   {SCHEDULE_CATEGORY_OPTIONS.map((opt) => (
                     <option key={opt.value} value={opt.value}>
@@ -5881,308 +6648,40 @@ export function MenuHubView({
                 </select>
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700">
-                    Pilih Hari
-                  </label>
-                  <select
+              <div className="flex items-center justify-between gap-2 pt-1">
+                {editingBookId && effectiveBooks.length > 1 && canDelete ? (
+                  <button
+                    type="button"
                     disabled={isOffline}
-                    value={scheduleDay}
-                    onChange={(e) => setScheduleDay(e.target.value)}
-                    className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                    onClick={handleDeleteEditingBook}
+                    className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    <option value="">Otomatis ({autoDayLabel})</option>
-                    {SPTJM_DAY_OPTIONS.map((dayName) => (
-                      <option key={dayName} value={dayName}>
-                        {dayName}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700">
-                    Tanggal Target
-                  </label>
-                  <input
-                    type="date"
-                    required
-                    disabled={isOffline}
-                    value={scheduleDate}
-                    onChange={(e) => setScheduleDate(e.target.value)}
-                    className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none tabular-nums disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700">Tahun</label>
-                  <select
-                    disabled={isOffline}
-                    value={scheduleYear}
-                    onChange={(e) => {
-                      const nextYr = e.target.value;
-                      setScheduleYear(nextYr);
-                      if (
-                        scheduleProposal &&
-                        !proposals.some(
-                          (p) => p.tahun === nextYr && p.namaProposal === scheduleProposal
-                        )
-                      ) {
-                        setScheduleProposal('');
-                      }
-                    }}
-                    className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none tabular-nums disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>Hapus Buku</span>
+                  </button>
+                ) : (
+                  <span />
+                )}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsBookModalOpen(false)}
+                    className="min-h-[40px] rounded-xl border border-slate-200 px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50"
                   >
-                    {scheduleYearOptions.map((y) => (
-                      <option key={y} value={y}>
-                        {y}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700">
-                    Jam Agenda (opsional)
-                  </label>
-                  <input
-                    type="time"
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
                     disabled={isOffline}
-                    value={scheduleTime}
-                    onChange={(e) => setScheduleTime(e.target.value)}
-                    className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none tabular-nums disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
-                  />
+                    className="min-h-[40px] rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Simpan Buku
+                  </button>
                 </div>
               </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Proposal Terkait
-                </label>
-                <select
-                  disabled={isOffline}
-                  value={scheduleProposal}
-                  onChange={(e) => setScheduleProposal(e.target.value)}
-                  className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
-                >
-                  <option value="">Umum / Tanpa Proposal Spesifik</option>
-                  {scheduleProposalOptions.map((prop) => (
-                    <option key={prop.id} value={prop.namaProposal}>
-                      {prop.namaProposal} ({prop.tipe})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Lokasi Penyaluran (otomatis ke Kupon)
-                </label>
-                <input
-                  type="text"
-                  disabled={isOffline}
-                  value={scheduleLocation}
-                  onChange={(e) => setScheduleLocation(e.target.value)}
-                  placeholder="Contoh: Aula Kantor Camat Pontianak Barat"
-                  className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Catatan Singkat Internal (opsional)
-                </label>
-                <input
-                  type="text"
-                  disabled={isOffline}
-                  value={scheduleNotes}
-                  onChange={(e) => setScheduleNotes(e.target.value)}
-                  placeholder="Catatan tambahan agenda..."
-                  className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={isOffline}
-                className="inline-flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {editingScheduleId ? <Check className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
-                <span>{editingScheduleId ? 'Simpan Perubahan Jadwal' : 'Simpan Jadwal'}</span>
-              </button>
             </form>
-          )}
-
-          <div
-            className={`overflow-hidden rounded-2xl border border-slate-200 bg-white ${
-              !isNativeApp && ((onAddSchedule && canAdd) || (editingScheduleId && onUpdateSchedule && canUpdate))
-                ? 'md:col-span-7'
-                : ''
-            }`}
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50/70 px-4 py-3">
-              <div>
-                <h2 className="text-sm font-bold text-slate-900">
-                  Daftar Agenda ({sortedSchedules.length})
-                </h2>
-                <p className="text-[11px] text-slate-500">
-                  Jadwal &amp; lokasi penyaluran otomatis terhubung ke Cetak Kupon
-                </p>
-              </div>
-              <button
-                type="button"
-                disabled={exportingSchedulePdf || sortedSchedules.length === 0}
-                onClick={() => void handleExportSchedulePdf()}
-                className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl border border-teal-700 bg-teal-700 px-3 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-200 disabled:text-slate-400"
-              >
-                <FileText className="h-3.5 w-3.5" />
-                <span>{exportingSchedulePdf ? 'Membuat PDF...' : 'Export PDF'}</span>
-              </button>
-            </div>
-
-            {schedulePdfError && (
-              <div className="border-b border-rose-200 bg-rose-50 px-4 py-2 text-xs text-rose-700">
-                {schedulePdfError}
-              </div>
-            )}
-
-            <div className="divide-y divide-slate-100">
-              {sortedSchedules.length === 0 ? (
-                <div className="px-4 py-10 text-center">
-                  <CalendarClock className="mx-auto h-8 w-8 text-slate-300" />
-                  <p className="mt-2 text-xs font-medium text-slate-600">
-                    Belum ada jadwal kegiatan atau tenggat proposal.
-                  </p>
-                </div>
-              ) : (
-                sortedSchedules.map((ev) => {
-                  const isOverdue = !ev.completed && ev.targetDate < todayStr;
-                  const categoryTitle = catLabelMap[ev.category] || ev.title || 'Agenda Lainnya';
-                  const trimmedEvTitle = (ev.title || '').trim();
-                  const legacyNoteTitle =
-                    trimmedEvTitle &&
-                    trimmedEvTitle.toLowerCase() !== categoryTitle.toLowerCase()
-                      ? trimmedEvTitle
-                      : '';
-                  const subtitleParts = [legacyNoteTitle, ev.proposalName, ev.notes].filter(Boolean);
-                  const formattedScheduleDate = formatScheduleIndonesianDate(
-                    ev.targetDate,
-                    ev.targetDay
-                  );
-                  return (
-                    <div key={ev.id} className="flex items-start gap-3 px-4 py-3">
-                      {onToggleSchedule && (
-                        <button
-                          type="button"
-                          disabled={isOffline}
-                          onClick={() => {
-                            if (isOffline) return;
-                            onToggleSchedule(ev.id);
-                          }}
-                          className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-                            ev.completed
-                              ? 'border-teal-700 bg-teal-700 text-white'
-                              : 'border-slate-300 bg-white text-transparent hover:border-teal-600'
-                          }`}
-                          aria-label={ev.completed ? 'Tandai belum selesai' : 'Tandai selesai'}
-                        >
-                          <Check className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div className="flex items-center gap-1.5">
-                            <span
-                              className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
-                                ev.completed
-                                  ? 'bg-emerald-50 text-emerald-700'
-                                  : isOverdue
-                                    ? 'bg-rose-50 text-rose-700'
-                                    : 'bg-teal-50 text-teal-800'
-                              }`}
-                            >
-                              {ev.completed ? 'Selesai' : isOverdue ? 'Terlambat' : 'Terjadwal'}
-                            </span>
-                            {ev.tahun && (
-                              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 tabular-nums">
-                                {ev.tahun}
-                              </span>
-                            )}
-                          </div>
-                          <span
-                            className={`text-[11px] font-bold tabular-nums ${
-                              ev.completed
-                                ? 'text-slate-400'
-                                : isOverdue
-                                  ? 'text-rose-600'
-                                  : 'text-slate-700'
-                            }`}
-                          >
-                            {formattedScheduleDate}
-                            {ev.targetTime ? ` · ${ev.targetTime}` : ''}
-                          </span>
-                        </div>
-                        <p
-                          className={`mt-1 text-sm font-semibold ${
-                            ev.completed ? 'line-through text-slate-400' : 'text-slate-900'
-                          }`}
-                        >
-                          {categoryTitle}
-                        </p>
-                        {subtitleParts.length > 0 && (
-                          <p className="mt-0.5 text-xs text-slate-500">
-                            {subtitleParts.join(' · ')}
-                          </p>
-                        )}
-                        {ev.location && (
-                          <div className="mt-1 space-y-0.5 text-[11px] text-slate-600">
-                            <p className="flex items-center gap-1">
-                              <MapPin className="h-3 w-3 shrink-0 text-teal-700" />
-                              <span className="truncate">{ev.location}</span>
-                            </p>
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="flex shrink-0 items-center gap-1">
-                        {onUpdateSchedule && canUpdate && (
-                          <button
-                            type="button"
-                            disabled={isOffline}
-                            onClick={() => handleStartEditSchedule(ev)}
-                            aria-label="Edit jadwal"
-                            title="Edit Jadwal & Lokasi"
-                            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            <Edit3 className="h-4 w-4" />
-                          </button>
-                        )}
-                        {onDeleteSchedule && canDelete && (
-                          <button
-                            type="button"
-                            disabled={isOffline}
-                            onClick={() => {
-                              if (isOffline) return;
-                              onDeleteSchedule(ev.id);
-                            }}
-                            aria-label="Hapus jadwal"
-                            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
           </div>
-        </div>
+        )}
       </div>
     );
   }

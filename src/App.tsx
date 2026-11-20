@@ -73,6 +73,7 @@ import {
   DEFAULT_COUPON_CONFIG,
   DEFAULT_PEJABAT_LIST,
   DEFAULT_REPORT_TEMPLATE,
+  DEFAULT_SCHEDULE_BOOKS,
   DEFAULT_SPTJM_TEMPLATE,
   DirectChatMessage,
   InternalUser,
@@ -81,6 +82,7 @@ import {
   ItemBantuan,
   KpmAuditLogEntry,
   KpmBastInfo,
+  KpmDeleteAction,
   KpmDocumentFile,
   KpmDocuments,
   KpmFormValues,
@@ -97,6 +99,8 @@ import {
   ProposalSlotMap,
   ReportTemplateConfig,
   SCHEDULE_CATEGORY_LABELS,
+  ScheduleBook,
+  ScheduleBooksState,
   ScheduleCategory,
   ScheduleEventItem,
   SharedKpmCard,
@@ -107,6 +111,7 @@ import {
   UserPresenceStatus,
   ValidationStatus,
   WilayahKabKota,
+  resolveScheduleBookId,
 } from './types/kpm';
 import { normalizePejabatNipNumber } from './utils/pdfExporter';
 import {
@@ -580,7 +585,52 @@ export default function App() {
   const [chatBaselineReady, setChatBaselineReady] = useState<boolean>(false);
   const [isOperationalLoading, setIsOperationalLoading] = useState<boolean>(true);
   const [offlineQueueCount, setOfflineQueueCount] = useState<number>(0);
-  const [schedules, setSchedules] = useState<ScheduleEventItem[]>([]);
+  const [schedules, setSchedules] = useState<ScheduleEventItem[]>(() => {
+    try {
+      const raw = localStorage.getItem('masdeta_slice_masdeta_schedules_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed as ScheduleEventItem[];
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  });
+  const [scheduleBooksState, setScheduleBooksState] = useState<ScheduleBooksState>(() => {
+    try {
+      const raw = localStorage.getItem('masdeta_slice_masdeta_schedule_books_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<ScheduleBooksState>;
+        const books =
+          Array.isArray(parsed?.books) && parsed.books.length > 0
+            ? parsed.books
+            : DEFAULT_SCHEDULE_BOOKS;
+        const scheduleBookMap =
+          parsed?.scheduleBookMap &&
+          typeof parsed.scheduleBookMap === 'object' &&
+          !Array.isArray(parsed.scheduleBookMap)
+            ? parsed.scheduleBookMap
+            : {};
+        return { books, scheduleBookMap };
+      }
+    } catch {
+      // ignore
+    }
+    return { books: DEFAULT_SCHEDULE_BOOKS, scheduleBookMap: {} };
+  });
+  const schedulesWithBooks = useMemo(
+    () =>
+      schedules.map((ev) => ({
+        ...ev,
+        bookId: resolveScheduleBookId(
+          ev,
+          scheduleBooksState.scheduleBookMap,
+          scheduleBooksState.books
+        ),
+      })),
+    [schedules, scheduleBooksState]
+  );
   const [trashBin, setTrashBin] = useState<TrashRecordItem[]>([]);
   const [reportTemplate, setReportTemplate] = useState<ReportTemplateConfig>(DEFAULT_REPORT_TEMPLATE);
   const [couponConfig, setCouponConfig] = useState<CouponPrintConfig>(DEFAULT_COUPON_CONFIG);
@@ -1438,6 +1488,7 @@ export default function App() {
     try {
       const [
         fetchedSchedules,
+        fetchedScheduleBooksState,
         fetchedTrash,
         fetchedTemplate,
         fetchedCouponConfig,
@@ -1451,6 +1502,10 @@ export default function App() {
         fetchedPejabatList,
       ] = await Promise.all([
         fetchSchedulesFromSupabase(),
+        fetchAppStateSlice<ScheduleBooksState>('masdeta_schedule_books_v1', {
+          books: DEFAULT_SCHEDULE_BOOKS,
+          scheduleBookMap: {},
+        }),
         fetchAppStateSlice<TrashRecordItem[]>('masdeta_trash_bin_v1', []),
         fetchDocumentTemplateFromSupabase<ReportTemplateConfig>(
           'report',
@@ -1533,6 +1588,20 @@ export default function App() {
       kpmBastMapRef.current = safeBastMap;
       proposalSlotMapRef.current = safeSlotMap;
       setSchedules(Array.isArray(fetchedSchedules) ? fetchedSchedules : []);
+      if (fetchedScheduleBooksState && typeof fetchedScheduleBooksState === 'object') {
+        const nextBooks =
+          Array.isArray(fetchedScheduleBooksState.books) &&
+          fetchedScheduleBooksState.books.length > 0
+            ? fetchedScheduleBooksState.books
+            : DEFAULT_SCHEDULE_BOOKS;
+        const nextBookMap =
+          fetchedScheduleBooksState.scheduleBookMap &&
+          typeof fetchedScheduleBooksState.scheduleBookMap === 'object' &&
+          !Array.isArray(fetchedScheduleBooksState.scheduleBookMap)
+            ? fetchedScheduleBooksState.scheduleBookMap
+            : {};
+        setScheduleBooksState({ books: nextBooks, scheduleBookMap: nextBookMap });
+      }
       setTrashBin(activeTrash);
       setReportTemplate(
         fetchedTemplate && typeof fetchedTemplate === 'object'
@@ -4655,11 +4724,37 @@ export default function App() {
     return true;
   };
 
-  const handleDeleteKpm = (id: string, slotHandling: SlotRemovalMode = 'vacate') => {
-    if (!requirePermission('delete', 'menghapus data KPM')) return;
+  const handleDeleteKpm = (
+    id: string,
+    slotHandling: SlotRemovalMode = 'vacate',
+    deleteAction: KpmDeleteAction = 'permanent'
+  ) => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      setFeedback({
+        type: 'error',
+        message: 'Mode Offline (Read-Only): Perubahan data dinonaktifkan sampai koneksi kembali aktif.',
+      });
+      return;
+    }
+
+    if (deleteAction === 'database' || deleteAction === 'rejected') {
+      if (!hasPermission('update') && !hasPermission('delete')) {
+        requirePermission('delete', 'memindahkan data KPM');
+        return;
+      }
+      const nextStatus: ValidationStatus =
+        deleteAction === 'rejected' ? 'rejected' : 'pending';
+      handleUpdateKpmStatus(id, nextStatus, undefined, slotHandling, {
+        skipPermissionCheck: true,
+      });
+      return;
+    }
+
+    if (!requirePermission('delete', 'menghapus data KPM secara permanen')) return;
     const target = records.find((r) => r.id === id);
     if (!target) return;
     const prop =
+      (target.proposalId ? proposals.find((p) => p.id === target.proposalId) : undefined) ??
       proposals.find((p) => p.namaProposal === target.proposal && p.tahun === target.tahun) ??
       proposals.find((p) => p.namaProposal === target.proposal);
     if (prop?.status === 'locked') {
@@ -4670,41 +4765,38 @@ export default function App() {
       return;
     }
 
-    // Pindahkan ke Tempat Sampah 30 hari (berkas Drive tetap dipertahankan sampai kedaluwarsa atau dihapus permanen)
-    const now = new Date().toISOString();
-    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-    const containerSubtitle =
-      target.proposal?.trim() ||
-      (target.validasi === 'rejected' ? 'Arsip Ditolak' : 'Database KPM');
-    const trashEntry: TrashRecordItem = {
-      id: `trash-kpm-${target.id}-${Date.now()}`,
-      kind: 'kpm',
-      title: target.nama,
-      subtitle: [containerSubtitle, target.tahun || '', target.registerCode]
-        .filter(Boolean)
-        .join(' · '),
-      tahun: target.tahun,
-      deletedAt: now,
-      expiresAt,
-      deletedBy: currentActor.nama,
-      kpmRecord: target,
-    };
-    const nextTrash = [trashEntry, ...trashBin];
-    setTrashBin(nextTrash);
-    void saveAppStateSlice('masdeta_trash_bin_v1', nextTrash);
+    const docsToDelete: KpmDocumentFile[] = [];
+    const docSet = target.documents;
+    if (docSet.ktp) docsToDelete.push(docSet.ktp);
+    if (docSet.kk) docsToDelete.push(docSet.kk);
+    if (docSet.penerima) docsToDelete.push(docSet.penerima);
+    if (docSet.survey) docsToDelete.push(docSet.survey);
+    (docSet.rumah || []).forEach((x) => docsToDelete.push(x));
+    (docSet.lainnya || []).forEach((x) => docsToDelete.push(x));
+    if (target.bast?.signatureDoc) {
+      docsToDelete.push(target.bast.signatureDoc);
+    }
+    if (docsToDelete.length > 0) {
+      void Promise.allSettled(docsToDelete.map((doc) => removeDocumentFromDrive(doc)));
+    }
 
-    const removedHistory: ProposalKpmHistoryEntry = {
-      id: `hist-del-${Date.now()}`,
-      tahun: target.tahun,
-      proposalName: target.proposal,
-      kpmId: target.id,
-      kpmName: target.nama,
-      registerCode: target.registerCode,
-      action: 'removed',
-      fromProposal: target.proposal,
-      actorName: currentActor.nama,
-      timestamp: now,
-    };
+    const now = new Date().toISOString();
+    const removedHistory: ProposalKpmHistoryEntry[] = target.proposal?.trim()
+      ? [
+          {
+            id: `hist-pdel-${Date.now()}`,
+            tahun: target.tahun,
+            proposalName: target.proposal,
+            kpmId: target.id,
+            kpmName: target.nama,
+            registerCode: target.registerCode,
+            action: 'removed',
+            fromProposal: target.proposal,
+            actorName: currentActor.nama,
+            timestamp: now,
+          },
+        ]
+      : [];
 
     const wasInAcceptedProposal =
       target.validasi === 'accepted' && Boolean(target.proposal?.trim());
@@ -4728,19 +4820,25 @@ export default function App() {
           )
       : proposalSlotMapRef.current;
 
-    const nextHistory = [removedHistory, ...proposalHistory];
+    const nextHistory =
+      removedHistory.length > 0 ? [...removedHistory, ...proposalHistory] : proposalHistory;
+    const nextLogs = kpmAuditLogs.filter((l) => l.kpmId !== id);
     const remainingRecords = records.filter((r) => r.id !== id);
-    const nextRecords = recalculateProposalRegisterCodes(
-      remainingRecords,
-      proposals,
-      items,
-      wilayahList,
-      nextSlotMap
+    const nextRecords = mergeBastIntoRecords(
+      recalculateProposalRegisterCodes(
+        remainingRecords,
+        proposals,
+        items,
+        wilayahList,
+        nextSlotMap
+      ),
+      kpmBastMapRef.current
     );
 
     if (nextSlotMap !== proposalSlotMapRef.current) {
       persistProposalSlotMap(nextSlotMap, nextRecords);
     }
+    setKpmAuditLogs(nextLogs);
     setProposalHistory(nextHistory);
     setRecords(nextRecords);
 
@@ -4757,12 +4855,15 @@ export default function App() {
             updatedRecordsInProposal,
             proposals,
             pengelolaList,
-            historyEntries: [removedHistory],
+            historyEntries: removedHistory,
           }),
-        'Gagal menghapus KPM dari Supabase'
+        'Gagal menghapus KPM permanen dari Supabase'
       );
     } else {
-      void syncOperationalData({ records: nextRecords, proposalHistory: nextHistory }, 'delete');
+      void syncOperationalData(
+        { records: nextRecords, kpmAuditLogs: nextLogs, proposalHistory: nextHistory },
+        'delete'
+      );
     }
 
     if (activeKpmId === id) {
@@ -4772,7 +4873,7 @@ export default function App() {
     }
     setFeedback({
       type: 'success',
-      message: `Data KPM "${target.nama}" dipindahkan ke Tempat Sampah (tersimpan 30 hari).`,
+      message: `Data KPM "${target.nama}" berhasil dihapus permanen beserta dokumen dan riwayat terkait.`,
     });
   };
 
@@ -4891,15 +4992,22 @@ export default function App() {
     id: string,
     status: ValidationStatus,
     targetProposalId?: string,
-    slotHandling: SlotRemovalMode = 'vacate'
+    slotHandling: SlotRemovalMode = 'vacate',
+    options?: { skipPermissionCheck?: boolean }
   ) => {
-    if (!requirePermission('update', 'mengubah status validasi KPM')) return;
+    if (
+      !options?.skipPermissionCheck &&
+      !requirePermission('update', 'mengubah status validasi KPM')
+    ) {
+      return;
+    }
     const target = records.find((r) => r.id === id);
     if (!target) return;
-    if (
-      target.validasi === status &&
-      (status !== 'accepted' || !targetProposalId || target.proposalId === targetProposalId)
-    ) {
+    const sameContainer =
+      status === 'accepted'
+        ? !targetProposalId || target.proposalId === targetProposalId
+        : !target.proposal?.trim();
+    if (target.validasi === status && sameContainer) {
       return;
     }
 
@@ -6031,6 +6139,23 @@ export default function App() {
         );
     if (!ok) return;
 
+    const docsToDelete: KpmDocumentFile[] = [];
+    for (const target of deletableTargets) {
+      const docSet = target.documents;
+      if (docSet.ktp) docsToDelete.push(docSet.ktp);
+      if (docSet.kk) docsToDelete.push(docSet.kk);
+      if (docSet.penerima) docsToDelete.push(docSet.penerima);
+      if (docSet.survey) docsToDelete.push(docSet.survey);
+      (docSet.rumah || []).forEach((x) => docsToDelete.push(x));
+      (docSet.lainnya || []).forEach((x) => docsToDelete.push(x));
+      if (target.bast?.signatureDoc) {
+        docsToDelete.push(target.bast.signatureDoc);
+      }
+    }
+    if (docsToDelete.length > 0) {
+      void Promise.allSettled(docsToDelete.map((doc) => removeDocumentFromDrive(doc)));
+    }
+
     if (nextSlotMap !== proposalSlotMapRef.current) {
       persistProposalSlotMap(nextSlotMap);
     }
@@ -6307,9 +6432,37 @@ export default function App() {
     });
   };
 
+  const handleSaveScheduleBooks = (nextBooks: ScheduleBook[]) => {
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      setFeedback({
+        type: 'error',
+        message: 'Mode Offline (Read-Only): Buku agenda tidak dapat diubah saat offline.',
+      });
+      return;
+    }
+    const cleanBooks = nextBooks.length > 0 ? nextBooks : DEFAULT_SCHEDULE_BOOKS;
+    const validIds = new Set(cleanBooks.map((b) => b.id));
+    const fallbackBookId = cleanBooks[0].id;
+    const nextBookMap: Record<string, string> = {};
+    Object.entries(scheduleBooksState.scheduleBookMap).forEach(([schedId, bId]) => {
+      nextBookMap[schedId] = validIds.has(bId) ? bId : fallbackBookId;
+    });
+    const nextState: ScheduleBooksState = {
+      books: cleanBooks,
+      scheduleBookMap: nextBookMap,
+    };
+    setScheduleBooksState(nextState);
+    void saveAppStateSlice('masdeta_schedule_books_v1', nextState);
+    setFeedback({
+      type: 'success',
+      message: 'Daftar buku / bab agenda berhasil diperbarui.',
+    });
+  };
+
   const handleAddSchedule = (payload: {
     title: string;
     category: ScheduleCategory;
+    bookId?: string;
     targetDay?: string;
     targetDate: string;
     targetTime?: string;
@@ -6327,10 +6480,20 @@ export default function App() {
     }
     const resolvedTitle =
       payload.title.trim() || SCHEDULE_CATEGORY_LABELS[payload.category] || 'Agenda Lainnya';
+    const newId = `sch-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+    const resolvedBookId =
+      payload.bookId && scheduleBooksState.books.some((b) => b.id === payload.bookId)
+        ? payload.bookId
+        : resolveScheduleBookId(
+            { id: newId, category: payload.category },
+            scheduleBooksState.scheduleBookMap,
+            scheduleBooksState.books
+          );
     const newItem: ScheduleEventItem = {
-      id: `sch-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      id: newId,
       title: resolvedTitle,
       category: payload.category,
+      bookId: resolvedBookId,
       targetDay: payload.targetDay?.trim() || undefined,
       targetDate: payload.targetDate,
       targetTime: payload.targetTime?.trim() || undefined,
@@ -6347,11 +6510,20 @@ export default function App() {
       if (dateCmp !== 0) return dateCmp;
       return (a.targetTime || '99:99').localeCompare(b.targetTime || '99:99');
     });
+    const nextBooksState: ScheduleBooksState = {
+      books: scheduleBooksState.books,
+      scheduleBookMap: {
+        ...scheduleBooksState.scheduleBookMap,
+        [newId]: resolvedBookId,
+      },
+    };
     setSchedules(next);
+    setScheduleBooksState(nextBooksState);
+    void saveAppStateSlice('masdeta_schedule_books_v1', nextBooksState);
     void upsertScheduleInSupabase(newItem, next);
     setFeedback({
       type: 'success',
-      message: `Agenda "${resolvedTitle}" berhasil ditambahkan ke jadwal.`,
+      message: `Agenda "${payload.proposalName?.trim() || resolvedTitle}" berhasil ditambahkan ke jadwal.`,
     });
   };
 
@@ -6360,6 +6532,7 @@ export default function App() {
     payload: {
       title: string;
       category: ScheduleCategory;
+      bookId?: string;
       targetDay?: string;
       targetDate: string;
       targetTime?: string;
@@ -6378,6 +6551,14 @@ export default function App() {
     }
     const resolvedTitle =
       payload.title.trim() || SCHEDULE_CATEGORY_LABELS[payload.category] || 'Agenda Lainnya';
+    const resolvedBookId =
+      payload.bookId && scheduleBooksState.books.some((b) => b.id === payload.bookId)
+        ? payload.bookId
+        : resolveScheduleBookId(
+            { id, category: payload.category },
+            scheduleBooksState.scheduleBookMap,
+            scheduleBooksState.books
+          );
     let updatedItem: ScheduleEventItem | null = null;
     const next = schedules
       .map((s) => {
@@ -6386,6 +6567,7 @@ export default function App() {
           ...s,
           title: resolvedTitle,
           category: payload.category,
+          bookId: resolvedBookId,
           targetDay: payload.targetDay?.trim() || undefined,
           targetDate: payload.targetDate,
           targetTime: payload.targetTime?.trim() || undefined,
@@ -6401,13 +6583,22 @@ export default function App() {
         if (dateCmp !== 0) return dateCmp;
         return (a.targetTime || '99:99').localeCompare(b.targetTime || '99:99');
       });
+    const nextBooksState: ScheduleBooksState = {
+      books: scheduleBooksState.books,
+      scheduleBookMap: {
+        ...scheduleBooksState.scheduleBookMap,
+        [id]: resolvedBookId,
+      },
+    };
     setSchedules(next);
+    setScheduleBooksState(nextBooksState);
+    void saveAppStateSlice('masdeta_schedule_books_v1', nextBooksState);
     if (updatedItem) {
       void upsertScheduleInSupabase(updatedItem, next);
     }
     setFeedback({
       type: 'success',
-      message: `Agenda "${resolvedTitle}" berhasil diperbarui.`,
+      message: `Agenda "${payload.proposalName?.trim() || resolvedTitle}" berhasil diperbarui.`,
     });
   };
 
@@ -6434,6 +6625,16 @@ export default function App() {
     if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) return;
     const next = schedules.filter((s) => s.id !== id);
     setSchedules(next);
+    if (scheduleBooksState.scheduleBookMap[id]) {
+      const nextBookMap = { ...scheduleBooksState.scheduleBookMap };
+      delete nextBookMap[id];
+      const nextBooksState: ScheduleBooksState = {
+        books: scheduleBooksState.books,
+        scheduleBookMap: nextBookMap,
+      };
+      setScheduleBooksState(nextBooksState);
+      void saveAppStateSlice('masdeta_schedule_books_v1', nextBooksState);
+    }
     void deleteScheduleFromSupabase(id, next);
   };
 
@@ -9529,7 +9730,7 @@ export default function App() {
             onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
             onUpdateKpmDocuments={handleUpdateKpmDocuments}
             reportTemplate={reportTemplate}
-            schedules={schedules}
+            schedules={schedulesWithBooks}
             couponConfig={couponConfig}
             onSaveCouponConfig={handleSaveCouponConfig}
             bastTemplate={bastTemplate}
@@ -9690,7 +9891,7 @@ export default function App() {
               items={items}
               historyEntries={proposalHistory}
               proposalSlotMap={proposalSlotMap}
-              schedules={schedules}
+              schedules={schedulesWithBooks}
               reportTemplate={reportTemplate}
               bastTemplate={bastTemplate}
               pejabatList={pejabatList}
@@ -9810,7 +10011,7 @@ export default function App() {
             isOnline={isOnline}
             offlineQueueCount={offlineQueueCount}
             onSyncOfflineQueue={() => void handleFlushOfflineQueue()}
-            schedules={schedules}
+            schedules={schedulesWithBooks}
             onOpenSchedules={() => {
               navigateForwardScroll();
               setMenuOpenedFromDashboard(true);
@@ -9928,6 +10129,7 @@ export default function App() {
             onEditRecord={(rec) => openKpmForm(rec, 'kpm', false)}
             onDeleteRecord={handleDeleteKpm}
             onBulkUpdateKpms={handleBulkUpdateKpms}
+            onBulkPermanentDeleteKpms={handleBulkPermanentDeleteKpms}
           />
         </div>
 
@@ -10094,7 +10296,10 @@ export default function App() {
             onToggleBerkasDikembalikan={handleToggleBerkasDikembalikan}
             onSelectKpmFromDuplicate={(rec) => openKpmDetail(rec, 'menu')}
             onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
-            schedules={schedules}
+            schedules={schedulesWithBooks}
+            scheduleBooks={scheduleBooksState.books}
+            scheduleBookMap={scheduleBooksState.scheduleBookMap}
+            onSaveScheduleBooks={handleSaveScheduleBooks}
             onAddSchedule={handleAddSchedule}
             onUpdateSchedule={handleUpdateSchedule}
             onToggleSchedule={handleToggleSchedule}

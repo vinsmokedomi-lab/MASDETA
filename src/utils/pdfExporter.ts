@@ -10,6 +10,7 @@ import {
   DEFAULT_BAST_TEMPLATE,
   DEFAULT_COUPON_CONFIG,
   DEFAULT_KOP_LOGO_URL,
+  DEFAULT_SCHEDULE_BOOKS,
   DEFAULT_SPTJM_TEMPLATE,
   ItemBantuan,
   KpmDocumentFile,
@@ -20,9 +21,11 @@ import {
   ProposalTipe,
   ReportTemplateConfig,
   SCHEDULE_CATEGORY_LABELS,
+  ScheduleBook,
   ScheduleEventItem,
   SptjmTemplateConfig,
   WilayahKabKota,
+  resolveScheduleBookId,
 } from '../types/kpm';
 import {
   computeSubItemRecap,
@@ -686,6 +689,7 @@ export function resolveScheduleForProposal(
     let s = 0;
     if (ev.category === 'distribusi') s += 100;
     else if (ev.category === 'dinas') s += 20;
+    if (ev.bookId === 'book-2') s += 25;
     if ((ev.location || '').trim()) s += 30;
     if (!ev.completed) s += 15;
     return s;
@@ -4309,6 +4313,10 @@ export async function exportSubItemRecapToPdf({
 export interface ExportSchedulesPdfOptions {
   schedules: import('../types/kpm').ScheduleEventItem[];
   title?: string;
+  bookLabel?: string;
+  books?: ScheduleBook[];
+  scheduleBookMap?: Record<string, string>;
+  showBookColumn?: boolean;
   selectedYear?: string;
   fileName?: string;
   reportTemplate?: ReportTemplateConfig;
@@ -4317,6 +4325,10 @@ export interface ExportSchedulesPdfOptions {
 export async function exportSchedulesToPdf({
   schedules,
   title = 'JADWAL KEGIATAN & TARGET PROPOSAL',
+  bookLabel,
+  books = DEFAULT_SCHEDULE_BOOKS,
+  scheduleBookMap = {},
+  showBookColumn = false,
   selectedYear = 'all',
   fileName,
   reportTemplate,
@@ -4391,8 +4403,9 @@ export async function exportSchedulesToPdf({
   doc.setFontSize(8.8);
   doc.setTextColor(71, 85, 105);
   const yearLabel = selectedYear === 'all' ? 'Semua Tahun' : `Tahun ${selectedYear}`;
+  const bookMetaPart = bookLabel ? `Buku: ${bookLabel}   ·   ` : '';
   doc.text(
-    `Cakupan: ${yearLabel}   ·   Total: ${sorted.length} Agenda   ·   Dicetak: ${formatUploadDateTime(new Date().toISOString())}`,
+    `${bookMetaPart}Cakupan: ${yearLabel}   ·   Total: ${sorted.length} Agenda   ·   Dicetak: ${formatUploadDateTime(new Date().toISOString())}`,
     F4_PDF_MARGINS.left,
     cursorY + 9.2
   );
@@ -4431,26 +4444,51 @@ export async function exportSchedulesToPdf({
 
   cursorY = (doc.lastAutoTable?.finalY ?? cursorY + 18) + 6;
 
+  const bookMapById = new Map(books.map((b) => [b.id, b]));
+  const tableHead = showBookColumn
+    ? [['NO', 'BUKU / BAB', 'HARI, TANGGAL & JAM', 'KELURAHAN / PROPOSAL', 'KATEGORI', 'TAHUN', 'LOKASI', 'STATUS']]
+    : [['NO', 'HARI, TANGGAL & JAM', 'KELURAHAN / PROPOSAL', 'KATEGORI / AGENDA', 'TAHUN', 'LOKASI', 'STATUS']];
+
   const tableBody: string[][] =
     sorted.length === 0
-      ? [['-', '-', '-', '-', '-', '-', '-']]
+      ? [showBookColumn ? ['-', '-', '-', '-', '-', '-', '-', '-'] : ['-', '-', '-', '-', '-', '-', '-']]
       : sorted.map((ev, idx) => {
           const isOverdue = !ev.completed && ev.targetDate < todayStr;
           const statusText = ev.completed ? 'Selesai' : isOverdue ? 'Terlambat' : 'Terjadwal';
           const formattedDate = formatScheduleIndonesianDate(ev.targetDate, ev.targetDay);
           const dateTimeStr = ev.targetTime ? `${formattedDate}\nPukul ${ev.targetTime}` : formattedDate;
-          const categoryLabel = catLabelMap[ev.category] || ev.category;
+          const categoryLabel = catLabelMap[ev.category] || ev.title || ev.category;
+          const proposalTitle = ev.proposalName?.trim() || 'Umum / Tanpa Proposal';
           const cleanLocation =
             (ev.location || '')
               .trim()
               .replace(/^lokasi\s*:\s*/i, '')
               .trim() || '-';
+          const bId = resolveScheduleBookId(ev, scheduleBookMap, books);
+          const bookObj = bookMapById.get(bId);
+          const bookCell = bookObj
+            ? bookObj.subtitle
+              ? `${bookObj.title}\n${bookObj.subtitle}`
+              : bookObj.title
+            : bId;
+          if (showBookColumn) {
+            return [
+              String(idx + 1).padStart(2, '0'),
+              bookCell,
+              dateTimeStr,
+              proposalTitle,
+              categoryLabel,
+              ev.tahun || '-',
+              cleanLocation,
+              statusText,
+            ];
+          }
           return [
             String(idx + 1).padStart(2, '0'),
             dateTimeStr,
+            proposalTitle,
             categoryLabel,
             ev.tahun || '-',
-            ev.proposalName?.trim() || 'Umum / Tanpa Proposal',
             cleanLocation,
             statusText,
           ];
@@ -4465,7 +4503,7 @@ export async function exportSchedulesToPdf({
       left: F4_PDF_MARGINS.left,
     },
     tableWidth: PRINTABLE_WIDTH_MM,
-    head: [['NO', 'HARI, TANGGAL & JAM', 'KATEGORI / JUDUL', 'TAHUN', 'PROPOSAL', 'LOKASI', 'STATUS']],
+    head: tableHead,
     body: tableBody,
     theme: 'grid',
     showHead: 'everyPage',
@@ -4486,15 +4524,26 @@ export async function exportSchedulesToPdf({
       fontSize: 7.8,
       halign: 'center',
     },
-    columnStyles: {
-      0: { cellWidth: 9, halign: 'center' },
-      1: { cellWidth: 32, halign: 'center' },
-      2: { cellWidth: 23.5, halign: 'left', fontStyle: 'bold' },
-      3: { cellWidth: 13, halign: 'center' },
-      4: { cellWidth: 35, halign: 'left' },
-      5: { cellWidth: PRINTABLE_WIDTH_MM - 131, halign: 'left' },
-      6: { cellWidth: 18.5, halign: 'center', fontStyle: 'bold' },
-    },
+    columnStyles: showBookColumn
+      ? {
+          0: { cellWidth: 8.5, halign: 'center' },
+          1: { cellWidth: 24, halign: 'left' },
+          2: { cellWidth: 29, halign: 'center' },
+          3: { cellWidth: 34, halign: 'left', fontStyle: 'bold' },
+          4: { cellWidth: 23, halign: 'left' },
+          5: { cellWidth: 12, halign: 'center' },
+          6: { cellWidth: PRINTABLE_WIDTH_MM - 148.5, halign: 'left' },
+          7: { cellWidth: 18, halign: 'center', fontStyle: 'bold' },
+        }
+      : {
+          0: { cellWidth: 9, halign: 'center' },
+          1: { cellWidth: 31, halign: 'center' },
+          2: { cellWidth: 36, halign: 'left', fontStyle: 'bold' },
+          3: { cellWidth: 26, halign: 'left' },
+          4: { cellWidth: 13, halign: 'center' },
+          5: { cellWidth: PRINTABLE_WIDTH_MM - 133.5, halign: 'left' },
+          6: { cellWidth: 18.5, halign: 'center', fontStyle: 'bold' },
+        },
   });
 
   const totalPages = doc.getNumberOfPages();
@@ -4504,7 +4553,7 @@ export async function exportSchedulesToPdf({
     doc.setFontSize(7.5);
     doc.setTextColor(100, 116, 139);
     doc.text(
-      `MASDETA · Jadwal & Target Proposal (${yearLabel})`,
+      `MASDETA · ${bookLabel || 'Jadwal & Target Proposal'} (${yearLabel})`,
       F4_PDF_MARGINS.left,
       F4_PAPER_HEIGHT_MM - 5.5
     );
@@ -4516,8 +4565,14 @@ export async function exportSchedulesToPdf({
     );
   }
 
+  const bookSlug = bookLabel
+    ? `-${bookLabel
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')}`
+    : '';
   const resolvedFileName =
-    fileName || `masdeta-jadwal-proposal-${selectedYear === 'all' ? 'semua' : selectedYear}`;
+    fileName || `masdeta-jadwal${bookSlug}-${selectedYear === 'all' ? 'semua' : selectedYear}`;
   const res = await saveOrOpenPdfDocument(doc, resolvedFileName);
   return { ...res, count: sorted.length };
 }

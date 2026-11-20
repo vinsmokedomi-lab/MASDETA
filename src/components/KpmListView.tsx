@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  AlertTriangle,
+  Archive,
   ArrowDown,
   ArrowUp,
   Check,
@@ -21,6 +23,7 @@ import {
 import { DTSEN_OPTION_ITEMS, INITIAL_WILAYAH_LIST, TAHUN_OPTIONS } from '../data/kpmOptions';
 import {
   ItemBantuan,
+  KpmDeleteAction,
   KpmRecord,
   ProposalRecord,
   ProposalSlotMap,
@@ -90,7 +93,11 @@ interface KpmListViewProps {
   ) => void;
   onSelectRecord: (record: KpmRecord) => void;
   onEditRecord?: (record: KpmRecord) => void;
-  onDeleteRecord: (id: string, slotHandling?: SlotRemovalMode) => void;
+  onDeleteRecord: (
+    id: string,
+    slotHandling?: SlotRemovalMode,
+    deleteAction?: KpmDeleteAction
+  ) => void;
   onBulkUpdateKpms?: (
     ids: string[],
     patch: {
@@ -101,6 +108,7 @@ interface KpmListViewProps {
       markAllSubItems?: boolean;
     }
   ) => Promise<void> | void;
+  onBulkPermanentDeleteKpms?: (ids: string[]) => Promise<void> | void;
 }
 
 export function KpmListView({
@@ -129,6 +137,7 @@ export function KpmListView({
   onEditRecord,
   onDeleteRecord,
   onBulkUpdateKpms,
+  onBulkPermanentDeleteKpms,
 }: KpmListViewProps) {
   const { isOffline } = useOfflineStatus();
   const [query, setQuery] = useState('');
@@ -144,7 +153,9 @@ export function KpmListView({
   const [lockedNoticeRecord, setLockedNoticeRecord] = useState<KpmRecord | null>(null);
   const [bulkMode, setBulkMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [bulkSheet, setBulkSheet] = useState<'none' | 'dtsen' | 'item'>('none');
+  const [bulkSheet, setBulkSheet] = useState<
+    'none' | 'dtsen' | 'item' | 'delete' | 'delete-confirm-permanent'
+  >('none');
   const [isBulkProposalPickerOpen, setIsBulkProposalPickerOpen] = useState(false);
   const [bulkProcessing, setBulkProcessing] = useState(false);
   const [dbPickerTargetSlot, setDbPickerTargetSlot] = useState<{
@@ -534,6 +545,19 @@ export function KpmListView({
     }
   };
 
+  const runBulkPermanentDelete = async () => {
+    if (!onBulkPermanentDeleteKpms || selectedIds.length === 0 || bulkProcessing) return;
+    setBulkProcessing(true);
+    try {
+      await onBulkPermanentDeleteKpms(selectedIds);
+      setBulkSheet('none');
+      setSelectedIds([]);
+      setBulkMode(false);
+    } finally {
+      setBulkProcessing(false);
+    }
+  };
+
   const handleBulkAcceptClick = () => {
     if (selectedIds.length === 0 || bulkProcessing) return;
     const selectedRecs = records.filter((r) => selectedIds.includes(r.id));
@@ -571,7 +595,7 @@ export function KpmListView({
           </h1>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {canUpdate && onBulkUpdateKpms && (
+          {((canUpdate && onBulkUpdateKpms) || (canDelete && onBulkPermanentDeleteKpms)) && (
             <button
               type="button"
               disabled={isOffline}
@@ -611,7 +635,7 @@ export function KpmListView({
               </span>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              {canUpdate && onBulkUpdateKpms && (
+              {((canUpdate && onBulkUpdateKpms) || (canDelete && onBulkPermanentDeleteKpms)) && (
                 <button
                   type="button"
                   disabled={isOffline}
@@ -1685,7 +1709,7 @@ export function KpmListView({
         )}
       </div>
 
-      {/* 2-Step Delete Slot Handling & Confirmation Modal */}
+      {/* Multi-Step Delete Disposition, Slot Handling & Confirmation Modal */}
       <SlotHandlingConfirmModal
         isOpen={Boolean(pendingDeleteRecord)}
         actionType="delete"
@@ -1704,17 +1728,18 @@ export function KpmListView({
               )
             : null
         }
+        currentStatus={pendingDeleteRecord?.validasi}
         requiresSlotChoice={Boolean(
           pendingDeleteRecord &&
             pendingDeleteRecord.validasi === 'accepted' &&
             pendingDeleteRecord.proposal?.trim()
         )}
         onCancel={() => setPendingDeleteRecord(null)}
-        onConfirm={(slotHandling) => {
+        onConfirm={(slotHandling, deleteAction) => {
           if (!pendingDeleteRecord) return;
           const id = pendingDeleteRecord.id;
           setPendingDeleteRecord(null);
-          onDeleteRecord(id, slotHandling);
+          onDeleteRecord(id, slotHandling, deleteAction);
         }}
       />
 
@@ -1831,6 +1856,174 @@ export function KpmListView({
             >
               Sub-Item ✓
             </button>
+          </div>
+
+          {canDelete && (
+            <button
+              type="button"
+              disabled={bulkProcessing}
+              onClick={() => setBulkSheet('delete')}
+              className="mt-1.5 inline-flex min-h-[36px] w-full items-center justify-center gap-1.5 rounded-xl border border-rose-500/40 bg-rose-950/60 px-3 text-[11px] font-semibold text-rose-200 hover:bg-rose-900/70 disabled:opacity-60"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              <span>Hapus / Keluarkan {selectedIds.length} KPM...</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Bulk Delete Choice Modal */}
+      {bulkSheet === 'delete' && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/55 backdrop-blur-xs sm:items-center sm:p-4"
+          onClick={() => !bulkProcessing && setBulkSheet('none')}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Pilih Tindakan Hapus KPM Terpilih"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl space-y-4"
+          >
+            <div className="mx-auto h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
+                  <Trash2 className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">
+                    Pilih Tindakan untuk {selectedIds.length} KPM
+                  </h3>
+                  <p className="mt-0.5 text-xs leading-relaxed text-slate-600">
+                    Simpan ke Database / Arsip Ditolak agar bisa dipakai ulang, atau hapus permanen:
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={bulkProcessing}
+                onClick={() => setBulkSheet('none')}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-2.5">
+              {onBulkUpdateKpms && (
+                <button
+                  type="button"
+                  disabled={bulkProcessing}
+                  onClick={() => void runBulkPatch({ validasi: 'pending' })}
+                  className="flex w-full items-start gap-3 rounded-2xl border-2 border-teal-200 bg-teal-50/60 p-3.5 text-left transition-colors hover:border-teal-400 hover:bg-teal-50 disabled:opacity-50"
+                >
+                  <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-teal-200 bg-white text-teal-700">
+                    <Database className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-bold text-slate-900">Masukkan ke Database KPM</p>
+                    <p className="mt-0.5 text-[11px] leading-relaxed text-slate-600">
+                      Data &amp; foto tetap disimpan di Database KPM tanpa koneksi proposal agar mudah dimasukkan lagi nanti.
+                    </p>
+                  </div>
+                </button>
+              )}
+
+              {onBulkUpdateKpms && (
+                <button
+                  type="button"
+                  disabled={bulkProcessing}
+                  onClick={() => void runBulkPatch({ validasi: 'rejected' })}
+                  className="flex w-full items-start gap-3 rounded-2xl border-2 border-amber-200 bg-amber-50/55 p-3.5 text-left transition-colors hover:border-amber-400 hover:bg-amber-50 disabled:opacity-50"
+                >
+                  <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-amber-200 bg-white text-amber-700">
+                    <Archive className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-bold text-slate-900">Tandai Ditolak (Arsip)</p>
+                    <p className="mt-0.5 text-[11px] leading-relaxed text-slate-600">
+                      Dipindahkan ke Arsip Berkas Ditolak sebagai catatan, tetap bisa dipulihkan kapan saja.
+                    </p>
+                  </div>
+                </button>
+              )}
+
+              {onBulkPermanentDeleteKpms && (
+                <button
+                  type="button"
+                  disabled={bulkProcessing}
+                  onClick={() => setBulkSheet('delete-confirm-permanent')}
+                  className="flex w-full items-start gap-3 rounded-2xl border-2 border-slate-200 bg-white p-3.5 text-left transition-colors hover:border-rose-300 hover:bg-rose-50/50 disabled:opacity-50"
+                >
+                  <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-rose-200 bg-rose-50 text-rose-600">
+                    <Trash2 className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-bold text-rose-700">Hapus Permanen</p>
+                    <p className="mt-0.5 text-[11px] leading-relaxed text-slate-600">
+                      Menghapus {selectedIds.length} KPM terpilih secara permanen beserta dokumen dan riwayat terkait.
+                    </p>
+                  </div>
+                </button>
+              )}
+            </div>
+
+            <button
+              type="button"
+              disabled={bulkProcessing}
+              onClick={() => setBulkSheet('none')}
+              className="inline-flex min-h-[44px] w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              Batal
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm Bulk Permanent Delete */}
+      {bulkSheet === 'delete-confirm-permanent' && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 backdrop-blur-xs sm:items-center sm:p-4"
+          onClick={() => !bulkProcessing && setBulkSheet('none')}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Konfirmasi Hapus Permanen Massal"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-t-3xl bg-white p-5 shadow-xl sm:rounded-3xl space-y-4"
+          >
+            <div className="mx-auto h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-base font-bold text-slate-900">Hapus Permanen {selectedIds.length} KPM?</h3>
+                <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                  Sebanyak <strong>{selectedIds.length} data KPM terpilih</strong> beserta dokumen foto &amp; riwayat terkait akan <strong>dihapus permanen</strong> dan tidak dapat dikembalikan.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2.5">
+              <button
+                type="button"
+                disabled={bulkProcessing}
+                onClick={() => setBulkSheet('delete')}
+                className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Kembali
+              </button>
+              <button
+                type="button"
+                disabled={bulkProcessing || isOffline}
+                onClick={() => void runBulkPermanentDelete()}
+                className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-rose-600 px-4 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+              >
+                {bulkProcessing ? 'Menghapus...' : 'Ya, Hapus Permanen'}
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -50,6 +50,7 @@ import {
   InternalUser,
   ItemBantuan,
   KpmAuditLogEntry,
+  KpmDeleteAction,
   KpmDocumentFile,
   KpmDocuments,
   KpmRecord,
@@ -116,7 +117,11 @@ interface KpmDetailViewProps {
   canDelete?: boolean;
   onBack: () => void;
   onEditRecord: (record: KpmRecord) => void;
-  onDeleteRecord: (id: string, slotHandling?: SlotRemovalMode) => void;
+  onDeleteRecord: (
+    id: string,
+    slotHandling?: SlotRemovalMode,
+    deleteAction?: KpmDeleteAction
+  ) => void;
   onUpdateStatus: (
     id: string,
     status: ValidationStatus,
@@ -2407,7 +2412,7 @@ export function KpmDetailView({
         </div>
       )}
 
-      {/* 2-Step Confirmation Modal for Deleting KPM Record */}
+      {/* Multi-Step Delete Disposition, Slot Handling & Confirmation Modal */}
       <SlotHandlingConfirmModal
         isOpen={Boolean(confirmDelete && canDelete && !isProposalLocked && !isOffline)}
         actionType="delete"
@@ -2415,11 +2420,12 @@ export function KpmDetailView({
         registerCode={record.registerCode}
         originProposalName={record.proposal}
         originSlotNumber={currentSlotNumber}
+        currentStatus={record.validasi}
         requiresSlotChoice={Boolean(!isStandalone && record.validasi === 'accepted' && record.proposal?.trim())}
         onCancel={() => setConfirmDelete(false)}
-        onConfirm={(slotHandling) => {
+        onConfirm={(slotHandling, deleteAction) => {
           setConfirmDelete(false);
-          onDeleteRecord(record.id, slotHandling);
+          onDeleteRecord(record.id, slotHandling, deleteAction);
         }}
       />
 

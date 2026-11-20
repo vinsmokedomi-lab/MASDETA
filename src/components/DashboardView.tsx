@@ -1318,8 +1318,13 @@ export function DashboardView({
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-xs font-semibold text-slate-900">
                       {urgentSchedules.length === 1
-                        ? SCHEDULE_CATEGORY_LABELS[urgentSchedules[0].category] ||
-                          urgentSchedules[0].title
+                        ? urgentSchedules[0].proposalName?.trim()
+                          ? `${urgentSchedules[0].proposalName.trim()} · ${
+                              SCHEDULE_CATEGORY_LABELS[urgentSchedules[0].category] ||
+                              urgentSchedules[0].title
+                            }`
+                          : SCHEDULE_CATEGORY_LABELS[urgentSchedules[0].category] ||
+                            urgentSchedules[0].title
                         : 'Jadwal Kegiatan Mendekati Tenggat'}
                     </p>
                     <p className="mt-0.5 truncate text-[11px] text-slate-500 tabular-nums">
