@@ -55,6 +55,7 @@ import {
 import {
   buildMergedProposalSlots,
   computeSubItemRecap,
+  doesKpmMatchProposalDomicile,
   formatNikDisplay,
   formatUploadDateTime,
   getAbsenSeq,
@@ -64,7 +65,7 @@ import {
   removeDocumentFromDrive,
   resolveKpmDomicile,
   resolvePackageForKpm,
-  resolveProposalDomicile,
+  resolveProposalAreaScope,
   resolveProposalSlotStateForGroup,
   uploadProposalDocumentToDrive,
 } from '../utils/imageProcessor';
@@ -123,7 +124,8 @@ interface ProposalDetailViewProps {
     kpmId: string,
     proposalName: string,
     tahun: string,
-    slotNumber: number
+    slotNumber: number,
+    slotItem?: string
   ) => void;
   activeReconcileSnapshot?: TroubleshootingReconcileSnapshot | null;
   onUndoReconcileSnapshot?: (
@@ -176,7 +178,6 @@ export function ProposalDetailView({
     item?: string;
   } | null>(null);
   const [dbPickerQuery, setDbPickerQuery] = useState('');
-  const [dbPickerAreaFilterEnabled, setDbPickerAreaFilterEnabled] = useState(true);
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
   const [transferYear, setTransferYear] = useState<string>(proposal.tahun);
   const [transferTargetId, setTransferTargetId] = useState<string>('');
@@ -754,35 +755,34 @@ export function ProposalDetailView({
     });
   }, [mergedProposalSlots, kpmListQuery, kpmListItemFilter]);
 
-  const proposalDomicile = useMemo(
-    () => resolveProposalDomicile(proposal.namaProposal, allProposals, proposal.tahun, wilayahList),
+  const proposalAreaScope = useMemo(
+    () =>
+      resolveProposalAreaScope(proposal.namaProposal, allProposals, proposal.tahun, wilayahList),
     [proposal.namaProposal, allProposals, proposal.tahun, wilayahList]
-  );
-
-  const hasProposalAreaScope = Boolean(
-    proposalDomicile.kelurahan?.trim() || proposalDomicile.kecamatan?.trim()
   );
 
   const databasePickerCandidates = useMemo(() => {
     if (!dbPickerTargetSlot) return [];
     const q = dbPickerQuery.trim().toLowerCase();
-    const targetKel = (proposalDomicile.kelurahan || '').trim().toLowerCase();
-    const targetKec = (proposalDomicile.kecamatan || '').trim().toLowerCase();
 
     return records
       .filter((r) => {
         if (r.validasi !== 'pending') return false;
-        const dom = resolveKpmDomicile(r, allProposals, wilayahList);
-        if (dbPickerAreaFilterEnabled && hasProposalAreaScope) {
-          const candKel = (dom.kelurahan || '').trim().toLowerCase();
-          const candKec = (dom.kecamatan || '').trim().toLowerCase();
-          if (targetKel) {
-            if (candKel !== targetKel) return false;
-          } else if (targetKec) {
-            if (candKec !== targetKec) return false;
-          }
+        const propStr = (r.proposal || '').trim();
+        if (propStr && propStr !== proposal.namaProposal) return false;
+        if (
+          !doesKpmMatchProposalDomicile({
+            record: r,
+            proposalName: proposal.namaProposal,
+            proposalTahun: proposal.tahun,
+            proposals: allProposals,
+            wilayahList,
+          })
+        ) {
+          return false;
         }
         if (!q) return true;
+        const dom = resolveKpmDomicile(r, allProposals, wilayahList);
         return (
           r.nama.toLowerCase().includes(q) ||
           r.nikKtp.includes(q) ||
@@ -795,8 +795,14 @@ export function ProposalDetailView({
       })
       .sort((a, b) => {
         if (dbPickerTargetSlot.item) {
-          const aMatch = a.item === dbPickerTargetSlot.item ? 0 : 1;
-          const bMatch = b.item === dbPickerTargetSlot.item ? 0 : 1;
+          const aMatch =
+            (a.item || '').trim().toUpperCase() === dbPickerTargetSlot.item.trim().toUpperCase()
+              ? 0
+              : 1;
+          const bMatch =
+            (b.item || '').trim().toUpperCase() === dbPickerTargetSlot.item.trim().toUpperCase()
+              ? 0
+              : 1;
           if (aMatch !== bMatch) return aMatch - bMatch;
         }
         return a.nama.localeCompare(b.nama, 'id');
@@ -804,10 +810,8 @@ export function ProposalDetailView({
   }, [
     dbPickerTargetSlot,
     dbPickerQuery,
-    dbPickerAreaFilterEnabled,
-    hasProposalAreaScope,
-    proposalDomicile.kelurahan,
-    proposalDomicile.kecamatan,
+    proposal.namaProposal,
+    proposal.tahun,
     records,
     allProposals,
     wilayahList,
@@ -2361,7 +2365,6 @@ export function ProposalDetailView({
                       disabled={!canFillEmpty}
                       onClick={() => {
                         setDbPickerQuery('');
-                        setDbPickerAreaFilterEnabled(true);
                         setDbPickerTargetSlot({
                           slotNumber: entry.slotNumber,
                           item: entry.emptySlot.item,
@@ -3306,23 +3309,19 @@ export function ProposalDetailView({
               </button>
             </div>
 
-            {hasProposalAreaScope && (
-              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-teal-200 bg-teal-50/70 px-3 py-2 text-xs text-teal-900">
-                <span className="font-medium">
-                  Filter otomatis:{' '}
-                  <strong>
-                    {proposalDomicile.kelurahan
-                      ? `Kel. ${proposalDomicile.kelurahan}`
-                      : `Kec. ${proposalDomicile.kecamatan}`}
-                  </strong>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setDbPickerAreaFilterEnabled((prev) => !prev)}
-                  className="shrink-0 rounded-lg border border-teal-300 bg-white px-2.5 py-1 text-[11px] font-bold text-teal-800 hover:bg-teal-50"
-                >
-                  {dbPickerAreaFilterEnabled ? 'Tampilkan Semua Wilayah' : 'Filter Wilayah Proposal'}
-                </button>
+            {(proposalAreaScope.hasScope || dbPickerTargetSlot.item) && (
+              <div className="space-y-1 rounded-xl border border-teal-200 bg-teal-50/70 px-3 py-2 text-xs text-teal-900">
+                {proposalAreaScope.hasScope && (
+                  <p className="font-medium">
+                    Filter wilayah aktif: <strong>{proposalAreaScope.scopeLabel}</strong>
+                  </p>
+                )}
+                {dbPickerTargetSlot.item && (
+                  <p className="text-[11px] text-teal-800/90">
+                    KPM yang dipilih otomatis disesuaikan item bantuannya mengikuti slot kosong:{' '}
+                    <strong>{dbPickerTargetSlot.item}</strong>.
+                  </p>
+                )}
               </div>
             )}
 
@@ -3333,7 +3332,7 @@ export function ProposalDetailView({
                 autoFocus
                 value={dbPickerQuery}
                 onChange={(e) => setDbPickerQuery(e.target.value)}
-                placeholder="Cari nama, NIK, item, kelurahan, catatan..."
+                placeholder="Cari nama, NIK, item, pengelola, catatan..."
                 className="min-h-[42px] w-full rounded-xl border border-slate-200 bg-slate-50 pr-3.5 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:bg-white focus:outline-none"
               />
             </div>
@@ -3342,23 +3341,18 @@ export function ProposalDetailView({
               {databasePickerCandidates.length === 0 ? (
                 <div className="px-4 py-8 text-center">
                   <p className="text-xs font-medium text-slate-600">
-                    Tidak ada KPM berstatus Database yang cocok di filter saat ini.
+                    {proposalAreaScope.hasScope
+                      ? `Tidak ada KPM berstatus Menunggu dari ${proposalAreaScope.scopeLabel} di Database KPM.`
+                      : 'Tidak ada KPM berstatus Database yang cocok.'}
                   </p>
-                  {hasProposalAreaScope && dbPickerAreaFilterEnabled && (
-                    <button
-                      type="button"
-                      onClick={() => setDbPickerAreaFilterEnabled(false)}
-                      className="mt-2 inline-flex min-h-[32px] items-center rounded-lg border border-teal-700 bg-white px-3 text-[11px] font-bold text-teal-800 hover:bg-teal-50"
-                    >
-                      Lihat KPM Database dari Semua Wilayah
-                    </button>
-                  )}
                 </div>
               ) : (
                 databasePickerCandidates.slice(0, 60).map((cand) => {
                   const dom = resolveKpmDomicile(cand, allProposals, wilayahList);
-                  const isSameItem =
-                    Boolean(dbPickerTargetSlot.item) && cand.item === dbPickerTargetSlot.item;
+                  const targetSlotItem = (dbPickerTargetSlot.item || '').trim().toUpperCase();
+                  const candItem = (cand.item || '').trim().toUpperCase();
+                  const isSameItem = Boolean(targetSlotItem) && candItem === targetSlotItem;
+                  const willChangeItem = Boolean(targetSlotItem) && candItem !== targetSlotItem;
                   const isExOverQuota = Boolean(
                     cand.catatan && cand.catatan.includes('Over Kuota BAST')
                   );
@@ -3371,7 +3365,8 @@ export function ProposalDetailView({
                           cand.id,
                           proposal.namaProposal,
                           proposal.tahun,
-                          dbPickerTargetSlot.slotNumber
+                          dbPickerTargetSlot.slotNumber,
+                          dbPickerTargetSlot.item
                         );
                         setDbPickerTargetSlot(null);
                       }}
@@ -3385,6 +3380,11 @@ export function ProposalDetailView({
                           {isSameItem && (
                             <span className="shrink-0 rounded bg-teal-100 px-1.5 py-0.5 text-[10px] font-bold text-teal-800">
                               Item Cocok
+                            </span>
+                          )}
+                          {willChangeItem && (
+                            <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-900">
+                              {candItem || 'Tanpa Item'} → {targetSlotItem}
                             </span>
                           )}
                           {isExOverQuota && (

@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Archive,
   ArrowDown,
+  ArrowLeft,
   ArrowUp,
   Check,
   CheckSquare,
@@ -33,6 +34,7 @@ import {
 } from '../types/kpm';
 import {
   buildMergedProposalSlots,
+  doesKpmMatchProposalDomicile,
   getAbsenSeq,
   getItemHierarchyRank,
   getItemsForYear,
@@ -40,6 +42,7 @@ import {
   getPrimaryKpmPhoto,
   ProposalMergedSlotItem,
   resolveKpmDomicile,
+  resolveProposalAreaScope,
   resolveProposalSlotStateForGroup,
 } from '../utils/imageProcessor';
 import { useIsDesktopWeb } from '../utils/platform';
@@ -69,6 +72,8 @@ interface KpmListViewProps {
   canUpdate?: boolean;
   canDelete?: boolean;
   isLoading?: boolean;
+  openedFromProposalDetail?: boolean;
+  onOpenProposalDetail?: (proposalId: string) => void;
   onBack?: () => void;
   onCreateNew: () => void;
   onCreateForEmptySlot?: (
@@ -89,7 +94,8 @@ interface KpmListViewProps {
     kpmId: string,
     proposalName: string,
     tahun: string,
-    slotNumber: number
+    slotNumber: number,
+    slotItem?: string
   ) => void;
   onSelectRecord: (record: KpmRecord) => void;
   onEditRecord?: (record: KpmRecord) => void;
@@ -129,6 +135,9 @@ export function KpmListView({
   canUpdate = true,
   canDelete = true,
   isLoading = false,
+  openedFromProposalDetail = false,
+  onOpenProposalDetail,
+  onBack,
   onCreateNew,
   onCreateForEmptySlot,
   onMoveSlot,
@@ -471,12 +480,42 @@ export function KpmListView({
     });
   }, [isSlotViewActive, activeProposalRecord, proposalSlotMap, proposals, scopedRecords, items, wilayahList]);
 
+  const dbPickerAreaScope = useMemo(() => {
+    if (!dbPickerTargetSlot) {
+      return {
+        hasScope: false,
+        scopeType: 'none' as const,
+        normalizedTarget: '',
+        scopeLabel: '',
+      };
+    }
+    return resolveProposalAreaScope(
+      dbPickerTargetSlot.proposalName,
+      proposals,
+      dbPickerTargetSlot.tahun,
+      wilayahList
+    );
+  }, [dbPickerTargetSlot, proposals, wilayahList]);
+
   const databaseCandidates = useMemo(() => {
     if (!dbPickerTargetSlot) return [];
     const q = dbPickerQuery.trim().toLowerCase();
     return records
-      .filter((r) => r.validasi === 'pending' && !(r.proposal || '').trim())
       .filter((r) => {
+        if (r.validasi !== 'pending') return false;
+        const propStr = (r.proposal || '').trim();
+        if (propStr && propStr !== dbPickerTargetSlot.proposalName) return false;
+        if (
+          !doesKpmMatchProposalDomicile({
+            record: r,
+            proposalName: dbPickerTargetSlot.proposalName,
+            proposalTahun: dbPickerTargetSlot.tahun,
+            proposals,
+            wilayahList,
+          })
+        ) {
+          return false;
+        }
         if (!q) return true;
         const dom = resolveKpmDomicile(r, proposals, wilayahList);
         return (
@@ -491,8 +530,14 @@ export function KpmListView({
       })
       .sort((a, b) => {
         if (dbPickerTargetSlot.item) {
-          const aMatch = a.item === dbPickerTargetSlot.item ? 0 : 1;
-          const bMatch = b.item === dbPickerTargetSlot.item ? 0 : 1;
+          const aMatch =
+            (a.item || '').trim().toUpperCase() === dbPickerTargetSlot.item.trim().toUpperCase()
+              ? 0
+              : 1;
+          const bMatch =
+            (b.item || '').trim().toUpperCase() === dbPickerTargetSlot.item.trim().toUpperCase()
+              ? 0
+              : 1;
           if (aMatch !== bMatch) return aMatch - bMatch;
         }
         return a.nama.localeCompare(b.nama, 'id');
@@ -591,7 +636,23 @@ export function KpmListView({
       {/* Sticky Header (Native APK only) */}
       {isNativeApp && (
       <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md">
-        <div className="flex min-w-0 items-center gap-2.5">
+        <div className="flex min-w-0 items-center gap-2">
+          {(openedFromProposalDetail || (proposalFilter !== 'all' && activeProposalRecord && onOpenProposalDetail)) && (
+            <button
+              type="button"
+              onClick={() => {
+                if (openedFromProposalDetail && onBack) {
+                  onBack();
+                } else if (activeProposalRecord && onOpenProposalDetail) {
+                  onOpenProposalDetail(activeProposalRecord.id);
+                }
+              }}
+              className="-ml-1.5 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
+              aria-label="Kembali ke Detail Proposal"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </button>
+          )}
           <h1 className="truncate text-base font-bold text-slate-900">
             Keluarga Penerima Manfaat
           </h1>
@@ -629,6 +690,23 @@ export function KpmListView({
         {!isNativeApp && (
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2.5">
+              {(openedFromProposalDetail ||
+                (proposalFilter !== 'all' && activeProposalRecord && onOpenProposalDetail)) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (openedFromProposalDetail && onBack) {
+                      onBack();
+                    } else if (activeProposalRecord && onOpenProposalDetail) {
+                      onOpenProposalDetail(activeProposalRecord.id);
+                    }
+                  }}
+                  className="inline-flex min-h-[38px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  <span>{openedFromProposalDetail ? 'Kembali ke Proposal' : 'Detail Proposal'}</span>
+                </button>
+              )}
               <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
                 Keluarga Penerima Manfaat
               </h1>
@@ -675,7 +753,7 @@ export function KpmListView({
         )}
         {proposalFilter !== 'all' && onChangeProposalFilter && (
           <div className="space-y-1.5 rounded-2xl border border-teal-200 bg-teal-50 px-3.5 py-2.5 text-xs text-teal-900">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="min-w-0 flex items-center gap-2">
                 <span className="truncate font-semibold">Proposal: {proposalFilter}</span>
                 {emptySlotCountInProposal > 0 && (
@@ -684,14 +762,32 @@ export function KpmListView({
                   </span>
                 )}
               </div>
-              <button
-                type="button"
-                onClick={() => onChangeProposalFilter('all')}
-                className="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg bg-white px-2 text-[11px] font-semibold text-teal-800 hover:bg-teal-100"
-              >
-                <X className="h-3 w-3" />
-                <span>Reset</span>
-              </button>
+              <div className="flex shrink-0 items-center gap-1.5">
+                {(openedFromProposalDetail || (activeProposalRecord && onOpenProposalDetail)) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (openedFromProposalDetail && onBack) {
+                        onBack();
+                      } else if (activeProposalRecord && onOpenProposalDetail) {
+                        onOpenProposalDetail(activeProposalRecord.id);
+                      }
+                    }}
+                    className="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg border border-teal-300 bg-white px-2.5 text-[11px] font-semibold text-teal-800 transition-colors hover:bg-teal-100"
+                  >
+                    <ArrowLeft className="h-3 w-3" />
+                    <span>{openedFromProposalDetail ? 'Kembali ke Proposal' : 'Buka Detail Proposal'}</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => onChangeProposalFilter('all')}
+                  className="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg bg-white px-2 text-[11px] font-semibold text-teal-800 hover:bg-teal-100"
+                >
+                  <X className="h-3 w-3" />
+                  <span>Reset</span>
+                </button>
+              </div>
             </div>
             {isSlotViewActive && canUpdate && !activeProposalLocked && (
               <p className="text-[11px] text-teal-800/85">
@@ -2235,6 +2331,22 @@ export function KpmListView({
               </button>
             </div>
 
+            {(dbPickerAreaScope.hasScope || dbPickerTargetSlot.item) && (
+              <div className="space-y-1 rounded-xl border border-teal-200 bg-teal-50/70 px-3 py-2 text-xs text-teal-900">
+                {dbPickerAreaScope.hasScope && (
+                  <p className="font-medium">
+                    Filter wilayah aktif: <strong>{dbPickerAreaScope.scopeLabel}</strong>
+                  </p>
+                )}
+                {dbPickerTargetSlot.item && (
+                  <p className="text-[11px] text-teal-800/90">
+                    KPM yang dipilih otomatis disesuaikan item bantuannya mengikuti slot kosong:{' '}
+                    <strong>{dbPickerTargetSlot.item}</strong>.
+                  </p>
+                )}
+              </div>
+            )}
+
             <div className="relative">
               <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <input
@@ -2242,7 +2354,7 @@ export function KpmListView({
                 autoFocus
                 value={dbPickerQuery}
                 onChange={(e) => setDbPickerQuery(e.target.value)}
-                placeholder="Cari nama, NIK, item, kelurahan..."
+                placeholder="Cari nama, NIK, item, pengelola..."
                 className="min-h-[42px] w-full rounded-xl border border-slate-200 bg-slate-50 pr-3.5 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:bg-white focus:outline-none"
               />
             </div>
@@ -2250,13 +2362,17 @@ export function KpmListView({
             <div className="max-h-72 divide-y divide-slate-100 overflow-y-auto rounded-2xl border border-slate-200">
               {databaseCandidates.length === 0 ? (
                 <p className="px-4 py-8 text-center text-xs text-slate-500">
-                  Tidak ada KPM tersedia di Database KPM.
+                  {dbPickerAreaScope.hasScope
+                    ? `Tidak ada KPM berstatus Menunggu dari ${dbPickerAreaScope.scopeLabel} di Database KPM.`
+                    : 'Tidak ada KPM tersedia di Database KPM.'}
                 </p>
               ) : (
                 databaseCandidates.slice(0, 50).map((cand) => {
                   const dom = resolveKpmDomicile(cand, proposals, wilayahList);
-                  const isSameItem =
-                    Boolean(dbPickerTargetSlot.item) && cand.item === dbPickerTargetSlot.item;
+                  const targetSlotItem = (dbPickerTargetSlot.item || '').trim().toUpperCase();
+                  const candItem = (cand.item || '').trim().toUpperCase();
+                  const isSameItem = Boolean(targetSlotItem) && candItem === targetSlotItem;
+                  const willChangeItem = Boolean(targetSlotItem) && candItem !== targetSlotItem;
                   return (
                     <button
                       key={cand.id}
@@ -2266,20 +2382,26 @@ export function KpmListView({
                           cand.id,
                           dbPickerTargetSlot.proposalName,
                           dbPickerTargetSlot.tahun,
-                          dbPickerTargetSlot.slotNumber
+                          dbPickerTargetSlot.slotNumber,
+                          dbPickerTargetSlot.item
                         );
                         setDbPickerTargetSlot(null);
                       }}
                       className="flex w-full items-center justify-between gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-teal-50/70"
                     >
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex flex-wrap items-center gap-1.5">
                           <span className="truncate text-sm font-semibold text-slate-900">
                             {cand.nama}
                           </span>
                           {isSameItem && (
                             <span className="shrink-0 rounded bg-teal-100 px-1.5 py-0.5 text-[10px] font-bold text-teal-800">
                               Item Cocok
+                            </span>
+                          )}
+                          {willChangeItem && (
+                            <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-900">
+                              {candItem || 'Tanpa Item'} → {targetSlotItem}
                             </span>
                           )}
                         </div>

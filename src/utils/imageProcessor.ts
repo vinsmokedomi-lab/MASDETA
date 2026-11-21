@@ -176,6 +176,89 @@ export function resolveProposalDomicile(
   return { kabKota, kecamatan, kelurahan };
 }
 
+export function normalizeWilayahToken(
+  value: string | undefined | null,
+  kind: 'kelurahan' | 'kecamatan'
+): string {
+  const cleaned = (value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!cleaned) return '';
+  if (kind === 'kelurahan') {
+    return cleaned.replace(/^(?:kelurahan|kel\.?|desa|ds\.?)\s+/i, '').trim();
+  }
+  return cleaned.replace(/^(?:kecamatan|kec\.?)\s+/i, '').trim();
+}
+
+export function resolveProposalAreaScope(
+  proposalName: string,
+  proposals: ProposalRecord[],
+  proposalTahun?: string,
+  wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST
+): {
+  hasScope: boolean;
+  scopeType: 'kelurahan' | 'kecamatan' | 'none';
+  normalizedTarget: string;
+  scopeLabel: string;
+} {
+  const dom = resolveProposalDomicile(proposalName, proposals, proposalTahun, wilayahList);
+  const isKecProp = isKecamatanProposal(proposalName);
+  const targetKel = isKecProp ? '' : normalizeWilayahToken(dom.kelurahan, 'kelurahan');
+  const targetKec = normalizeWilayahToken(dom.kecamatan, 'kecamatan');
+
+  if (targetKel) {
+    const label = dom.kelurahan.trim() || `Kelurahan ${capitalizeWords(targetKel)}`;
+    return {
+      hasScope: true,
+      scopeType: 'kelurahan',
+      normalizedTarget: targetKel,
+      scopeLabel: label,
+    };
+  }
+  if (targetKec) {
+    const bareKec = dom.kecamatan.replace(/^(?:kecamatan|kec\.?)\s+/i, '').trim();
+    return {
+      hasScope: true,
+      scopeType: 'kecamatan',
+      normalizedTarget: targetKec,
+      scopeLabel: `Kecamatan ${bareKec || capitalizeWords(targetKec)}`,
+    };
+  }
+  return {
+    hasScope: false,
+    scopeType: 'none',
+    normalizedTarget: '',
+    scopeLabel: '',
+  };
+}
+
+export function doesKpmMatchProposalDomicile(params: {
+  record: Pick<KpmRecord, 'kabKota' | 'kecamatan' | 'kelurahan' | 'proposal' | 'proposalId' | 'tahun'>;
+  proposalName: string;
+  proposalTahun?: string;
+  proposals: ProposalRecord[];
+  wilayahList?: WilayahKabKota[];
+}): boolean {
+  const {
+    record,
+    proposalName,
+    proposalTahun,
+    proposals,
+    wilayahList = INITIAL_WILAYAH_LIST,
+  } = params;
+  const scope = resolveProposalAreaScope(proposalName, proposals, proposalTahun, wilayahList);
+  if (!scope.hasScope) return true;
+
+  const kpmDom = resolveKpmDomicile(record, proposals, wilayahList);
+  if (scope.scopeType === 'kelurahan') {
+    const candKel = normalizeWilayahToken(kpmDom.kelurahan || record.kelurahan, 'kelurahan');
+    return Boolean(candKel && candKel === scope.normalizedTarget);
+  }
+  if (scope.scopeType === 'kecamatan') {
+    const candKec = normalizeWilayahToken(kpmDom.kecamatan || record.kecamatan, 'kecamatan');
+    return Boolean(candKec && candKec === scope.normalizedTarget);
+  }
+  return true;
+}
+
 export function isLegacyDummyProposal(prop: { tipe?: unknown; namaProposal?: string }): boolean {
   const tipeStr = String(prop?.tipe || '').trim();
   return tipeStr !== 'Murni' && tipeStr !== 'Perubahan';

@@ -148,6 +148,7 @@ import {
   resolveKpmDomicile,
   resolvePackageForKpm,
   resolveProposalDomicile,
+  resolveProposalSlotStateForGroup,
   sanitizeProposalSlotMap,
   saveCustomYears,
   saveInternalUsers,
@@ -8952,7 +8953,8 @@ export default function App() {
     kpmId: string,
     proposalName: string,
     tahun: string,
-    slotNumber: number
+    slotNumber: number,
+    slotItemOverride?: string
   ) => {
     if (!requirePermission('update', 'mengisi baris kosong dari Database KPM')) return;
     const prop =
@@ -8972,6 +8974,24 @@ export default function App() {
 
     const target = records.find((r) => r.id === kpmId);
     if (!target) return;
+
+    const { state: existingSlotState } = resolveProposalSlotStateForGroup(
+      proposalSlotMapRef.current,
+      prop.id,
+      prop.namaProposal,
+      prop.tahun,
+      proposals
+    );
+    const matchedEmptySlot = existingSlotState?.emptySlots.find(
+      (es) => es.slotNumber === slotNumber
+    );
+    const rawSlotItem = (slotItemOverride ?? matchedEmptySlot?.item ?? '').trim().toUpperCase();
+    const matchedCatalogItem = rawSlotItem
+      ? items.find((it) => it.code.trim().toUpperCase() === rawSlotItem)
+      : undefined;
+    const resolvedSlotItem = matchedCatalogItem?.code || rawSlotItem;
+    const nextItem = resolvedSlotItem || target.item;
+    const itemChanged = Boolean(resolvedSlotItem && nextItem !== target.item);
 
     const now = new Date().toISOString();
     const dom = resolveKpmDomicile(
@@ -8993,6 +9013,8 @@ export default function App() {
             proposalId: prop.id,
             proposal: prop.namaProposal,
             tahun: nextTahun,
+            item: nextItem,
+            subItemDeliveries: itemChanged ? {} : r.subItemDeliveries,
             kabKota: dom.kabKota,
             kecamatan: dom.kecamatan,
             kelurahan: dom.kelurahan,
@@ -9039,6 +9061,15 @@ export default function App() {
           before: formatValidationLabel(target.validasi),
           after: 'Diterima',
         },
+        ...(itemChanged
+          ? [
+              {
+                field: 'Item Bantuan',
+                before: target.item || '-',
+                after: `${nextItem} (otomatis mengikuti slot #${String(slotNumber).padStart(2, '0')})`,
+              },
+            ]
+          : []),
       ],
     };
 
@@ -9098,6 +9129,14 @@ export default function App() {
         [prop.id]: {
           ...activeSnap,
           filledFromDatabaseKpmIds: [...activeSnap.filledFromDatabaseKpmIds, kpmId],
+          ...(itemChanged
+            ? {
+                filledFromDatabaseOriginalItems: {
+                  ...(activeSnap.filledFromDatabaseOriginalItems || {}),
+                  [kpmId]: target.item,
+                },
+              }
+            : {}),
         },
       };
       reconcileSnapshotsRef.current = nextSnapshots;
@@ -9107,7 +9146,9 @@ export default function App() {
 
     setFeedback({
       type: 'success',
-      message: `"${target.nama}" ditempatkan ke nomor urut #${String(slotNumber).padStart(2, '0')} di ${prop.namaProposal}.`,
+      message: itemChanged
+        ? `"${target.nama}" ditempatkan ke nomor urut #${String(slotNumber).padStart(2, '0')} di ${prop.namaProposal} (item otomatis disesuaikan dari ${target.item || '-'} ke ${nextItem}).`
+        : `"${target.nama}" ditempatkan ke nomor urut #${String(slotNumber).padStart(2, '0')} di ${prop.namaProposal}.`,
     });
   };
 
@@ -9439,6 +9480,7 @@ export default function App() {
               },
             ],
           });
+          const restoredItem = snapshot.filledFromDatabaseOriginalItems?.[rec.id];
           return {
             ...rec,
             validasi: 'pending' as ValidationStatus,
@@ -9446,6 +9488,7 @@ export default function App() {
             proposal: '',
             tahun: '',
             registerCode: '',
+            item: restoredItem !== undefined ? restoredItem : rec.item,
             updatedAt: now,
           };
         }
@@ -10601,8 +10644,14 @@ export default function App() {
               onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
               onUpdateProposalDocuments={handleQuickSyncProposalDocuments}
               onSelectKpm={(rec) => openKpmDetail(rec, returnToTab, false, null, true)}
-              onFillEmptySlotFromDatabase={(kpmId, proposalName, tahun, slotNumber) =>
-                void handleFillEmptySlotFromDatabase(kpmId, proposalName, tahun, slotNumber)
+              onFillEmptySlotFromDatabase={(kpmId, proposalName, tahun, slotNumber, slotItem) =>
+                void handleFillEmptySlotFromDatabase(
+                  kpmId,
+                  proposalName,
+                  tahun,
+                  slotNumber,
+                  slotItem
+                )
               }
               activeReconcileSnapshot={reconcileSnapshots[activeProposal.id] ?? null}
               onUndoReconcileSnapshot={handleUndoTroubleshootingSnapshot}
@@ -10773,6 +10822,8 @@ export default function App() {
             canUpdate={hasPermission('update')}
             canDelete={hasPermission('delete')}
             isLoading={isOperationalLoading}
+            openedFromProposalDetail={kpmOpenedFromProposalDetail && Boolean(activeProposal)}
+            onOpenProposalDetail={(proposalId) => openProposalDetailById(proposalId, 'proposal')}
             onBack={() => {
               navigateRestoreScroll();
               if (kpmOpenedFromProposalDetail && activeProposal) {
@@ -10800,8 +10851,14 @@ export default function App() {
             onRemoveEmptySlot={(proposalName, tahun, slotNumber) =>
               void handleRemoveEmptySlot(proposalName, tahun, slotNumber)
             }
-            onFillEmptySlotFromDatabase={(kpmId, proposalName, tahun, slotNumber) =>
-              void handleFillEmptySlotFromDatabase(kpmId, proposalName, tahun, slotNumber)
+            onFillEmptySlotFromDatabase={(kpmId, proposalName, tahun, slotNumber, slotItem) =>
+              void handleFillEmptySlotFromDatabase(
+                kpmId,
+                proposalName,
+                tahun,
+                slotNumber,
+                slotItem
+              )
             }
             onSelectRecord={(rec) => openKpmDetail(rec, 'kpm')}
             onEditRecord={(rec) => openKpmForm(rec, 'kpm', false)}

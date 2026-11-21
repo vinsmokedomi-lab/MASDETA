@@ -1323,7 +1323,7 @@ export function KpmRegistrationForm({
                             const matchedSlot = availableEmptySlots.find(
                               (s) => s.slotNumber === nextSlot
                             );
-                            if (matchedSlot?.item && !values.item) {
+                            if (matchedSlot?.item) {
                               updateField('item', matchedSlot.item);
                             }
                           }

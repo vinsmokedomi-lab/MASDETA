@@ -59,7 +59,11 @@ import {
   reconcileProposalWithBast,
 } from '../utils/troubleshootingReconciler';
 import { exportTroubleshootingToPdf } from '../utils/pdfExporter';
-import { formatUploadDateTime } from '../utils/imageProcessor';
+import {
+  buildMergedProposalSlots,
+  formatUploadDateTime,
+  resolveProposalSlotStateForGroup,
+} from '../utils/imageProcessor';
 import { useIsDesktopWeb } from '../utils/platform';
 import { useOfflineStatus } from '../contexts/OfflineContext';
 
@@ -598,12 +602,112 @@ export function TroubleshootingView({
   );
   const isProposalLocked = Boolean(analyzedProposalRecord?.status === 'locked');
   const isMismatchBlocked = Boolean(isDatabaseResultReady && result?.matchMetrics.isMismatch);
+
+  // Bandingkan kondisi aktual Proposal di MASDETA saat ini vs hasil rekonsiliasi BAST
+  // agar proposal yang sudah 100% sinkron tidak memunculkan Apply palsu & tidak menimpa snapshot Undo.
+  const proposalApplyDiff = useMemo(() => {
+    if (!isDatabaseResultReady || !result || !analyzedProposalRecord) {
+      return {
+        actualShiftedCount: 0,
+        actualEmptySlotsChanged: false,
+        actualMovedToDatabaseCount: 0,
+        currentEmptySlotsCount: 0,
+        targetEmptySlotsCount: 0,
+        hasActualChanges: false,
+      };
+    }
+
+    const propRecords = records.filter(
+      (r) =>
+        r.validasi === 'accepted' &&
+        (r.proposalId
+          ? r.proposalId === analyzedProposalRecord.id
+          : r.proposal === analyzedProposalRecord.namaProposal &&
+            r.tahun === analyzedProposalRecord.tahun)
+    );
+
+    const { state: currentSlotState } = resolveProposalSlotStateForGroup(
+      proposalSlotMap,
+      analyzedProposalRecord.id,
+      analyzedProposalRecord.namaProposal,
+      analyzedProposalRecord.tahun,
+      proposals
+    );
+
+    const currentMerged = buildMergedProposalSlots({
+      groupRecords: propRecords,
+      slotState: currentSlotState,
+      proposals,
+      catalog: items,
+      wilayahList,
+    });
+
+    const currentSlotByKpmId = new Map<string, number>();
+    const currentEmptySig: string[] = [];
+    for (const entry of currentMerged) {
+      if (entry.kind === 'kpm') {
+        currentSlotByKpmId.set(entry.record.id, entry.slotNumber);
+      } else {
+        const code = (entry.emptySlot.item || '').trim().toUpperCase();
+        currentEmptySig.push(`${entry.slotNumber}:${code}`);
+      }
+    }
+    currentEmptySig.sort();
+
+    let actualShiftedCount = 0;
+    const targetEmptySig: string[] = [];
+    for (const row of result.mainRows) {
+      if (row.isEmpty) {
+        targetEmptySig.push(`${row.noUrut}:${(row.kodeItem || '').trim().toUpperCase()}`);
+      } else if (row.sourceKpmId) {
+        const currentSlot = currentSlotByKpmId.get(row.sourceKpmId);
+        if (currentSlot !== row.noUrut) {
+          actualShiftedCount += 1;
+        }
+      }
+    }
+    targetEmptySig.sort();
+
+    const actualEmptySlotsChanged =
+      currentEmptySig.length !== targetEmptySig.length ||
+      currentEmptySig.some((sig, idx) => sig !== targetEmptySig[idx]);
+    const actualMovedToDatabaseCount = result.excludedRows.length;
+    const hasActualChanges =
+      actualShiftedCount > 0 || actualEmptySlotsChanged || actualMovedToDatabaseCount > 0;
+
+    return {
+      actualShiftedCount,
+      actualEmptySlotsChanged,
+      actualMovedToDatabaseCount,
+      currentEmptySlotsCount: currentEmptySig.length,
+      targetEmptySlotsCount: targetEmptySig.length,
+      hasActualChanges,
+    };
+  }, [
+    isDatabaseResultReady,
+    result,
+    analyzedProposalRecord,
+    records,
+    proposalSlotMap,
+    proposals,
+    items,
+    wilayahList,
+  ]);
+
+  const isAlreadySyncedWithProposal = Boolean(
+    isDatabaseResultReady &&
+      !isSelectedProposalDifferent &&
+      !isMismatchBlocked &&
+      !proposalApplyDiff.hasActualChanges
+  );
+
   const canExecuteApply = Boolean(
     onApplyReconciliation &&
       isDatabaseResultReady &&
       !isSelectedProposalDifferent &&
       !isProposalLocked &&
       !isMismatchBlocked &&
+      !isAlreadySyncedWithProposal &&
       !isOffline &&
       canUpdate &&
       !applyingMode
@@ -1191,14 +1295,24 @@ export function TroubleshootingView({
                   type="button"
                   disabled={!canExecuteApply}
                   onClick={() => setIsApplyModalOpen(true)}
-                  className="inline-flex min-h-[42px] items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-slate-900 px-4 text-xs font-bold text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
+                  className={`inline-flex min-h-[42px] items-center justify-center gap-2 whitespace-nowrap rounded-xl px-4 text-xs font-bold transition-colors disabled:cursor-not-allowed ${
+                    isAlreadySyncedWithProposal
+                      ? 'border border-emerald-200 bg-emerald-50 text-emerald-800'
+                      : 'bg-slate-900 text-white hover:bg-slate-800 disabled:bg-slate-300 disabled:text-slate-500'
+                  }`}
                 >
-                  {isMismatchBlocked || isProposalLocked ? (
+                  {isAlreadySyncedWithProposal ? (
+                    <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                  ) : isMismatchBlocked || isProposalLocked ? (
                     <Lock className="h-4 w-4" />
                   ) : (
                     <CheckCircle2 className="h-4 w-4" />
                   )}
-                  <span>Apply Hasil ke Proposal</span>
+                  <span>
+                    {isAlreadySyncedWithProposal
+                      ? 'Sudah Sinkron (0 Perubahan)'
+                      : 'Apply Hasil ke Proposal'}
+                  </span>
                 </button>
               )}
             </div>
@@ -1267,6 +1381,26 @@ export function TroubleshootingView({
                     </p>
                   </div>
                 </div>
+              ) : isAlreadySyncedWithProposal ? (
+                <div className="flex items-start gap-2.5 rounded-xl border border-emerald-200 bg-emerald-50/80 px-3.5 py-2.5 text-xs text-emerald-950">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+                  <div className="space-y-0.5">
+                    <p className="font-bold text-emerald-900">
+                      Proposal {analyzedProposalRecord?.namaProposal} sudah 100% sinkron dengan BAST
+                      ini — tidak ada perubahan baru untuk diterapkan.
+                    </p>
+                    <p className="text-[11px] leading-relaxed text-emerald-800">
+                      Urutan nomor KPM, posisi baris kosong ({proposalApplyDiff.currentEmptySlotsCount}{' '}
+                      slot), dan kuota item di database MASDETA sudah sama persis dengan hasil
+                      rekonsiliasi. Tombol Apply dinonaktifkan otomatis agar snapshot Undo sebelumnya
+                      tetap aman
+                      {result.totals.shiftedCount > 0
+                        ? ` (catatan: angka "${result.totals.shiftedCount} bergeser" di bawah adalah perbandingan terhadap nomor BAST PDF awal, bukan perubahan baru ke Proposal)`
+                        : ''}
+                      .
+                    </p>
+                  </div>
+                </div>
               ) : (
                 <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-teal-200 bg-teal-50/70 px-3.5 py-2 text-xs text-teal-900">
                   <span className="inline-flex items-center gap-1.5 font-medium">
@@ -1277,8 +1411,17 @@ export function TroubleshootingView({
                         {result.matchMetrics.proposalMatchPercentage}%
                       </strong>{' '}
                       ({result.matchMetrics.matchedBastCount}/{result.matchMetrics.totalProposalCount}{' '}
-                      KPM) · siap diterapkan ke{' '}
-                      <strong>{analyzedProposalRecord?.namaProposal}</strong>.
+                      KPM) · perubahan ke <strong>{analyzedProposalRecord?.namaProposal}</strong>:{' '}
+                      <strong className="tabular-nums">
+                        {proposalApplyDiff.actualShiftedCount} berubah posisi
+                      </strong>
+                      {proposalApplyDiff.actualEmptySlotsChanged
+                        ? ` · ${proposalApplyDiff.targetEmptySlotsCount} baris kosong`
+                        : ''}
+                      {proposalApplyDiff.actualMovedToDatabaseCount > 0
+                        ? ` · ${proposalApplyDiff.actualMovedToDatabaseCount} ke Database`
+                        : ''}
+                      .
                     </span>
                   </span>
                 </div>
@@ -2151,21 +2294,21 @@ export function TroubleshootingView({
 
             <div className="grid grid-cols-3 gap-2.5 rounded-2xl border border-slate-200 bg-slate-50 p-3.5 text-xs">
               <div className="rounded-xl border border-slate-200 bg-white p-2.5">
-                <p className="text-[11px] text-slate-500">KPM Bergeser Urutan</p>
+                <p className="text-[11px] text-slate-500">Berubah Posisi di Proposal</p>
                 <p className="mt-0.5 text-lg font-bold text-sky-700 tabular-nums">
-                  {result.totals.shiftedCount} KPM
+                  {proposalApplyDiff.actualShiftedCount} KPM
                 </p>
               </div>
               <div className="rounded-xl border border-slate-200 bg-white p-2.5">
-                <p className="text-[11px] text-slate-500">Baris Kosong Dibuat</p>
+                <p className="text-[11px] text-slate-500">Baris Kosong</p>
                 <p className="mt-0.5 text-lg font-bold text-amber-700 tabular-nums">
-                  {result.totals.barisKosong} Slot
+                  {proposalApplyDiff.targetEmptySlotsCount} Slot
                 </p>
               </div>
               <div className="rounded-xl border border-slate-200 bg-white p-2.5">
                 <p className="text-[11px] text-slate-500">Over Kuota → Database</p>
                 <p className="mt-0.5 text-lg font-bold text-rose-700 tabular-nums">
-                  {result.totals.dikeluarkan} KPM
+                  {proposalApplyDiff.actualMovedToDatabaseCount} KPM
                 </p>
               </div>
             </div>

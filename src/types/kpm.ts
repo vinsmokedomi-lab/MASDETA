@@ -621,5 +621,6 @@ export interface TroubleshootingReconcileSnapshot {
   previousKpmStates: TroubleshootingKpmPreApplyState[];
   movedOverQuotaKpmIds: string[];
   filledFromDatabaseKpmIds: string[];
+  filledFromDatabaseOriginalItems?: Record<string, string>;
 }
 
