@@ -5,10 +5,12 @@ import {
   Check,
   ChevronDown,
   FileCheck2,
+  FileSpreadsheet,
   FileText,
   ImagePlus,
   Loader2,
   Package,
+  Paintbrush,
   Printer,
   Search,
   Tag,
@@ -50,6 +52,8 @@ import {
 } from '../utils/imageProcessor';
 import {
   ADDON_PDF_COLUMN_DEFINITIONS,
+  CatNomorOrientation,
+  CatNomorPaperSize,
   DEFAULT_ADDON_PDF_COLUMN_KEYS,
   KpmSubItemStatusFilter,
   MANDATORY_PDF_COLUMN_KEYS,
@@ -57,7 +61,9 @@ import {
   PDF_COLUMN_DEFINITIONS,
   PdfColumnKey,
   SPTJM_DAY_OPTIONS,
+  buildCatNomorBarangMatrix,
   doesKpmRecordMatchCheckedColumns,
+  exportCatNomorBarangToPdf,
   exportKpmBastBulkToPdf,
   exportKpmSptjmBulkToPdf,
   exportKpmSubItemChecklistToPdf,
@@ -76,11 +82,12 @@ import {
   resolveScheduleForProposal,
   shouldAutoIncludeKelurahanColumn,
 } from '../utils/pdfExporter';
+import { exportKpmTableToXlsx } from '../utils/xlsxExporter';
 import { SelectionPickerModal, SelectionPickerOption } from './SelectionPickerModal';
 import { useIsDesktopWeb } from '../utils/platform';
 import { useOfflineStatus } from '../contexts/OfflineContext';
 
-type DownloadPrintMode = 'kpm' | 'subitem' | 'kupon' | 'bast' | 'sptjm' | 'dinsos';
+type DownloadPrintMode = 'kpm' | 'subitem' | 'kupon' | 'bast' | 'sptjm' | 'dinsos' | 'cat_nomor';
 
 interface MenuDownloadViewProps {
   records: KpmRecord[];
@@ -207,15 +214,19 @@ export function MenuDownloadView({
   const [isPengelolaModalOpen, setIsPengelolaModalOpen] = useState(false);
 
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  const [isGeneratingXlsx, setIsGeneratingXlsx] = useState(false);
   const [isGeneratingSubItem, setIsGeneratingSubItem] = useState(false);
   const [isGeneratingKupon, setIsGeneratingKupon] = useState(false);
   const [isGeneratingBast, setIsGeneratingBast] = useState(false);
   const [isGeneratingSptjm, setIsGeneratingSptjm] = useState(false);
   const [isGeneratingDinsos, setIsGeneratingDinsos] = useState(false);
+  const [isGeneratingCatNomor, setIsGeneratingCatNomor] = useState(false);
   const [limitNotice, setLimitNotice] = useState(false);
 
   const [dinsosProvinsi, setDinsosProvinsi] = useState('PROVINSI KALIMANTAN BARAT');
   const [dinsosPrefix, setDinsosPrefix] = useState('DINSOS');
+  const [catNomorOrientation, setCatNomorOrientation] = useState<CatNomorOrientation>('landscape');
+  const [catNomorPaperSize, setCatNomorPaperSize] = useState<CatNomorPaperSize>('a4');
 
   const [subItemStatusFilter, setSubItemStatusFilter] = useState<KpmSubItemStatusFilter>('all');
   const [subItemSelectedCode, setSubItemSelectedCode] = useState<string>('all');
@@ -247,6 +258,10 @@ export function MenuDownloadView({
     message: string;
   } | null>(null);
   const [dinsosFeedback, setDinsosFeedback] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
+  const [catNomorFeedback, setCatNomorFeedback] = useState<{
     type: 'success' | 'error';
     message: string;
   } | null>(null);
@@ -1123,6 +1138,70 @@ export function MenuDownloadView({
     }
   };
 
+  const handleDownloadXlsx = async () => {
+    if (pdfPrintRecords.length === 0 || isGeneratingXlsx) return;
+    setPdfFeedback(null);
+    setIsGeneratingXlsx(true);
+    try {
+      const { title, subtitle, fileName } = buildScopeTitleAndFileName(
+        undefined,
+        pdfPrintRecords.length
+      );
+      const shouldSplitByProposal =
+        selectedProposal === 'all' &&
+        selectedTahun !== 'database' &&
+        selectedTahun !== 'arsip' &&
+        selectedTahun !== 'database_arsip';
+      const includeEmptySlots =
+        !isStandaloneSource &&
+        selectedPengelola === 'all' &&
+        !onlyCompleteCheckedColumns &&
+        activeExcludedPengelolaCount === 0 &&
+        activeExcludedKelurahanCount === 0;
+      const selectedProposalMeta =
+        !isStandaloneSource && selectedProposal !== 'all'
+          ? proposals.find(
+              (p) =>
+                p.namaProposal === selectedProposal &&
+                (selectedTahun === 'all' || p.tahun === selectedTahun)
+            )
+          : undefined;
+
+      const res = await exportKpmTableToXlsx({
+        records: pdfPrintRecords,
+        proposals,
+        items,
+        wilayahList,
+        proposalSlotMap,
+        title,
+        subtitle,
+        fileName,
+        includeEmptySlots,
+        splitByProposal: shouldSplitByProposal,
+        proposalMeta: selectedProposalMeta
+          ? {
+              id: selectedProposalMeta.id,
+              namaProposal: selectedProposalMeta.namaProposal,
+              tahun: selectedProposalMeta.tahun,
+            }
+          : undefined,
+      });
+      setPdfFeedback({
+        type: 'success',
+        message: res.openedNative
+          ? `Excel "${res.savedFileName}" (${res.count} KPM${res.emptyCount > 0 ? ` + ${res.emptyCount} baris kosong` : ''}) berhasil dibuat dan dibuka.`
+          : `Excel "${res.savedFileName}" (${res.count} KPM${res.emptyCount > 0 ? ` + ${res.emptyCount} baris kosong` : ''}) berhasil diunduh.`,
+      });
+    } catch (err) {
+      setPdfFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Gagal membuat file Excel (.xlsx).',
+      });
+    } finally {
+      setIsGeneratingXlsx(false);
+    }
+  };
+
   const handleDownloadKuponPdf = async () => {
     if (eligibleKuponRecords.length === 0 || isGeneratingKupon) return;
     setKuponFeedback(null);
@@ -1259,6 +1338,67 @@ export function MenuDownloadView({
       });
     } finally {
       setIsGeneratingDinsos(false);
+    }
+  };
+
+  const catNomorMatrix = useMemo(
+    () =>
+      buildCatNomorBarangMatrix({
+        records,
+        proposals,
+        items,
+        wilayahList,
+        proposalSlotMap,
+        selectedYear: isStandaloneSource ? 'all' : selectedTahun,
+        proposalNameFilter: selectedProposal,
+        proposalTipeFilter: selectedProposalTipe,
+      }),
+    [
+      records,
+      proposals,
+      items,
+      wilayahList,
+      proposalSlotMap,
+      isStandaloneSource,
+      selectedTahun,
+      selectedProposal,
+      selectedProposalTipe,
+    ]
+  );
+
+  const handleDownloadCatNomorPdf = async () => {
+    if (catNomorMatrix.rows.length === 0 || isGeneratingCatNomor) return;
+    setCatNomorFeedback(null);
+    setIsGeneratingCatNomor(true);
+    try {
+      const orientText = catNomorOrientation === 'landscape' ? 'Landscape' : 'Portrait';
+      const paperText = catNomorPaperSize.toUpperCase();
+      const res = await exportCatNomorBarangToPdf({
+        records,
+        proposals,
+        items,
+        wilayahList,
+        proposalSlotMap,
+        selectedYear: isStandaloneSource ? 'all' : selectedTahun,
+        proposalNameFilter: selectedProposal,
+        proposalTipeFilter: selectedProposalTipe,
+        orientation: catNomorOrientation,
+        paperSize: catNomorPaperSize,
+      });
+      setCatNomorFeedback({
+        type: 'success',
+        message: res.openedNative
+          ? `PDF "${res.savedFileName}" (${res.proposalCount} lokasi · ${orientText} ${paperText}) berhasil dibuat dan dibuka.`
+          : `PDF "${res.savedFileName}" (${res.proposalCount} lokasi · ${orientText} ${paperText}) berhasil diunduh.`,
+      });
+    } catch (err) {
+      setCatNomorFeedback({
+        type: 'error',
+        message:
+          err instanceof Error ? err.message : 'Gagal membuat file PDF Cat Nomor Barang.',
+      });
+    } finally {
+      setIsGeneratingCatNomor(false);
     }
   };
 
@@ -1505,11 +1645,13 @@ export function MenuDownloadView({
                 <p className="mt-0.5 text-[11px] text-slate-500">
                   {printMode === 'dinsos'
                     ? 'Ukuran kertas F4 (216 × 330 mm · 2 Label/Lembar)'
-                    : 'Ukuran kertas F4 Portrait (216 × 310 mm)'}
+                    : printMode === 'cat_nomor'
+                      ? `Matriks rentang nomor cat (${catNomorOrientation === 'landscape' ? 'Landscape' : 'Portrait'} · ${catNomorPaperSize.toUpperCase()})`
+                      : 'Ukuran kertas F4 Portrait (216 × 310 mm)'}
                 </p>
               </div>
               <span className="shrink-0 rounded-lg bg-teal-50 px-2 py-1 text-[10px] font-bold text-teal-800 border border-teal-200/70">
-                6 Format
+                7 Format
               </span>
             </div>
             <div className="grid grid-cols-2 gap-2">
@@ -1550,6 +1692,12 @@ export function MenuDownloadView({
                     label: 'Nomor DINSOS',
                     subtitle: 'Tag nomor barang F4',
                     Icon: Tag,
+                  },
+                  {
+                    id: 'cat_nomor',
+                    label: 'Cat Nomor Barang',
+                    subtitle: 'Rentang nomor per item',
+                    Icon: Paintbrush,
                   },
                 ] as const
               ).map(({ id, label, subtitle, Icon }) => {
@@ -2367,27 +2515,48 @@ export function MenuDownloadView({
                 </div>
               )}
 
-              <button
-                type="button"
-                disabled={pdfPrintRecords.length === 0 || isGeneratingPdf}
-                onClick={() => void handleDownloadPdf()}
-                className="inline-flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-teal-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
-              >
-                {isGeneratingPdf ? (
-                  <>
-                    <Loader2 className="h-4.5 w-4.5 animate-spin" />
-                    <span>Menyiapkan PDF F4...</span>
-                  </>
-                ) : (
-                  <>
-                    <Printer className="h-4.5 w-4.5" />
-                    <span>Download PDF F4 ({pdfPrintRecords.length} KPM)</span>
-                  </>
-                )}
-              </button>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  disabled={pdfPrintRecords.length === 0 || isGeneratingPdf}
+                  onClick={() => void handleDownloadPdf()}
+                  className="inline-flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-teal-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
+                >
+                  {isGeneratingPdf ? (
+                    <>
+                      <Loader2 className="h-4.5 w-4.5 animate-spin" />
+                      <span>Menyiapkan PDF F4...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Printer className="h-4.5 w-4.5" />
+                      <span>Download PDF F4 ({pdfPrintRecords.length} KPM)</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  disabled={pdfPrintRecords.length === 0 || isGeneratingXlsx}
+                  onClick={() => void handleDownloadXlsx()}
+                  className="inline-flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl border border-emerald-700 bg-emerald-50/80 px-4 text-sm font-semibold text-emerald-800 shadow-xs transition-colors hover:bg-emerald-100 active:scale-[0.99] disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                >
+                  {isGeneratingXlsx ? (
+                    <>
+                      <Loader2 className="h-4.5 w-4.5 animate-spin" />
+                      <span>Menyiapkan Excel...</span>
+                    </>
+                  ) : (
+                    <>
+                      <FileSpreadsheet className="h-4.5 w-4.5" />
+                      <span>Download Excel (.xlsx)</span>
+                    </>
+                  )}
+                </button>
+              </div>
 
               <p className="text-center text-[11px] leading-relaxed text-slate-500">
-                Kertas F4 Portrait (216 × 310 mm) · Margin Kiri 2 cm · Kanan 1,5 cm · Atas &amp; Bawah 1 cm
+                PDF: Kertas F4 Portrait (216 × 310 mm) · Excel (.xlsx): NIK &amp; No. KK format teks siap salin ke Dinas + sheet Rekap Item
               </p>
             </section>
           )}
@@ -3999,6 +4168,252 @@ export function MenuDownloadView({
               </section>
             );
           })()}
+
+          {/* MODE 7: CAT NOMOR BARANG (MATRIKS RENTANG NOMOR ITEM PER LOKASI — PORTRAIT / LANDSCAPE) */}
+          {printMode === 'cat_nomor' && (
+            <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-4 md:p-5">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900">
+                    Cetak PDF Cat Nomor Barang
+                  </h2>
+                  <p className="mt-0.5 text-[11px] text-slate-500">
+                    Matriks rentang nomor barang per lokasi/proposal untuk panduan pengecatan nomor item (mengikuti urutan slot &amp; baris kosong proposal).
+                  </p>
+                </div>
+                <span className="shrink-0 rounded-lg bg-teal-50 px-2.5 py-1 text-xs font-bold text-teal-700 tabular-nums border border-teal-200/70">
+                  {catNomorMatrix.totalProposals} Lokasi
+                </span>
+              </div>
+
+              {/* Pilihan Orientasi & Ukuran Kertas */}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    Orientasi Halaman
+                  </p>
+                  <div className="grid grid-cols-2 gap-1.5 rounded-xl border border-slate-200 bg-slate-50 p-1">
+                    {(
+                      [
+                        { key: 'landscape', label: 'Landscape', desc: 'Mendatar (lebar)' },
+                        { key: 'portrait', label: 'Portrait', desc: 'Tegak (ringkas)' },
+                      ] as const
+                    ).map((opt) => {
+                      const active = catNomorOrientation === opt.key;
+                      return (
+                        <button
+                          key={opt.key}
+                          type="button"
+                          onClick={() => setCatNomorOrientation(opt.key)}
+                          className={`rounded-lg px-2.5 py-2 text-left transition-all ${
+                            active
+                              ? 'bg-teal-700 text-white shadow-xs'
+                              : 'text-slate-700 hover:bg-white'
+                          }`}
+                        >
+                          <span className="block text-xs font-bold leading-tight">{opt.label}</span>
+                          <span
+                            className={`mt-0.5 block text-[10px] leading-tight ${
+                              active ? 'text-teal-100' : 'text-slate-500'
+                            }`}
+                          >
+                            {opt.desc}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    Ukuran Kertas
+                  </p>
+                  <div className="grid grid-cols-2 gap-1.5 rounded-xl border border-slate-200 bg-slate-50 p-1">
+                    {(
+                      [
+                        {
+                          key: 'a4',
+                          label: 'A4',
+                          desc: catNomorOrientation === 'landscape' ? '297 × 210 mm' : '210 × 297 mm',
+                        },
+                        {
+                          key: 'f4',
+                          label: 'F4',
+                          desc: catNomorOrientation === 'landscape' ? '330 × 216 mm' : '216 × 330 mm',
+                        },
+                      ] as const
+                    ).map((opt) => {
+                      const active = catNomorPaperSize === opt.key;
+                      return (
+                        <button
+                          key={opt.key}
+                          type="button"
+                          onClick={() => setCatNomorPaperSize(opt.key)}
+                          className={`rounded-lg px-2.5 py-2 text-left transition-all ${
+                            active
+                              ? 'bg-teal-700 text-white shadow-xs'
+                              : 'text-slate-700 hover:bg-white'
+                          }`}
+                        >
+                          <span className="block text-xs font-bold leading-tight">{opt.label}</span>
+                          <span
+                            className={`mt-0.5 block text-[10px] leading-tight tabular-nums ${
+                              active ? 'text-teal-100' : 'text-slate-500'
+                            }`}
+                          >
+                            {opt.desc}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Pratinjau Langsung Matriks Cat Nomor Barang */}
+              {catNomorMatrix.rows.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
+                  <p className="text-xs font-semibold text-slate-700">
+                    Belum ada data proposal pada filter terpilih
+                  </p>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Pilih tahun anggaran yang memiliki proposal &amp; KPM berstatus Diterima.
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-hidden rounded-xl border border-slate-200">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 text-[11px]">
+                    <span className="font-bold text-slate-800">
+                      Pratinjau CAT NOMOR BARANG · {catNomorMatrix.yearLabel}
+                    </span>
+                    <span className="text-slate-500 tabular-nums">
+                      {catNomorMatrix.totalProposals} Lokasi · {catNomorMatrix.columns.length} Item · {catNomorMatrix.totalSlots} Nomor
+                    </span>
+                  </div>
+                  <div className="max-h-[340px] overflow-auto">
+                    <table className="w-full border-collapse text-left text-[11px]">
+                      <thead className="sticky top-0 z-10 bg-[#1E3A5F] text-white">
+                        <tr>
+                          <th rowSpan={2} className="w-9 border border-slate-600/60 px-1.5 py-2 text-center font-bold">
+                            No.
+                          </th>
+                          <th rowSpan={2} className="min-w-[155px] border border-slate-600/60 px-2.5 py-2 text-center font-bold">
+                            <span className="block">Lokasi</span>
+                            <span className="block text-[9.5px] font-normal text-slate-200">
+                              {catNomorMatrix.yearLabel === 'Semua Tahun'
+                                ? 'Semua Tahun'
+                                : `Tahun ${catNomorMatrix.yearLabel}`}
+                            </span>
+                          </th>
+                          <th
+                            colSpan={catNomorMatrix.columns.length}
+                            className="border border-slate-600/60 px-2 py-1 text-center text-[10px] font-bold tracking-wider uppercase"
+                          >
+                            ITEM
+                          </th>
+                        </tr>
+                        <tr>
+                          {catNomorMatrix.columns.map((col) => (
+                            <th
+                              key={col.code}
+                              className="min-w-[66px] border border-slate-600/60 px-1.5 py-1.5 text-center align-middle"
+                            >
+                              <span className="block text-[10.5px] font-bold leading-tight">
+                                {col.code}
+                              </span>
+                              <span className="block text-[9px] font-normal text-blue-100 leading-tight">
+                                {col.shortLabel}
+                              </span>
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 bg-white">
+                        {catNomorMatrix.rows.map((row, idx) => (
+                          <tr
+                            key={`${row.proposalName}-${row.tahun}-${idx}`}
+                            className={idx % 2 === 1 ? 'bg-slate-50/70' : 'bg-white'}
+                          >
+                            <td className="border-r border-slate-200 px-1.5 py-2 text-center font-mono font-bold text-slate-600 tabular-nums">
+                              {idx + 1}
+                            </td>
+                            <td className="border-r border-slate-200 px-2.5 py-2 font-semibold text-slate-900">
+                              {row.proposalName}
+                              {catNomorMatrix.yearLabel === 'Semua Tahun' && row.tahun ? (
+                                <span className="ml-1 text-[10px] font-normal text-slate-400">
+                                  ({row.tahun})
+                                </span>
+                              ) : null}
+                            </td>
+                            {catNomorMatrix.columns.map((col) => {
+                              const rangeText = row.rangesByItem[col.code] || '—';
+                              const isEmpty = rangeText === '—';
+                              return (
+                                <td
+                                  key={col.code}
+                                  className={`border-r border-slate-200 px-1.5 py-2 text-center whitespace-pre-line tabular-nums ${
+                                    isEmpty
+                                      ? 'font-normal text-slate-400'
+                                      : 'font-bold text-slate-900'
+                                  }`}
+                                >
+                                  {rangeText}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {catNomorFeedback && (
+                <div
+                  role="status"
+                  className={`flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs ${
+                    catNomorFeedback.type === 'success'
+                      ? 'border-teal-200 bg-teal-50 text-teal-900'
+                      : 'border-rose-200 bg-rose-50 text-rose-900'
+                  }`}
+                >
+                  {catNomorFeedback.type === 'success' ? (
+                    <Check className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+                  ) : (
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+                  )}
+                  <p className="font-medium leading-snug">{catNomorFeedback.message}</p>
+                </div>
+              )}
+
+              <button
+                type="button"
+                disabled={catNomorMatrix.rows.length === 0 || isGeneratingCatNomor}
+                onClick={() => void handleDownloadCatNomorPdf()}
+                className="inline-flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-teal-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
+              >
+                {isGeneratingCatNomor ? (
+                  <>
+                    <Loader2 className="h-4.5 w-4.5 animate-spin" />
+                    <span>Menyiapkan PDF Cat Nomor Barang...</span>
+                  </>
+                ) : (
+                  <>
+                    <Paintbrush className="h-4.5 w-4.5" />
+                    <span>
+                      Download Cat Nomor Barang ({catNomorOrientation === 'landscape' ? 'Landscape' : 'Portrait'} · {catNomorPaperSize.toUpperCase()})
+                    </span>
+                  </>
+                )}
+              </button>
+
+              <p className="text-center text-[11px] leading-relaxed text-slate-500">
+                Header berulang tiap halaman · Kolom lokasi anti potong kata · Rentang nomor otomatis dari urutan slot proposal
+              </p>
+            </section>
+          )}
         </div>
       </div>
 

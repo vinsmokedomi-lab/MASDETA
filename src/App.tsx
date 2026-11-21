@@ -10434,6 +10434,8 @@ export default function App() {
               records={records}
               proposals={proposals}
               items={items}
+              wilayahList={wilayahList}
+              proposalSlotMap={proposalSlotMap}
               selectedYear={selectedYear}
               reportTemplate={reportTemplate}
               onChangeYear={setSelectedYear}

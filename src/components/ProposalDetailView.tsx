@@ -81,6 +81,7 @@ import {
   resolveScheduleForProposal,
   shouldAutoIncludeKelurahanColumn,
 } from '../utils/pdfExporter';
+import { exportKpmTableToXlsx } from '../utils/xlsxExporter';
 import { DriveImage } from './DriveImage';
 import { isNativeAppPlatform, useIsDesktopWeb } from '../utils/platform';
 import { useOfflineStatus } from '../contexts/OfflineContext';
@@ -249,6 +250,7 @@ export function ProposalDetailView({
   const [bastBusy, setBastBusy] = useState(false);
   const [dinsosBusy, setDinsosBusy] = useState(false);
   const [kpmPdfBusy, setKpmPdfBusy] = useState(false);
+  const [kpmXlsxBusy, setKpmXlsxBusy] = useState(false);
   const [bastFeedback, setBastFeedback] = useState<{
     type: 'success' | 'error';
     text: string;
@@ -390,6 +392,49 @@ export function ProposalDetailView({
       });
     } finally {
       setKpmPdfBusy(false);
+    }
+  };
+
+  const handleExportProposalKpmXlsx = async () => {
+    if ((proposalRecords.length === 0 && emptySlotsCount === 0) || kpmXlsxBusy) return;
+    setKpmXlsxBusy(true);
+    setBastFeedback(null);
+    try {
+      const subtitleParts = [
+        `Tipe: ${proposal.tipe}`,
+        `Total: ${proposalRecords.length} KPM`,
+        emptySlotsCount > 0 ? `${emptySlotsCount} Baris Kosong` : '',
+      ].filter(Boolean);
+      const result = await exportKpmTableToXlsx({
+        records: proposalRecords,
+        proposals: allProposals,
+        items,
+        wilayahList,
+        proposalSlotMap,
+        title: `${proposal.namaProposal} ${proposal.tahun}`.trim(),
+        subtitle: subtitleParts.join('  ·  '),
+        fileName: `KPM_${proposal.tahun}_${proposal.namaProposal}`,
+        includeEmptySlots: true,
+        splitByProposal: false,
+        proposalMeta: {
+          id: proposal.id,
+          namaProposal: proposal.namaProposal,
+          tahun: proposal.tahun,
+        },
+      });
+      setBastFeedback({
+        type: 'success',
+        text: `Excel Daftar KPM (${result.count} KPM${
+          result.emptyCount > 0 ? ` + ${result.emptyCount} baris kosong` : ''
+        }) disimpan: ${result.savedFileName}`,
+      });
+    } catch (err) {
+      setBastFeedback({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Gagal membuat file Excel (.xlsx) Daftar KPM.',
+      });
+    } finally {
+      setKpmXlsxBusy(false);
     }
   };
 
@@ -1448,22 +1493,38 @@ export function ProposalDetailView({
           )}
 
           <div className="space-y-2">
-            <button
-              type="button"
-              disabled={(proposalRecords.length === 0 && emptySlotsCount === 0) || kpmPdfBusy}
-              onClick={() => void handleExportProposalKpmPdf()}
-              className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-teal-700 bg-white px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {kpmPdfBusy ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Download className="h-3.5 w-3.5" />
-              )}
-              <span>
-                Download KPM PDF ({kpmCounts.accepted} KPM
-                {emptySlotsCount > 0 ? ` + ${emptySlotsCount} Kosong` : ''} · F4)
-              </span>
-            </button>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                disabled={(proposalRecords.length === 0 && emptySlotsCount === 0) || kpmPdfBusy}
+                onClick={() => void handleExportProposalKpmPdf()}
+                className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-teal-700 bg-white px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {kpmPdfBusy ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Download className="h-3.5 w-3.5" />
+                )}
+                <span>
+                  Download PDF ({kpmCounts.accepted} KPM
+                  {emptySlotsCount > 0 ? ` + ${emptySlotsCount}` : ''})
+                </span>
+              </button>
+
+              <button
+                type="button"
+                disabled={(proposalRecords.length === 0 && emptySlotsCount === 0) || kpmXlsxBusy}
+                onClick={() => void handleExportProposalKpmXlsx()}
+                className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-emerald-700 bg-emerald-50/70 px-3 text-xs font-semibold text-emerald-800 transition-colors hover:bg-emerald-100/80 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {kpmXlsxBusy ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <FileSpreadsheet className="h-3.5 w-3.5" />
+                )}
+                <span>Download Excel (.xlsx)</span>
+              </button>
+            </div>
 
             <div className="flex flex-wrap gap-2">
               {onSaveProposalBastConfig && canUpdate && (
@@ -2119,7 +2180,7 @@ export function ProposalDetailView({
             Klik baris KPM untuk membuka detail lengkap, atau isi Baris Kosong dari Database KPM
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex flex-wrap shrink-0 items-center gap-2">
           <button
             type="button"
             disabled={(proposalRecords.length === 0 && emptySlotsCount === 0) || kpmPdfBusy}
@@ -2132,6 +2193,19 @@ export function ProposalDetailView({
               <Download className="h-3.5 w-3.5" />
             )}
             <span>Download PDF</span>
+          </button>
+          <button
+            type="button"
+            disabled={(proposalRecords.length === 0 && emptySlotsCount === 0) || kpmXlsxBusy}
+            onClick={() => void handleExportProposalKpmXlsx()}
+            className="inline-flex min-h-[38px] shrink-0 items-center gap-1.5 rounded-xl border border-emerald-700 bg-emerald-50/80 px-3 text-xs font-semibold text-emerald-800 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {kpmXlsxBusy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <FileSpreadsheet className="h-3.5 w-3.5" />
+            )}
+            <span>Excel (.xlsx)</span>
           </button>
           {proposal.status !== 'locked' && canAdd && (
             <button

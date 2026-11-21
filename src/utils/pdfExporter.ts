@@ -46,6 +46,8 @@ import {
   resolveProposalDomicile,
   resolveProposalKecamatanCategory,
   resolveProposalSlotStateForGroup,
+  sortKecamatanCategoryNames,
+  sortProposalsWithinKecamatan,
 } from './imageProcessor';
 import type { TroubleshootingReconcileResult } from './troubleshootingReconciler';
 import {
@@ -6635,4 +6637,658 @@ export async function exportRabToPdf(
   const saved = await saveOrOpenPdfDocument(doc, options.fileName || defaultFileName);
   return { ...saved, count: summary.totalPenerima };
 }
+
+// ============================================================================
+// EKSPOR PDF: CAT NOMOR BARANG (RENTANG NOMOR ITEM PER LOKASI / PROPOSAL)
+// Mendukung pilihan orientasi Portrait & Landscape serta kertas A4 & F4.
+// ============================================================================
+
+export type CatNomorOrientation = 'landscape' | 'portrait';
+export type CatNomorPaperSize = 'a4' | 'f4';
+
+export interface CatNomorItemColumn {
+  code: string;
+  name: string;
+  shortLabel: string;
+  totalUnits: number;
+}
+
+export interface CatNomorProposalRow {
+  proposalId?: string;
+  proposalName: string;
+  tahun: string;
+  tipe?: ProposalTipe;
+  kecamatanCategory: string;
+  totalSlots: number;
+  rangesByItem: Record<string, string>;
+  countsByItem: Record<string, number>;
+}
+
+export interface CatNomorMatrixData {
+  yearLabel: string;
+  columns: CatNomorItemColumn[];
+  rows: CatNomorProposalRow[];
+  totalProposals: number;
+  totalSlots: number;
+}
+
+function formatCatNomorItemShortLabel(code: string, rawName?: string): string {
+  const cleanName = (rawName || '').trim();
+  if (!cleanName || cleanName.toUpperCase() === code.toUpperCase()) {
+    return code.toUpperCase();
+  }
+  const shortened = cleanName
+    .replace(/^Peralatan\s+/i, 'Alat ')
+    .replace(/^Paket\s+/i, 'Alat ')
+    .replace(/^Tenda\s*&\s*Kursi$/i, 'Tenda')
+    .trim();
+  return shortened || cleanName;
+}
+
+function formatSlotNumberRanges(slotNumbers: number[]): string {
+  if (slotNumbers.length === 0) return '—';
+  const sorted = Array.from(
+    new Set(slotNumbers.filter((n) => Number.isFinite(n) && n >= 1))
+  ).sort((a, b) => a - b);
+  if (sorted.length === 0) return '—';
+
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const runs: Array<[number, number]> = [];
+  let start = sorted[0];
+  let prev = sorted[0];
+
+  for (let i = 1; i < sorted.length; i += 1) {
+    const cur = sorted[i];
+    if (cur === prev + 1) {
+      prev = cur;
+    } else {
+      runs.push([start, prev]);
+      start = cur;
+      prev = cur;
+    }
+  }
+  runs.push([start, prev]);
+
+  return runs.map(([a, b]) => `${pad(a)} – ${pad(b)}`).join('\n');
+}
+
+export function buildCatNomorBarangMatrix(options: {
+  records: KpmRecord[];
+  proposals: ProposalRecord[];
+  items: ItemBantuan[];
+  wilayahList?: WilayahKabKota[];
+  proposalSlotMap?: ProposalSlotMap;
+  selectedYear: string;
+  proposalNameFilter?: string;
+  proposalTipeFilter?: 'all' | ProposalTipe;
+}): CatNomorMatrixData {
+  const {
+    records,
+    proposals,
+    items,
+    wilayahList = INITIAL_WILAYAH_LIST,
+    proposalSlotMap = {},
+    selectedYear,
+    proposalNameFilter = 'all',
+    proposalTipeFilter = 'all',
+  } = options;
+
+  const isSpecificYear = Boolean(
+    selectedYear &&
+      selectedYear !== 'all' &&
+      selectedYear !== 'database' &&
+      selectedYear !== 'arsip' &&
+      selectedYear !== 'database_arsip'
+  );
+  const yearLabel = isSpecificYear ? selectedYear : 'Semua Tahun';
+
+  // Kumpulkan semua kandidat proposal pada cakupan tahun/filter terpilih
+  interface ProposalCandidate {
+    key: string;
+    proposalId?: string;
+    proposalName: string;
+    tahun: string;
+    tipe?: ProposalTipe;
+    groupRecords: KpmRecord[];
+  }
+
+  const candidateMap = new Map<string, ProposalCandidate>();
+
+  const matchesScope = (namaProposal: string, tahun: string, tipe?: ProposalTipe): boolean => {
+    if (!namaProposal.trim()) return false;
+    if (isSpecificYear && tahun !== selectedYear) return false;
+    if (proposalNameFilter && proposalNameFilter !== 'all') {
+      if (namaProposal.trim().toLowerCase() !== proposalNameFilter.trim().toLowerCase()) {
+        return false;
+      }
+    }
+    if (proposalTipeFilter !== 'all' && tipe !== proposalTipeFilter) {
+      return false;
+    }
+    return true;
+  };
+
+  for (const prop of proposals) {
+    const name = (prop.namaProposal || '').trim();
+    const yr = (prop.tahun || '').trim();
+    if (!matchesScope(name, yr, prop.tipe)) continue;
+    const key = `${name.toLowerCase()}__${yr}`;
+    if (!candidateMap.has(key)) {
+      candidateMap.set(key, {
+        key,
+        proposalId: prop.id,
+        proposalName: name,
+        tahun: yr,
+        tipe: prop.tipe,
+        groupRecords: [],
+      });
+    }
+  }
+
+  // Indeks proposal untuk resolusi tipe/id bagi record diterima
+  const propById = new Map<string, ProposalRecord>();
+  const propByNameYear = new Map<string, ProposalRecord>();
+  for (const p of proposals) {
+    if (p.id) propById.set(p.id, p);
+    const k = `${(p.namaProposal || '').trim().toLowerCase()}__${(p.tahun || '').trim()}`;
+    if (!propByNameYear.has(k)) propByNameYear.set(k, p);
+  }
+
+  for (const rec of records) {
+    if (rec.validasi !== 'accepted') continue;
+    const name = (rec.proposal || '').trim();
+    const yr = (rec.tahun || '').trim();
+    if (!name) continue;
+    const matchedProp =
+      (rec.proposalId ? propById.get(rec.proposalId) : undefined) ??
+      propByNameYear.get(`${name.toLowerCase()}__${yr}`);
+    const resolvedName = matchedProp?.namaProposal?.trim() || name;
+    const resolvedYear = matchedProp?.tahun?.trim() || yr;
+    if (!matchesScope(resolvedName, resolvedYear, matchedProp?.tipe)) continue;
+
+    const key = `${resolvedName.toLowerCase()}__${resolvedYear}`;
+    let cand = candidateMap.get(key);
+    if (!cand) {
+      cand = {
+        key,
+        proposalId: matchedProp?.id ?? rec.proposalId ?? undefined,
+        proposalName: resolvedName,
+        tahun: resolvedYear,
+        tipe: matchedProp?.tipe,
+        groupRecords: [],
+      };
+      candidateMap.set(key, cand);
+    }
+    cand.groupRecords.push(rec);
+  }
+
+  // Bangun slot gabungan untuk tiap proposal & hitung rentang nomor per item
+  const presentItemCodes = new Set<string>();
+  const itemTotals = new Map<string, number>();
+  const rawRows: CatNomorProposalRow[] = [];
+
+  for (const cand of candidateMap.values()) {
+    const slotResolution = resolveProposalSlotStateForGroup(
+      proposalSlotMap,
+      cand.proposalId,
+      cand.proposalName,
+      cand.tahun
+    );
+    const mergedSlots = buildMergedProposalSlots({
+      groupRecords: cand.groupRecords,
+      slotState: slotResolution.state,
+      proposals,
+      catalog: items,
+      wilayahList,
+    });
+
+    if (mergedSlots.length === 0) continue;
+
+    const slotsByItem = new Map<string, number[]>();
+    for (const slot of mergedSlots) {
+      const rawCode =
+        slot.kind === 'kpm'
+          ? (slot.record.item || '').trim().toUpperCase()
+          : (slot.emptySlot.item || '').trim().toUpperCase();
+      if (!rawCode) continue;
+      presentItemCodes.add(rawCode);
+      const bucket = slotsByItem.get(rawCode) ?? [];
+      bucket.push(slot.slotNumber);
+      slotsByItem.set(rawCode, bucket);
+      itemTotals.set(rawCode, (itemTotals.get(rawCode) ?? 0) + 1);
+    }
+
+    const rangesByItem: Record<string, string> = {};
+    const countsByItem: Record<string, number> = {};
+    for (const [code, slotNums] of slotsByItem.entries()) {
+      rangesByItem[code] = formatSlotNumberRanges(slotNums);
+      countsByItem[code] = slotNums.length;
+    }
+
+    rawRows.push({
+      proposalId: cand.proposalId,
+      proposalName: cand.proposalName,
+      tahun: cand.tahun,
+      tipe: cand.tipe,
+      kecamatanCategory: resolveProposalKecamatanCategory(
+        cand.proposalName,
+        proposals,
+        cand.tahun,
+        wilayahList
+      ),
+      totalSlots: mergedSlots.length,
+      rangesByItem,
+      countsByItem,
+    });
+  }
+
+  // Kelompokkan dan urutkan baris per Kecamatan (Kecamatan di atas, lalu Kelurahan alfabetis)
+  const rowsByKecamatan = new Map<string, CatNomorProposalRow[]>();
+  for (const row of rawRows) {
+    const list = rowsByKecamatan.get(row.kecamatanCategory) ?? [];
+    list.push(row);
+    rowsByKecamatan.set(row.kecamatanCategory, list);
+  }
+  const sortedCategories = Array.from(rowsByKecamatan.keys()).sort(sortKecamatanCategoryNames);
+  const sortedRows: CatNomorProposalRow[] = [];
+  for (const cat of sortedCategories) {
+    const group = rowsByKecamatan.get(cat) ?? [];
+    const orderedGroup = sortProposalsWithinKecamatan(group, (r) => r.proposalName);
+    sortedRows.push(...orderedGroup);
+  }
+
+  // Kumpulkan kolom item: seluruh item katalog pada tahun terpilih + item yang muncul di baris
+  const catalogCodes = new Set<string>();
+  const catalogNameMap = new Map<string, string>();
+  const targetCatalogItems = isSpecificYear
+    ? items.filter((it) => it.tahun === selectedYear)
+    : items;
+
+  for (const it of targetCatalogItems) {
+    const code = (it.code || '').trim().toUpperCase();
+    if (!code) continue;
+    catalogCodes.add(code);
+    if (!catalogNameMap.has(code) && it.name?.trim()) {
+      catalogNameMap.set(code, it.name.trim());
+    }
+  }
+  for (const code of presentItemCodes) {
+    catalogCodes.add(code);
+    if (!catalogNameMap.has(code)) {
+      const found = items.find((it) => (it.code || '').trim().toUpperCase() === code);
+      if (found?.name?.trim()) {
+        catalogNameMap.set(code, found.name.trim());
+      }
+    }
+  }
+
+  const rankYear = isSpecificYear ? selectedYear : 'all';
+  const columns: CatNomorItemColumn[] = Array.from(catalogCodes)
+    .sort((a, b) => {
+      const rankA = getItemHierarchyRank(a, rankYear, items);
+      const rankB = getItemHierarchyRank(b, rankYear, items);
+      if (rankA !== rankB) return rankA - rankB;
+      return a.localeCompare(b, 'id');
+    })
+    .map((code) => {
+      const fullName = catalogNameMap.get(code) || code;
+      return {
+        code,
+        name: fullName,
+        shortLabel: formatCatNomorItemShortLabel(code, fullName),
+        totalUnits: itemTotals.get(code) ?? 0,
+      };
+    });
+
+  const totalSlots = sortedRows.reduce((acc, r) => acc + r.totalSlots, 0);
+
+  return {
+    yearLabel,
+    columns,
+    rows: sortedRows,
+    totalProposals: sortedRows.length,
+    totalSlots,
+  };
+}
+
+export interface ExportCatNomorBarangPdfOptions {
+  records: KpmRecord[];
+  proposals: ProposalRecord[];
+  items: ItemBantuan[];
+  wilayahList?: WilayahKabKota[];
+  proposalSlotMap?: ProposalSlotMap;
+  selectedYear: string;
+  proposalNameFilter?: string;
+  proposalTipeFilter?: 'all' | ProposalTipe;
+  orientation: CatNomorOrientation;
+  paperSize?: CatNomorPaperSize;
+  fileName?: string;
+}
+
+export async function exportCatNomorBarangToPdf(
+  options: ExportCatNomorBarangPdfOptions
+): Promise<{
+  savedFileName: string;
+  openedNative: boolean;
+  proposalCount: number;
+  totalSlots: number;
+}> {
+  const orientation: CatNomorOrientation = options.orientation || 'landscape';
+  const paperSize: CatNomorPaperSize = options.paperSize || 'a4';
+  const matrix = buildCatNomorBarangMatrix(options);
+
+  if (matrix.rows.length === 0) {
+    throw new Error(
+      'Tidak ada data proposal/KPM diterima pada filter terpilih untuk dicetak ke PDF Cat Nomor Barang.'
+    );
+  }
+
+  // Ukuran halaman dalam mm: A4 (210x297) atau F4 (216x330)
+  const shortSide = paperSize === 'f4' ? 216 : 210;
+  const longSide = paperSize === 'f4' ? 330 : 297;
+  const pageW = orientation === 'landscape' ? longSide : shortSide;
+  const pageH = orientation === 'landscape' ? shortSide : longSide;
+
+  const doc = new jsPDF({
+    orientation,
+    unit: 'mm',
+    format: [pageW, pageH],
+    compress: true,
+  });
+
+  const isLandscape = orientation === 'landscape';
+  const margin = isLandscape
+    ? { top: 11, right: 10, bottom: 13, left: 10 }
+    : { top: 10, right: 7.5, bottom: 12, left: 7.5 };
+  const printableW = pageW - margin.left - margin.right;
+
+  const colCount = Math.max(1, matrix.columns.length);
+
+  // Lebar kolom presisi: pastikan kolom Lokasi cukup lebar agar tidak memotong kata di tengah
+  const noColW = isLandscape ? 11 : 8.5;
+  const lokasiColW = isLandscape
+    ? Math.min(60, Math.max(50, printableW * 0.2))
+    : Math.min(40, Math.max(35, printableW * 0.195));
+  const itemPoolW = Math.max(60, printableW - noColW - lokasiColW);
+  const itemColW = itemPoolW / colCount;
+
+  const tipeBadgeText =
+    options.proposalTipeFilter && options.proposalTipeFilter !== 'all'
+      ? ` · Proposal ${options.proposalTipeFilter}`
+      : '';
+  const yearHeadingText =
+    matrix.yearLabel === 'Semua Tahun'
+      ? `Semua Tahun${tipeBadgeText}`
+      : `Tahun ${matrix.yearLabel}${tipeBadgeText}`;
+  const locationYearSub =
+    matrix.yearLabel === 'Semua Tahun' ? 'Semua Tahun' : `Tahun ${matrix.yearLabel}`;
+
+  // Header judul hanya di halaman 1 (bersih seperti referensi Landscape)
+  const titleY = margin.top + 4.5;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(isLandscape ? 14 : 12);
+  doc.setTextColor(30, 58, 95); // #1E3A5F
+  doc.text('CAT NOMOR BARANG', margin.left, titleY);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(isLandscape ? 10.5 : 9.5);
+  doc.setTextColor(51, 65, 85); // #334155
+  doc.text(yearHeadingText, pageW - margin.right, titleY, { align: 'right' });
+
+  doc.setDrawColor(30, 58, 95);
+  doc.setLineWidth(0.45);
+  doc.line(margin.left, titleY + 2.4, pageW - margin.right, titleY + 2.4);
+
+  const tableStartY = titleY + 5.2;
+
+  // Ukuran font dinamis agar angka rentang "01 – 08" selalu pas 1 baris
+  const bodyFontSize = isLandscape
+    ? colCount <= 10
+      ? 8.8
+      : colCount <= 12
+        ? 8.0
+        : 7.2
+    : colCount <= 10
+      ? 7.3
+      : colCount <= 12
+        ? 6.6
+        : 6.0;
+  const lokasiFontSize = isLandscape ? 8.6 : 7.2;
+  const headCodeFontSize = isLandscape
+    ? colCount <= 10
+      ? 8.5
+      : 7.6
+    : colCount <= 10
+      ? 7.2
+      : 6.4;
+  const headSubFontSize = isLandscape ? 6.8 : 5.6;
+
+  // Susun header 2 baris: [No., Lokasi (rowSpan 2), ITEM (colSpan N)] + [kode & nama item]
+  const headRow1 = [
+    {
+      content: 'No.',
+      rowSpan: 2,
+      styles: {
+        halign: 'center' as const,
+        valign: 'middle' as const,
+        fontStyle: 'bold' as const,
+        fontSize: isLandscape ? 8.8 : 7.5,
+      },
+    },
+    {
+      content: `Lokasi\n${locationYearSub}`,
+      rowSpan: 2,
+      styles: {
+        halign: 'center' as const,
+        valign: 'middle' as const,
+        fontStyle: 'bold' as const,
+        fontSize: isLandscape ? 8.5 : 7.3,
+      },
+    },
+    {
+      content: 'ITEM',
+      colSpan: matrix.columns.length,
+      styles: {
+        halign: 'center' as const,
+        valign: 'middle' as const,
+        fontStyle: 'bold' as const,
+        fontSize: isLandscape ? 8.8 : 7.6,
+        cellPadding: { top: 1.8, right: 1, bottom: 1.8, left: 1 },
+      },
+    },
+  ];
+
+  const headRow2 = matrix.columns.map((col) => ({
+    content: `${col.code}\n${col.shortLabel}`,
+    styles: {
+      halign: 'center' as const,
+      valign: 'middle' as const,
+      fontStyle: 'bold' as const,
+      fontSize: headCodeFontSize,
+      cellPadding: {
+        top: isLandscape ? 2.0 : 1.5,
+        right: 0.7,
+        bottom: isLandscape ? 2.0 : 1.5,
+        left: 0.7,
+      },
+    },
+  }));
+
+  const bodyRows = matrix.rows.map((row, idx) => {
+    const lokasiLabel =
+      matrix.yearLabel === 'Semua Tahun' && row.tahun
+        ? `${row.proposalName} (${row.tahun})`
+        : row.proposalName;
+
+    return [
+      String(idx + 1),
+      lokasiLabel,
+      ...matrix.columns.map((col) => row.rangesByItem[col.code] || '—'),
+    ];
+  });
+
+  const columnStyles: Record<number, Partial<Styles>> = {
+    0: {
+      cellWidth: noColW,
+      halign: 'center',
+      fontStyle: 'bold',
+      textColor: [51, 65, 85],
+    },
+    1: {
+      cellWidth: lokasiColW,
+      halign: 'left',
+      fontStyle: 'bold',
+      fontSize: lokasiFontSize,
+      textColor: [15, 23, 42],
+      cellPadding: {
+        top: isLandscape ? 2.8 : 2.1,
+        right: isLandscape ? 2.5 : 1.8,
+        bottom: isLandscape ? 2.8 : 2.1,
+        left: isLandscape ? 2.5 : 1.8,
+      },
+    },
+  };
+
+  matrix.columns.forEach((_, idx) => {
+    columnStyles[idx + 2] = {
+      cellWidth: itemColW,
+      halign: 'center',
+      fontStyle: 'bold',
+      fontSize: bodyFontSize,
+      cellPadding: {
+        top: isLandscape ? 2.8 : 2.1,
+        right: 0.6,
+        bottom: isLandscape ? 2.8 : 2.1,
+        left: 0.6,
+      },
+    };
+  });
+
+  autoTable(doc, {
+    startY: tableStartY,
+    margin: {
+      top: margin.top,
+      right: margin.right,
+      bottom: margin.bottom,
+      left: margin.left,
+    },
+    head: [headRow1, headRow2],
+    body: bodyRows,
+    showHead: 'everyPage',
+    rowPageBreak: 'avoid',
+    theme: 'grid',
+    styles: {
+      font: 'helvetica',
+      fontSize: bodyFontSize,
+      lineColor: [203, 213, 225], // #CBD5E1
+      lineWidth: 0.25,
+      valign: 'middle',
+      overflow: 'linebreak',
+      textColor: [15, 23, 42],
+    },
+    headStyles: {
+      fillColor: [30, 58, 95], // #1E3A5F
+      textColor: [255, 255, 255],
+      lineColor: [51, 79, 115],
+      lineWidth: 0.25,
+      fontStyle: 'bold',
+      halign: 'center',
+      valign: 'middle',
+    },
+    alternateRowStyles: {
+      fillColor: [248, 250, 252], // #F8FAFC
+    },
+    columnStyles,
+    didParseCell: (hookData) => {
+      // Baris 2 header item: kecilkan sub-nama secara visual menggunakan custom draw
+      if (hookData.section === 'head' && hookData.row.index === 1) {
+        hookData.cell.styles.textColor = [30, 58, 95]; // sembunyikan teks default, digambar 2 gaya di didDrawCell
+      }
+      if (hookData.section === 'head' && hookData.row.index === 0 && hookData.column.index === 1) {
+        hookData.cell.styles.textColor = [30, 58, 95]; // digambar 2 gaya (Lokasi bold + Tahun normal) di didDrawCell
+      }
+      // Sel kosong "—" diberi warna abu lembut agar rentang nomor langsung menonjol
+      if (hookData.section === 'body' && hookData.column.index >= 2) {
+        const txt = String(hookData.cell.raw ?? '').trim();
+        if (txt === '—' || txt === '-') {
+          hookData.cell.styles.textColor = [148, 163, 184]; // #94A3B8
+          hookData.cell.styles.fontStyle = 'normal';
+        }
+      }
+    },
+    didDrawCell: (hookData) => {
+      if (hookData.section !== 'head') return;
+      const { x, y, width, height } = hookData.cell;
+      const cx = x + width / 2;
+
+      // Gambar ulang header Lokasi (baris 1 bold, baris 2 tipis)
+      if (hookData.row.index === 0 && hookData.column.index === 1) {
+        doc.setTextColor(255, 255, 255);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(isLandscape ? 9 : 7.8);
+        doc.text('Lokasi', cx, y + height * 0.43, { align: 'center', baseline: 'middle' });
+
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(isLandscape ? 7.6 : 6.4);
+        doc.setTextColor(203, 213, 225);
+        doc.text(locationYearSub, cx, y + height * 0.68, { align: 'center', baseline: 'middle' });
+        return;
+      }
+
+      // Gambar ulang header tiap item (baris 1: KODE bold, baris 2: nama pendek normal)
+      if (hookData.row.index === 1 && hookData.column.index >= 2) {
+        const colMeta = matrix.columns[hookData.column.index - 2];
+        if (!colMeta) return;
+
+        doc.setTextColor(255, 255, 255);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(headCodeFontSize);
+        doc.text(colMeta.code, cx, y + height * 0.34, { align: 'center', baseline: 'middle' });
+
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(headSubFontSize);
+        doc.setTextColor(219, 234, 254);
+        const subLines = doc.splitTextToSize(colMeta.shortLabel, Math.max(8, width - 1.4)) as string[];
+        const trimmedSub = subLines.slice(0, 2);
+        const subStartY = trimmedSub.length > 1 ? y + height * 0.64 : y + height * 0.72;
+        doc.text(trimmedSub, cx, subStartY, {
+          align: 'center',
+          baseline: 'middle',
+          lineHeightFactor: 1.08,
+        });
+      }
+    },
+  });
+
+  // Footer tiap halaman (kiri: judul + tahun, kanan: halaman)
+  const totalPages = doc.getNumberOfPages();
+  for (let p = 1; p <= totalPages; p += 1) {
+    doc.setPage(p);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(isLandscape ? 8 : 7.2);
+    doc.setTextColor(100, 116, 139);
+    const footerY = pageH - 5.5;
+    doc.text(`CAT NOMOR BARANG — ${yearHeadingText}`, margin.left, footerY);
+    doc.text(`Halaman ${p} dari ${totalPages}`, pageW - margin.right, footerY, {
+      align: 'right',
+    });
+  }
+
+  const orientationLabel = isLandscape ? 'Landscape' : 'Portrait';
+  const paperLabel = paperSize.toUpperCase();
+  const safeYear = matrix.yearLabel.replace(/\s+/g, '_');
+  const safeTipe =
+    options.proposalTipeFilter && options.proposalTipeFilter !== 'all'
+      ? `_${options.proposalTipeFilter}`
+      : '';
+  const defaultFileName = `CAT_NOMOR_BARANG_${safeYear}${safeTipe}_${orientationLabel}_${paperLabel}`;
+  const saved = await saveOrOpenPdfDocument(doc, options.fileName || defaultFileName);
+
+  return {
+    ...saved,
+    proposalCount: matrix.totalProposals,
+    totalSlots: matrix.totalSlots,
+  };
+}
+
 

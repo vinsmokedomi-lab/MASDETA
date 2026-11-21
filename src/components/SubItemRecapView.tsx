@@ -7,16 +7,19 @@ import {
   FileText,
   Loader2,
   Package,
+  Paintbrush,
   Users,
   X,
 } from 'lucide-react';
-import { TAHUN_OPTIONS } from '../data/kpmOptions';
+import { INITIAL_WILAYAH_LIST, TAHUN_OPTIONS } from '../data/kpmOptions';
 import {
   ItemBantuan,
   KpmRecord,
   ProposalRecord,
+  ProposalSlotMap,
   ProposalTipe,
   ReportTemplateConfig,
+  WilayahKabKota,
 } from '../types/kpm';
 import {
   computeSubItemRecap,
@@ -25,6 +28,10 @@ import {
   resolvePackageForKpm,
 } from '../utils/imageProcessor';
 import {
+  CatNomorOrientation,
+  CatNomorPaperSize,
+  buildCatNomorBarangMatrix,
+  exportCatNomorBarangToPdf,
   exportKpmSubItemChecklistToPdf,
   exportSubItemRecapToPdf,
 } from '../utils/pdfExporter';
@@ -41,6 +48,8 @@ interface SubItemRecapViewProps {
   records: KpmRecord[];
   proposals?: ProposalRecord[];
   items: ItemBantuan[];
+  wilayahList?: WilayahKabKota[];
+  proposalSlotMap?: ProposalSlotMap;
   selectedYear: string;
   reportTemplate?: ReportTemplateConfig;
   onChangeYear: (year: string) => void;
@@ -67,6 +76,8 @@ export function SubItemRecapView({
   records,
   proposals = [],
   items,
+  wilayahList = INITIAL_WILAYAH_LIST,
+  proposalSlotMap = {},
   selectedYear,
   reportTemplate,
   onChangeYear,
@@ -80,6 +91,11 @@ export function SubItemRecapView({
   const [selectedItemCode, setSelectedItemCode] = useState<string>('OV');
   const [exportingPdf, setExportingPdf] = useState(false);
   const [exportingKpmPdf, setExportingKpmPdf] = useState(false);
+  const [isCatNomorModalOpen, setIsCatNomorModalOpen] = useState(false);
+  const [catNomorOrientation, setCatNomorOrientation] = useState<CatNomorOrientation>('landscape');
+  const [catNomorPaperSize, setCatNomorPaperSize] = useState<CatNomorPaperSize>('a4');
+  const [catNomorTipeFilter, setCatNomorTipeFilter] = useState<ProposalTipeFilter>('all');
+  const [exportingCatNomorPdf, setExportingCatNomorPdf] = useState(false);
   const [pendingPdfDownload, setPendingPdfDownload] = useState<PendingPdfDownload>(null);
   const [pdfNotice, setPdfNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(
     null
@@ -474,6 +490,266 @@ export function SubItemRecapView({
     );
   })() : null;
 
+  const catNomorMatrixPreview = useMemo(() => {
+    if (!isCatNomorModalOpen) return null;
+    return buildCatNomorBarangMatrix({
+      records,
+      proposals,
+      items,
+      wilayahList,
+      proposalSlotMap,
+      selectedYear,
+      proposalTipeFilter: catNomorTipeFilter,
+    });
+  }, [
+    isCatNomorModalOpen,
+    records,
+    proposals,
+    items,
+    wilayahList,
+    proposalSlotMap,
+    selectedYear,
+    catNomorTipeFilter,
+  ]);
+
+  const handleDownloadCatNomorPdf = async () => {
+    if (exportingCatNomorPdf) return;
+    setPdfNotice(null);
+    setExportingCatNomorPdf(true);
+    try {
+      const orientText = catNomorOrientation === 'landscape' ? 'Landscape' : 'Portrait';
+      const paperText = catNomorPaperSize.toUpperCase();
+      const res = await exportCatNomorBarangToPdf({
+        records,
+        proposals,
+        items,
+        wilayahList,
+        proposalSlotMap,
+        selectedYear,
+        proposalTipeFilter: catNomorTipeFilter,
+        orientation: catNomorOrientation,
+        paperSize: catNomorPaperSize,
+      });
+      setIsCatNomorModalOpen(false);
+      setPdfNotice({
+        type: 'success',
+        message: res.openedNative
+          ? `PDF "${res.savedFileName}" (${res.proposalCount} lokasi · ${orientText} ${paperText}) berhasil dibuat dan dibuka.`
+          : `PDF "${res.savedFileName}" (${res.proposalCount} lokasi · ${orientText} ${paperText}) berhasil diunduh.`,
+      });
+    } catch (err) {
+      setPdfNotice({
+        type: 'error',
+        message:
+          err instanceof Error ? err.message : 'Gagal membuat file PDF Cat Nomor Barang.',
+      });
+    } finally {
+      setExportingCatNomorPdf(false);
+    }
+  };
+
+  const catNomorModal = isCatNomorModalOpen ? (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/50 p-3 backdrop-blur-xs sm:items-center"
+      onClick={() => !exportingCatNomorPdf && setIsCatNomorModalOpen(false)}
+    >
+      <div
+        className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3.5">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+              <Paintbrush className="h-4.5 w-4.5" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-sm font-bold text-slate-900">Download Cat Nomor Barang</h3>
+              <p className="mt-0.5 text-[11px] text-slate-500">
+                Tahun {selectedYear === 'all' ? 'Semua Tahun' : selectedYear} · Pilih orientasi &amp; ukuran kertas
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            disabled={exportingCatNomorPdf}
+            onClick={() => setIsCatNomorModalOpen(false)}
+            aria-label="Tutup modal Cat Nomor Barang"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="space-y-3.5 p-4">
+          {/* Orientasi */}
+          <div className="space-y-1.5">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+              Orientasi Halaman
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {(
+                [
+                  { key: 'landscape', label: 'Landscape', desc: 'Mendatar — tabel lebih lega' },
+                  { key: 'portrait', label: 'Portrait', desc: 'Tegak — ringkas 1–2 halaman' },
+                ] as const
+              ).map((opt) => {
+                const active = catNomorOrientation === opt.key;
+                return (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => setCatNomorOrientation(opt.key)}
+                    className={`rounded-xl border px-3 py-2.5 text-left transition-all ${
+                      active
+                        ? 'border-teal-700 bg-teal-700 text-white shadow-xs'
+                        : 'border-slate-200 bg-white text-slate-800 hover:border-teal-400 hover:bg-teal-50/40'
+                    }`}
+                  >
+                    <span className="block text-xs font-bold">{opt.label}</span>
+                    <span
+                      className={`mt-0.5 block text-[10px] ${
+                        active ? 'text-teal-100' : 'text-slate-500'
+                      }`}
+                    >
+                      {opt.desc}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Ukuran Kertas */}
+          <div className="space-y-1.5">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+              Ukuran Kertas
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {(
+                [
+                  {
+                    key: 'a4',
+                    label: 'A4',
+                    desc: catNomorOrientation === 'landscape' ? '297 × 210 mm' : '210 × 297 mm',
+                  },
+                  {
+                    key: 'f4',
+                    label: 'F4',
+                    desc: catNomorOrientation === 'landscape' ? '330 × 216 mm' : '216 × 330 mm',
+                  },
+                ] as const
+              ).map((opt) => {
+                const active = catNomorPaperSize === opt.key;
+                return (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => setCatNomorPaperSize(opt.key)}
+                    className={`rounded-xl border px-3 py-2 text-left transition-all ${
+                      active
+                        ? 'border-teal-700 bg-teal-50 text-teal-900'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                    }`}
+                  >
+                    <span className="block text-xs font-bold">{opt.label}</span>
+                    <span className="mt-0.5 block text-[10px] text-slate-500 tabular-nums">
+                      {opt.desc}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Filter Tipe Proposal */}
+          <div className="space-y-1.5">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+              Tipe Proposal
+            </p>
+            <div className="grid grid-cols-3 gap-1.5">
+              {(
+                [
+                  { key: 'all', label: 'Semua' },
+                  { key: 'Murni', label: 'Murni' },
+                  { key: 'Perubahan', label: 'Perubahan' },
+                ] as const
+              ).map((opt) => {
+                const active = catNomorTipeFilter === opt.key;
+                return (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => setCatNomorTipeFilter(opt.key)}
+                    className={`rounded-xl border px-2.5 py-2 text-xs font-semibold transition-colors ${
+                      active
+                        ? 'border-teal-700 bg-teal-700 text-white'
+                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Ringkasan Cakupan Data */}
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs text-slate-700">
+            {catNomorMatrixPreview && catNomorMatrixPreview.totalProposals > 0 ? (
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold text-slate-900">
+                  {catNomorMatrixPreview.totalProposals} Proposal / Lokasi
+                </span>
+                <span className="text-[11px] font-semibold text-teal-700 tabular-nums">
+                  {catNomorMatrixPreview.columns.length} Item · {catNomorMatrixPreview.totalSlots} Nomor
+                </span>
+              </div>
+            ) : (
+              <p className="text-[11px] text-rose-600">
+                Tidak ada proposal dengan KPM diterima pada filter ini.
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/70 px-4 py-3">
+          <button
+            type="button"
+            disabled={exportingCatNomorPdf}
+            onClick={() => setIsCatNomorModalOpen(false)}
+            className="inline-flex min-h-[38px] items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+          >
+            Batal
+          </button>
+          <button
+            type="button"
+            disabled={
+              exportingCatNomorPdf ||
+              !catNomorMatrixPreview ||
+              catNomorMatrixPreview.totalProposals === 0
+            }
+            onClick={() => void handleDownloadCatNomorPdf()}
+            className="inline-flex min-h-[38px] items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
+          >
+            {exportingCatNomorPdf ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <span>Menyusun PDF...</span>
+              </>
+            ) : (
+              <>
+                <Paintbrush className="h-3.5 w-3.5" />
+                <span>
+                  Download PDF ({catNomorOrientation === 'landscape' ? 'Landscape' : 'Portrait'})
+                </span>
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   // Drill-down KPM rows
   const drillKpmRows = useMemo(() => {
     if (!drillTarget) return [];
@@ -744,6 +1020,20 @@ export function SubItemRecapView({
                     : `Download Rekap Item (${selectedYear === 'all' ? 'Semua Tahun' : selectedYear})`}
                 </span>
               </button>
+
+              <button
+                type="button"
+                disabled={exportingCatNomorPdf || scopedRecords.length === 0}
+                onClick={() => setIsCatNomorModalOpen(true)}
+                className="inline-flex min-h-[42px] shrink-0 items-center gap-2 rounded-xl border border-teal-200 bg-teal-50/70 px-4 text-xs font-semibold text-teal-800 shadow-xs transition-colors hover:border-teal-600 hover:bg-teal-50 disabled:opacity-60"
+              >
+                {exportingCatNomorPdf ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-teal-700" />
+                ) : (
+                  <Paintbrush className="h-4 w-4 text-teal-700" />
+                )}
+                <span>Cat Nomor Barang</span>
+              </button>
             </div>
           </div>
         )}
@@ -885,6 +1175,19 @@ export function SubItemRecapView({
                   <FileText className="h-3.5 w-3.5 shrink-0 text-teal-700" />
                 )}
                 <span className="truncate">Rekap Item PDF</span>
+              </button>
+              <button
+                type="button"
+                disabled={exportingCatNomorPdf || scopedRecords.length === 0}
+                onClick={() => setIsCatNomorModalOpen(true)}
+                className="col-span-2 inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50/80 px-3 text-xs font-semibold text-teal-800 shadow-xs transition-colors hover:bg-teal-100/70 disabled:opacity-60"
+              >
+                {exportingCatNomorPdf ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0 text-teal-700" />
+                ) : (
+                  <Paintbrush className="h-3.5 w-3.5 shrink-0 text-teal-700" />
+                )}
+                <span className="truncate">Download PDF Cat Nomor Barang (Portrait / Landscape)</span>
               </button>
             </div>
 
@@ -1290,6 +1593,7 @@ export function SubItemRecapView({
         )}
       </main>
       {downloadTypeModal}
+      {catNomorModal}
     </div>
   );
 }
