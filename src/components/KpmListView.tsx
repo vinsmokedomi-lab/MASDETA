@@ -98,6 +98,7 @@ interface KpmListViewProps {
     slotHandling?: SlotRemovalMode,
     deleteAction?: KpmDeleteAction
   ) => void;
+  onToggleAttendance?: (kpmId: string, nextPresent: boolean) => void;
   onBulkUpdateKpms?: (
     ids: string[],
     patch: {
@@ -136,6 +137,7 @@ export function KpmListView({
   onSelectRecord,
   onEditRecord,
   onDeleteRecord,
+  onToggleAttendance,
   onBulkUpdateKpms,
   onBulkPermanentDeleteKpms,
 }: KpmListViewProps) {
@@ -693,7 +695,20 @@ export function KpmListView({
             </div>
             {isSlotViewActive && canUpdate && !activeProposalLocked && (
               <p className="text-[11px] text-teal-800/85">
-                Gunakan tombol panah ↑ / ↓ untuk mengatur urutan prioritas KPM. Jika KPM dikeluarkan, nomor urutnya dipertahankan sebagai Baris Kosong.
+                {isNativeApp ? (
+                  <>
+                    Geser kiri baris KPM untuk tombol <strong>↑ / ↓</strong> &amp; <strong>Edit</strong>, atau gunakan toggle di kanan untuk absensi kehadiran.
+                  </>
+                ) : (
+                  <>
+                    <span className="hidden md:inline">
+                      Gunakan tombol panah ↑ / ↓ pada kolom Aksi untuk mengatur urutan prioritas KPM. Jika KPM dikeluarkan, nomor urutnya dipertahankan sebagai Baris Kosong.
+                    </span>
+                    <span className="md:hidden">
+                      Geser kiri baris KPM untuk tombol <strong>↑ / ↓</strong> &amp; <strong>Edit</strong>, atau gunakan toggle di kanan untuk absensi kehadiran.
+                    </span>
+                  </>
+                )}
               </p>
             )}
           </div>
@@ -916,16 +931,15 @@ export function KpmListView({
           {!isNativeApp && (
             <div className="hidden md:block overflow-hidden rounded-2xl border border-slate-200 bg-white">
               <div className="overflow-x-auto">
-                <table className="w-full border-collapse text-left text-xs">
+                <table className="w-full table-fixed border-collapse text-left text-xs">
                   <thead>
                     <tr className="border-b border-slate-200 bg-slate-50/90 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                      <th className="w-12 px-3 py-3 text-center">No</th>
-                      <th className="px-3 py-3">KPM</th>
-                      <th className="px-3 py-3">Proposal &amp; Wilayah</th>
-                      <th className="px-3 py-3">Item &amp; Desil</th>
-                      <th className="px-3 py-3">Pengelola</th>
-                      <th className="px-3 py-3">Status</th>
-                      <th className="px-3 py-3 text-right">Aksi</th>
+                      <th className="w-11 px-2 py-3 text-center">No</th>
+                      <th className="w-[33%] px-2.5 py-3">KPM</th>
+                      <th className="w-[24%] px-2.5 py-3">Proposal &amp; Wilayah</th>
+                      <th className="w-[13%] px-2.5 py-3">Pengelola</th>
+                      <th className="w-[12%] px-2.5 py-3">Status</th>
+                      <th className="w-[176px] px-2.5 py-3 text-right">Aksi</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -940,37 +954,72 @@ export function KpmListView({
                             key={`dt-empty-${entry.slotNumber}`}
                             className="border-l-4 border-l-amber-400 bg-amber-50/50"
                           >
-                            <td className="px-3 py-3 text-center font-mono text-[11px] font-bold text-amber-800 tabular-nums">
+                            <td className="px-2 py-2.5 text-center font-mono text-[11px] font-bold text-amber-800 tabular-nums">
                               {slotLabel}
                             </td>
-                            <td className="px-3 py-3" colSpan={2}>
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="rounded-md border border-dashed border-amber-400 bg-white px-2 py-0.5 text-[11px] font-bold text-amber-800">
-                                  Baris Kosong
-                                </span>
-                                <span className="text-xs font-medium text-amber-900">
-                                  {entry.emptySlot.previousKpmName
-                                    ? `Slot bekas ${entry.emptySlot.previousKpmName}`
-                                    : 'Slot dicadangkan untuk pengganti SK / BAST'}
-                                </span>
+                            <td className="px-2.5 py-2.5" colSpan={4}>
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                                  <span className="rounded-md border border-dashed border-amber-400 bg-white px-2 py-0.5 text-[11px] font-bold text-amber-800">
+                                    Baris Kosong
+                                  </span>
+                                  {entry.emptySlot.item && (
+                                    <span className="inline-flex rounded-md border border-amber-200 bg-white px-2 py-0.5 text-[11px] font-bold text-amber-800">
+                                      {entry.emptySlot.item}
+                                    </span>
+                                  )}
+                                  <span className="truncate text-xs font-medium text-amber-900">
+                                    {entry.emptySlot.previousKpmName
+                                      ? `Slot bekas ${entry.emptySlot.previousKpmName}`
+                                      : 'Slot dicadangkan untuk pengganti SK / BAST'}
+                                  </span>
+                                </div>
+                                {activeProposalRecord && !activeProposalLocked && canUpdate && (
+                                  <div className="flex shrink-0 items-center gap-1.5">
+                                    {onCreateForEmptySlot && (
+                                      <button
+                                        type="button"
+                                        disabled={isOffline}
+                                        onClick={() =>
+                                          onCreateForEmptySlot(
+                                            activeProposalRecord.id,
+                                            activeProposalRecord.namaProposal,
+                                            activeProposalRecord.tahun,
+                                            entry.slotNumber,
+                                            entry.emptySlot.item
+                                          )
+                                        }
+                                        className="inline-flex h-7 items-center gap-1 rounded-lg bg-teal-700 px-2 text-[11px] font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-45"
+                                      >
+                                        <UserPlus className="h-3.5 w-3.5" />
+                                        <span>Daftar Baru</span>
+                                      </button>
+                                    )}
+                                    {onFillEmptySlotFromDatabase && (
+                                      <button
+                                        type="button"
+                                        disabled={isOffline}
+                                        onClick={() => {
+                                          if (isOffline) return;
+                                          setDbPickerQuery('');
+                                          setDbPickerTargetSlot({
+                                            proposalName: activeProposalRecord.namaProposal,
+                                            tahun: activeProposalRecord.tahun,
+                                            slotNumber: entry.slotNumber,
+                                            item: entry.emptySlot.item,
+                                          });
+                                        }}
+                                        className="inline-flex h-7 items-center gap-1 rounded-lg border border-teal-700 bg-white px-2 text-[11px] font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-45"
+                                      >
+                                        <Database className="h-3.5 w-3.5" />
+                                        <span>Dari Database</span>
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
                               </div>
                             </td>
-                            <td className="px-3 py-3 whitespace-nowrap">
-                              {entry.emptySlot.item ? (
-                                <span className="inline-flex rounded-md border border-amber-200 bg-white px-2 py-0.5 text-[11px] font-bold text-amber-800">
-                                  {entry.emptySlot.item}
-                                </span>
-                              ) : (
-                                <span className="text-[11px] text-slate-400">-</span>
-                              )}
-                            </td>
-                            <td className="px-3 py-3 text-[11px] text-slate-400">-</td>
-                            <td className="px-3 py-3 whitespace-nowrap">
-                              <span className="inline-flex rounded-md bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
-                                Kosong
-                              </span>
-                            </td>
-                            <td className="px-3 py-3 text-right whitespace-nowrap">
+                            <td className="px-2.5 py-2.5 text-right whitespace-nowrap">
                               {activeProposalRecord && !activeProposalLocked && canUpdate ? (
                                 <div className="inline-flex items-center gap-1">
                                   {onMoveSlot && (
@@ -988,7 +1037,7 @@ export function KpmListView({
                                         }
                                         title="Naikkan urutan slot"
                                         aria-label="Naikkan urutan slot"
-                                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-35"
+                                        className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-35"
                                       >
                                         <ArrowUp className="h-3.5 w-3.5" />
                                       </button>
@@ -1005,50 +1054,11 @@ export function KpmListView({
                                         }
                                         title="Turunkan urutan slot"
                                         aria-label="Turunkan urutan slot"
-                                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-35"
+                                        className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-35"
                                       >
                                         <ArrowDown className="h-3.5 w-3.5" />
                                       </button>
                                     </>
-                                  )}
-                                  {onCreateForEmptySlot && (
-                                    <button
-                                      type="button"
-                                      disabled={isOffline}
-                                      onClick={() =>
-                                        onCreateForEmptySlot(
-                                          activeProposalRecord.id,
-                                          activeProposalRecord.namaProposal,
-                                          activeProposalRecord.tahun,
-                                          entry.slotNumber,
-                                          entry.emptySlot.item
-                                        )
-                                      }
-                                      className="inline-flex h-8 items-center gap-1 rounded-lg bg-teal-700 px-2.5 text-[11px] font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-45"
-                                    >
-                                      <UserPlus className="h-3.5 w-3.5" />
-                                      <span>Daftar Baru</span>
-                                    </button>
-                                  )}
-                                  {onFillEmptySlotFromDatabase && (
-                                    <button
-                                      type="button"
-                                      disabled={isOffline}
-                                      onClick={() => {
-                                        if (isOffline) return;
-                                        setDbPickerQuery('');
-                                        setDbPickerTargetSlot({
-                                          proposalName: activeProposalRecord.namaProposal,
-                                          tahun: activeProposalRecord.tahun,
-                                          slotNumber: entry.slotNumber,
-                                          item: entry.emptySlot.item,
-                                        });
-                                      }}
-                                      className="inline-flex h-8 items-center gap-1 rounded-lg border border-teal-700 bg-white px-2.5 text-[11px] font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-45"
-                                    >
-                                      <Database className="h-3.5 w-3.5" />
-                                      <span>Dari Database</span>
-                                    </button>
                                   )}
                                   {onRemoveEmptySlot && canDelete && (
                                     <button
@@ -1063,7 +1073,7 @@ export function KpmListView({
                                       }
                                       title="Hapus Baris Kosong (geser urutan di bawahnya naik)"
                                       aria-label="Hapus Baris Kosong"
-                                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-45"
+                                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-45"
                                     >
                                       <Trash2 className="h-3.5 w-3.5" />
                                     </button>
@@ -1104,6 +1114,7 @@ export function KpmListView({
                         ? rec.tahun?.trim() || ''
                         : rec.tahun || 'Tanpa Tahun';
                       const isSelected = selectedIds.includes(rec.id);
+                      const isAttending = Boolean(rec.attendance?.present);
 
                       return (
                         <tr
@@ -1123,7 +1134,7 @@ export function KpmListView({
                             isSelected ? 'bg-teal-50/70' : 'hover:bg-slate-50'
                           }`}
                         >
-                          <td className="px-3 py-2.5 text-center font-mono text-[11px] font-bold text-slate-500 tabular-nums">
+                          <td className="px-2 py-2.5 text-center font-mono text-[11px] font-bold text-slate-500 tabular-nums">
                             {bulkMode ? (
                               <span className="inline-flex items-center justify-center">
                                 {locked ? (
@@ -1138,8 +1149,8 @@ export function KpmListView({
                               absenLabel
                             )}
                           </td>
-                          <td className="px-3 py-2.5">
-                            <div className="flex items-center gap-2.5">
+                          <td className="px-2.5 py-2.5">
+                            <div className="flex min-w-0 items-center gap-2.5">
                               <div className="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-100 text-slate-400">
                                 {thumb ? (
                                   <DriveImage
@@ -1151,10 +1162,20 @@ export function KpmListView({
                                   <User className="h-4 w-4" />
                                 )}
                               </div>
-                              <div className="min-w-0 max-w-[220px]">
-                                <div className="flex items-center gap-1">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex min-w-0 items-center gap-1.5">
                                   <span className="truncate font-semibold text-slate-900">
                                     {rec.nama}
+                                  </span>
+                                  <span
+                                    className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-bold leading-none tabular-nums ${
+                                      rec.item?.trim()
+                                        ? 'bg-slate-100 text-slate-700'
+                                        : 'bg-amber-50 text-amber-800'
+                                    }`}
+                                  >
+                                    {rec.item?.trim() || 'Tanpa Item'}
+                                    {desilNumeric ? ` · D${desilNumeric}` : ''}
                                   </span>
                                   {locked && (
                                     <Lock className="h-3 w-3 shrink-0 text-rose-600" />
@@ -1166,7 +1187,7 @@ export function KpmListView({
                               </div>
                             </div>
                           </td>
-                          <td className="px-3 py-2.5 max-w-[220px]">
+                          <td className="px-2.5 py-2.5">
                             <p className="truncate font-medium text-slate-800">{containerTitle}</p>
                             <p className="truncate text-[11px] text-slate-500 tabular-nums">
                               {[
@@ -1179,43 +1200,63 @@ export function KpmListView({
                                 .join(' · ') || '-'}
                             </p>
                           </td>
-                          <td className="px-3 py-2.5 whitespace-nowrap">
-                            <span
-                              className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-bold tabular-nums ${
-                                rec.item?.trim()
-                                  ? 'bg-slate-100 text-slate-700'
-                                  : 'bg-amber-50 text-amber-800'
-                              }`}
-                            >
-                              {rec.item?.trim() || 'Tanpa Item'}
-                              {desilNumeric ? ` · D${desilNumeric}` : ''}
-                            </span>
-                          </td>
-                          <td className="px-3 py-2.5 max-w-[140px] truncate text-slate-700">
+                          <td className="px-2.5 py-2.5 truncate text-slate-700">
                             {rec.pengelola?.trim() || '-'}
                           </td>
-                          <td className="px-3 py-2.5 whitespace-nowrap">
-                            <span
-                              className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-semibold ${
-                                rec.validasi === 'accepted'
-                                  ? 'bg-teal-50 text-teal-800'
+                          <td
+                            className="px-2.5 py-2.5 whitespace-nowrap"
+                            onClick={(e) => {
+                              if (!isStandalone && onToggleAttendance && canUpdate && !locked && !isOffline) {
+                                e.stopPropagation();
+                              }
+                            }}
+                          >
+                            <div className="flex flex-col items-start gap-1">
+                              <span
+                                className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-semibold ${
+                                  rec.validasi === 'accepted'
+                                    ? 'bg-teal-50 text-teal-800'
+                                    : rec.validasi === 'rejected'
+                                      ? 'bg-rose-50 text-rose-700'
+                                      : 'bg-amber-50 text-amber-800'
+                                }`}
+                              >
+                                {rec.validasi === 'accepted'
+                                  ? 'Diterima'
                                   : rec.validasi === 'rejected'
-                                    ? 'bg-rose-50 text-rose-700'
-                                    : 'bg-amber-50 text-amber-800'
-                              }`}
-                            >
-                              {rec.validasi === 'accepted'
-                                ? 'Diterima'
-                                : rec.validasi === 'rejected'
-                                  ? 'Ditolak'
-                                  : 'Menunggu'}
-                            </span>
+                                    ? 'Ditolak'
+                                    : 'Menunggu'}
+                              </span>
+                              {!isStandalone && onToggleAttendance && (
+                                <button
+                                  type="button"
+                                  disabled={locked || !canUpdate || isOffline}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onToggleAttendance(rec.id, !isAttending);
+                                  }}
+                                  title={
+                                    isAttending
+                                      ? 'KPM hadir — klik untuk batalkan absensi'
+                                      : 'Tandai KPM hadir (absensi)'
+                                  }
+                                  className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                                    isAttending
+                                      ? 'border-teal-200 bg-teal-600 text-white hover:bg-teal-700'
+                                      : 'border-slate-200 bg-white text-slate-500 hover:border-teal-300 hover:text-teal-700'
+                                  }`}
+                                >
+                                  <Check className={`h-2.5 w-2.5 ${isAttending ? 'opacity-100' : 'opacity-40'}`} />
+                                  <span>{isAttending ? 'Hadir' : 'Absen'}</span>
+                                </button>
+                              )}
+                            </div>
                           </td>
                           <td
-                            className="px-3 py-2.5 text-right whitespace-nowrap"
+                            className="px-2.5 py-2.5 text-right whitespace-nowrap"
                             onClick={(e) => e.stopPropagation()}
                           >
-                            <div className="inline-flex items-center gap-1">
+                            <div className="inline-flex items-center justify-end gap-1">
                               {isSlotViewActive &&
                                 activeProposalRecord &&
                                 canUpdate &&
@@ -1235,7 +1276,7 @@ export function KpmListView({
                                       }
                                       title="Naikkan urutan KPM"
                                       aria-label="Naikkan urutan KPM"
-                                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
+                                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
                                     >
                                       <ArrowUp className="h-3.5 w-3.5" />
                                     </button>
@@ -1252,7 +1293,7 @@ export function KpmListView({
                                       }
                                       title="Turunkan urutan KPM"
                                       aria-label="Turunkan urutan KPM"
-                                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
+                                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-35"
                                     >
                                       <ArrowDown className="h-3.5 w-3.5" />
                                     </button>
@@ -1263,7 +1304,7 @@ export function KpmListView({
                                 onClick={() => onSelectRecord(rec)}
                                 title="Lihat Detail KPM"
                                 aria-label={`Lihat Detail ${rec.nama}`}
-                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 hover:text-teal-700"
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 hover:text-teal-700"
                               >
                                 <Eye className="h-3.5 w-3.5" />
                               </button>
@@ -1278,7 +1319,7 @@ export function KpmListView({
                                   }
                                   title={locked ? 'Proposal Terkunci' : 'Edit Data KPM'}
                                   aria-label={locked ? 'Proposal Terkunci' : `Edit ${rec.nama}`}
-                                  className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
+                                  className={`inline-flex h-7 w-7 items-center justify-center rounded-lg border transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
                                     locked
                                       ? 'border-slate-200 bg-slate-50 text-slate-400'
                                       : 'border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100'
@@ -1297,7 +1338,7 @@ export function KpmListView({
                                       : setPendingDeleteRecord(rec)
                                   }
                                   title={locked ? 'Proposal Terkunci' : 'Hapus KPM'}
-                                  className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
+                                  className={`inline-flex h-7 w-7 items-center justify-center rounded-lg border transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
                                     locked
                                       ? 'border-slate-200 bg-slate-50 text-slate-400'
                                       : 'border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100'
@@ -1499,6 +1540,19 @@ export function KpmListView({
                 .filter(Boolean)
                 .join(' · ');
 
+              const showMobileMoveArrows = Boolean(
+                isSlotViewActive &&
+                  activeProposalRecord &&
+                  canUpdate &&
+                  !locked &&
+                  !bulkMode &&
+                  onMoveSlot
+              );
+              const isAttending = Boolean(rec.attendance?.present);
+              const showMobileAttendanceToggle = Boolean(
+                !isStandalone && !bulkMode && onToggleAttendance
+              );
+
               const swipeActions: SwipeAction[] = locked
                 ? [
                     {
@@ -1511,6 +1565,50 @@ export function KpmListView({
                     },
                   ]
                 : [
+                    ...(showMobileMoveArrows && activeProposalRecord && onMoveSlot
+                      ? [
+                          {
+                            key: 'reorder',
+                            label: 'Urutan',
+                            icon: <ArrowUp className="h-3.5 w-3.5" />,
+                            tone: 'neutral' as const,
+                            width: 52,
+                            onClick: () => {},
+                            stackedActions: [
+                              {
+                                key: 'move-up',
+                                label: 'Naikkan urutan KPM',
+                                icon: <ArrowUp className="h-4 w-4" />,
+                                tone: 'neutral' as const,
+                                disabled: isOffline || !canMoveUp,
+                                keepOpen: true,
+                                onClick: () =>
+                                  onMoveSlot(
+                                    activeProposalRecord.namaProposal,
+                                    activeProposalRecord.tahun,
+                                    { kind: 'kpm', kpmId: rec.id },
+                                    'up'
+                                  ),
+                              },
+                              {
+                                key: 'move-down',
+                                label: 'Turunkan urutan KPM',
+                                icon: <ArrowDown className="h-4 w-4" />,
+                                tone: 'neutral' as const,
+                                disabled: isOffline || !canMoveDown,
+                                keepOpen: true,
+                                onClick: () =>
+                                  onMoveSlot(
+                                    activeProposalRecord.namaProposal,
+                                    activeProposalRecord.tahun,
+                                    { kind: 'kpm', kpmId: rec.id },
+                                    'down'
+                                  ),
+                              },
+                            ],
+                          },
+                        ]
+                      : []),
                     ...(canUpdate && onEditRecord
                       ? [
                           {
@@ -1518,6 +1616,7 @@ export function KpmListView({
                             label: 'Edit',
                             icon: <Pencil className="h-4 w-4" />,
                             tone: 'teal' as const,
+                            width: 64,
                             disabled: isOffline,
                             onClick: () => onEditRecord(rec),
                           },
@@ -1530,6 +1629,7 @@ export function KpmListView({
                             label: 'Hapus',
                             icon: <Trash2 className="h-4 w-4" />,
                             tone: 'danger' as const,
+                            width: 64,
                             disabled: isOffline,
                             onClick: () => setPendingDeleteRecord(rec),
                           },
@@ -1538,14 +1638,6 @@ export function KpmListView({
                   ];
 
               const isSelected = selectedIds.includes(rec.id);
-              const showMobileMoveArrows = Boolean(
-                isSlotViewActive &&
-                  activeProposalRecord &&
-                  canUpdate &&
-                  !locked &&
-                  !bulkMode &&
-                  onMoveSlot
-              );
 
               return (
                 <SwipeableRow
@@ -1577,7 +1669,7 @@ export function KpmListView({
                         onSelectRecord(rec);
                       }}
                       className={`flex min-w-0 flex-1 items-center gap-2.5 pl-3.5 py-2.5 text-left ${
-                        showMobileMoveArrows ? 'pr-1.5' : 'pr-3.5'
+                        showMobileAttendanceToggle ? 'pr-2' : 'pr-3.5'
                       }`}
                     >
                       {bulkMode ? (
@@ -1653,40 +1745,38 @@ export function KpmListView({
                       </div>
                     </button>
 
-                    {showMobileMoveArrows && activeProposalRecord && onMoveSlot && (
-                      <div className="flex shrink-0 flex-col items-center justify-center gap-1 py-1.5 pr-2.5">
+                    {showMobileAttendanceToggle && onToggleAttendance && (
+                      <div
+                        className="flex shrink-0 flex-col items-center justify-center gap-1 py-2 pr-3 pl-1"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <button
                           type="button"
-                          disabled={isOffline || !canMoveUp}
-                          onClick={() =>
-                            onMoveSlot(
-                              activeProposalRecord.namaProposal,
-                              activeProposalRecord.tahun,
-                              { kind: 'kpm', kpmId: rec.id },
-                              'up'
-                            )
-                          }
-                          aria-label="Naikkan urutan KPM"
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+                          role="switch"
+                          aria-checked={isAttending}
+                          aria-label={`Absensi kehadiran ${rec.nama}`}
+                          disabled={locked || !canUpdate || isOffline}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onToggleAttendance(rec.id, !isAttending);
+                          }}
+                          className={`relative inline-flex h-6 w-10 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-teal-700/30 disabled:cursor-not-allowed disabled:opacity-45 ${
+                            isAttending ? 'bg-teal-700' : 'bg-slate-300'
+                          }`}
                         >
-                          <ArrowUp className="h-3.5 w-3.5" />
+                          <span
+                            className={`pointer-events-none inline-block h-4.5 w-4.5 transform rounded-full bg-white shadow-xs transition duration-200 ${
+                              isAttending ? 'translate-x-4' : 'translate-x-0.5'
+                            }`}
+                          />
                         </button>
-                        <button
-                          type="button"
-                          disabled={isOffline || !canMoveDown}
-                          onClick={() =>
-                            onMoveSlot(
-                              activeProposalRecord.namaProposal,
-                              activeProposalRecord.tahun,
-                              { kind: 'kpm', kpmId: rec.id },
-                              'down'
-                            )
-                          }
-                          aria-label="Turunkan urutan KPM"
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+                        <span
+                          className={`text-[10px] font-semibold leading-none ${
+                            isAttending ? 'text-teal-700' : 'text-slate-400'
+                          }`}
                         >
-                          <ArrowDown className="h-3.5 w-3.5" />
-                        </button>
+                          {isAttending ? 'Hadir' : 'Absen'}
+                        </span>
                       </div>
                     )}
                   </div>

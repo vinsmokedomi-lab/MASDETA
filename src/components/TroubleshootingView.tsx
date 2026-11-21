@@ -55,7 +55,6 @@ import {
   TroubleshootingReconcileResult,
   buildProposalRowsFromDatabase,
   buildWhatsAppReconcileSummary,
-  countRecordsNeedingBastAddressEnrichment,
   getTroubleshootingItemBadgeClass,
   reconcileProposalWithBast,
 } from '../utils/troubleshootingReconciler';
@@ -162,11 +161,9 @@ export function TroubleshootingView({
   const [overQuotaModalItem, setOverQuotaModalItem] = useState<string | null>(null);
   const [overQuotaSearch, setOverQuotaSearch] = useState('');
 
-  // Panel Audit Anomali & Dampak Pengelola
+  // Panel Audit & Dampak Pengelola
   const [auditPanelOpen, setAuditPanelOpen] = useState(false);
-  const [auditTab, setAuditTab] = useState<'unmatched_bast' | 'nik_mismatch' | 'pengelola'>(
-    'unmatched_bast'
-  );
+  const [auditTab, setAuditTab] = useState<'unmatched_bast' | 'pengelola'>('unmatched_bast');
   const [copiedWaSummary, setCopiedWaSummary] = useState(false);
 
   const [exportingPdf, setExportingPdf] = useState(false);
@@ -576,11 +573,6 @@ export function TroubleshootingView({
     return proposals.find((p) => p.id === analyzedProposalId) ?? null;
   }, [proposals, analyzedProposalId]);
 
-  const addressUpdateCount = useMemo(() => {
-    if (!result || result.proposalSourceType !== 'database') return 0;
-    return countRecordsNeedingBastAddressEnrichment(result, records);
-  }, [result, records]);
-
   const activeUndoSnapshot = useMemo(() => {
     const targetId = analyzedProposalId || selectedProposalId;
     if (targetId && reconcileSnapshots[targetId]) {
@@ -802,8 +794,7 @@ export function TroubleshootingView({
                   <strong>{activeUndoSnapshot.appliedBy}</strong> ·{' '}
                   {activeUndoSnapshot.summary.shiftedCount} bergeser ·{' '}
                   {activeUndoSnapshot.summary.emptySlotsCount} baris kosong ·{' '}
-                  {activeUndoSnapshot.summary.movedToDatabaseCount} ke Database ·{' '}
-                  {activeUndoSnapshot.summary.addressUpdatedCount} alamat RT/RW dilengkapi
+                  {activeUndoSnapshot.summary.movedToDatabaseCount} ke Database
                 </p>
               </div>
             </div>
@@ -1036,7 +1027,7 @@ export function TroubleshootingView({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <span className="text-[11px] font-bold uppercase tracking-wider text-slate-600">
-                    Dokumen 2 · Acuan Kuota &amp; Identitas
+                    Dokumen 2 · Acuan Kuota &amp; Urutan Blok
                   </span>
                   <h3 className="text-sm font-bold text-slate-900">
                     File PDF BAST Dinas
@@ -1122,7 +1113,8 @@ export function TroubleshootingView({
                       Klik atau seret File PDF BAST Dinas
                     </p>
                     <p className="mt-1 text-[11px] text-slate-500">
-                      Menjadi acuan urutan blok item, kuota per item, NIK, dan alamat RT/RW lengkap
+                      Hanya menjadi acuan urutan blok item dan kuota per item (detail KPM tetap
+                      mengikuti data Proposal)
                     </p>
                   </div>
                 )}
@@ -1140,7 +1132,8 @@ export function TroubleshootingView({
                 </span>
               ) : (
                 <span>
-                  Item pada Proposal selalu dipertahankan dan dicocokkan ke kuota blok BAST Dinas.
+                  Item dan detail KPM (nama, NIK, alamat) tetap mengikuti data Proposal; BAST hanya
+                  menjadi acuan urutan blok &amp; kuota item.
                 </span>
               )}
             </div>
@@ -1288,11 +1281,6 @@ export function TroubleshootingView({
                       <strong>{analyzedProposalRecord?.namaProposal}</strong>.
                     </span>
                   </span>
-                  {addressUpdateCount > 0 && (
-                    <span className="text-[11px] font-semibold text-teal-800 tabular-nums">
-                      +{addressUpdateCount} alamat RT/RW akan dilengkapi dari BAST
-                    </span>
-                  )}
                 </div>
               )}
             </div>
@@ -1411,9 +1399,8 @@ export function TroubleshootingView({
               </div>
             )}
 
-            {/* PANEL AUDIT ANOMALI: NAMA BAST TANPA PASANGAN, SELISIH NIK & DAMPAK PENGELOLA */}
+            {/* PANEL AUDIT: NAMA BAST TANPA PASANGAN & DAMPAK PENGELOLA */}
             {(result.unmatchedBastRows.length > 0 ||
-              result.nikMismatches.length > 0 ||
               result.hasProposalPengelolaData ||
               Object.keys(overrides.manualBastLinkByRowKey || {}).length > 0) && (
               <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
@@ -1428,11 +1415,10 @@ export function TroubleshootingView({
                     </div>
                     <div className="min-w-0">
                       <h2 className="text-xs font-bold text-slate-900">
-                        Audit Data &amp; Anomali BAST vs Proposal
+                        Ringkasan Nama BAST &amp; Dampak per Pengelola
                       </h2>
                       <p className="mt-0.5 text-[11px] text-slate-500 tabular-nums">
-                        {result.unmatchedBastRows.length} nama di BAST belum terpasang ·{' '}
-                        {result.nikMismatches.length} selisih NIK
+                        {result.unmatchedBastRows.length} nama di BAST belum terpasang
                         {result.hasProposalPengelolaData
                           ? ` · ${result.pengelolaImpacts.length} pengelola`
                           : ''}
@@ -1443,11 +1429,6 @@ export function TroubleshootingView({
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    {result.nikMismatches.length > 0 && (
-                      <span className="rounded-md border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-bold text-rose-700 tabular-nums">
-                        {result.nikMismatches.length} Selisih NIK
-                      </span>
-                    )}
                     {result.unmatchedBastRows.length > 0 && (
                       <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-800 tabular-nums">
                         {result.unmatchedBastRows.length} BAST Tanpa Pasangan
@@ -1478,19 +1459,6 @@ export function TroubleshootingView({
                         <span>Nama BAST Tanpa Pasangan ({result.unmatchedBastRows.length})</span>
                       </button>
 
-                      <button
-                        type="button"
-                        onClick={() => setAuditTab('nik_mismatch')}
-                        className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
-                          auditTab === 'nik_mismatch'
-                            ? 'bg-rose-700 text-white'
-                            : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:text-slate-900'
-                        }`}
-                      >
-                        <AlertTriangle className="h-3.5 w-3.5" />
-                        <span>Selisih NIK ({result.nikMismatches.length})</span>
-                      </button>
-
                       {result.hasProposalPengelolaData && (
                         <button
                           type="button"
@@ -1507,14 +1475,14 @@ export function TroubleshootingView({
                       )}
                     </div>
 
-                    {/* Tab 1: Nama BAST Tanpa Pasangan + Link Manual untuk Typo */}
+                    {/* Tab 1: Nama BAST Tanpa Pasangan + Link Manual untuk Typo Urutan */}
                     {auditTab === 'unmatched_bast' && (
                       <div className="p-4">
                         <p className="mb-3 text-xs text-slate-600">
                           Daftar nama yang tercetak di <strong>BAST Dinas</strong> namun tidak ditemukan
                           pasangannya di Proposal. Jika sebenarnya orang yang sama namun beda ejaan
-                          (typo), gunakan tombol <strong>Cocokkan Manual</strong> agar NIK &amp; alamat
-                          RT/RW dari BAST langsung tersambung.
+                          (typo), gunakan tombol <strong>Cocokkan</strong> untuk menyamakan status
+                          urutan (<em>Tetap/Bergeser</em>) tanpa mengubah detail data KPM Proposal.
                         </p>
                         {result.unmatchedBastRows.length === 0 ? (
                           <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 px-4 py-3 text-xs font-semibold text-teal-800">
@@ -1522,15 +1490,13 @@ export function TroubleshootingView({
                           </div>
                         ) : (
                           <div className="overflow-x-auto rounded-xl border border-slate-200">
-                            <table className="w-full min-w-[780px] border-collapse text-left text-xs">
+                            <table className="w-full min-w-[620px] border-collapse text-left text-xs">
                               <thead>
                                 <tr className="border-b border-slate-200 bg-slate-100 text-[11px] font-bold uppercase text-slate-600">
                                   <th className="w-20 px-3 py-2 text-center">No. BAST</th>
                                   <th className="w-20 px-3 py-2 text-center">Item</th>
-                                  <th className="w-44 px-3 py-2">Nama di BAST</th>
-                                  <th className="w-36 px-3 py-2 text-center">NIK BAST</th>
-                                  <th className="px-3 py-2">Alamat BAST</th>
-                                  <th className="w-64 px-3 py-2">Cocokkan ke KPM Proposal (Typo)</th>
+                                  <th className="px-3 py-2">Nama di BAST</th>
+                                  <th className="w-72 px-3 py-2">Cocokkan Urutan ke KPM Proposal (Typo)</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-slate-200">
@@ -1553,10 +1519,6 @@ export function TroubleshootingView({
                                         </span>
                                       </td>
                                       <td className="px-3 py-2 font-bold text-slate-900">{u.nama}</td>
-                                      <td className="px-3 py-2 text-center text-slate-600 tabular-nums">
-                                        {u.nik}
-                                      </td>
-                                      <td className="px-3 py-2 text-slate-600">{u.alamat}</td>
                                       <td className="px-3 py-2">
                                         {u.suggestedProposalRowKey ? (
                                           <div className="space-y-1.5">
@@ -1610,56 +1572,6 @@ export function TroubleshootingView({
                                     </tr>
                                   ));
                                 })()}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Tab 2: Audit Selisih NIK */}
-                    {auditTab === 'nik_mismatch' && (
-                      <div className="p-4">
-                        {result.nikMismatches.length === 0 ? (
-                          <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 px-4 py-3 text-xs font-semibold text-teal-800">
-                            Tidak ditemukan perbedaan NIK antara data Proposal MASDETA dan dokumen BAST Dinas.
-                          </div>
-                        ) : (
-                          <div className="overflow-x-auto rounded-xl border border-rose-200">
-                            <table className="w-full min-w-[680px] border-collapse text-left text-xs">
-                              <thead>
-                                <tr className="border-b border-rose-200 bg-rose-50 text-[11px] font-bold uppercase text-rose-800">
-                                  <th className="w-20 px-3 py-2 text-center">No. Urut</th>
-                                  <th className="w-20 px-3 py-2 text-center">Item</th>
-                                  <th className="px-3 py-2">Nama KPM</th>
-                                  <th className="px-3 py-2 text-center">NIK di Proposal</th>
-                                  <th className="px-3 py-2 text-center">NIK di BAST Dinas</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-rose-100">
-                                {result.nikMismatches.map((m) => (
-                                  <tr key={`nik-mis-${m.rowKey}`} className="bg-white">
-                                    <td className="px-3 py-2 text-center font-bold tabular-nums">
-                                      {m.noUrutText}
-                                    </td>
-                                    <td className="px-3 py-2 text-center">
-                                      <span
-                                        className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-bold ${getTroubleshootingItemBadgeClass(
-                                          m.kodeItem
-                                        )}`}
-                                      >
-                                        {m.kodeItem}
-                                      </span>
-                                    </td>
-                                    <td className="px-3 py-2 font-bold text-slate-900">{m.nama}</td>
-                                    <td className="px-3 py-2 text-center font-mono text-slate-700 tabular-nums">
-                                      {m.proposalNik}
-                                    </td>
-                                    <td className="px-3 py-2 text-center font-mono font-bold text-rose-700 tabular-nums">
-                                      {m.bastNik}
-                                    </td>
-                                  </tr>
-                                ))}
                               </tbody>
                             </table>
                           </div>
@@ -1883,28 +1795,10 @@ export function TroubleshootingView({
                               </td>
                               <td
                                 className={`px-3 py-2.5 text-center tabular-nums ${
-                                  row.isEmpty
-                                    ? 'text-slate-400'
-                                    : row.hasNikMismatch
-                                    ? 'font-bold text-rose-700'
-                                    : 'text-slate-700'
+                                  row.isEmpty ? 'text-slate-400' : 'text-slate-700'
                                 }`}
                               >
-                                {row.isEmpty ? (
-                                  '-'
-                                ) : (
-                                  <div className="space-y-0.5">
-                                    <span>{row.nik}</span>
-                                    {row.hasNikMismatch && (
-                                      <span
-                                        title={`NIK Proposal (${row.proposalNik}) berbeda dengan NIK BAST (${row.bastNik})`}
-                                        className="block text-[10px] font-bold text-rose-600"
-                                      >
-                                        Selisih NIK!
-                                      </span>
-                                    )}
-                                  </div>
-                                )}
+                                {row.isEmpty ? '-' : row.nik}
                               </td>
                               <td
                                 className={`px-3 py-2.5 leading-relaxed ${
@@ -2255,7 +2149,7 @@ export function TroubleshootingView({
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-2.5 rounded-2xl border border-slate-200 bg-slate-50 p-3.5 text-xs">
+            <div className="grid grid-cols-3 gap-2.5 rounded-2xl border border-slate-200 bg-slate-50 p-3.5 text-xs">
               <div className="rounded-xl border border-slate-200 bg-white p-2.5">
                 <p className="text-[11px] text-slate-500">KPM Bergeser Urutan</p>
                 <p className="mt-0.5 text-lg font-bold text-sky-700 tabular-nums">
@@ -2274,12 +2168,14 @@ export function TroubleshootingView({
                   {result.totals.dikeluarkan} KPM
                 </p>
               </div>
-              <div className="rounded-xl border border-slate-200 bg-white p-2.5">
-                <p className="text-[11px] text-slate-500">Alamat RT/RW Dilengkapi</p>
-                <p className="mt-0.5 text-lg font-bold text-teal-700 tabular-nums">
-                  {addressUpdateCount} KPM
-                </p>
-              </div>
+            </div>
+
+            <div className="flex items-start gap-2 rounded-xl border border-teal-200 bg-teal-50/60 px-3 py-2 text-[11px] leading-relaxed text-teal-900">
+              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-teal-700" />
+              <p>
+                Detail KPM (nama, NIK, alamat, RT/RW, kelurahan, pengelola) tetap menggunakan data
+                inputan <strong>Proposal MASDETA</strong> dan tidak diubah mengikuti BAST.
+              </p>
             </div>
 
             {result.totals.dikeluarkan > 0 && (

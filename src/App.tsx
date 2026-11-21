@@ -80,6 +80,7 @@ import {
   InternalUserRole,
   InternalUserStatus,
   ItemBantuan,
+  KpmAttendanceInfo,
   KpmAuditLogEntry,
   KpmBastInfo,
   KpmDeleteAction,
@@ -117,10 +118,7 @@ import {
   WilayahKabKota,
   resolveScheduleBookId,
 } from './types/kpm';
-import {
-  TroubleshootingReconcileResult,
-  computeKpmAddressEnrichmentFromBast,
-} from './utils/troubleshootingReconciler';
+import { TroubleshootingReconcileResult } from './utils/troubleshootingReconciler';
 import { normalizePejabatNipNumber } from './utils/pdfExporter';
 import {
   assignKpmToProposalSlot,
@@ -647,6 +645,7 @@ export default function App() {
   const [pejabatList, setPejabatList] = useState<PejabatProfile[]>(DEFAULT_PEJABAT_LIST);
   const [proposalBastMap, setProposalBastMap] = useState<ProposalBastMap>({});
   const [kpmBastMap, setKpmBastMap] = useState<Record<string, KpmBastInfo>>({});
+  const [kpmAttendanceMap, setKpmAttendanceMap] = useState<Record<string, KpmAttendanceInfo>>({});
   const [proposalSlotMap, setProposalSlotMap] = useState<ProposalSlotMap>({});
   const [reconcileSnapshots, setReconcileSnapshots] = useState<
     Record<string, TroubleshootingReconcileSnapshot>
@@ -719,6 +718,7 @@ export default function App() {
   const appAlertToastTimerRef = useRef<number | undefined>(undefined);
   const nativePushRequestedRef = useRef<boolean>(false);
   const kpmBastMapRef = useRef<Record<string, KpmBastInfo>>(kpmBastMap);
+  const kpmAttendanceMapRef = useRef<Record<string, KpmAttendanceInfo>>(kpmAttendanceMap);
   const proposalSlotMapRef = useRef<ProposalSlotMap>(proposalSlotMap);
   const loadAppStateSlicesRef = useRef<() => Promise<void>>(async () => {});
   const currentUserAliasesRef = useRef<Record<string, string>>({});
@@ -737,6 +737,7 @@ export default function App() {
   const prevAuthenticatedRef = useRef<boolean>(false);
 
   kpmBastMapRef.current = kpmBastMap;
+  kpmAttendanceMapRef.current = kpmAttendanceMap;
   proposalSlotMapRef.current = proposalSlotMap;
   directMessagesRef.current = directMessages;
   dismissedUpdateVersionRef.current = dismissedUpdateVersion;
@@ -1268,9 +1269,16 @@ export default function App() {
         }
         if (snapshot.records && (snapshot.records.length > 0 || latestDataRef.current.records.length === 0)) {
           setRecords(
-            snapshot.records.map((r) =>
-              kpmBastMapRef.current[r.id] ? { ...r, bast: kpmBastMapRef.current[r.id] } : r
-            )
+            snapshot.records.map((r) => {
+              const bast = kpmBastMapRef.current[r.id];
+              const attendance = kpmAttendanceMapRef.current[r.id];
+              if (!bast && !attendance) return r;
+              return {
+                ...r,
+                ...(bast ? { bast } : {}),
+                ...(attendance ? { attendance } : {}),
+              };
+            })
           );
         }
         if (snapshot.internalUsers && snapshot.internalUsers.length > 0) {
@@ -1497,8 +1505,21 @@ export default function App() {
   );
 
   const mergeBastIntoRecords = useCallback(
-    (list: KpmRecord[], bastMap: Record<string, KpmBastInfo>): KpmRecord[] =>
-      list.map((r) => (bastMap[r.id] ? { ...r, bast: bastMap[r.id] } : r)),
+    (
+      list: KpmRecord[],
+      bastMap: Record<string, KpmBastInfo>,
+      attendanceMap: Record<string, KpmAttendanceInfo> = kpmAttendanceMapRef.current
+    ): KpmRecord[] =>
+      list.map((r) => {
+        const bast = bastMap[r.id];
+        const attendance = attendanceMap[r.id];
+        if (!bast && !attendance) return r;
+        return {
+          ...r,
+          ...(bast ? { bast } : {}),
+          ...(attendance ? { attendance } : {}),
+        };
+      }),
     []
   );
 
@@ -1527,6 +1548,7 @@ export default function App() {
         fetchedBastTemplate,
         fetchedSptjmTemplate,
         fetchedBastMap,
+        fetchedAttendanceMap,
         fetchedWatermarks,
         fetchedAliases,
         fetchedSlotMap,
@@ -1561,6 +1583,7 @@ export default function App() {
           DEFAULT_SPTJM_TEMPLATE
         ),
         fetchAppStateSlice<Record<string, KpmBastInfo>>('masdeta_kpm_bast_v1', {}),
+        fetchAppStateSlice<Record<string, KpmAttendanceInfo>>('masdeta_kpm_attendance_v1', {}),
         fetchChatDeliveryWatermarks(),
         fetchAppStateSlice<Record<string, Record<string, string>>>('masdeta_user_aliases_v1', {}),
         fetchAppStateSlice<ProposalSlotMap>('masdeta_proposal_slots_v1', {}),
@@ -1614,6 +1637,12 @@ export default function App() {
 
       const safeBastMap =
         fetchedBastMap && typeof fetchedBastMap === 'object' ? fetchedBastMap : {};
+      const safeAttendanceMap =
+        fetchedAttendanceMap &&
+        typeof fetchedAttendanceMap === 'object' &&
+        !Array.isArray(fetchedAttendanceMap)
+          ? fetchedAttendanceMap
+          : {};
       const rawSlotMap: ProposalSlotMap =
         fetchedSlotMap && typeof fetchedSlotMap === 'object' && !Array.isArray(fetchedSlotMap)
           ? fetchedSlotMap
@@ -1623,6 +1652,7 @@ export default function App() {
           ? sanitizeProposalSlotMap(rawSlotMap, latestDataRef.current.records, proposalsRef.current)
           : rawSlotMap;
       kpmBastMapRef.current = safeBastMap;
+      kpmAttendanceMapRef.current = safeAttendanceMap;
       proposalSlotMapRef.current = safeSlotMap;
       setSchedules(Array.isArray(fetchedSchedules) ? fetchedSchedules : []);
       if (fetchedScheduleBooksState && typeof fetchedScheduleBooksState === 'object') {
@@ -1686,6 +1716,7 @@ export default function App() {
           : DEFAULT_PEJABAT_LIST
       );
       setKpmBastMap(safeBastMap);
+      setKpmAttendanceMap(safeAttendanceMap);
       setProposalSlotMap(safeSlotMap);
       const safeSnapshots =
         fetchedReconcileSnapshots &&
@@ -1728,7 +1759,8 @@ export default function App() {
             latestDataRef.current.wilayahList,
             safeSlotMap
           ),
-          safeBastMap
+          safeBastMap,
+          safeAttendanceMap
         )
       );
     } catch {
@@ -5382,6 +5414,82 @@ export default function App() {
             auditLogs: [auditEntry],
           }),
         'Gagal memperbarui checklist sub-item ke Supabase'
+      );
+    } else {
+      void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
+    }
+  };
+
+  const handleToggleKpmAttendance = (kpmId: string, nextPresent: boolean) => {
+    if (!requirePermission('update', 'memperbarui kehadiran KPM')) return;
+    const target = records.find((r) => r.id === kpmId);
+    if (!target) return;
+
+    const prop =
+      proposals.find((p) => p.namaProposal === target.proposal && p.tahun === target.tahun) ??
+      proposals.find((p) => p.namaProposal === target.proposal);
+    if (prop?.status === 'locked') {
+      setFeedback({
+        type: 'error',
+        message: 'Proposal ini terkunci. Kehadiran KPM tidak dapat diubah.',
+      });
+      return;
+    }
+
+    const prevPresent = Boolean(target.attendance?.present);
+    if (prevPresent === nextPresent) return;
+
+    const now = new Date().toISOString();
+    const nextAttendance: KpmAttendanceInfo = {
+      present: nextPresent,
+      updatedAt: now,
+      updatedBy: currentActor.nama,
+    };
+
+    const auditEntry: KpmAuditLogEntry = {
+      id: `audit-att-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      kpmId: target.id,
+      action: 'updated',
+      actorName: currentActor.nama,
+      actorEmail: currentActor.email,
+      timestamp: now,
+      proposal: target.proposal,
+      tahun: target.tahun,
+      changes: [
+        {
+          field: 'Kehadiran (Absensi)',
+          before: prevPresent ? 'Hadir' : 'Belum hadir',
+          after: nextPresent ? 'Hadir' : 'Belum hadir',
+        },
+      ],
+    };
+
+    const nextAttendanceMap: Record<string, KpmAttendanceInfo> = {
+      ...kpmAttendanceMapRef.current,
+      [kpmId]: nextAttendance,
+    };
+    kpmAttendanceMapRef.current = nextAttendanceMap;
+    setKpmAttendanceMap(nextAttendanceMap);
+
+    const nextLogs = [auditEntry, ...kpmAuditLogs];
+    const nextRecords = records.map((r) =>
+      r.id === kpmId
+        ? {
+            ...r,
+            attendance: nextAttendance,
+            updatedAt: now,
+          }
+        : r
+    );
+    setKpmAuditLogs(nextLogs);
+    setRecords(nextRecords);
+
+    void saveAppStateSlice('masdeta_kpm_attendance_v1', nextAttendanceMap);
+
+    if (supabaseReadyRef.current) {
+      void runSupabaseMutation(
+        () => appendKpmAuditLogsInSupabase([auditEntry]),
+        'Gagal menyimpan log kehadiran KPM ke Supabase'
       );
     } else {
       void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
@@ -9083,10 +9191,6 @@ export default function App() {
       kelurahan: r.kelurahan || '',
     }));
 
-    const mainRowByKpmId = new Map<
-      string,
-      (typeof params.result.mainRows)[number]
-    >();
     const keptKpmIdsOrdered: string[] = [];
     const newEmptySlots: ProposalEmptySlot[] = [];
 
@@ -9099,7 +9203,6 @@ export default function App() {
         });
       } else if (row.sourceKpmId) {
         keptKpmIdsOrdered.push(row.sourceKpmId);
-        mainRowByKpmId.set(row.sourceKpmId, row);
       }
     }
 
@@ -9115,7 +9218,6 @@ export default function App() {
       }
     }
 
-    let addressUpdatedCount = 0;
     const newAuditLogs: KpmAuditLogEntry[] = [];
 
     const mappedRecords = records.map((rec) => {
@@ -9153,48 +9255,6 @@ export default function App() {
         };
       }
 
-      const mainRow = mainRowByKpmId.get(rec.id);
-      if (mainRow) {
-        const enrich = computeKpmAddressEnrichmentFromBast(rec, mainRow.bastRawAlamat);
-        if (enrich.changed) {
-          addressUpdatedCount += 1;
-          const addrChanges: { field: string; before: string; after: string }[] = [];
-          if (enrich.nextRt !== rec.rt) {
-            addrChanges.push({ field: 'RT', before: rec.rt || '-', after: enrich.nextRt });
-          }
-          if (enrich.nextRw !== rec.rw) {
-            addrChanges.push({ field: 'RW', before: rec.rw || '-', after: enrich.nextRw });
-          }
-          if (enrich.nextAlamat !== rec.alamat) {
-            addrChanges.push({
-              field: 'Alamat',
-              before: rec.alamat || '-',
-              after: enrich.nextAlamat,
-            });
-          }
-          if (addrChanges.length > 0) {
-            newAuditLogs.push({
-              id: `audit-reconcile-addr-${rec.id}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-              kpmId: rec.id,
-              action: 'updated',
-              actorName: currentActor.nama,
-              actorEmail: currentActor.email,
-              timestamp: now,
-              proposal: prop.namaProposal,
-              tahun: prop.tahun,
-              changes: addrChanges,
-            });
-          }
-          return {
-            ...rec,
-            alamat: enrich.nextAlamat,
-            rt: enrich.nextRt,
-            rw: enrich.nextRw,
-            updatedAt: now,
-          };
-        }
-      }
-
       return rec;
     });
 
@@ -9224,7 +9284,7 @@ export default function App() {
         shiftedCount: params.result.totals.shiftedCount,
         emptySlotsCount: newEmptySlots.length,
         movedToDatabaseCount: movedOverQuotaKpmIds.length,
-        addressUpdatedCount,
+        addressUpdatedCount: 0,
       },
       slotKey,
       hadPreviousSlotState,
@@ -9239,7 +9299,6 @@ export default function App() {
       `${params.result.totals.shiftedCount} KPM bergeser urutan`,
       `${newEmptySlots.length} baris kosong`,
       `${movedOverQuotaKpmIds.length} KPM over-kuota dipindah ke Database`,
-      `${addressUpdatedCount} alamat RT/RW dilengkapi`,
     ];
 
     const actEntry = createActivityHistoryEntry('reconcile_apply', {
@@ -9428,6 +9487,7 @@ export default function App() {
         ],
       });
 
+      const shouldRestoreAddress = (snapshot.summary.addressUpdatedCount || 0) > 0;
       return {
         ...rec,
         validasi: prevSt.validasi,
@@ -9435,13 +9495,13 @@ export default function App() {
         proposal: prevSt.proposal,
         tahun: prevSt.tahun,
         registerCode: prevSt.registerCode,
-        alamat: prevSt.alamat,
-        rt: prevSt.rt,
-        rw: prevSt.rw,
+        alamat: shouldRestoreAddress ? prevSt.alamat : rec.alamat,
+        rt: shouldRestoreAddress ? prevSt.rt : rec.rt,
+        rw: shouldRestoreAddress ? prevSt.rw : rec.rw,
         catatan: prevSt.catatan,
-        kabKota: prevSt.kabKota || rec.kabKota,
-        kecamatan: prevSt.kecamatan || rec.kecamatan,
-        kelurahan: prevSt.kelurahan || rec.kelurahan,
+        kabKota: shouldRestoreAddress ? prevSt.kabKota || rec.kabKota : rec.kabKota,
+        kecamatan: shouldRestoreAddress ? prevSt.kecamatan || rec.kecamatan : rec.kecamatan,
+        kelurahan: shouldRestoreAddress ? prevSt.kelurahan || rec.kelurahan : rec.kelurahan,
         updatedAt: now,
       };
     });
@@ -9473,7 +9533,7 @@ export default function App() {
 
     const actEntry = createActivityHistoryEntry('reconcile_undo', {
       proposalName: snapshot.proposalName,
-      detail: `Undo Rekonsiliasi BAST pada ${snapshot.proposalName} (${snapshot.tahun}): susunan KPM, slot, alamat, dan Database dikembalikan ke kondisi sebelum Apply.${conflictNote}`,
+      detail: `Undo Rekonsiliasi BAST pada ${snapshot.proposalName} (${snapshot.tahun}): susunan KPM, slot, dan Database dikembalikan ke kondisi sebelum Apply.${conflictNote}`,
       tahun: snapshot.tahun,
       action: 'entered',
     });
@@ -10320,6 +10380,7 @@ export default function App() {
             onEditRecord={(rec) => openKpmForm(rec, returnToTab, true)}
             onDeleteRecord={handleDeleteKpm}
             onUpdateStatus={handleUpdateKpmStatus}
+            onToggleAttendance={handleToggleKpmAttendance}
             onToggleSubItem={handleToggleSubItem}
             onMarkAllSubItemsDelivered={handleMarkAllSubItemsDelivered}
             onShareToChat={handleShareKpmToChat}
@@ -10743,6 +10804,7 @@ export default function App() {
             onSelectRecord={(rec) => openKpmDetail(rec, 'kpm')}
             onEditRecord={(rec) => openKpmForm(rec, 'kpm', false)}
             onDeleteRecord={handleDeleteKpm}
+            onToggleAttendance={handleToggleKpmAttendance}
             onBulkUpdateKpms={handleBulkUpdateKpms}
             onBulkPermanentDeleteKpms={handleBulkPermanentDeleteKpms}
           />

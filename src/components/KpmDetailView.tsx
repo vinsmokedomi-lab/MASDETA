@@ -128,6 +128,7 @@ interface KpmDetailViewProps {
     targetProposalId?: string,
     slotHandling?: SlotRemovalMode
   ) => void;
+  onToggleAttendance?: (kpmId: string, nextPresent: boolean) => void;
   onToggleSubItem: (
     kpmId: string,
     subItemKey: string,
@@ -226,6 +227,7 @@ export function KpmDetailView({
   onEditRecord,
   onDeleteRecord,
   onUpdateStatus,
+  onToggleAttendance,
   onToggleSubItem,
   onMarkAllSubItemsDelivered,
   onShareToChat,
@@ -1237,8 +1239,68 @@ export function KpmDetailView({
     </>
   );
 
+  const isAttending = Boolean(record.attendance?.present);
+
   const subItemAndBastBlock = (
     <>
+        {/* Kehadiran (Absensi) KPM */}
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+          <div className="flex items-center justify-between gap-3 px-4 py-3.5">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <div
+                className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors ${
+                  isAttending
+                    ? 'bg-teal-50 text-teal-700'
+                    : 'bg-slate-100 text-slate-500'
+                }`}
+              >
+                <UserCheck className="h-4.5 w-4.5" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <h3 className="text-sm font-bold text-slate-900">Kehadiran (Absensi)</h3>
+                  <span
+                    className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-bold ${
+                      isAttending
+                        ? 'bg-teal-50 text-teal-700'
+                        : 'bg-slate-100 text-slate-500'
+                    }`}
+                  >
+                    {isAttending ? 'Hadir' : 'Belum Hadir'}
+                  </span>
+                </div>
+                <p
+                  className={`mt-0.5 text-xs leading-snug ${
+                    isAttending ? 'font-medium text-teal-700' : 'text-slate-500'
+                  }`}
+                >
+                  {isAttending
+                    ? `Sudah hadir${record.attendance?.updatedAt ? ` · ${formatUploadDateTime(record.attendance.updatedAt)}` : ''}${record.attendance?.updatedBy ? ` (${record.attendance.updatedBy})` : ''}`
+                    : 'Aktifkan toggle untuk menandai KPM hadir saat penyaluran'}
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              role="switch"
+              aria-checked={isAttending}
+              aria-label={`Kehadiran ${record.nama}`}
+              disabled={isProposalLocked || !canUpdate || isOffline || !onToggleAttendance}
+              onClick={() => onToggleAttendance?.(record.id, !isAttending)}
+              className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-teal-700/30 disabled:cursor-not-allowed disabled:opacity-50 ${
+                isAttending ? 'bg-teal-700' : 'bg-slate-300'
+              }`}
+            >
+              <span
+                className={`pointer-events-none inline-block h-5.5 w-5.5 transform rounded-full bg-white shadow-xs transition duration-200 ${
+                  isAttending ? 'translate-x-5' : 'translate-x-0.5'
+                }`}
+              />
+            </button>
+          </div>
+        </section>
+
         {/* Penyaluran Sub-Item Bantuan (Interactive Toggles & Hutang Tracking) */}
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
           <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
@@ -2805,6 +2867,7 @@ export function KpmDetailView({
                 <input
                   type="text"
                   value={bastDraft.nomorBast}
+                  placeholder="Kosongkan agar baris nomor di PDF tetap kosong (tulis tangan)"
                   onChange={(e) => setBastDraft((prev) => ({ ...prev, nomorBast: e.target.value }))}
                   className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
                 />

@@ -3012,12 +3012,10 @@ function renderSingleBastPage(
   cursorY += 4.8 * gs;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(preset.subTitleFontSize);
-  doc.text(
-    bastConfig.nomorBast?.trim() || DEFAULT_BAST_TEMPLATE.nomorBast,
-    centerX,
-    cursorY,
-    { align: 'center' }
-  );
+  const nomorBastText = (bastConfig.nomorBast ?? '').trim();
+  if (nomorBastText) {
+    doc.text(nomorBastText, centerX, cursorY, { align: 'center' });
+  }
   cursorY += 6.4 * gs;
 
   // Paragraf pembuka

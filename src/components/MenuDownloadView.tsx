@@ -2928,6 +2928,7 @@ export function MenuDownloadView({
                   <input
                     type="text"
                     value={bastDraft.nomorBast}
+                    placeholder="Kosongkan agar baris nomor di PDF tetap kosong (tulis tangan)"
                     onChange={(e) => {
                       setBastSavedNotice(false);
                       setBastDraft((prev) => ({ ...prev, nomorBast: e.target.value }));

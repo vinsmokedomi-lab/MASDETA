@@ -2823,7 +2823,7 @@ export function ProposalDetailView({
                   type="text"
                   value={bastDraft.nomorBast}
                   onChange={(e) => setBastDraft((prev) => ({ ...prev, nomorBast: e.target.value }))}
-                  placeholder="400.9.14.5 / ................... / DINSOS"
+                  placeholder="Kosongkan agar baris nomor di PDF tetap kosong (tulis tangan)"
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none focus:border-teal-600"
                 />
               </div>

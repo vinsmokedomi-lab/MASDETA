@@ -299,10 +299,18 @@ export function formatProposalAddressFull(row: ProposalExtractedRow): string {
   const rtRwRaw = (row.rtRw || '').trim();
   if (rtRwRaw && !/\bRT\b/i.test(alamat)) {
     const cleaned = rtRwRaw.replace(/\s+/g, '');
-    const segments = cleaned.split('/').filter(Boolean);
+    const segments = cleaned.split('/').map((s) => s.trim());
     if (segments.length === 2) {
-      parts.push(`RT ${segments[0].padStart(3, '0')} RW ${segments[1].padStart(3, '0')}`);
-    } else if (cleaned !== '-' && cleaned !== '/') {
+      const rtPart = segments[0] && segments[0] !== '-' ? segments[0].padStart(3, '0') : '';
+      const rwPart = segments[1] && segments[1] !== '-' ? segments[1].padStart(3, '0') : '';
+      if (rtPart && rwPart) {
+        parts.push(`RT ${rtPart} RW ${rwPart}`);
+      } else if (rtPart) {
+        parts.push(`RT ${rtPart}`);
+      } else if (rwPart) {
+        parts.push(`RW ${rwPart}`);
+      }
+    } else if (cleaned && cleaned !== '-' && cleaned !== '/') {
       parts.push(`RT/RW ${rtRwRaw}`);
     }
   }
@@ -339,12 +347,8 @@ export interface ReconciledMainRow {
   namaItem: string;
   nama: string;
   nik: string;
-  proposalNik?: string;
-  bastNik?: string;
-  hasNikMismatch?: boolean;
   isManuallyLinked?: boolean;
   alamat: string;
-  bastRawAlamat?: string | null;
   pengelola: string;
   isEmpty: boolean;
   status: ReconciledRowStatus;
@@ -419,16 +423,6 @@ export interface UnmatchedBastRow {
   suggestedSimilarityScore: number;
 }
 
-export interface NikMismatchAlert {
-  rowKey: string;
-  noUrutText: string;
-  kodeItem: string;
-  nama: string;
-  proposalNik: string;
-  bastNik: string;
-  bastNo: number;
-}
-
 export interface PengelolaImpactRow {
   pengelola: string;
   usulan: number;
@@ -457,7 +451,6 @@ export interface TroubleshootingReconcileResult {
   itemComparisons: ReconciledItemComparison[];
   overQuotaGroups: OverQuotaItemGroup[];
   unmatchedBastRows: UnmatchedBastRow[];
-  nikMismatches: NikMismatchAlert[];
   pengelolaImpacts: PengelolaImpactRow[];
   totals: {
     kuotaBast: number;
@@ -507,16 +500,6 @@ function findMatchingBastSlot(
   bastSlots: IndexedBastSlot[],
   preferredIndexMap: Map<IndexedBastSlot, boolean>
 ): IndexedBastSlot | null {
-  const propNikDigits = (propRow.nik || '').replace(/\D/g, '');
-  if (propNikDigits.length === 16) {
-    const byNik = bastSlots.find(
-      (s) => !preferredIndexMap.get(s) && s.nik.replace(/\D/g, '') === propNikDigits
-    );
-    if (byNik) return byNik;
-    const anyByNik = bastSlots.find((s) => s.nik.replace(/\D/g, '') === propNikDigits);
-    if (anyByNik) return anyByNik;
-  }
-
   const strictProp = normalizeStrictName(propRow.nama);
   const alphaProp = normalizeAlphaName(propRow.nama);
   if (!alphaProp) return null;
@@ -623,9 +606,12 @@ export function buildProposalRowsFromDatabase(params: {
 
   return ordered.map(({ rec, slotNumber }, idx) => {
     const displayNo = slotNumber < 999999 ? pad2(slotNumber) : pad2(idx + 1);
-    const rt = (rec.rt || '').trim().padStart(3, '0');
-    const rw = (rec.rw || '').trim().padStart(3, '0');
-    const rtRw = rec.rt || rec.rw ? `${rt} / ${rw}` : '';
+    const rtRaw = (rec.rt || '').trim();
+    const rwRaw = (rec.rw || '').trim();
+    const rtRw =
+      rtRaw || rwRaw
+        ? `${rtRaw ? rtRaw.padStart(3, '0') : '-'} / ${rwRaw ? rwRaw.padStart(3, '0') : '-'}`
+        : '';
     return {
       sourceKpmId: rec.id,
       no: displayNo,
@@ -638,101 +624,6 @@ export function buildProposalRowsFromDatabase(params: {
       nik: (rec.nikKtp || '').replace(/\D/g, ''),
     };
   });
-}
-
-export function parseRtRwFromBastAddress(bastAlamat: string): {
-  rt: string;
-  rw: string;
-  streetAlamat: string;
-} {
-  const raw = (bastAlamat || '').replace(/\s+/g, ' ').trim();
-  if (!raw) return { rt: '', rw: '', streetAlamat: '' };
-
-  let rt = '';
-  let rw = '';
-  const combinedMatch = raw.match(/\bRT\.?\s*0*(\d{1,3})\s*[/\\-]?\s*RW\.?\s*0*(\d{1,3})\b/i);
-  if (combinedMatch) {
-    rt = combinedMatch[1].padStart(3, '0');
-    rw = combinedMatch[2].padStart(3, '0');
-  } else {
-    const rtMatch = raw.match(/\bRT\.?\s*[:.]?\s*0*(\d{1,3})\b/i);
-    const rwMatch = raw.match(/\bRW\.?\s*[:.]?\s*0*(\d{1,3})\b/i);
-    if (rtMatch) rt = rtMatch[1].padStart(3, '0');
-    if (rwMatch) rw = rwMatch[1].padStart(3, '0');
-  }
-
-  let streetPart = raw
-    .replace(/[,;\s]*\bRT\.?\s*0*\d{1,3}\s*[/\\-]?\s*RW\.?\s*0*\d{1,3}\b.*$/i, '')
-    .replace(/[,;\s]*\bRT\.?\s*[:.]?\s*0*\d{1,3}\b.*$/i, '')
-    .replace(/[,;\s]*\b(KELURAHAN|KEL\.?|DESA|KECAMATAN|KEC\.?|KOTA|KAB\.?)\b.*$/i, '')
-    .replace(/[,\s]+$/g, '')
-    .trim();
-
-  if (!streetPart && raw) {
-    streetPart = raw;
-  }
-
-  return { rt, rw, streetAlamat: streetPart };
-}
-
-export function computeKpmAddressEnrichmentFromBast(
-  rec: Pick<KpmRecord, 'alamat' | 'rt' | 'rw'>,
-  bastAlamat: string | null | undefined
-): {
-  changed: boolean;
-  nextAlamat: string;
-  nextRt: string;
-  nextRw: string;
-} {
-  const currentAlamat = (rec.alamat || '').trim();
-  const currentRt = (rec.rt || '').trim();
-  const currentRw = (rec.rw || '').trim();
-
-  if (!bastAlamat || !bastAlamat.trim() || bastAlamat.trim() === '-') {
-    return { changed: false, nextAlamat: currentAlamat, nextRt: currentRt, nextRw: currentRw };
-  }
-
-  const parsed = parseRtRwFromBastAddress(bastAlamat);
-  const missingRt = !currentRt || /^0+$/.test(currentRt);
-  const missingRw = !currentRw || /^0+$/.test(currentRw);
-
-  const nextRt = missingRt && parsed.rt ? parsed.rt : currentRt;
-  const nextRw = missingRw && parsed.rw ? parsed.rw : currentRw;
-
-  const missingStreet =
-    !currentAlamat ||
-    currentAlamat === '-' ||
-    (parsed.streetAlamat.length > currentAlamat.length + 6 &&
-      !/\b(JL|JALAN|GG|GANG|BLOK|NO)\b/i.test(currentAlamat));
-
-  const nextAlamat = missingStreet && parsed.streetAlamat
-    ? formatAlamatLengkap(parsed.streetAlamat)
-    : currentAlamat;
-
-  const changed =
-    nextRt !== currentRt ||
-    nextRw !== currentRw ||
-    nextAlamat !== currentAlamat;
-
-  return { changed, nextAlamat, nextRt, nextRw };
-}
-
-export function countRecordsNeedingBastAddressEnrichment(
-  result: TroubleshootingReconcileResult,
-  records: KpmRecord[]
-): number {
-  if (!result || result.proposalSourceType !== 'database') return 0;
-  const byId = new Map(records.map((r) => [r.id, r]));
-  let count = 0;
-  for (const row of result.mainRows) {
-    if (row.isEmpty || !row.sourceKpmId || !row.bastRawAlamat) continue;
-    const rec = byId.get(row.sourceKpmId);
-    if (!rec) continue;
-    if (computeKpmAddressEnrichmentFromBast(rec, row.bastRawAlamat).changed) {
-      count += 1;
-    }
-  }
-  return count;
 }
 
 export function reconcileProposalWithBast(params: {
@@ -921,7 +812,7 @@ export function reconcileProposalWithBast(params: {
           noAsalProposal: row.no || '-',
           kodeItem: code,
           nama: row.nama,
-          alamat: matchedBast?.alamat || formatProposalAddressFull(row) || '-',
+          alamat: formatProposalAddressFull(row) || '-',
           pengelola: row.pengelola || '-',
           matchedBastNo: matchedBast?.bastNo ?? null,
           matchedBastItemCode: matchedBast?.itemCode ?? null,
@@ -1011,8 +902,8 @@ export function reconcileProposalWithBast(params: {
   }
 
   // Susun Tabel Utama (Bagian 1) mengikuti urutan blok BAST
+  // Detail KPM (nama, NIK, alamat, pengelola) SELALU diambil murni dari Proposal (tidak mengambil detail dari BAST).
   const mainRows: ReconciledMainRow[] = [];
-  const nikMismatches: NikMismatchAlert[] = [];
 
   let unchangedCount = 0;
   let shiftedCount = 0;
@@ -1030,16 +921,8 @@ export function reconcileProposalWithBast(params: {
 
       if (propKpm) {
         const matchedBast = matchedBastByPropRow.get(propKpm) || null;
-        const propNikDigits = (propKpm.nik || '').replace(/\D/g, '');
-        const bastNikDigits = (matchedBast?.nik || '').replace(/\D/g, '');
-        const hasNikMismatch = Boolean(
-          propNikDigits.length === 16 &&
-            bastNikDigits.length === 16 &&
-            propNikDigits !== bastNikDigits
-        );
-        const resolvedNik = matchedBast?.nik || propKpm.nik || '-';
-        const resolvedAlamat =
-          matchedBast?.alamat || formatProposalAddressFull(propKpm) || '-';
+        const resolvedNik = (propKpm.nik || '').replace(/\D/g, '') || '-';
+        const resolvedAlamat = formatProposalAddressFull(propKpm) || '-';
         const resolvedPengelola = propKpm.pengelola || '-';
         const newNo = slot.bastNo;
         const isManuallyLinked = manuallyLinkedRowKeys.has(propKpm.rowKey);
@@ -1059,17 +942,6 @@ export function reconcileProposalWithBast(params: {
             shiftedCount += 1;
             keterangan = `Di BAST awal tercatat pada No. Urut ${pad2(matchedBast.bastNo)} dengan item ${matchedBast.itemCode} (${bastOrigName}); bergeser menjadi No. Urut ${pad2(newNo)} dengan item ${code} (${itemName}) sesuai usulan Proposal.${linkSuffix}`;
           }
-          if (hasNikMismatch) {
-            nikMismatches.push({
-              rowKey: propKpm.rowKey,
-              noUrutText: pad2(newNo),
-              kodeItem: code,
-              nama: propKpm.nama,
-              proposalNik: propNikDigits,
-              bastNik: bastNikDigits,
-              bastNo: matchedBast.bastNo,
-            });
-          }
         } else {
           status = 'new_in_proposal';
           newInProposalCount += 1;
@@ -1084,13 +956,9 @@ export function reconcileProposalWithBast(params: {
           kodeItem: code,
           namaItem: itemName,
           nama: propKpm.nama,
-          nik: resolvedNik || '-',
-          proposalNik: propNikDigits || undefined,
-          bastNik: bastNikDigits || undefined,
-          hasNikMismatch,
+          nik: resolvedNik,
           isManuallyLinked,
-          alamat: resolvedAlamat || '-',
-          bastRawAlamat: matchedBast?.alamat ?? null,
+          alamat: resolvedAlamat,
           pengelola: resolvedPengelola,
           isEmpty: false,
           status,
@@ -1109,7 +977,6 @@ export function reconcileProposalWithBast(params: {
           nama: '-',
           nik: '-',
           alamat: '-',
-          bastRawAlamat: null,
           pengelola: '-',
           isEmpty: true,
           status: 'empty_slot',
@@ -1133,8 +1000,7 @@ export function reconcileProposalWithBast(params: {
 
     for (const propKpm of excludedForItem) {
       const matchedBast = matchedBastByPropRow.get(propKpm) || null;
-      const resolvedAlamat =
-        matchedBast?.alamat || formatProposalAddressFull(propKpm) || '-';
+      const resolvedAlamat = formatProposalAddressFull(propKpm) || '-';
       const isManuallySelected = manualSet.has(propKpm.rowKey);
       const nextIdx = excludedRows.length + 1;
       excludedRows.push({
@@ -1300,7 +1166,6 @@ export function reconcileProposalWithBast(params: {
     itemComparisons,
     overQuotaGroups,
     unmatchedBastRows,
-    nikMismatches,
     pengelolaImpacts,
     totals,
     matchMetrics,
@@ -1341,16 +1206,6 @@ export function buildWhatsAppReconcileSummary(result: TroubleshootingReconcileRe
     result.excludedRows.forEach((r, i) => {
       const peng = r.pengelola && r.pengelola !== '-' ? ` · Pengelola: ${r.pengelola}` : '';
       lines.push(`${i + 1}. ${r.nama} (${r.kodeItem}, No. Asal ${r.noAsalProposal})${peng}`);
-    });
-  }
-
-  if (result.nikMismatches.length > 0) {
-    lines.push('');
-    lines.push(`*Perhatian — Selisih NIK (${result.nikMismatches.length}):*`);
-    result.nikMismatches.forEach((m) => {
-      lines.push(
-        `- No. ${m.noUrutText} ${m.nama} (${m.kodeItem}): Proposal ${m.proposalNik} ≠ BAST ${m.bastNik}`
-      );
     });
   }
 

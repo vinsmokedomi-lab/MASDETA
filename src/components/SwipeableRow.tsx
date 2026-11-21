@@ -1,6 +1,16 @@
 import { ReactNode, TouchEvent, useRef, useState } from 'react';
 import { useOfflineStatus } from '../contexts/OfflineContext';
 
+export interface SwipeStackedSubAction {
+  key: string;
+  label: string;
+  icon: ReactNode;
+  onClick: () => void;
+  tone: 'teal' | 'amber' | 'neutral' | 'danger' | 'locked';
+  disabled?: boolean;
+  keepOpen?: boolean;
+}
+
 export interface SwipeAction {
   key: string;
   label: string;
@@ -8,6 +18,9 @@ export interface SwipeAction {
   onClick: () => void;
   tone: 'teal' | 'amber' | 'neutral' | 'danger' | 'locked';
   disabled?: boolean;
+  width?: number;
+  keepOpen?: boolean;
+  stackedActions?: SwipeStackedSubAction[];
 }
 
 interface SwipeableRowProps {
@@ -38,7 +51,7 @@ export function SwipeableRow({
   children,
 }: SwipeableRowProps) {
   const { isOffline } = useOfflineStatus();
-  const totalWidth = actions.length * ACTION_WIDTH;
+  const totalWidth = actions.reduce((sum, a) => sum + (a.width ?? ACTION_WIDTH), 0);
   const [dragOffset, setDragOffset] = useState<number | null>(null);
 
   const gestureRef = useRef({
@@ -135,6 +148,43 @@ export function SwipeableRow({
           style={{ width: `${totalWidth}px` }}
         >
           {actions.map((action) => {
+            const colWidth = action.width ?? ACTION_WIDTH;
+            if (action.stackedActions && action.stackedActions.length > 0) {
+              return (
+                <div
+                  key={action.key}
+                  style={{ width: `${colWidth}px` }}
+                  className="flex flex-col divide-y divide-white/20"
+                >
+                  {action.stackedActions.map((sub) => {
+                    const isSubDisabled = Boolean(sub.disabled || isOffline);
+                    return (
+                      <button
+                        key={sub.key}
+                        type="button"
+                        disabled={isSubDisabled}
+                        title={isOffline ? 'Mode Offline (Read-Only)' : sub.label}
+                        aria-label={sub.label}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (isSubDisabled) return;
+                          if (!sub.keepOpen) {
+                            onClose();
+                          }
+                          sub.onClick();
+                        }}
+                        className={`flex flex-1 items-center justify-center transition-colors ${TONE_CLASSES[sub.tone]} ${
+                          isSubDisabled ? 'cursor-not-allowed opacity-40' : ''
+                        }`}
+                      >
+                        {sub.icon}
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            }
+
             const isDisabled = Boolean(action.disabled || isOffline);
             return (
               <button
@@ -145,10 +195,12 @@ export function SwipeableRow({
                 onClick={(e) => {
                   e.stopPropagation();
                   if (isDisabled) return;
-                  onClose();
+                  if (!action.keepOpen) {
+                    onClose();
+                  }
                   action.onClick();
                 }}
-                style={{ width: `${ACTION_WIDTH}px` }}
+                style={{ width: `${colWidth}px` }}
                 className={`flex flex-col items-center justify-center gap-1 px-1 text-[11px] font-semibold transition-colors ${TONE_CLASSES[action.tone]} ${
                   isDisabled ? 'cursor-not-allowed opacity-45 grayscale' : ''
                 }`}

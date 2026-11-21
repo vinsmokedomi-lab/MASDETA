@@ -71,6 +71,12 @@ export interface KpmBastInfo {
   signatureDoc?: KpmDocumentFile;
 }
 
+export interface KpmAttendanceInfo {
+  present: boolean;
+  updatedAt: string;
+  updatedBy: string;
+}
+
 export interface KpmRecord {
   id: string;
   registerCode: string;
@@ -97,6 +103,7 @@ export interface KpmRecord {
   documents: KpmDocuments;
   subItemDeliveries?: Record<string, SubItemDeliveryState>;
   bast?: KpmBastInfo;
+  attendance?: KpmAttendanceInfo;
   berkasDikembalikan?: boolean;
   berkasDikembalikanAt?: string;
   berkasDikembalikanBy?: string;
