@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import {
   Archive,
   Bell,
+  Calculator,
   CalendarClock,
   CopyCheck,
   Database,
@@ -129,7 +130,8 @@ export function DesktopSidebar({
     activeMenuSection !== 'arsip' &&
     activeMenuSection !== 'jadwal' &&
     activeMenuSection !== 'duplikasi' &&
-    activeMenuSection !== 'download';
+    activeMenuSection !== 'download' &&
+    activeMenuSection !== 'rab';
 
   return (
     <aside
@@ -321,6 +323,25 @@ export function DesktopSidebar({
               }`}
             />
             <span className="flex-1 truncate">Download PDF</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onOpenMenuSection('rab')}
+            className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
+              activeSubView === 'none' && activeTab === 'menu' && activeMenuSection === 'rab'
+                ? 'bg-teal-50 text-teal-800'
+                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+            }`}
+          >
+            <Calculator
+              className={`h-4 w-4 shrink-0 ${
+                activeSubView === 'none' && activeTab === 'menu' && activeMenuSection === 'rab'
+                  ? 'text-teal-700'
+                  : 'text-slate-400'
+              }`}
+            />
+            <span className="flex-1 truncate">Pembuat RAB</span>
           </button>
 
           <button

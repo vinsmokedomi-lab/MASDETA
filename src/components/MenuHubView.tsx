@@ -6,6 +6,7 @@ import {
   Banknote,
   BookOpen,
   Briefcase,
+  Calculator,
   CalendarClock,
   Check,
   CheckCircle2,
@@ -49,6 +50,7 @@ import { DriveImage } from './DriveImage';
 import { FilterSelect, SegmentedTabs } from './FormControls';
 import { ItemManagerView } from './ItemManagerView';
 import { MenuDownloadView } from './MenuDownloadView';
+import { RabBuilderView } from './RabBuilderView';
 import { TroubleshootingView } from './TroubleshootingView';
 import { AddPengelolaModal } from './PengelolaSelectorModal';
 import { PresenceDot, getPresenceMeta } from './PresenceDot';
@@ -133,6 +135,7 @@ export type MenuSection =
   | 'sampah'
   | 'changelog'
   | 'troubleshooting'
+  | 'rab'
   | 'laporan';
 
 export type AdminDataActionType =
@@ -1383,6 +1386,23 @@ export function MenuHubView({
                       <p className="text-sm font-semibold text-slate-900">Download</p>
                       <p className="mt-0.5 truncate text-xs text-slate-500">
                         Unduh PDF F4, Kupon &amp; BAST
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onChangeSection('rab')}
+                    className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                      <Calculator className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-slate-900">Pembuat RAB</p>
+                      <p className="mt-0.5 truncate text-xs text-slate-500">
+                        Hitung anggaran paket Master Item &amp; penyesuaian harga sub-item otomatis
                       </p>
                     </div>
                     <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -7022,6 +7042,18 @@ export function MenuHubView({
         onApplyReconciliation={onApplyTroubleshootingReconciliation}
         onUndoSnapshot={onUndoTroubleshootingSnapshot}
         onOpenProposalDetail={onOpenProposalDetailFromTroubleshooting}
+        onBack={() => onChangeSection('root')}
+      />
+    );
+  }
+
+  // 12C. PEMBUAT RAB (RENCANA ANGGARAN BIAYA OTOMATIS)
+  if (activeSection === 'rab') {
+    return (
+      <RabBuilderView
+        proposals={proposals}
+        records={records}
+        items={items}
         onBack={() => onChangeSection('root')}
       />
     );

@@ -48,6 +48,11 @@ import {
   resolveProposalSlotStateForGroup,
 } from './imageProcessor';
 import type { TroubleshootingReconcileResult } from './troubleshootingReconciler';
+import {
+  RabCalculatedSummary,
+  formatRupiahCurrency,
+  formatRupiahPlain,
+} from './rabCalculator';
 
 // Ukuran kertas F4: 216mm x 310mm
 export const F4_PAPER_WIDTH_MM = 216;
@@ -1084,7 +1089,7 @@ export async function exportKpmTableToPdf({
     let slotEntries:
       | Array<
           | { kind: 'kpm'; slotNumber: number; record: KpmRecord }
-          | { kind: 'empty'; slotNumber: number }
+          | { kind: 'empty'; slotNumber: number; item: string }
         >
       | null = null;
 
@@ -1116,7 +1121,11 @@ export async function exportKpmTableToPdf({
         });
         slotEntries = merged.map((item) =>
           item.kind === 'empty'
-            ? { kind: 'empty' as const, slotNumber: item.slotNumber }
+            ? {
+                kind: 'empty' as const,
+                slotNumber: item.slotNumber,
+                item: (item.emptySlot.item || '').trim().toUpperCase(),
+              }
             : { kind: 'kpm' as const, slotNumber: item.slotNumber, record: item.record }
         );
       }
@@ -1137,7 +1146,11 @@ export async function exportKpmTableToPdf({
     const bodyRows = renderRows.map((entry) => {
       const absenText = String(entry.slotNumber).padStart(2, '0');
       if (entry.kind === 'empty') {
-        return activeCols.map((col) => (col.key === 'no' ? absenText : ''));
+        return activeCols.map((col) => {
+          if (col.key === 'no') return absenText;
+          if (col.key === 'item') return entry.item || '';
+          return '';
+        });
       }
 
       const rec = entry.record;
@@ -1245,7 +1258,7 @@ export async function exportKpmTableToPdf({
 
     // Ringkasan DAFTAR ITEM & PENGELOLA di bawah tabel (sesuai halaman akhir referensi PDF)
     if (includeSummary && sectionRecords.length > 0) {
-      const itemMap = new Map<string, { count: number; rank: number }>();
+      const itemMap = new Map<string, { count: number; emptyCount: number; rank: number }>();
       const pengelolaMap = new Map<string, number>();
 
       for (const rec of sectionRecords) {
@@ -1256,11 +1269,27 @@ export async function exportKpmTableToPdf({
           existingItem.count += 1;
           existingItem.rank = Math.min(existingItem.rank, rank);
         } else {
-          itemMap.set(code, { count: 1, rank });
+          itemMap.set(code, { count: 1, emptyCount: 0, rank });
         }
 
         const peng = (rec.pengelola || 'Tanpa Pengelola').trim();
         pengelolaMap.set(peng, (pengelolaMap.get(peng) || 0) + 1);
+      }
+
+      if (slotEntries) {
+        const refYear = proposalInfo?.tahun || sectionRecords[0]?.tahun || '';
+        for (const entry of slotEntries) {
+          if (entry.kind !== 'empty' || !entry.item) continue;
+          const code = entry.item;
+          const existingItem = itemMap.get(code);
+          const rank = getItemHierarchyRank(code, refYear, items);
+          if (existingItem) {
+            existingItem.emptyCount += 1;
+            existingItem.rank = Math.min(existingItem.rank, rank);
+          } else {
+            itemMap.set(code, { count: 0, emptyCount: 1, rank });
+          }
+        }
       }
 
       const itemEntries = Array.from(itemMap.entries()).sort((a, b) => {
@@ -1308,7 +1337,8 @@ export async function exportKpmTableToPdf({
       const lineStep = 4.6;
 
       itemEntries.forEach(([code, meta], idx) => {
-        doc.text(`- ${code} : ${meta.count}`, leftColX, cursorY + 6 + idx * lineStep);
+        const emptySuffix = meta.emptyCount > 0 ? ` (+${meta.emptyCount} kosong)` : '';
+        doc.text(`- ${code} : ${meta.count}${emptySuffix}`, leftColX, cursorY + 6 + idx * lineStep);
       });
 
       pengelolaEntries.forEach(([name, cnt], idx) => {
@@ -6208,5 +6238,403 @@ export async function exportTroubleshootingToPdf(
   const defaultFileName = `Troubleshooting_Rekonsiliasi_${result.proposalTitle}`;
   const saved = await saveOrOpenPdfDocument(doc, options?.fileName || defaultFileName);
   return { ...saved, count: result.mainRows.length };
+}
+
+export interface ExportRabPdfOptions {
+  judul: string;
+  summary: RabCalculatedSummary;
+  fileName?: string;
+}
+
+export async function exportRabToPdf(
+  options: ExportRabPdfOptions
+): Promise<{ savedFileName: string; openedNative: boolean; count: number }> {
+  const { summary } = options;
+  const cleanTitle = (options.judul || 'RENCANA ANGGARAN BIAYA (RAB)').trim().toUpperCase();
+
+  // A4 Portrait (210mm x 297mm)
+  const PAGE_W = 210;
+  const PAGE_H = 297;
+  const MARGIN = { top: 14, right: 14, bottom: 14, left: 14 };
+  const CONTENT_W = PAGE_W - MARGIN.left - MARGIN.right; // 182mm
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+    compress: true,
+  }) as AutoTableDoc;
+
+  // Judul dokumen rata tengah tebal (konsisten dengan PDF referensi)
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12);
+  doc.setTextColor(15, 23, 42);
+  const titleLines = doc.splitTextToSize(cleanTitle, CONTENT_W) as string[];
+  let cursorY = MARGIN.top + 2;
+  titleLines.forEach((line) => {
+    doc.text(line, PAGE_W / 2, cursorY, { align: 'center' });
+    cursorY += 5.2;
+  });
+  cursorY += 2;
+
+  // =========================================================================
+  // BAGIAN 1: TABEL REKAPITULASI SELURUH BARANG (DIKELOMPOKKAN PER MASTER ITEM)
+  // =========================================================================
+  interface RecapRowMeta {
+    isSpacer: boolean;
+    isBalancer: boolean;
+    isZero: boolean;
+  }
+
+  const recapBody: Array<Array<string | { content: string; colSpan?: number; styles?: Partial<Styles> }>> = [];
+  const recapMeta: RecapRowMeta[] = [];
+
+  summary.packages.forEach((pkg, pkgIdx) => {
+    if (pkgIdx > 0) {
+      recapBody.push([
+        {
+          content: '',
+          colSpan: 5,
+          styles: {
+            fillColor: [255, 255, 255],
+            minCellHeight: 3.2,
+            cellPadding: 0,
+            lineWidth: { top: 0.25, right: 0, bottom: 0.25, left: 0 },
+            lineColor: [15, 23, 42],
+          },
+        },
+      ]);
+      recapMeta.push({ isSpacer: true, isBalancer: false, isZero: false });
+    }
+
+    pkg.subItems.forEach((sub) => {
+      const isZero = sub.jumlahHarga === 0;
+      recapBody.push([
+        sub.namaBarang,
+        `${sub.volumePerPaket} ${sub.satuan}`,
+        formatRupiahCurrency(sub.hargaSatuan, { withDecimals: true }),
+        `${sub.jumlahVolume} ${sub.satuan}`,
+        formatRupiahCurrency(sub.jumlahHarga, { zeroAsDash: true }),
+      ]);
+      recapMeta.push({
+        isSpacer: false,
+        isBalancer: sub.isBalancer,
+        isZero,
+      });
+    });
+  });
+
+  autoTable(doc, {
+    startY: cursorY,
+    margin: { top: MARGIN.top, right: MARGIN.right, bottom: MARGIN.bottom, left: MARGIN.left },
+    head: [['Nama Barang', 'Volume Satuan', 'Harga Satuan', 'Jumlah Volume', 'Jumlah Harga']],
+    body: recapBody,
+    theme: 'grid',
+    styles: {
+      font: 'helvetica',
+      fontSize: 8.2,
+      cellPadding: { top: 1.5, right: 2.2, bottom: 1.5, left: 2.2 },
+      lineColor: [15, 23, 42],
+      lineWidth: 0.22,
+      textColor: [15, 23, 42],
+      valign: 'middle',
+      overflow: 'linebreak',
+    },
+    headStyles: {
+      fillColor: [248, 250, 252],
+      textColor: [15, 23, 42],
+      fontStyle: 'bold',
+      fontSize: 8.4,
+      halign: 'center',
+      lineColor: [15, 23, 42],
+      lineWidth: 0.28,
+    },
+    columnStyles: {
+      0: { cellWidth: 54, halign: 'left' },
+      1: { cellWidth: 24, halign: 'center' },
+      2: { cellWidth: 36, halign: 'right' },
+      3: { cellWidth: 26, halign: 'center' },
+      4: { cellWidth: 42, halign: 'right' },
+    },
+    didParseCell: (hookData) => {
+      if (hookData.section !== 'body') return;
+      const meta = recapMeta[hookData.row.index];
+      if (!meta || meta.isSpacer) return;
+      if (hookData.column.index === 2 && meta.isBalancer) {
+        hookData.cell.styles.textColor = [220, 38, 38]; // #DC2626
+        hookData.cell.styles.fontStyle = 'bold';
+      }
+      if (hookData.column.index === 4 && meta.isZero) {
+        hookData.cell.styles.textColor = [100, 116, 139];
+      }
+    },
+  });
+
+  // Ringkasan Total & Total Penerima di bawah Tabel 1
+  let summaryY = (doc.lastAutoTable?.finalY ?? cursorY) + 3.5;
+  if (summaryY + 24 > PAGE_H - MARGIN.bottom) {
+    doc.addPage('a4', 'portrait');
+    summaryY = MARGIN.top;
+  }
+
+  autoTable(doc, {
+    startY: summaryY,
+    margin: { top: MARGIN.top, right: MARGIN.right, bottom: MARGIN.bottom, left: MARGIN.left },
+    body: [
+      [
+        {
+          content: 'Total',
+          colSpan: 4,
+          styles: { halign: 'center', fontStyle: 'bold', textColor: [15, 23, 42] },
+        },
+        {
+          content: formatRupiahCurrency(summary.totalTerhitung, { withDecimals: true }),
+          styles: { halign: 'right', fontStyle: 'bold', textColor: [220, 38, 38] },
+        },
+      ],
+      [
+        {
+          content: 'Total Penerima',
+          colSpan: 3,
+          styles: { halign: 'center', fontStyle: 'bold', fillColor: [248, 250, 252] },
+        },
+        {
+          content: `${summary.totalPenerima} Orang`,
+          styles: { halign: 'center', fontStyle: 'bold', fillColor: [248, 250, 252] },
+        },
+        {
+          content: formatRupiahCurrency(summary.totalAnggaranTarget),
+          styles: { halign: 'right', fontStyle: 'bold', fillColor: [248, 250, 252] },
+        },
+      ],
+    ],
+    theme: 'grid',
+    styles: {
+      font: 'helvetica',
+      fontSize: 8.6,
+      cellPadding: { top: 2, right: 2.2, bottom: 2, left: 2.2 },
+      lineColor: [15, 23, 42],
+      lineWidth: 0.28,
+      textColor: [15, 23, 42],
+      valign: 'middle',
+    },
+    columnStyles: {
+      0: { cellWidth: 54 },
+      1: { cellWidth: 24 },
+      2: { cellWidth: 36 },
+      3: { cellWidth: 26 },
+      4: { cellWidth: 42 },
+    },
+  });
+
+  // =========================================================================
+  // BAGIAN 2: TABEL RINCIAN PER MASTER ITEM (PER PAKET)
+  // =========================================================================
+  let pkgCursorY = (doc.lastAutoTable?.finalY ?? summaryY) + 8;
+
+  // Pastikan Bagian 2 dimulai rapi (jika ruang tersisa < 48mm, pindah halaman baru)
+  if (pkgCursorY + 48 > PAGE_H - MARGIN.bottom) {
+    doc.addPage('a4', 'portrait');
+    pkgCursorY = MARGIN.top;
+  }
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text('RINCIAN ANGGARAN PER PAKET MASTER ITEM', MARGIN.left, pkgCursorY);
+  pkgCursorY += 3.2;
+
+  summary.packages.forEach((pkg) => {
+    const estimatedBoxHeight = 14 + (pkg.subItems.length + 1) * 6.4;
+    if (pkgCursorY + estimatedBoxHeight > PAGE_H - MARGIN.bottom) {
+      doc.addPage('a4', 'portrait');
+      pkgCursorY = MARGIN.top;
+    }
+
+    const pkgBody: Array<Array<string | { content: string; rowSpan?: number; colSpan?: number; styles?: Partial<Styles> }>> = [];
+    const balancerFlags: boolean[] = [];
+
+    pkg.subItems.forEach((sub, subIdx) => {
+      const row: Array<string | { content: string; rowSpan?: number; colSpan?: number; styles?: Partial<Styles> }> = [
+        sub.namaBarang,
+        `${sub.volumePerPaket} ${sub.satuan}`,
+        formatRupiahCurrency(sub.hargaSatuan, { withDecimals: true }),
+        `${sub.jumlahVolume} ${sub.satuan}`,
+        formatRupiahCurrency(sub.jumlahHarga, { zeroAsDash: true }),
+      ];
+
+      if (subIdx === 0) {
+        row.push({
+          content: `${pkg.jumlahPenerima} Orang`,
+          rowSpan: pkg.subItems.length,
+          styles: {
+            halign: 'center',
+            valign: 'middle',
+            fontStyle: 'bold',
+            textColor: pkg.jumlahPenerima > 0 ? [15, 23, 42] : [148, 163, 184],
+          },
+        });
+      }
+
+      pkgBody.push(row);
+      balancerFlags.push(sub.isBalancer);
+    });
+
+    // Footer Total per paket Master Item
+    pkgBody.push([
+      {
+        content: `Total (${pkg.kode} · ${pkg.namaPaket})`,
+        colSpan: 4,
+        styles: {
+          halign: 'center',
+          fontStyle: 'bold',
+          fillColor: [248, 250, 252],
+          textColor: [15, 23, 42],
+        },
+      },
+      {
+        content: formatRupiahCurrency(pkg.subtotalHarga, { zeroAsDash: true }),
+        styles: {
+          halign: 'right',
+          fontStyle: 'bold',
+          fillColor: [248, 250, 252],
+          textColor: pkg.subtotalHarga > 0 ? [15, 23, 42] : [100, 116, 139],
+        },
+      },
+      {
+        content: '',
+        styles: {
+          fillColor: [248, 250, 252],
+        },
+      },
+    ]);
+
+    autoTable(doc, {
+      startY: pkgCursorY,
+      margin: { top: MARGIN.top, right: MARGIN.right, bottom: MARGIN.bottom, left: MARGIN.left },
+      head: [
+        [
+          'Nama & Jenis Barang',
+          'Volume Satuan',
+          'Harga Satuan',
+          'Jumlah Volume',
+          'Jumlah Harga',
+          'Jumlah Penerima',
+        ],
+      ],
+      body: pkgBody,
+      theme: 'grid',
+      styles: {
+        font: 'helvetica',
+        fontSize: 8,
+        cellPadding: { top: 1.5, right: 2, bottom: 1.5, left: 2 },
+        lineColor: [15, 23, 42],
+        lineWidth: 0.22,
+        textColor: [15, 23, 42],
+        valign: 'middle',
+        overflow: 'linebreak',
+      },
+      headStyles: {
+        fillColor: [241, 245, 249],
+        textColor: [15, 23, 42],
+        fontStyle: 'bold',
+        fontSize: 8,
+        halign: 'center',
+        lineColor: [15, 23, 42],
+        lineWidth: 0.25,
+      },
+      columnStyles: {
+        0: { cellWidth: 48, halign: 'left' },
+        1: { cellWidth: 22, halign: 'center' },
+        2: { cellWidth: 32, halign: 'right' },
+        3: { cellWidth: 22, halign: 'center' },
+        4: { cellWidth: 34, halign: 'right' },
+        5: { cellWidth: 24, halign: 'center' },
+      },
+      didParseCell: (hookData) => {
+        if (hookData.section !== 'body') return;
+        const idx = hookData.row.index;
+        if (idx < balancerFlags.length && hookData.column.index === 2 && balancerFlags[idx]) {
+          hookData.cell.styles.textColor = [220, 38, 38];
+          hookData.cell.styles.fontStyle = 'bold';
+        }
+      },
+    });
+
+    pkgCursorY = (doc.lastAutoTable?.finalY ?? pkgCursorY) + 4.5;
+  });
+
+  // Baris Grand Total akhir dengan highlight merah muda lembut (sesuai PDF referensi)
+  if (pkgCursorY + 14 > PAGE_H - MARGIN.bottom) {
+    doc.addPage('a4', 'portrait');
+    pkgCursorY = MARGIN.top;
+  }
+
+  autoTable(doc, {
+    startY: pkgCursorY,
+    margin: { top: MARGIN.top, right: MARGIN.right, bottom: MARGIN.bottom, left: MARGIN.left },
+    body: [
+      [
+        {
+          content: 'TOTAL',
+          colSpan: 4,
+          styles: {
+            halign: 'center',
+            fontStyle: 'bold',
+            fontSize: 9.2,
+            fillColor: [254, 205, 211], // #FECDD3
+            textColor: [15, 23, 42],
+          },
+        },
+        {
+          content: formatRupiahCurrency(summary.totalTerhitung),
+          colSpan: 2,
+          styles: {
+            halign: 'right',
+            fontStyle: 'bold',
+            fontSize: 9.2,
+            fillColor: [254, 205, 211],
+            textColor: [185, 28, 28], // #B91C1C
+          },
+        },
+      ],
+    ],
+    theme: 'grid',
+    styles: {
+      font: 'helvetica',
+      cellPadding: { top: 2.3, right: 2.5, bottom: 2.3, left: 2.5 },
+      lineColor: [15, 23, 42],
+      lineWidth: 0.3,
+      valign: 'middle',
+    },
+    columnStyles: {
+      0: { cellWidth: 48 },
+      1: { cellWidth: 22 },
+      2: { cellWidth: 32 },
+      3: { cellWidth: 22 },
+      4: { cellWidth: 34 },
+      5: { cellWidth: 24 },
+    },
+  });
+
+  // Nomor halaman kecil di pojok kanan bawah
+  const totalPages = doc.getNumberOfPages();
+  for (let p = 1; p <= totalPages; p += 1) {
+    doc.setPage(p);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      `MASDETA · RAB ${summary.totalPenerima} KPM (Rp ${formatRupiahPlain(summary.totalTerhitung)})   ·   Halaman ${p} dari ${totalPages}`,
+      PAGE_W - MARGIN.right,
+      PAGE_H - 6,
+      { align: 'right' }
+    );
+  }
+
+  const safeBudgetLabel = formatRupiahPlain(summary.totalAnggaranTarget || summary.totalTerhitung);
+  const defaultFileName = `RAB_${summary.totalPenerima}_KPM_Total_${safeBudgetLabel}`;
+  const saved = await saveOrOpenPdfDocument(doc, options.fileName || defaultFileName);
+  return { ...saved, count: summary.totalPenerima };
 }
 

@@ -2,15 +2,23 @@ import { ChangeEvent, DragEvent, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
+  ArrowDown,
   ArrowLeft,
   ArrowRight,
+  ArrowUp,
+  ArrowUpDown,
+  Check,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Copy,
   Database,
   Download,
   FileCheck2,
   FileSpreadsheet,
   FileText,
   Info,
+  Link2,
   Loader2,
   Lock,
   RefreshCw,
@@ -18,7 +26,10 @@ import {
   Search,
   ShieldAlert,
   Trash2,
+  Unlink,
   Upload,
+  UserCheck,
+  Users,
   Wrench,
   X,
 } from 'lucide-react';
@@ -36,9 +47,14 @@ import {
   extractProposalPdfData,
 } from '../services/troubleshootingPdfExtractor';
 import {
+  BastExtractedRow,
+  ProposalExtractedRow,
   ReconciledRowStatus,
+  SlotPlacementStrategy,
+  TroubleshootingManualOverrides,
   TroubleshootingReconcileResult,
   buildProposalRowsFromDatabase,
+  buildWhatsAppReconcileSummary,
   countRecordsNeedingBastAddressEnrichment,
   getTroubleshootingItemBadgeClass,
   reconcileProposalWithBast,
@@ -119,7 +135,19 @@ export function TroubleshootingView({
   const [processingStep, setProcessingStep] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const [result, setResult] = useState<TroubleshootingReconcileResult | null>(null);
+  const [rawSource, setRawSource] = useState<{
+    proposalRows: ProposalExtractedRow[];
+    bastRows: BastExtractedRow[];
+    proposalTitle: string;
+    bastTitle: string;
+    proposalSourceType: 'pdf' | 'database';
+  } | null>(null);
+  const [overrides, setOverrides] = useState<TroubleshootingManualOverrides>({
+    excludedRowKeysByItem: {},
+    orderedIncludedKeysByItem: {},
+    manualBastLinkByRowKey: {},
+    placementStrategy: 'proposal_order',
+  });
   const [analyzedProposalId, setAnalyzedProposalId] = useState<string | null>(null);
   const [summaryPengelolaPdf, setSummaryPengelolaPdf] = useState<{ name: string; count: number }[]>(
     []
@@ -129,6 +157,17 @@ export function TroubleshootingView({
   const [searchQuery, setSearchQuery] = useState('');
   const [itemFilter, setItemFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | ReconciledRowStatus>('all');
+
+  // Modal pemilihan KPM over-kuota yang dikeluarkan
+  const [overQuotaModalItem, setOverQuotaModalItem] = useState<string | null>(null);
+  const [overQuotaSearch, setOverQuotaSearch] = useState('');
+
+  // Panel Audit Anomali & Dampak Pengelola
+  const [auditPanelOpen, setAuditPanelOpen] = useState(false);
+  const [auditTab, setAuditTab] = useState<'unmatched_bast' | 'nik_mismatch' | 'pengelola'>(
+    'unmatched_bast'
+  );
+  const [copiedWaSummary, setCopiedWaSummary] = useState(false);
 
   const [exportingPdf, setExportingPdf] = useState(false);
   const [exportSuccessNotice, setExportSuccessNotice] = useState<string | null>(null);
@@ -142,6 +181,19 @@ export function TroubleshootingView({
   const [pendingUndoSnapshot, setPendingUndoSnapshot] =
     useState<TroubleshootingReconcileSnapshot | null>(null);
   const [undoBusy, setUndoBusy] = useState(false);
+
+  const result: TroubleshootingReconcileResult | null = useMemo(() => {
+    if (!rawSource) return null;
+    return reconcileProposalWithBast({
+      proposalRows: rawSource.proposalRows,
+      bastRows: rawSource.bastRows,
+      proposalTitle: rawSource.proposalTitle,
+      bastTitle: rawSource.bastTitle,
+      proposalSourceType: rawSource.proposalSourceType,
+      catalog: items,
+      overrides,
+    });
+  }, [rawSource, items, overrides]);
 
   // Daftar proposal database beserta jumlah KPM accepted
   const proposalOptions = useMemo(() => {
@@ -268,15 +320,19 @@ export function TroubleshootingView({
         extractedSummaryPengelola = propRes.summaryPengelola;
 
         setProcessingStep('Menyelaraskan urutan KPM terhadap kuota BAST Dinas...');
-        const reconciled = reconcileProposalWithBast({
+        setOverrides({
+          excludedRowKeysByItem: {},
+          orderedIncludedKeysByItem: {},
+          manualBastLinkByRowKey: {},
+          placementStrategy: 'proposal_order',
+        });
+        setRawSource({
           proposalRows,
           bastRows: bastRes.rows,
           proposalTitle,
           bastTitle: bastRes.documentTitle,
           proposalSourceType: 'pdf',
-          catalog: items,
         });
-        setResult(reconciled);
         setAnalyzedProposalId(null);
         setApplySuccessInfo(null);
         setSummaryPengelolaPdf(extractedSummaryPengelola);
@@ -293,15 +349,19 @@ export function TroubleshootingView({
           proposalSlotMap,
         });
         proposalTitle = `${selectedProposalOption.proposal.namaProposal} (${selectedProposalOption.proposal.tahun})`;
-        const reconciled = reconcileProposalWithBast({
+        setOverrides({
+          excludedRowKeysByItem: {},
+          orderedIncludedKeysByItem: {},
+          manualBastLinkByRowKey: {},
+          placementStrategy: 'proposal_order',
+        });
+        setRawSource({
           proposalRows,
           bastRows: bastRes.rows,
           proposalTitle,
           bastTitle: bastRes.documentTitle,
           proposalSourceType: 'database',
-          catalog: items,
         });
-        setResult(reconciled);
         setAnalyzedProposalId(selectedProposalOption.proposal.id);
         setApplySuccessInfo(null);
         setSummaryPengelolaPdf([]);
@@ -310,6 +370,8 @@ export function TroubleshootingView({
       setSearchQuery('');
       setItemFilter('all');
       setStatusFilter('all');
+      setOverQuotaModalItem(null);
+      setOverQuotaSearch('');
     } catch (err) {
       const msg =
         err instanceof Error && err.message
@@ -319,6 +381,173 @@ export function TroubleshootingView({
     } finally {
       setProcessing(false);
       setProcessingStep('');
+    }
+  };
+
+  // === HANDLER PILIH KPM OVER-KUOTA ===
+  const handleToggleExcludedCandidate = (
+    kodeItem: string,
+    rowKey: string,
+    excessCount: number,
+    currentExcludedKeys: string[]
+  ) => {
+    setOverrides((prev) => {
+      const existing = [...currentExcludedKeys];
+      let nextKeys: string[];
+
+      if (excessCount <= 1) {
+        // Radio behavior: 1 klik langsung mengganti KPM yang dikeluarkan
+        nextKeys = [rowKey];
+      } else if (existing.includes(rowKey)) {
+        nextKeys = existing.filter((k) => k !== rowKey);
+      } else if (existing.length < excessCount) {
+        nextKeys = [...existing, rowKey];
+      } else {
+        // Ganti pilihan paling lama jika sudah mencapai batas excessCount
+        nextKeys = [...existing.slice(1), rowKey];
+      }
+
+      const nextCustomOrder = { ...(prev.orderedIncludedKeysByItem || {}) };
+      delete nextCustomOrder[kodeItem];
+
+      return {
+        ...prev,
+        excludedRowKeysByItem: {
+          ...(prev.excludedRowKeysByItem || {}),
+          [kodeItem]: nextKeys,
+        },
+        orderedIncludedKeysByItem: nextCustomOrder,
+      };
+    });
+  };
+
+  const handleAutoExcludeNotInBast = (kodeItem: string) => {
+    const group = result?.overQuotaGroups.find((g) => g.kodeItem === kodeItem);
+    if (!group) return;
+    const notInBast = group.candidates.filter((c) => c.matchedBastNo === null);
+    const inBast = group.candidates.filter((c) => c.matchedBastNo !== null);
+    // Ambil dari urutan terbawah yg tidak ada di BAST dulu, sisanya dari urutan terbawah yg ada di BAST
+    const prioritized = [...notInBast.reverse(), ...inBast.reverse()];
+    const picked = prioritized.slice(0, group.excessCount).map((c) => c.rowKey);
+
+    setOverrides((prev) => {
+      const nextCustomOrder = { ...(prev.orderedIncludedKeysByItem || {}) };
+      delete nextCustomOrder[kodeItem];
+      return {
+        ...prev,
+        excludedRowKeysByItem: {
+          ...(prev.excludedRowKeysByItem || {}),
+          [kodeItem]: picked,
+        },
+        orderedIncludedKeysByItem: nextCustomOrder,
+      };
+    });
+  };
+
+  const handleResetExcludedForItem = (kodeItem: string) => {
+    setOverrides((prev) => {
+      const nextMap = { ...(prev.excludedRowKeysByItem || {}) };
+      delete nextMap[kodeItem];
+      const nextCustomOrder = { ...(prev.orderedIncludedKeysByItem || {}) };
+      delete nextCustomOrder[kodeItem];
+      return {
+        ...prev,
+        excludedRowKeysByItem: nextMap,
+        orderedIncludedKeysByItem: nextCustomOrder,
+      };
+    });
+  };
+
+  // === HANDLER TUKAR URUTAN ↑ / ↓ DALAM BLOK ITEM YANG SAMA ===
+  const handleMoveRowInItemBlock = (kodeItem: string, rowKey: string, direction: 'up' | 'down') => {
+    if (!result) return;
+    const filledKeysInItem = result.mainRows
+      .filter((r) => r.kodeItem === kodeItem && !r.isEmpty && r.rowKey)
+      .map((r) => r.rowKey as string);
+    const currentIdx = filledKeysInItem.indexOf(rowKey);
+    if (currentIdx < 0) return;
+    const targetIdx = direction === 'up' ? currentIdx - 1 : currentIdx + 1;
+    if (targetIdx < 0 || targetIdx >= filledKeysInItem.length) return;
+
+    const swapped = [...filledKeysInItem];
+    const tmp = swapped[currentIdx];
+    swapped[currentIdx] = swapped[targetIdx];
+    swapped[targetIdx] = tmp;
+
+    setOverrides((prev) => ({
+      ...prev,
+      orderedIncludedKeysByItem: {
+        ...(prev.orderedIncludedKeysByItem || {}),
+        [kodeItem]: swapped,
+      },
+    }));
+  };
+
+  const handleResetCustomOrder = () => {
+    setOverrides((prev) => ({
+      ...prev,
+      orderedIncludedKeysByItem: {},
+    }));
+  };
+
+  const handleChangePlacementStrategy = (strategy: SlotPlacementStrategy) => {
+    setOverrides((prev) => ({
+      ...prev,
+      placementStrategy: strategy,
+      orderedIncludedKeysByItem: {},
+    }));
+  };
+
+  // === HANDLER LINK MANUAL BAST <-> PROPOSAL (ATASI TYPO / BEDA EJAAN NAMA) ===
+  const handleLinkBastManually = (proposalRowKey: string, bastNo: number) => {
+    if (!proposalRowKey) return;
+    setOverrides((prev) => {
+      const nextLinks = { ...(prev.manualBastLinkByRowKey || {}) };
+      // Pastikan bastNo tidak terpasang ganda
+      Object.keys(nextLinks).forEach((k) => {
+        if (nextLinks[k] === bastNo) delete nextLinks[k];
+      });
+      nextLinks[proposalRowKey] = bastNo;
+      return {
+        ...prev,
+        manualBastLinkByRowKey: nextLinks,
+      };
+    });
+  };
+
+  const handleUnlinkBastManually = (proposalRowKey: string) => {
+    setOverrides((prev) => {
+      const nextLinks = { ...(prev.manualBastLinkByRowKey || {}) };
+      delete nextLinks[proposalRowKey];
+      return {
+        ...prev,
+        manualBastLinkByRowKey: nextLinks,
+      };
+    });
+  };
+
+  // === HANDLER SALIN RINGKASAN WHATSAPP ===
+  const handleCopyWhatsAppSummary = async () => {
+    if (!result) return;
+    const text = buildWhatsAppReconcileSummary(result);
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      setCopiedWaSummary(true);
+      setExportSuccessNotice('Ringkasan rekonsiliasi siap kirim WhatsApp berhasil disalin ke clipboard.');
+      setTimeout(() => setCopiedWaSummary(false), 2500);
+    } catch {
+      setErrorMessage('Gagal menyalin ringkasan ke clipboard.');
     }
   };
 
@@ -934,19 +1163,34 @@ export function TroubleshootingView({
               </button>
 
               {result && (
-                <button
-                  type="button"
-                  onClick={() => void handleDownloadPdf()}
-                  disabled={exportingPdf}
-                  className="inline-flex min-h-[42px] items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-teal-700 bg-white px-4 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {exportingPdf ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Download className="h-4 w-4" />
-                  )}
-                  <span>{exportingPdf ? 'Menyusun PDF...' : 'Download PDF Hasil Penyesuaian'}</span>
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyWhatsAppSummary()}
+                    className="inline-flex min-h-[42px] items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-3.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+                  >
+                    {copiedWaSummary ? (
+                      <Check className="h-4 w-4 text-emerald-600" />
+                    ) : (
+                      <Copy className="h-4 w-4 text-slate-500" />
+                    )}
+                    <span>{copiedWaSummary ? 'Tersalin!' : 'Salin Ringkasan WA'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void handleDownloadPdf()}
+                    disabled={exportingPdf}
+                    className="inline-flex min-h-[42px] items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-teal-700 bg-white px-4 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {exportingPdf ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Download className="h-4 w-4" />
+                    )}
+                    <span>{exportingPdf ? 'Menyusun PDF...' : 'Download PDF Hasil Penyesuaian'}</span>
+                  </button>
+                </>
               )}
 
               {result && proposalMode === 'database' && result.proposalSourceType === 'database' && (
@@ -1167,17 +1411,360 @@ export function TroubleshootingView({
               </div>
             )}
 
+            {/* PANEL AUDIT ANOMALI: NAMA BAST TANPA PASANGAN, SELISIH NIK & DAMPAK PENGELOLA */}
+            {(result.unmatchedBastRows.length > 0 ||
+              result.nikMismatches.length > 0 ||
+              result.hasProposalPengelolaData ||
+              Object.keys(overrides.manualBastLinkByRowKey || {}).length > 0) && (
+              <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                <button
+                  type="button"
+                  onClick={() => setAuditPanelOpen((v) => !v)}
+                  className="flex w-full flex-wrap items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                >
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                      <ShieldAlert className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <h2 className="text-xs font-bold text-slate-900">
+                        Audit Data &amp; Anomali BAST vs Proposal
+                      </h2>
+                      <p className="mt-0.5 text-[11px] text-slate-500 tabular-nums">
+                        {result.unmatchedBastRows.length} nama di BAST belum terpasang ·{' '}
+                        {result.nikMismatches.length} selisih NIK
+                        {result.hasProposalPengelolaData
+                          ? ` · ${result.pengelolaImpacts.length} pengelola`
+                          : ''}
+                        {Object.keys(overrides.manualBastLinkByRowKey || {}).length > 0
+                          ? ` · ${Object.keys(overrides.manualBastLinkByRowKey || {}).length} link manual aktif`
+                          : ''}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {result.nikMismatches.length > 0 && (
+                      <span className="rounded-md border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-bold text-rose-700 tabular-nums">
+                        {result.nikMismatches.length} Selisih NIK
+                      </span>
+                    )}
+                    {result.unmatchedBastRows.length > 0 && (
+                      <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-bold text-amber-800 tabular-nums">
+                        {result.unmatchedBastRows.length} BAST Tanpa Pasangan
+                      </span>
+                    )}
+                    {auditPanelOpen ? (
+                      <ChevronUp className="h-4 w-4 text-slate-400" />
+                    ) : (
+                      <ChevronDown className="h-4 w-4 text-slate-400" />
+                    )}
+                  </div>
+                </button>
+
+                {auditPanelOpen && (
+                  <div className="border-t border-slate-200">
+                    {/* Tabs Audit */}
+                    <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-100 bg-slate-50/70 px-4 py-2.5">
+                      <button
+                        type="button"
+                        onClick={() => setAuditTab('unmatched_bast')}
+                        className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                          auditTab === 'unmatched_bast'
+                            ? 'bg-slate-900 text-white'
+                            : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:text-slate-900'
+                        }`}
+                      >
+                        <Link2 className="h-3.5 w-3.5" />
+                        <span>Nama BAST Tanpa Pasangan ({result.unmatchedBastRows.length})</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setAuditTab('nik_mismatch')}
+                        className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                          auditTab === 'nik_mismatch'
+                            ? 'bg-rose-700 text-white'
+                            : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:text-slate-900'
+                        }`}
+                      >
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        <span>Selisih NIK ({result.nikMismatches.length})</span>
+                      </button>
+
+                      {result.hasProposalPengelolaData && (
+                        <button
+                          type="button"
+                          onClick={() => setAuditTab('pengelola')}
+                          className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                            auditTab === 'pengelola'
+                              ? 'bg-teal-700 text-white'
+                              : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:text-slate-900'
+                          }`}
+                        >
+                          <Users className="h-3.5 w-3.5" />
+                          <span>Dampak per Pengelola ({result.pengelolaImpacts.length})</span>
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Tab 1: Nama BAST Tanpa Pasangan + Link Manual untuk Typo */}
+                    {auditTab === 'unmatched_bast' && (
+                      <div className="p-4">
+                        <p className="mb-3 text-xs text-slate-600">
+                          Daftar nama yang tercetak di <strong>BAST Dinas</strong> namun tidak ditemukan
+                          pasangannya di Proposal. Jika sebenarnya orang yang sama namun beda ejaan
+                          (typo), gunakan tombol <strong>Cocokkan Manual</strong> agar NIK &amp; alamat
+                          RT/RW dari BAST langsung tersambung.
+                        </p>
+                        {result.unmatchedBastRows.length === 0 ? (
+                          <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 px-4 py-3 text-xs font-semibold text-teal-800">
+                            Seluruh nama pada dokumen BAST Dinas sudah terpasang dengan data KPM Proposal.
+                          </div>
+                        ) : (
+                          <div className="overflow-x-auto rounded-xl border border-slate-200">
+                            <table className="w-full min-w-[780px] border-collapse text-left text-xs">
+                              <thead>
+                                <tr className="border-b border-slate-200 bg-slate-100 text-[11px] font-bold uppercase text-slate-600">
+                                  <th className="w-20 px-3 py-2 text-center">No. BAST</th>
+                                  <th className="w-20 px-3 py-2 text-center">Item</th>
+                                  <th className="w-44 px-3 py-2">Nama di BAST</th>
+                                  <th className="w-36 px-3 py-2 text-center">NIK BAST</th>
+                                  <th className="px-3 py-2">Alamat BAST</th>
+                                  <th className="w-64 px-3 py-2">Cocokkan ke KPM Proposal (Typo)</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-200">
+                                {(() => {
+                                  const unmatchedProposalMain = result.mainRows.filter(
+                                    (r) => !r.isEmpty && r.status === 'new_in_proposal' && r.rowKey
+                                  );
+                                  return result.unmatchedBastRows.map((u) => (
+                                    <tr key={`unmatched-bast-${u.bastNo}`} className="bg-white">
+                                      <td className="px-3 py-2 text-center font-bold text-slate-900 tabular-nums">
+                                        {u.bastNoText}
+                                      </td>
+                                      <td className="px-3 py-2 text-center">
+                                        <span
+                                          className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-bold ${getTroubleshootingItemBadgeClass(
+                                            u.kodeItem
+                                          )}`}
+                                        >
+                                          {u.kodeItem}
+                                        </span>
+                                      </td>
+                                      <td className="px-3 py-2 font-bold text-slate-900">{u.nama}</td>
+                                      <td className="px-3 py-2 text-center text-slate-600 tabular-nums">
+                                        {u.nik}
+                                      </td>
+                                      <td className="px-3 py-2 text-slate-600">{u.alamat}</td>
+                                      <td className="px-3 py-2">
+                                        {u.suggestedProposalRowKey ? (
+                                          <div className="space-y-1.5">
+                                            <div className="flex items-center justify-between gap-2 rounded-lg border border-teal-200 bg-teal-50/70 px-2 py-1.5">
+                                              <div className="min-w-0">
+                                                <p className="truncate text-[11px] font-bold text-teal-900">
+                                                  Mirip {u.suggestedSimilarityScore}%: {u.suggestedProposalName}
+                                                </p>
+                                                <p className="text-[10px] text-teal-700">
+                                                  Item Proposal: {u.suggestedProposalItem}
+                                                </p>
+                                              </div>
+                                              <button
+                                                type="button"
+                                                onClick={() =>
+                                                  handleLinkBastManually(
+                                                    u.suggestedProposalRowKey!,
+                                                    u.bastNo
+                                                  )
+                                                }
+                                                className="shrink-0 rounded-md bg-teal-700 px-2 py-1 text-[10px] font-bold text-white hover:bg-teal-800"
+                                              >
+                                                Cocokkan
+                                              </button>
+                                            </div>
+                                          </div>
+                                        ) : unmatchedProposalMain.length > 0 ? (
+                                          <select
+                                            defaultValue=""
+                                            onChange={(e) => {
+                                              if (e.target.value) {
+                                                handleLinkBastManually(e.target.value, u.bastNo);
+                                                e.target.value = '';
+                                              }
+                                            }}
+                                            className="h-8 w-full rounded-lg border border-slate-200 bg-white px-2 text-[11px] text-slate-700 focus:border-teal-700 focus:outline-none"
+                                          >
+                                            <option value="">-- Pilih KPM Usulan Baru... --</option>
+                                            {unmatchedProposalMain.map((m) => (
+                                              <option key={m.rowKey} value={m.rowKey}>
+                                                {m.nama} ({m.kodeItem} · No. {m.noUrutText})
+                                              </option>
+                                            ))}
+                                          </select>
+                                        ) : (
+                                          <span className="text-[11px] text-slate-400">
+                                            Tidak ada KPM usulan baru tersisa
+                                          </span>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  ));
+                                })()}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Tab 2: Audit Selisih NIK */}
+                    {auditTab === 'nik_mismatch' && (
+                      <div className="p-4">
+                        {result.nikMismatches.length === 0 ? (
+                          <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 px-4 py-3 text-xs font-semibold text-teal-800">
+                            Tidak ditemukan perbedaan NIK antara data Proposal MASDETA dan dokumen BAST Dinas.
+                          </div>
+                        ) : (
+                          <div className="overflow-x-auto rounded-xl border border-rose-200">
+                            <table className="w-full min-w-[680px] border-collapse text-left text-xs">
+                              <thead>
+                                <tr className="border-b border-rose-200 bg-rose-50 text-[11px] font-bold uppercase text-rose-800">
+                                  <th className="w-20 px-3 py-2 text-center">No. Urut</th>
+                                  <th className="w-20 px-3 py-2 text-center">Item</th>
+                                  <th className="px-3 py-2">Nama KPM</th>
+                                  <th className="px-3 py-2 text-center">NIK di Proposal</th>
+                                  <th className="px-3 py-2 text-center">NIK di BAST Dinas</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-rose-100">
+                                {result.nikMismatches.map((m) => (
+                                  <tr key={`nik-mis-${m.rowKey}`} className="bg-white">
+                                    <td className="px-3 py-2 text-center font-bold tabular-nums">
+                                      {m.noUrutText}
+                                    </td>
+                                    <td className="px-3 py-2 text-center">
+                                      <span
+                                        className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-bold ${getTroubleshootingItemBadgeClass(
+                                          m.kodeItem
+                                        )}`}
+                                      >
+                                        {m.kodeItem}
+                                      </span>
+                                    </td>
+                                    <td className="px-3 py-2 font-bold text-slate-900">{m.nama}</td>
+                                    <td className="px-3 py-2 text-center font-mono text-slate-700 tabular-nums">
+                                      {m.proposalNik}
+                                    </td>
+                                    <td className="px-3 py-2 text-center font-mono font-bold text-rose-700 tabular-nums">
+                                      {m.bastNik}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Tab 3: Rekap Dampak per Pengelola */}
+                    {auditTab === 'pengelola' && result.hasProposalPengelolaData && (
+                      <div className="p-4">
+                        <div className="overflow-x-auto rounded-xl border border-slate-200">
+                          <table className="w-full min-w-[520px] border-collapse text-left text-xs tabular-nums">
+                            <thead>
+                              <tr className="border-b border-slate-200 bg-slate-100 text-[11px] font-bold uppercase text-slate-600">
+                                <th className="px-3 py-2">Nama Pengelola</th>
+                                <th className="w-28 px-3 py-2 text-center">Usulan</th>
+                                <th className="w-28 px-3 py-2 text-center">Masuk BAST</th>
+                                <th className="w-32 px-3 py-2 text-center">Dikeluarkan</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-200">
+                              {result.pengelolaImpacts.map((p) => (
+                                <tr
+                                  key={`pengelola-impact-${p.pengelola}`}
+                                  className={p.dikeluarkan > 0 ? 'bg-rose-50/40' : 'bg-white'}
+                                >
+                                  <td className="px-3 py-2 font-semibold text-slate-900">
+                                    {p.pengelola}
+                                  </td>
+                                  <td className="px-3 py-2 text-center text-slate-700">{p.usulan}</td>
+                                  <td className="px-3 py-2 text-center font-bold text-teal-700">
+                                    {p.masuk}
+                                  </td>
+                                  <td
+                                    className={`px-3 py-2 text-center font-bold ${
+                                      p.dikeluarkan > 0 ? 'text-rose-700' : 'text-slate-400'
+                                    }`}
+                                  >
+                                    {p.dikeluarkan}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
+            )}
+
             {/* BAGIAN 1: TABEL UTAMA DAFTAR KPM HASIL PENYESUAIAN KUOTA BAST */}
             <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-              <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3.5 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <h2 className="text-sm font-bold text-slate-900">
-                    Bagian 1 — Tabel Utama Daftar KPM Hasil Penyesuaian Kuota BAST
-                  </h2>
-                  <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
-                    Menampilkan {filteredMainRows.length} dari {result.mainRows.length} slot BAST (No. 01
-                    s.d. {String(result.totals.kuotaBast).padStart(2, '0')})
-                  </p>
+              <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3.5">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <h2 className="text-sm font-bold text-slate-900">
+                      Bagian 1 — Tabel Utama Daftar KPM Hasil Penyesuaian Kuota BAST
+                    </h2>
+                    <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
+                      Menampilkan {filteredMainRows.length} dari {result.mainRows.length} slot BAST (No. 01
+                      s.d. {String(result.totals.kuotaBast).padStart(2, '0')})
+                    </p>
+                  </div>
+
+                  {/* Strategi Penempatan Slot */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="inline-flex rounded-xl border border-slate-200 bg-slate-100/80 p-0.5">
+                      <button
+                        type="button"
+                        onClick={() => handleChangePlacementStrategy('proposal_order')}
+                        className={`rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
+                          result.placementStrategy === 'proposal_order'
+                            ? 'bg-white text-slate-900 shadow-xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Urutan Proposal
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleChangePlacementStrategy('preserve_bast_number')}
+                        className={`rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
+                          result.placementStrategy === 'preserve_bast_number'
+                            ? 'bg-white text-teal-800 shadow-xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                        title="KPM yang nomor BAST awalnya masih dalam blok itemnya akan dipertahankan di nomor yang sama untuk meminimalkan pergeseran"
+                      >
+                        Minimalkan Pergeseran (No. BAST)
+                      </button>
+                    </div>
+
+                    {Object.keys(overrides.orderedIncludedKeysByItem || {}).length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleResetCustomOrder}
+                        className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+                      >
+                        <RotateCcw className="h-3 w-3" />
+                        <span>Reset Urutan</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
@@ -1224,123 +1811,224 @@ export function TroubleshootingView({
               </div>
 
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[980px] border-collapse text-left text-xs">
+                <table className="w-full min-w-[1040px] border-collapse text-left text-xs">
                   <thead>
                     <tr className="border-b border-slate-200 bg-teal-700 text-[11px] font-bold uppercase tracking-wider text-white">
                       <th className="w-16 px-3 py-2.5 text-center">No. Urut</th>
                       <th className="w-24 px-3 py-2.5 text-center">Kode Item</th>
                       <th className="w-48 px-3 py-2.5">Nama Penerima (KPM)</th>
                       <th className="w-36 px-3 py-2.5 text-center">NIK</th>
-                      <th className="w-64 px-3 py-2.5">Alamat &amp; Kelurahan</th>
+                      <th className="w-60 px-3 py-2.5">Alamat &amp; Kelurahan</th>
                       <th className="w-32 px-3 py-2.5">Pengelola</th>
                       <th className="px-3 py-2.5">Keterangan Perubahan</th>
+                      <th className="w-20 px-2 py-2.5 text-center">Urutan</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
                     {filteredMainRows.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="px-4 py-8 text-center text-xs text-slate-500">
+                        <td colSpan={8} className="px-4 py-8 text-center text-xs text-slate-500">
                           Tidak ada baris yang cocok dengan filter pencarian.
                         </td>
                       </tr>
                     ) : (
-                      filteredMainRows.map((row) => {
-                        const badgeMeta = statusMeta(row.status);
-                        return (
-                          <tr
-                            key={`${row.noUrut}-${row.kodeItem}`}
-                            className={
-                              row.isEmpty
-                                ? 'bg-[#FEFCE8] text-amber-950'
-                                : 'bg-white hover:bg-slate-50/70'
-                            }
-                          >
-                            <td className="px-3 py-2.5 text-center font-bold text-slate-900 tabular-nums">
-                              {row.noUrutText}
-                            </td>
-                            <td className="px-3 py-2.5 text-center">
-                              <span
-                                className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-bold ${getTroubleshootingItemBadgeClass(
-                                  row.kodeItem
-                                )}`}
-                              >
-                                {row.kodeItem}
-                              </span>
-                            </td>
-                            <td
-                              className={`px-3 py-2.5 ${
+                      (() => {
+                        // Peta indeks terisi per item agar tombol ↑/↓ tahu batas atas & bawah dalam blok itemnya
+                        const filledIndexByItem = new Map<string, string[]>();
+                        result.mainRows.forEach((r) => {
+                          if (!r.isEmpty && r.rowKey) {
+                            const arr = filledIndexByItem.get(r.kodeItem) || [];
+                            arr.push(r.rowKey);
+                            filledIndexByItem.set(r.kodeItem, arr);
+                          }
+                        });
+
+                        return filteredMainRows.map((row) => {
+                          const badgeMeta = statusMeta(row.status);
+                          const itemKeys = filledIndexByItem.get(row.kodeItem) || [];
+                          const idxInItem = row.rowKey ? itemKeys.indexOf(row.rowKey) : -1;
+                          const canMoveUp = !row.isEmpty && idxInItem > 0;
+                          const canMoveDown =
+                            !row.isEmpty && idxInItem >= 0 && idxInItem < itemKeys.length - 1;
+
+                          return (
+                            <tr
+                              key={`${row.noUrut}-${row.kodeItem}`}
+                              className={
                                 row.isEmpty
-                                  ? 'text-center text-slate-400'
-                                  : 'font-bold text-slate-900'
-                              }`}
+                                  ? 'bg-[#FEFCE8] text-amber-950'
+                                  : 'bg-white hover:bg-slate-50/70'
+                              }
                             >
-                              {row.isEmpty ? '-' : row.nama}
-                            </td>
-                            <td
-                              className={`px-3 py-2.5 text-center tabular-nums ${
-                                row.isEmpty ? 'text-slate-400' : 'text-slate-700'
-                              }`}
-                            >
-                              {row.isEmpty ? '-' : row.nik}
-                            </td>
-                            <td
-                              className={`px-3 py-2.5 leading-relaxed ${
-                                row.isEmpty ? 'text-center text-slate-400' : 'text-slate-700'
-                              }`}
-                            >
-                              {row.isEmpty ? '-' : row.alamat}
-                            </td>
-                            <td
-                              className={`px-3 py-2.5 ${
-                                row.isEmpty ? 'text-center text-slate-400' : 'font-medium text-slate-700'
-                              }`}
-                            >
-                              {row.isEmpty ? '-' : row.pengelola}
-                            </td>
-                            <td className="px-3 py-2.5">
-                              <div className="flex flex-col items-start gap-1">
+                              <td className="px-3 py-2.5 text-center font-bold text-slate-900 tabular-nums">
+                                {row.noUrutText}
+                              </td>
+                              <td className="px-3 py-2.5 text-center">
                                 <span
-                                  className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-bold ${badgeMeta.className}`}
+                                  className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-bold ${getTroubleshootingItemBadgeClass(
+                                    row.kodeItem
+                                  )}`}
                                 >
-                                  {badgeMeta.label}
+                                  {row.kodeItem}
                                 </span>
-                                <span
-                                  className={`leading-relaxed ${
-                                    row.isEmpty
-                                      ? 'font-semibold text-amber-900'
-                                      : 'text-slate-700'
-                                  }`}
-                                >
-                                  {row.keterangan}
-                                </span>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })
+                              </td>
+                              <td
+                                className={`px-3 py-2.5 ${
+                                  row.isEmpty
+                                    ? 'text-center text-slate-400'
+                                    : 'font-bold text-slate-900'
+                                }`}
+                              >
+                                {row.isEmpty ? '-' : row.nama}
+                              </td>
+                              <td
+                                className={`px-3 py-2.5 text-center tabular-nums ${
+                                  row.isEmpty
+                                    ? 'text-slate-400'
+                                    : row.hasNikMismatch
+                                    ? 'font-bold text-rose-700'
+                                    : 'text-slate-700'
+                                }`}
+                              >
+                                {row.isEmpty ? (
+                                  '-'
+                                ) : (
+                                  <div className="space-y-0.5">
+                                    <span>{row.nik}</span>
+                                    {row.hasNikMismatch && (
+                                      <span
+                                        title={`NIK Proposal (${row.proposalNik}) berbeda dengan NIK BAST (${row.bastNik})`}
+                                        className="block text-[10px] font-bold text-rose-600"
+                                      >
+                                        Selisih NIK!
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </td>
+                              <td
+                                className={`px-3 py-2.5 leading-relaxed ${
+                                  row.isEmpty ? 'text-center text-slate-400' : 'text-slate-700'
+                                }`}
+                              >
+                                {row.isEmpty ? '-' : row.alamat}
+                              </td>
+                              <td
+                                className={`px-3 py-2.5 ${
+                                  row.isEmpty ? 'text-center text-slate-400' : 'font-medium text-slate-700'
+                                }`}
+                              >
+                                {row.isEmpty ? '-' : row.pengelola}
+                              </td>
+                              <td className="px-3 py-2.5">
+                                <div className="flex flex-col items-start gap-1">
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <span
+                                      className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-bold ${badgeMeta.className}`}
+                                    >
+                                      {badgeMeta.label}
+                                    </span>
+                                    {row.isManuallyLinked && row.rowKey && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleUnlinkBastManually(row.rowKey!)}
+                                        className="inline-flex items-center gap-1 rounded border border-teal-200 bg-teal-50 px-1.5 py-0.5 text-[10px] font-semibold text-teal-800 hover:bg-rose-50 hover:text-rose-700"
+                                        title="Lepaskan pencocokan manual BAST"
+                                      >
+                                        <Unlink className="h-2.5 w-2.5" />
+                                        <span>Lepas Link</span>
+                                      </button>
+                                    )}
+                                  </div>
+                                  <span
+                                    className={`leading-relaxed ${
+                                      row.isEmpty
+                                        ? 'font-semibold text-amber-900'
+                                        : 'text-slate-700'
+                                    }`}
+                                  >
+                                    {row.keterangan}
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="px-2 py-2.5 text-center">
+                                {!row.isEmpty && row.rowKey ? (
+                                  <div className="inline-flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      disabled={!canMoveUp}
+                                      onClick={() =>
+                                        handleMoveRowInItemBlock(row.kodeItem, row.rowKey!, 'up')
+                                      }
+                                      title={`Geser ke atas dalam blok ${row.kodeItem}`}
+                                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:border-teal-500 hover:bg-teal-50 hover:text-teal-800 disabled:cursor-not-allowed disabled:opacity-30"
+                                    >
+                                      <ArrowUp className="h-3.5 w-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={!canMoveDown}
+                                      onClick={() =>
+                                        handleMoveRowInItemBlock(row.kodeItem, row.rowKey!, 'down')
+                                      }
+                                      title={`Geser ke bawah dalam blok ${row.kodeItem}`}
+                                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:border-teal-500 hover:bg-teal-50 hover:text-teal-800 disabled:cursor-not-allowed disabled:opacity-30"
+                                    >
+                                      <ArrowDown className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <span className="text-slate-300">-</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        });
+                      })()
                     )}
                   </tbody>
                 </table>
               </div>
             </section>
 
-            {/* BAGIAN 2: TABEL TERPISAH DAFTAR KPM YANG DIKELUARKAN (OVER LIMIT) */}
+            {/* BAGIAN 2: TABEL TERPISAH DAFTAR KPM YANG DIKELUARKAN (OVER LIMIT) + PILIH SIAPA YANG DIKELUARKAN */}
             <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-              <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3.5">
                 <div>
                   <h2 className="text-sm font-bold text-slate-900">
                     Bagian 2 — Daftar KPM yang Dikeluarkan (Melebihi Kuota/Limit BAST)
                   </h2>
                   <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
                     {result.excludedRows.length > 0
-                      ? `${result.excludedRows.length} KPM melebihi limit unit BAST dikeluarkan dari tabel utama`
+                      ? `${result.excludedRows.length} KPM melebihi limit unit BAST dikeluarkan — Anda dapat memilih sendiri siapa KPM yang ingin dikeluarkan`
                       : 'Tidak ada KPM berlebih (seluruh usulan masuk dalam batas kuota BAST)'}
                   </p>
                 </div>
+
+                {result.overQuotaGroups.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {result.overQuotaGroups.map((grp) => (
+                      <button
+                        key={`pick-over-${grp.kodeItem}`}
+                        type="button"
+                        onClick={() => {
+                          setOverQuotaModalItem(grp.kodeItem);
+                          setOverQuotaSearch('');
+                        }}
+                        className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl border border-rose-300 bg-rose-50 px-3 text-xs font-bold text-rose-800 transition-colors hover:bg-rose-100"
+                      >
+                        <ArrowUpDown className="h-3.5 w-3.5" />
+                        <span>
+                          Pilih {grp.kodeItem} ({grp.excessCount}/{grp.usulanKpm})
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[920px] border-collapse text-left text-xs">
+                <table className="w-full min-w-[980px] border-collapse text-left text-xs">
                   <thead>
                     <tr
                       className={`border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-white ${
@@ -1351,9 +2039,12 @@ export function TroubleshootingView({
                       <th className="w-28 px-3 py-2.5 text-center">No. Asal Proposal</th>
                       <th className="w-24 px-3 py-2.5 text-center">Kode Item</th>
                       <th className="w-48 px-3 py-2.5">Nama Penerima (KPM)</th>
-                      <th className="w-64 px-3 py-2.5">Alamat &amp; Kelurahan</th>
+                      <th className="w-60 px-3 py-2.5">Alamat &amp; Kelurahan</th>
                       <th className="w-32 px-3 py-2.5">Pengelola</th>
                       <th className="px-3 py-2.5">Keterangan Alasan Pengeluaran</th>
+                      {result.excludedRows.length > 0 && (
+                        <th className="w-32 px-3 py-2.5 text-center">Aksi</th>
+                      )}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
@@ -1369,7 +2060,7 @@ export function TroubleshootingView({
                       </tr>
                     ) : (
                       result.excludedRows.map((row) => (
-                        <tr key={`${row.no}-${row.nama}`} className="bg-rose-50/30">
+                        <tr key={`${row.no}-${row.rowKey || row.nama}`} className="bg-rose-50/30">
                           <td className="px-3 py-2.5 text-center font-bold text-slate-900 tabular-nums">
                             {row.noText}
                           </td>
@@ -1385,7 +2076,14 @@ export function TroubleshootingView({
                               {row.kodeItem}
                             </span>
                           </td>
-                          <td className="px-3 py-2.5 font-bold text-slate-900">{row.nama}</td>
+                          <td className="px-3 py-2.5">
+                            <p className="font-bold text-slate-900">{row.nama}</p>
+                            <p className="mt-0.5 text-[10px] font-semibold text-slate-500">
+                              {row.matchedBastNo
+                                ? `Ada di BAST awal (No. ${String(row.matchedBastNo).padStart(2, '0')})`
+                                : 'Tidak ada di BAST awal'}
+                            </p>
+                          </td>
                           <td className="px-3 py-2.5 leading-relaxed text-slate-700">
                             {row.alamat}
                           </td>
@@ -1393,7 +2091,25 @@ export function TroubleshootingView({
                             {row.pengelola}
                           </td>
                           <td className="px-3 py-2.5 font-medium leading-relaxed text-rose-900">
-                            {row.keterangan}
+                            {row.isManuallySelected && (
+                              <span className="mb-1 inline-flex items-center rounded border border-rose-300 bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-800">
+                                Pilihan Manual Admin
+                              </span>
+                            )}
+                            <p>{row.keterangan}</p>
+                          </td>
+                          <td className="px-3 py-2.5 text-center">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setOverQuotaModalItem(row.kodeItem);
+                                setOverQuotaSearch('');
+                              }}
+                              className="inline-flex h-8 items-center gap-1 rounded-lg border border-rose-300 bg-white px-2.5 text-[11px] font-bold text-rose-700 transition-colors hover:bg-rose-600 hover:text-white"
+                            >
+                              <ArrowUpDown className="h-3 w-3" />
+                              <span>Ganti KPM</span>
+                            </button>
                           </td>
                         </tr>
                       ))
@@ -1567,11 +2283,21 @@ export function TroubleshootingView({
             </div>
 
             {result.totals.dikeluarkan > 0 && (
-              <p className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-[11px] leading-relaxed text-sky-900">
-                <strong>Catatan Over-Kuota:</strong> {result.totals.dikeluarkan} KPM yang melebihi
-                kuota BAST dipindahkan ke <strong>Database KPM</strong> (bukan Arsip Ditolak)
-                dengan catatan <em>Eks Proposal {analyzedProposalRecord.namaProposal}</em>.
-              </p>
+              <div className="space-y-1.5 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-[11px] leading-relaxed text-sky-900">
+                <p>
+                  <strong>Catatan Over-Kuota:</strong> {result.totals.dikeluarkan} KPM berikut akan
+                  dipindahkan ke <strong>Database KPM</strong> (bukan Arsip Ditolak) dengan catatan{' '}
+                  <em>Eks Proposal {analyzedProposalRecord.namaProposal}</em>:
+                </p>
+                <ul className="list-disc space-y-0.5 pl-4 font-semibold text-sky-950">
+                  {result.excludedRows.map((ex) => (
+                    <li key={`apply-ex-${ex.rowKey || ex.no}`}>
+                      {ex.nama} ({ex.kodeItem}
+                      {ex.pengelola && ex.pengelola !== '-' ? ` · ${ex.pengelola}` : ''})
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
 
             <div className="space-y-2 pt-1">
@@ -1616,6 +2342,255 @@ export function TroubleshootingView({
           </div>
         </div>
       )}
+
+      {/* MODAL PILIH KPM OVER-KUOTA YANG DIKELUARKAN */}
+      {overQuotaModalItem && result && (() => {
+        const activeGroup =
+          result.overQuotaGroups.find((g) => g.kodeItem === overQuotaModalItem) ||
+          result.overQuotaGroups[0];
+        if (!activeGroup) return null;
+
+        const currentExcludedKeys = activeGroup.candidates
+          .filter((c) => c.isExcluded)
+          .map((c) => c.rowKey);
+
+        const q = overQuotaSearch.trim().toLowerCase();
+        const visibleCandidates = activeGroup.candidates.filter((c) => {
+          if (!q) return true;
+          return (
+            c.nama.toLowerCase().includes(q) ||
+            c.pengelola.toLowerCase().includes(q) ||
+            c.noAsalProposal.toLowerCase().includes(q) ||
+            c.alamat.toLowerCase().includes(q)
+          );
+        });
+
+        // Hitung distribusi pengelola khusus pada item ini agar admin mudah menjaga keadilan kuota
+        const pengelolaStatsMap = new Map<string, { total: number; excluded: number }>();
+        activeGroup.candidates.forEach((c) => {
+          const pName = c.pengelola && c.pengelola !== '-' ? c.pengelola : 'Tanpa Pengelola';
+          const prev = pengelolaStatsMap.get(pName) || { total: 0, excluded: 0 };
+          prev.total += 1;
+          if (c.isExcluded) prev.excluded += 1;
+          pengelolaStatsMap.set(pName, prev);
+        });
+        const itemPengelolaStats = Array.from(pengelolaStatsMap.entries()).sort(
+          (a, b) => b[1].total - a[1].total
+        );
+
+        return (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Pilih KPM Over-Kuota yang Dikeluarkan"
+            onClick={() => setOverQuotaModalItem(null)}
+            className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-xs sm:items-center sm:p-4"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-t-3xl border border-slate-200 bg-white shadow-2xl sm:rounded-3xl"
+            >
+              {/* Header Modal */}
+              <div className="border-b border-slate-200 px-5 py-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-bold uppercase tracking-wider text-rose-700">
+                      Penentuan KPM Over-Kuota BAST
+                    </p>
+                    <h2 className="mt-0.5 text-base font-bold text-slate-900">
+                      Pilih KPM yang Dikeluarkan — {activeGroup.kodeItem} ({activeGroup.namaItem})
+                    </h2>
+                    <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
+                      Usulan Proposal: <strong>{activeGroup.usulanKpm} KPM</strong> · Kuota BAST:{' '}
+                      <strong>{activeGroup.kuotaBast} Unit</strong> · Wajib dikeluarkan:{' '}
+                      <strong className="text-rose-700">{activeGroup.excessCount} KPM</strong>
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setOverQuotaModalItem(null)}
+                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                    aria-label="Tutup"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                {/* Tab pindah antar item over-kuota jika > 1 item */}
+                {result.overQuotaGroups.length > 1 && (
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {result.overQuotaGroups.map((grp) => (
+                      <button
+                        key={`tab-over-${grp.kodeItem}`}
+                        type="button"
+                        onClick={() => {
+                          setOverQuotaModalItem(grp.kodeItem);
+                          setOverQuotaSearch('');
+                        }}
+                        className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
+                          grp.kodeItem === activeGroup.kodeItem
+                            ? 'bg-rose-700 text-white'
+                            : 'border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        {grp.kodeItem} · Keluarkan {grp.excessCount} dari {grp.usulanKpm}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Toolbar Pencarian & Bantuan Pilihan Cepat */}
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <div className="relative min-w-[180px] flex-1">
+                    <Search className="pointer-events-none absolute top-1/2 left-3 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="text"
+                      value={overQuotaSearch}
+                      onChange={(e) => setOverQuotaSearch(e.target.value)}
+                      placeholder="Cari nama KPM atau pengelola..."
+                      className="h-9 w-full rounded-xl border border-slate-200 bg-slate-50 pr-3 pl-8 text-xs text-slate-800 placeholder:text-slate-400 focus:border-teal-700 focus:bg-white focus:outline-none"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleAutoExcludeNotInBast(activeGroup.kodeItem)}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3 text-[11px] font-bold text-teal-800 hover:bg-teal-100"
+                    title="Otomatis memilih KPM yang tidak tercatat di BAST awal untuk dikeluarkan terlebih dahulu"
+                  >
+                    <UserCheck className="h-3.5 w-3.5" />
+                    <span>Prioritaskan yg Tidak di BAST</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleResetExcludedForItem(activeGroup.kodeItem)}
+                    className="inline-flex h-9 items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+                  >
+                    <RotateCcw className="h-3 w-3" />
+                    <span>Reset Default</span>
+                  </button>
+                </div>
+
+                {/* Ringkasan Pengelola pada item ini */}
+                {result.hasProposalPengelolaData && itemPengelolaStats.length > 0 && (
+                  <div className="mt-2.5 flex flex-wrap items-center gap-1.5 text-[11px]">
+                    <span className="font-semibold text-slate-500">
+                      Sebaran Pengelola ({activeGroup.kodeItem}):
+                    </span>
+                    {itemPengelolaStats.map(([pName, stat]) => (
+                      <span
+                        key={pName}
+                        className={`rounded-md border px-2 py-0.5 font-semibold tabular-nums ${
+                          stat.excluded > 0
+                            ? 'border-rose-200 bg-rose-50 text-rose-800'
+                            : 'border-slate-200 bg-slate-50 text-slate-700'
+                        }`}
+                      >
+                        {pName}: {stat.total}
+                        {stat.excluded > 0 ? ` (-${stat.excluded})` : ''}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Daftar Kandidat KPM */}
+              <div className="flex-1 overflow-y-auto p-4">
+                <p className="mb-2.5 text-[11px] text-slate-500">
+                  {activeGroup.excessCount === 1
+                    ? 'Klik satu nama KPM di bawah untuk menjadikannya KPM yang dikeluarkan. KPM lainnya otomatis masuk ke Tabel Utama.'
+                    : `Pilih tepat ${activeGroup.excessCount} nama KPM untuk dikeluarkan (${currentExcludedKeys.length}/${activeGroup.excessCount} terpilih).`}
+                </p>
+
+                <div className="space-y-2">
+                  {visibleCandidates.map((cand) => (
+                    <button
+                      key={cand.rowKey}
+                      type="button"
+                      onClick={() =>
+                        handleToggleExcludedCandidate(
+                          activeGroup.kodeItem,
+                          cand.rowKey,
+                          activeGroup.excessCount,
+                          currentExcludedKeys
+                        )
+                      }
+                      className={`flex w-full items-start justify-between gap-3 rounded-xl border p-3 text-left transition-colors ${
+                        cand.isExcluded
+                          ? 'border-rose-400 bg-rose-50/70'
+                          : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/70'
+                      }`}
+                    >
+                      <div className="flex min-w-0 flex-1 items-start gap-2.5">
+                        <span
+                          className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border text-[10px] font-bold ${
+                            cand.isExcluded
+                              ? 'border-rose-600 bg-rose-600 text-white'
+                              : 'border-slate-300 bg-white text-transparent'
+                          }`}
+                        >
+                          <Check className="h-3.5 w-3.5" />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600 tabular-nums">
+                              No. {cand.noAsalProposal}
+                            </span>
+                            <span className="text-xs font-bold text-slate-900">{cand.nama}</span>
+                            {cand.pengelola && cand.pengelola !== '-' && (
+                              <span className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-700">
+                                {cand.pengelola}
+                              </span>
+                            )}
+                            {cand.matchedBastNo ? (
+                              <span className="rounded border border-teal-200 bg-teal-50 px-1.5 py-0.5 text-[10px] font-semibold text-teal-800 tabular-nums">
+                                Ada di BAST No. {String(cand.matchedBastNo).padStart(2, '0')}
+                                {cand.matchedBastItemCode &&
+                                cand.matchedBastItemCode !== activeGroup.kodeItem
+                                  ? ` (${cand.matchedBastItemCode})`
+                                  : ''}
+                              </span>
+                            ) : (
+                              <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+                                Tidak ada di BAST
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-1 truncate text-[11px] text-slate-600">{cand.alamat}</p>
+                        </div>
+                      </div>
+
+                      <span
+                        className={`shrink-0 rounded-lg px-2.5 py-1 text-[11px] font-bold ${
+                          cand.isExcluded
+                            ? 'bg-rose-700 text-white'
+                            : 'bg-emerald-50 text-emerald-700'
+                        }`}
+                      >
+                        {cand.isExcluded ? 'Dikeluarkan' : 'Masuk Utama'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Footer Modal */}
+              <div className="flex items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-3">
+                <p className="text-xs text-slate-600">
+                  Perubahan langsung diterapkan ke Tabel Utama, PDF, dan Apply Proposal.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setOverQuotaModalItem(null)}
+                  className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-bold text-white hover:bg-teal-800"
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                  <span>Selesai &amp; Terapkan</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* MODAL KONFIRMASI UNDO APPLY TERAKHIR */}
       {pendingUndoSnapshot && (
