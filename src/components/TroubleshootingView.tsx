@@ -177,11 +177,11 @@ export function TroubleshootingView({
   );
 
   const canProcess = useMemo(() => {
-    if (processing || isOffline) return false;
+    if (processing) return false;
     if (!bastPdfFile) return false;
     if (proposalMode === 'pdf') return Boolean(proposalPdfFile);
     return Boolean(selectedProposalOption && selectedProposalOption.kpmCount > 0);
-  }, [processing, isOffline, bastPdfFile, proposalMode, proposalPdfFile, selectedProposalOption]);
+  }, [processing, bastPdfFile, proposalMode, proposalPdfFile, selectedProposalOption]);
 
   const handleProposalFileSelected = (file: File | null) => {
     setErrorMessage(null);
@@ -551,8 +551,8 @@ export function TroubleshootingView({
           <div className="flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
             <p className="leading-relaxed">
-              Mode Offline Read-Only aktif. Ekstraksi dokumen PDF serta aksi Apply/Undo memerlukan
-              koneksi internet aktif.
+              Mode Offline Read-Only aktif. Analisis &amp; pratinjau PDF digital tetap berjalan
+              secara lokal, sedangkan aksi Apply/Undo memerlukan koneksi internet aktif.
             </p>
           </div>
         )}

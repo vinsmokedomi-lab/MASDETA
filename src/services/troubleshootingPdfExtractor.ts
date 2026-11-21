@@ -1,5 +1,9 @@
 import { Capacitor } from '@capacitor/core';
 import { BastExtractedRow, ProposalExtractedRow } from '../utils/troubleshootingReconciler';
+import {
+  parseBastPdfLocally,
+  parseProposalPdfLocally,
+} from '../utils/troubleshootingPdfLocalParser';
 
 export type TroubleshootingPdfKind = 'proposal' | 'bast';
 
@@ -39,10 +43,11 @@ export async function fileToBase64(file: File): Promise<string> {
   });
 }
 
-async function callExtractEndpoint(params: {
+async function callServerExtractFallback(params: {
   kind: TroubleshootingPdfKind;
   fileName: string;
   base64: string;
+  hadTextLayer: boolean;
 }): Promise<RawExtractResponse> {
   const apiBase = String(import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
   const endpoint = apiBase
@@ -51,37 +56,94 @@ async function callExtractEndpoint(params: {
 
   if (Capacitor.isNativePlatform() && !apiBase) {
     throw new Error(
-      'Ekstraksi PDF di aplikasi native membutuhkan URL server aktif (VITE_API_BASE_URL).'
+      params.hadTextLayer
+        ? `Format tabel pada "${params.fileName}" tidak dapat dikenali secara lokal. Pastikan file adalah PDF ${params.kind === 'bast' ? 'BAST Dinas' : 'Daftar KPM Proposal'} asli.`
+        : `File "${params.fileName}" tampaknya berupa hasil scan gambar tanpa teks. Ekstraksi OCR membutuhkan server aktif (VITE_API_BASE_URL) atau gunakan PDF digital asli.`
     );
   }
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 90_000);
 
-  const contentType = response.headers.get('content-type') || '';
-  const isJson = contentType.includes('application/json');
-  const json = (isJson ? await response.json().catch(() => ({})) : {}) as RawExtractResponse;
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        kind: params.kind,
+        fileName: params.fileName,
+        base64: params.base64,
+      }),
+      signal: controller.signal,
+    });
 
-  if (!response.ok || !isJson) {
-    throw new Error(
-      typeof json.error === 'string' && json.error
-        ? json.error
-        : `Gagal mengekstrak file PDF (${response.status}).`
-    );
+    const contentType = response.headers.get('content-type') || '';
+    const isJson = contentType.includes('application/json');
+    const json = (isJson ? await response.json().catch(() => ({})) : {}) as RawExtractResponse;
+
+    if (!response.ok || !isJson) {
+      if (response.status === 404 || response.status === 405 || !isJson) {
+        throw new Error(
+          params.hadTextLayer
+            ? `Format tabel pada "${params.fileName}" tidak dikenali secara lokal. Pastikan dokumen sesuai format PDF ${params.kind === 'bast' ? 'BAST Dinas' : 'Daftar KPM Proposal'}.`
+            : `File "${params.fileName}" tidak memiliki lapisan teks (hasil scan gambar), sedangkan layanan OCR server tidak tersedia pada hosting statis ini. Gunakan PDF digital asli.`
+        );
+      }
+      throw new Error(
+        typeof json.error === 'string' && json.error
+          ? json.error
+          : `Gagal mengekstrak file PDF (${response.status}).`
+      );
+    }
+
+    return json;
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error(
+        `Waktu ekstraksi server untuk "${params.fileName}" habis (timeout). Gunakan PDF digital asli agar dapat dibaca instan secara lokal.`
+      );
+    }
+    if (
+      err instanceof TypeError ||
+      (err instanceof Error && /failed to fetch|networkerror|load failed/i.test(err.message))
+    ) {
+      throw new Error(
+        params.hadTextLayer
+          ? `Format tabel pada "${params.fileName}" tidak dikenali secara lokal dan server ekstraksi tidak dapat dijangkau. Periksa apakah file PDF yang diunggah sudah benar.`
+          : `File "${params.fileName}" berupa PDF scan gambar tanpa teks dan server OCR tidak dapat dijangkau. Gunakan file PDF digital asli (berisi teks).`
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
   }
-
-  return json;
 }
 
 export async function extractProposalPdfData(file: File): Promise<ExtractProposalPdfResult> {
+  // 1. Coba ekstraksi lokal instan di browser menggunakan pdfjs-dist (tanpa ketergantungan jaringan)
+  let hadTextLayer = false;
+  try {
+    const buffer = await file.arrayBuffer();
+    const localResult = await parseProposalPdfLocally(new Uint8Array(buffer), file.name);
+    hadTextLayer = localResult.totalTextItems > 0;
+    if (localResult.rows.length > 0) {
+      return {
+        documentTitle: localResult.documentTitle,
+        rows: localResult.rows,
+        summaryPengelola: localResult.summaryPengelola,
+      };
+    }
+  } catch (localErr) {
+    console.warn('[Troubleshooting] Local Proposal PDF parse fallback to server:', localErr);
+  }
+
+  // 2. Fallback ke server OCR hanya jika PDF berupa scan gambar / format tak standar
   const base64 = await fileToBase64(file);
-  const raw = await callExtractEndpoint({
+  const raw = await callServerExtractFallback({
     kind: 'proposal',
     fileName: file.name,
     base64,
+    hadTextLayer,
   });
 
   const rawRows = Array.isArray(raw.rows) ? raw.rows : [];
@@ -130,11 +192,29 @@ export async function extractProposalPdfData(file: File): Promise<ExtractProposa
 }
 
 export async function extractBastPdfData(file: File): Promise<ExtractBastPdfResult> {
+  // 1. Coba ekstraksi lokal instan di browser menggunakan pdfjs-dist (tanpa ketergantungan jaringan)
+  let hadTextLayer = false;
+  try {
+    const buffer = await file.arrayBuffer();
+    const localResult = await parseBastPdfLocally(new Uint8Array(buffer), file.name);
+    hadTextLayer = localResult.totalTextItems > 0;
+    if (localResult.rows.length > 0) {
+      return {
+        documentTitle: localResult.documentTitle,
+        rows: localResult.rows,
+      };
+    }
+  } catch (localErr) {
+    console.warn('[Troubleshooting] Local BAST PDF parse fallback to server:', localErr);
+  }
+
+  // 2. Fallback ke server OCR hanya jika PDF berupa scan gambar / format tak standar
   const base64 = await fileToBase64(file);
-  const raw = await callExtractEndpoint({
+  const raw = await callServerExtractFallback({
     kind: 'bast',
     fileName: file.name,
     base64,
+    hadTextLayer,
   });
 
   const rawRows = Array.isArray(raw.rows) ? raw.rows : [];
