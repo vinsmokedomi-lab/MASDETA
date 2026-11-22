@@ -1629,6 +1629,97 @@ export function replaceKpmInProposalSlotMap(
   };
 }
 
+export function swapKpmToEmptyProposalSlot(
+  slotMap: ProposalSlotMap,
+  proposalId: string | null | undefined,
+  proposalName: string | undefined,
+  tahun: string | undefined,
+  previousRecord: KpmRecord,
+  targetSlotNumber: number,
+  allRecordsBeforeChange: KpmRecord[],
+  proposals: ProposalRecord[],
+  catalog: ItemBantuan[],
+  wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST
+): {
+  slotMap: ProposalSlotMap;
+  oldSlotNumber: number | null;
+  newSlotNumber: number;
+  replacedEmptySlot?: ProposalEmptySlot;
+} {
+  const cleanName = (proposalName || '').trim();
+  if (!cleanName || targetSlotNumber < 1) {
+    return {
+      slotMap,
+      oldSlotNumber: null,
+      newSlotNumber: targetSlotNumber,
+    };
+  }
+
+  const { key, state, merged } = ensureProposalPinnedOrder(
+    slotMap,
+    proposalId,
+    cleanName,
+    tahun,
+    allRecordsBeforeChange,
+    proposals,
+    catalog,
+    wilayahList
+  );
+
+  const oldSlotEntry = merged.find(
+    (m) => m.kind === 'kpm' && m.record.id === previousRecord.id
+  );
+  const oldSlotNumber = oldSlotEntry ? oldSlotEntry.slotNumber : null;
+  const replacedEmptySlot = state.emptySlots.find(
+    (es) => es.slotNumber === targetSlotNumber
+  );
+
+  const now = new Date().toISOString();
+  const cleanPinned = state.pinnedOrder.filter((id) => id !== previousRecord.id);
+  const cleanEmpty = state.emptySlots.filter(
+    (es) => es.slotNumber !== targetSlotNumber
+  );
+
+  if (
+    oldSlotNumber &&
+    oldSlotNumber >= 1 &&
+    oldSlotNumber !== targetSlotNumber &&
+    !cleanEmpty.some((es) => es.slotNumber === oldSlotNumber)
+  ) {
+    cleanEmpty.push({
+      slotNumber: oldSlotNumber,
+      item: (previousRecord.item || '').trim().toUpperCase() || undefined,
+      previousKpmId: previousRecord.id,
+      previousKpmName: previousRecord.nama,
+      vacatedAt: now,
+    });
+  }
+
+  cleanEmpty.sort((a, b) => a.slotNumber - b.slotNumber);
+  const emptyBeforeTarget = cleanEmpty.filter(
+    (es) => es.slotNumber < targetSlotNumber
+  ).length;
+  const insertIdx = Math.max(
+    0,
+    Math.min(cleanPinned.length, targetSlotNumber - 1 - emptyBeforeTarget)
+  );
+  cleanPinned.splice(insertIdx, 0, previousRecord.id);
+
+  return {
+    slotMap: {
+      ...slotMap,
+      [key]: {
+        pinnedOrder: cleanPinned,
+        emptySlots: cleanEmpty,
+        updatedAt: now,
+      },
+    },
+    oldSlotNumber,
+    newSlotNumber: targetSlotNumber,
+    replacedEmptySlot,
+  };
+}
+
 export function moveProposalSlotDirection(
   slotMap: ProposalSlotMap,
   proposalId: string | null | undefined,

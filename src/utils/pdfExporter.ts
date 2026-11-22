@@ -9173,7 +9173,8 @@ export async function exportAbsenArsipToPdf(
       proposalSlotMap,
       prop.id,
       prop.namaProposal,
-      prop.tahun
+      prop.tahun,
+      proposals
     );
     const mergedSlots = buildMergedProposalSlots({
       groupRecords: propRecords,
@@ -9183,14 +9184,61 @@ export async function exportAbsenArsipToPdf(
       wilayahList,
     });
 
-    const rows: string[][] = mergedSlots.map((slot) => {
+    const recordById = new Map<string, KpmRecord>();
+    (allRecords && allRecords.length > 0 ? allRecords : records).forEach((r) => {
+      recordById.set(r.id, r);
+    });
+
+    const rows: string[][] = mergedSlots.map((slot, slotIdx) => {
       const noStr = String(slot.slotNumber).padStart(2, '0');
       if (slot.kind !== 'kpm') {
-        return [noStr, '', '', '', '', '', ''];
+        let emptyItemStr = (slot.emptySlot.item || '').trim().toUpperCase();
+        if (!emptyItemStr && slot.emptySlot.previousKpmId) {
+          emptyItemStr = (recordById.get(slot.emptySlot.previousKpmId)?.item || '')
+            .trim()
+            .toUpperCase();
+        }
+        if (!emptyItemStr) {
+          let prevItem = '';
+          for (let i = slotIdx - 1; i >= 0; i -= 1) {
+            const candidate = mergedSlots[i];
+            if (candidate.kind === 'kpm') {
+              prevItem = (candidate.record.item || '').trim().toUpperCase();
+              break;
+            }
+            if ((candidate.emptySlot.item || '').trim()) {
+              prevItem = (candidate.emptySlot.item || '').trim().toUpperCase();
+              break;
+            }
+          }
+          let nextItem = '';
+          for (let i = slotIdx + 1; i < mergedSlots.length; i += 1) {
+            const candidate = mergedSlots[i];
+            if (candidate.kind === 'kpm') {
+              nextItem = (candidate.record.item || '').trim().toUpperCase();
+              break;
+            }
+            if ((candidate.emptySlot.item || '').trim()) {
+              nextItem = (candidate.emptySlot.item || '').trim().toUpperCase();
+              break;
+            }
+          }
+          if (prevItem && prevItem === nextItem) {
+            emptyItemStr = prevItem;
+          } else if (prevItem && !nextItem) {
+            emptyItemStr = prevItem;
+          } else if (!prevItem && nextItem) {
+            emptyItemStr = nextItem;
+          }
+        }
+        return [noStr, '', '', '', emptyItemStr, '', ''];
       }
       const namaStr = (slot.record.nama || '').trim().toUpperCase();
+      const rawKontak = (slot.record.kontak || '').trim();
+      const kontakDigits = rawKontak.replace(/\D/g, '');
+      const waStr = kontakDigits.length >= 7 ? formatPhoneForPdf(rawKontak) : '';
       const itemStr = (slot.record.item || '').trim().toUpperCase();
-      return [noStr, namaStr, '', '', itemStr, '', ''];
+      return [noStr, namaStr, '', waStr, itemStr, '', ''];
     });
 
     const lastNum =

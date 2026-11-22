@@ -5189,7 +5189,7 @@ export function MenuDownloadView({
                               <span className="text-center tabular-nums">01</span>
                               <span className="px-1 truncate">NAMA PENERIMA</span>
                               <span>&nbsp;</span>
-                              <span>&nbsp;</span>
+                              <span className="px-1 text-center truncate tabular-nums">0812-xxxx</span>
                               <span className="text-center font-medium">KPR</span>
                               <span>&nbsp;</span>
                               <span>&nbsp;</span>

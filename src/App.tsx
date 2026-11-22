@@ -173,6 +173,7 @@ import {
   saveProposalHistory,
   saveProposals,
   saveWilayahList,
+  swapKpmToEmptyProposalSlot,
   upgradeCatalogTendaKursi,
   uploadImageDocumentToDrive,
   vacateKpmSlotsInMap,
@@ -4607,27 +4608,75 @@ export default function App() {
               );
       }
 
+      const isSameProposalSlotSwap = Boolean(
+        !leftPreviousProposal &&
+          previousRecord &&
+          previousRecord.validasi === 'accepted' &&
+          normalizedValues.validasi === 'accepted' &&
+          Boolean(previousRecord.proposal?.trim()) &&
+          targetSlotNumber &&
+          targetSlotNumber >= 1
+      );
+
+      let samePropSwapResult:
+        | {
+            oldSlotNumber: number | null;
+            newSlotNumber: number;
+            replacedEmptySlot?: ProposalEmptySlot;
+          }
+        | null = null;
+
+      if (isSameProposalSlotSwap && previousRecord && targetSlotNumber) {
+        const swapRes = swapKpmToEmptyProposalSlot(
+          nextSlotMap,
+          normalizedValues.proposalId,
+          normalizedValues.proposal,
+          normalizedValues.tahun,
+          previousRecord,
+          targetSlotNumber,
+          records,
+          proposals,
+          items,
+          wilayahList
+        );
+        nextSlotMap = swapRes.slotMap;
+        samePropSwapResult = {
+          oldSlotNumber: swapRes.oldSlotNumber,
+          newSlotNumber: swapRes.newSlotNumber,
+          replacedEmptySlot: swapRes.replacedEmptySlot,
+        };
+      } else {
+        const enteredOrTargetedProposal =
+          normalizedValues.validasi === 'accepted' &&
+          Boolean(normalizedValues.proposal?.trim()) &&
+          (leftPreviousProposal ||
+            !previousRecord ||
+            previousRecord.validasi !== 'accepted' ||
+            Boolean(targetSlotNumber));
+        if (enteredOrTargetedProposal) {
+          nextSlotMap = assignKpmToProposalSlot(
+            nextSlotMap,
+            normalizedValues.proposalId,
+            normalizedValues.proposal,
+            normalizedValues.tahun,
+            editingId,
+            targetSlotNumber ?? null,
+            mapped,
+            proposals,
+            items,
+            wilayahList
+          );
+        }
+      }
+
       const enteredOrTargetedProposal =
+        !isSameProposalSlotSwap &&
         normalizedValues.validasi === 'accepted' &&
         Boolean(normalizedValues.proposal?.trim()) &&
         (leftPreviousProposal ||
           !previousRecord ||
           previousRecord.validasi !== 'accepted' ||
           Boolean(targetSlotNumber));
-      if (enteredOrTargetedProposal) {
-        nextSlotMap = assignKpmToProposalSlot(
-          nextSlotMap,
-          normalizedValues.proposalId,
-          normalizedValues.proposal,
-          normalizedValues.tahun,
-          editingId,
-          targetSlotNumber ?? null,
-          mapped,
-          proposals,
-          items,
-          wilayahList
-        );
-      }
 
       const nextRecords = recalculateProposalRegisterCodes(
         mapped,
@@ -4693,14 +4742,21 @@ export default function App() {
           ...previousRecord,
           ...normalizedValues,
         };
-        const currentSlotNum = getKpmSlotNumberInProposal(
-          currentRecUpdated,
-          nextRecords,
-          proposals,
-          items,
-          wilayahList,
-          nextSlotMap
-        );
+        const currentSlotNum =
+          samePropSwapResult?.newSlotNumber ??
+          getKpmSlotNumberInProposal(
+            currentRecUpdated,
+            nextRecords,
+            proposals,
+            items,
+            wilayahList,
+            nextSlotMap
+          );
+        const oldSlotTag =
+          samePropSwapResult?.oldSlotNumber &&
+          samePropSwapResult.oldSlotNumber !== currentSlotNum
+            ? ` (dari slot #${String(samePropSwapResult.oldSlotNumber).padStart(2, '0')} → baris kosong #${String(currentSlotNum).padStart(2, '0')})`
+            : '';
         editChangeLogs.push({
           id: `pchg-edit-itm-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           proposalId: matchingProposal?.id || previousRecord.proposalId || '',
@@ -4718,11 +4774,63 @@ export default function App() {
           newNik: normalizedValues.nikKtp,
           newItem: normalizedValues.item,
           newKelurahan: normalizedValues.kelurahan,
-          reason: 'Perubahan item bantuan pada edit data KPM',
+          reason: `Perubahan item bantuan pada edit data KPM${oldSlotTag}`,
           source: 'auto',
           actorName: currentActor.nama,
           timestamp: now,
         });
+      }
+
+      if (
+        samePropSwapResult &&
+        previousRecord &&
+        samePropSwapResult.oldSlotNumber &&
+        samePropSwapResult.oldSlotNumber !== samePropSwapResult.newSlotNumber
+      ) {
+        editChangeLogs.push({
+          id: `pchg-swap-vac-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          proposalId: matchingProposal?.id || previousRecord.proposalId || '',
+          proposalName: normalizedValues.proposal || previousRecord.proposal,
+          tahun: normalizedValues.tahun || previousRecord.tahun || '',
+          slotNumber: samePropSwapResult.oldSlotNumber,
+          kind: 'kpm_vacated',
+          oldKpmId: previousRecord.id,
+          oldKpmName: previousRecord.nama,
+          oldNik: previousRecord.nikKtp,
+          oldItem: previousRecord.item,
+          oldKelurahan: previousRecord.kelurahan,
+          reason: `Pindah item ke baris kosong #${String(samePropSwapResult.newSlotNumber).padStart(2, '0')} (${normalizedValues.item}) — slot #${String(samePropSwapResult.oldSlotNumber).padStart(2, '0')} (${previousRecord.item}) dikosongkan`,
+          source: 'auto',
+          actorName: currentActor.nama,
+          timestamp: now,
+        });
+        if (samePropSwapResult.replacedEmptySlot?.previousKpmName) {
+          const oldTargetRec = samePropSwapResult.replacedEmptySlot.previousKpmId
+            ? records.find((r) => r.id === samePropSwapResult.replacedEmptySlot?.previousKpmId)
+            : undefined;
+          editChangeLogs.push({
+            id: `pchg-swap-rep-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            proposalId: matchingProposal?.id || previousRecord.proposalId || '',
+            proposalName: normalizedValues.proposal || previousRecord.proposal,
+            tahun: normalizedValues.tahun || previousRecord.tahun || '',
+            slotNumber: samePropSwapResult.newSlotNumber,
+            kind: 'kpm_replaced',
+            oldKpmId: samePropSwapResult.replacedEmptySlot.previousKpmId,
+            oldKpmName: samePropSwapResult.replacedEmptySlot.previousKpmName,
+            oldNik: oldTargetRec?.nikKtp,
+            oldItem: samePropSwapResult.replacedEmptySlot.item || oldTargetRec?.item,
+            oldKelurahan: oldTargetRec?.kelurahan,
+            newKpmId: editingId,
+            newKpmName: normalizedValues.nama,
+            newNik: normalizedValues.nikKtp,
+            newItem: normalizedValues.item,
+            newKelurahan: normalizedValues.kelurahan,
+            reason: `Mengisi baris kosong #${String(samePropSwapResult.newSlotNumber).padStart(2, '0')} dari pergantian item`,
+            source: 'auto',
+            actorName: currentActor.nama,
+            timestamp: now,
+          });
+        }
       }
 
       if (enteredOrTargetedProposal && targetSlotNumber && matchingProposal) {

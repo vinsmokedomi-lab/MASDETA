@@ -311,6 +311,7 @@ export function KpmRegistrationForm({
           lainnya: editingRecord.documents.lainnya || [],
         },
       });
+      setSelectedEmptySlotNo(null);
       setErrors({});
       setKtpOcrImage(undefined);
       setKkOcrImage(undefined);
@@ -510,6 +511,62 @@ export function KpmRegistrationForm({
     );
     return [...(state?.emptySlots || [])].sort((a, b) => a.slotNumber - b.slotNumber);
   }, [isStandaloneMode, proposalSlotMap, values.proposalId, values.proposal, values.tahun, proposals]);
+
+  const originItemCode = useMemo(
+    () => (editingRecord?.item || '').trim().toUpperCase(),
+    [editingRecord?.item]
+  );
+
+  const isSameAcceptedProposalItemLocked = Boolean(
+    editingRecord &&
+      editingRecord.validasi === 'accepted' &&
+      editingRecord.proposal?.trim() &&
+      values.validasi === 'accepted' &&
+      values.proposal === editingRecord.proposal &&
+      values.tahun === editingRecord.tahun
+  );
+
+  const emptySlotsByItem = useMemo(() => {
+    const recById = new Map(existingRecords.map((r) => [r.id, r]));
+    const map = new Map<string, typeof availableEmptySlots>();
+    for (const slot of availableEmptySlots) {
+      let itemCode = (slot.item || '').trim().toUpperCase();
+      if (!itemCode && slot.previousKpmId) {
+        itemCode = (recById.get(slot.previousKpmId)?.item || '').trim().toUpperCase();
+      }
+      if (!itemCode) continue;
+      const bucket = map.get(itemCode) ?? [];
+      bucket.push({ ...slot, item: itemCode });
+      map.set(itemCode, bucket);
+    }
+    return map;
+  }, [availableEmptySlots, existingRecords]);
+
+  const availableOtherEmptyItemCodes = useMemo(
+    () => Array.from(emptySlotsByItem.keys()).filter((c) => c !== originItemCode),
+    [emptySlotsByItem, originItemCode]
+  );
+
+  const currentItemUpper = (values.item || '').trim().toUpperCase();
+  const matchingEmptySlotsForSwitch = useMemo(() => {
+    if (!isSameAcceptedProposalItemLocked || !currentItemUpper || currentItemUpper === originItemCode) {
+      return [];
+    }
+    return emptySlotsByItem.get(currentItemUpper) ?? [];
+  }, [isSameAcceptedProposalItemLocked, currentItemUpper, originItemCode, emptySlotsByItem]);
+
+  const handleItemSelection = (nextItemCode: string) => {
+    updateField('item', nextItemCode);
+    if (isSameAcceptedProposalItemLocked) {
+      const nextUpper = nextItemCode.trim().toUpperCase();
+      if (nextUpper === originItemCode) {
+        setSelectedEmptySlotNo(null);
+      } else {
+        const slotsForTarget = emptySlotsByItem.get(nextUpper) ?? [];
+        setSelectedEmptySlotNo(slotsForTarget[0]?.slotNumber ?? null);
+      }
+    }
+  };
 
   const standaloneKabKotaOptions = useMemo(() => wilayahList.map((w) => w.nama), [wilayahList]);
 
@@ -800,7 +857,15 @@ export function KpmRegistrationForm({
     if (!values.pekerjaan) nextErrors.pekerjaan = 'Pilih pekerjaan utama.';
 
     // Kategori 03: Wajib untuk Item, Pengelola, DTSEN, dan Validasi Berkas (Biaya Administrasi & Catatan Petugas opsional)
-    if (!values.item) nextErrors.item = 'Pilih item bantuan.';
+    if (!values.item) {
+      nextErrors.item = 'Pilih item bantuan.';
+    } else if (
+      isSameAcceptedProposalItemLocked &&
+      values.item.trim().toUpperCase() !== originItemCode &&
+      !(selectedEmptySlotNo && matchingEmptySlotsForSwitch.some((s) => s.slotNumber === selectedEmptySlotNo))
+    ) {
+      nextErrors.item = 'Pilih baris kosong yang tersedia untuk item tujuan sesuai BAST.';
+    }
     if (!values.pengelola) nextErrors.pengelola = 'Pilih atau tambahkan pengelola.';
     if (!values.dtsen) nextErrors.dtsen = 'Pilih status DTSEN.';
     if (!values.validasi) nextErrors.validasi = 'Pilih status validasi berkas.';
@@ -1822,13 +1887,33 @@ export function KpmRegistrationForm({
                 }`}
               >
                 <div id="field-item">
-                  <span className="block text-xs font-semibold text-slate-700">
-                    Item Bantuan <span className="text-rose-600">*</span>
-                  </span>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="block text-xs font-semibold text-slate-700">
+                      Item Bantuan <span className="text-rose-600">*</span>
+                    </span>
+                    {isSameAcceptedProposalItemLocked && (
+                      <span
+                        className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${
+                          availableOtherEmptyItemCodes.length > 0
+                            ? 'bg-teal-50 text-teal-800 border border-teal-200'
+                            : 'bg-amber-50 text-amber-800 border border-amber-200'
+                        }`}
+                      >
+                        <Lock className="h-2.5 w-2.5" />
+                        {availableOtherEmptyItemCodes.length > 0
+                          ? `BAST · Terbuka: ${availableOtherEmptyItemCodes.join(', ')}`
+                          : 'Terkunci BAST'}
+                      </span>
+                    )}
+                  </div>
                   <button
                     type="button"
                     id="input-item"
-                    disabled={resolvedItemOptions.length === 0 || isFormReadOnly}
+                    disabled={
+                      resolvedItemOptions.length === 0 ||
+                      isFormReadOnly ||
+                      (isSameAcceptedProposalItemLocked && availableOtherEmptyItemCodes.length === 0)
+                    }
                     onClick={() => setIsItemModalOpen(true)}
                     className={`mt-1.5 flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border bg-white px-3.5 text-left text-sm transition-colors hover:bg-slate-50 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600 ${
                       errors.item ? 'border-rose-400' : 'border-slate-300'
@@ -1854,7 +1939,11 @@ export function KpmRegistrationForm({
                         </span>
                       );
                     })()}
-                    <ChevronDown className="h-4 w-4 text-slate-500 shrink-0" />
+                    {isSameAcceptedProposalItemLocked && availableOtherEmptyItemCodes.length === 0 ? (
+                      <Lock className="h-4 w-4 text-amber-600 shrink-0" />
+                    ) : (
+                      <ChevronDown className="h-4 w-4 text-slate-500 shrink-0" />
+                    )}
                   </button>
                   {resolvedItemOptions.length === 0 && (
                     <p className="mt-1.5 text-[11px] text-amber-700">
@@ -1869,6 +1958,60 @@ export function KpmRegistrationForm({
                       </span>
                     </p>
                   )}
+                  {isSameAcceptedProposalItemLocked && currentItemUpper === originItemCode && (
+                    <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-slate-500 leading-snug">
+                      <Lock className="h-3 w-3 shrink-0 text-amber-600" />
+                      <span>
+                        {availableOtherEmptyItemCodes.length > 0
+                          ? `Menyesuaikan BAST: item lain dikunci, hanya terbuka ${originItemCode} (saat ini) & item dengan Baris Kosong (${availableOtherEmptyItemCodes.join(', ')}).`
+                          : `Terkunci pada paket ${originItemCode} (Slot #${String(editingOriginSlotNumber ?? '-').padStart(2, '0')}) sesuai BAST karena belum ada Baris Kosong item lain.`}
+                      </span>
+                    </p>
+                  )}
+                  {isSameAcceptedProposalItemLocked &&
+                    currentItemUpper !== originItemCode &&
+                    matchingEmptySlotsForSwitch.length > 0 && (
+                      <div className="mt-2 rounded-xl border border-amber-300 bg-amber-50/90 px-3 py-2.5 text-xs text-amber-950 space-y-1.5">
+                        <p className="font-bold leading-snug">
+                          Pindah ke Baris Kosong #{String(selectedEmptySlotNo ?? matchingEmptySlotsForSwitch[0].slotNumber).padStart(2, '0')} ({currentItemUpper})
+                        </p>
+                        {matchingEmptySlotsForSwitch.length > 1 ? (
+                          <div>
+                            <label
+                              htmlFor="input-switch-empty-slot"
+                              className="block text-[11px] font-semibold text-amber-900 mb-1"
+                            >
+                              Tersedia {matchingEmptySlotsForSwitch.length} Baris Kosong {currentItemUpper} (otomatis paling atas):
+                            </label>
+                            <select
+                              id="input-switch-empty-slot"
+                              disabled={isFormReadOnly}
+                              value={String(selectedEmptySlotNo ?? matchingEmptySlotsForSwitch[0].slotNumber)}
+                              onChange={(e) => {
+                                const picked = parseInt(e.target.value, 10);
+                                setSelectedEmptySlotNo(Number.isFinite(picked) ? picked : null);
+                              }}
+                              className="min-h-[38px] w-full rounded-lg border border-amber-300 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none"
+                            >
+                              {matchingEmptySlotsForSwitch.map((slot, sIdx) => (
+                                <option key={slot.slotNumber} value={String(slot.slotNumber)}>
+                                  Baris Kosong #{String(slot.slotNumber).padStart(2, '0')}
+                                  {sIdx === 0 ? ' (Paling Atas · Otomatis)' : ''}
+                                  {slot.previousKpmName ? ` · bekas ${slot.previousKpmName}` : ''}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        ) : (
+                          <p className="text-[11px] text-amber-800 leading-snug">
+                            Hanya ada 1 baris kosong {currentItemUpper}, sehingga KPM otomatis mengisi urutan #{String(matchingEmptySlotsForSwitch[0].slotNumber).padStart(2, '0')}.
+                          </p>
+                        )}
+                        <p className="text-[11px] text-amber-800 leading-snug">
+                          Slot lama #{String(editingOriginSlotNumber ?? '-').padStart(2, '0')} ({originItemCode}) otomatis berubah menjadi Baris Kosong ({originItemCode}) agar urutan BAST tidak bergeser.
+                        </p>
+                      </div>
+                    )}
                   {errors.item && <p className="mt-1 text-xs text-rose-600">{errors.item}</p>}
                 </div>
 
@@ -2459,22 +2602,44 @@ export function KpmRegistrationForm({
         }}
       />
 
-      {/* Pop-up Pilihan Item Bantuan (Daftar Item Saja, Tanpa Search & +) */}
+      {/* Pop-up Pilihan Item Bantuan (Terkunci BAST kecuali item saat ini & item dengan Baris Kosong) */}
       <SelectionPickerModal
         isOpen={isItemModalOpen}
-        title="Pilih Item Bantuan"
-        options={resolvedItemOptions.map(
-          (item): SelectionPickerOption => ({
+        title={isSameAcceptedProposalItemLocked ? 'Pilih Item Bantuan (Sesuai BAST)' : 'Pilih Item Bantuan'}
+        options={resolvedItemOptions.map((item): SelectionPickerOption => {
+          const codeUpper = item.code.trim().toUpperCase();
+          const subText = item.subItems.length > 0 ? `Sub-item: ${item.subItems.join(', ')}` : '';
+          if (!isSameAcceptedProposalItemLocked) {
+            return {
+              value: item.code,
+              codeBadge: item.code,
+              label: item.name && item.name !== item.code ? item.name : item.code,
+              subtitle: subText || undefined,
+            };
+          }
+          const matchingEmpty = emptySlotsByItem.get(codeUpper) ?? [];
+          const isOrigin = codeUpper === originItemCode;
+          const isAllowed = isOrigin || matchingEmpty.length > 0;
+          const emptyNums = matchingEmpty
+            .map((s) => `#${String(s.slotNumber).padStart(2, '0')}`)
+            .join(', ');
+          const statusNote = isOrigin
+            ? `Item saat ini (Slot #${String(editingOriginSlotNumber ?? '-').padStart(2, '0')})`
+            : matchingEmpty.length > 0
+              ? `Terbuka · ${matchingEmpty.length} Baris Kosong (${emptyNums})`
+              : `Tidak ada Baris Kosong ${item.code} di proposal ini`;
+          return {
             value: item.code,
             codeBadge: item.code,
             label: item.name && item.name !== item.code ? item.name : item.code,
-            subtitle:
-              item.subItems.length > 0 ? `Sub-item: ${item.subItems.join(', ')}` : undefined,
-          })
-        )}
+            subtitle: subText ? `${statusNote} · ${subText}` : statusNote,
+            disabled: !isAllowed,
+            disabledBadge: !isAllowed ? 'Terkunci BAST' : undefined,
+          };
+        })}
         selectedValue={values.item}
         onClose={() => setIsItemModalOpen(false)}
-        onSelect={(v) => updateField('item', v)}
+        onSelect={(v) => handleItemSelection(v)}
         emptyMessage={`Belum ada item untuk tahun ${values.tahun || 'ini'}.`}
       />
 
