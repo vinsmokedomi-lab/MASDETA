@@ -986,6 +986,7 @@ export interface ExportKpmTablePdfOptions {
   includeSummary?: boolean;
   reportTemplate?: ReportTemplateConfig;
   splitByProposal?: boolean;
+  splitByPengelola?: boolean;
   autoExcludeKelurahanWhenInProposalTitle?: boolean;
   selectedPengelolaLabel?: string;
   proposalSlotMap?: ProposalSlotMap;
@@ -1005,6 +1006,7 @@ export async function exportKpmTableToPdf({
   includeSummary = true,
   reportTemplate,
   splitByProposal = false,
+  splitByPengelola = false,
   autoExcludeKelurahanWhenInProposalTitle = false,
   selectedPengelolaLabel,
   proposalSlotMap = {},
@@ -1044,6 +1046,8 @@ export async function exportKpmTableToPdf({
     proposalTitleForAutoKel?: string;
     proposalInfo?: { id?: string; namaProposal: string; tahun: string };
     grandTotalMoney?: { totalNominal: number; paidCount: number; totalCount: number };
+    customEmptySlots?: Array<{ slotNumber: number; item: string; proposalName?: string }>;
+    useSequentialRowNumber?: boolean;
   }) => {
     const {
       sectionRecords,
@@ -1052,6 +1056,8 @@ export async function exportKpmTableToPdf({
       proposalTitleForAutoKel,
       proposalInfo,
       grandTotalMoney,
+      customEmptySlots,
+      useSequentialRowNumber = false,
     } = sectionOpts;
 
     const shouldOmitKelurahan =
@@ -1180,11 +1186,28 @@ export async function exportKpmTableToPdf({
     let slotEntries:
       | Array<
           | { kind: 'kpm'; slotNumber: number; record: KpmRecord }
-          | { kind: 'empty'; slotNumber: number; item: string }
+          | { kind: 'empty'; slotNumber: number; item: string; proposalName?: string }
         >
       | null = null;
 
-    if (includeEmptySlots && proposalInfo && proposalInfo.namaProposal?.trim()) {
+    if (customEmptySlots && customEmptySlots.length > 0) {
+      slotEntries = [
+        ...sectionRecords.map((rec, rowIdx) => {
+          const seq = getAbsenSeq(rec.registerCode);
+          return {
+            kind: 'kpm' as const,
+            slotNumber: useSequentialRowNumber ? rowIdx + 1 : seq < 999999 ? seq : rowIdx + 1,
+            record: rec,
+          };
+        }),
+        ...customEmptySlots.map((es) => ({
+          kind: 'empty' as const,
+          slotNumber: es.slotNumber,
+          item: (es.item || '').trim().toUpperCase(),
+          proposalName: es.proposalName,
+        })),
+      ];
+    } else if (includeEmptySlots && proposalInfo && proposalInfo.namaProposal?.trim()) {
       const propObj =
         (proposalInfo.id ? proposals.find((p) => p.id === proposalInfo.id) : undefined) ??
         proposals.find(
@@ -1216,6 +1239,7 @@ export async function exportKpmTableToPdf({
                 kind: 'empty' as const,
                 slotNumber: item.slotNumber,
                 item: (item.emptySlot.item || '').trim().toUpperCase(),
+                proposalName: proposalInfo.namaProposal,
               }
             : { kind: 'kpm' as const, slotNumber: item.slotNumber, record: item.record }
         );
@@ -1228,7 +1252,7 @@ export async function exportKpmTableToPdf({
           const seq = getAbsenSeq(rec.registerCode);
           return {
             kind: 'kpm' as const,
-            slotNumber: seq < 999999 ? seq : rowIdx + 1,
+            slotNumber: useSequentialRowNumber ? rowIdx + 1 : seq < 999999 ? seq : rowIdx + 1,
             record: rec,
           };
         });
@@ -1240,6 +1264,7 @@ export async function exportKpmTableToPdf({
         return activeCols.map((col) => {
           if (col.key === 'no') return absenText;
           if (col.key === 'item') return entry.item || '';
+          if (col.key === 'proposal' && entry.proposalName) return entry.proposalName;
           return '';
         });
       }
@@ -1348,7 +1373,8 @@ export async function exportKpmTableToPdf({
     });
 
     // Ringkasan DAFTAR ITEM & PENGELOLA di bawah tabel (sesuai halaman akhir referensi PDF)
-    if (includeSummary && sectionRecords.length > 0) {
+    const hasEmptySummaryRows = Boolean(slotEntries && slotEntries.some((e) => e.kind === 'empty'));
+    if (includeSummary && (sectionRecords.length > 0 || hasEmptySummaryRows)) {
       const itemMap = new Map<string, { count: number; emptyCount: number; rank: number }>();
       const pengelolaMap = new Map<string, number>();
 
@@ -1528,7 +1554,176 @@ export async function exportKpmTableToPdf({
     }
   };
 
-  if (splitByProposal && sortedRecords.length > 0) {
+  if (splitByPengelola && sortedRecords.length > 0) {
+    interface PengelolaPrintGroup {
+      key: string;
+      label: string;
+      isEmpty: boolean;
+      records: KpmRecord[];
+    }
+
+    const namedGroupMap = new Map<string, PengelolaPrintGroup>();
+    const emptyPengelolaRecords: KpmRecord[] = [];
+
+    for (const rec of sortedRecords) {
+      const rawPeng = (rec.pengelola || '').trim();
+      const lowerPeng = rawPeng.toLowerCase();
+      const isUnassigned = !rawPeng || rawPeng === '-' || lowerPeng === 'tanpa pengelola';
+      if (isUnassigned) {
+        emptyPengelolaRecords.push(rec);
+        continue;
+      }
+      const existing = namedGroupMap.get(lowerPeng);
+      if (existing) {
+        existing.records.push(rec);
+      } else {
+        namedGroupMap.set(lowerPeng, {
+          key: lowerPeng,
+          label: rawPeng,
+          isEmpty: false,
+          records: [rec],
+        });
+      }
+    }
+
+    // Kumpulkan Baris Kosong (Empty Slots) dari proposal terkait untuk diletakkan di halaman terakhir
+    const collectedEmptySlots: Array<{
+      slotNumber: number;
+      item: string;
+      proposalName?: string;
+    }> = [];
+    if (includeEmptySlots) {
+      const proposalTargets = new Map<
+        string,
+        { id?: string; namaProposal: string; tahun: string }
+      >();
+
+      if (proposalMeta && proposalMeta.namaProposal?.trim()) {
+        const k = `${(proposalMeta.tahun || '').trim()}::${proposalMeta.namaProposal.trim().toLowerCase()}`;
+        proposalTargets.set(k, proposalMeta);
+      } else {
+        for (const rec of sortedRecords) {
+          if (rec.validasi !== 'accepted') continue;
+          const pName = (rec.proposal || '').trim();
+          if (!pName) continue;
+          const yr = (rec.tahun || '').trim();
+          const k = `${yr}::${pName.toLowerCase()}`;
+          if (!proposalTargets.has(k)) {
+            const propObj =
+              (rec.proposalId ? proposals.find((p) => p.id === rec.proposalId) : undefined) ??
+              proposals.find((p) => p.namaProposal === pName && (!yr || p.tahun === yr)) ??
+              proposals.find((p) => p.namaProposal === pName);
+            proposalTargets.set(k, {
+              id: propObj?.id ?? rec.proposalId ?? undefined,
+              namaProposal: propObj?.namaProposal || pName,
+              tahun: propObj?.tahun || yr,
+            });
+          }
+        }
+      }
+
+      const sortedTargets = Array.from(proposalTargets.values()).sort((a, b) => {
+        const yCmp = a.tahun.localeCompare(b.tahun);
+        if (yCmp !== 0) return yCmp;
+        return a.namaProposal.localeCompare(b.namaProposal, 'id');
+      });
+
+      for (const target of sortedTargets) {
+        const { state: slotState } = resolveProposalSlotStateForGroup(
+          proposalSlotMap,
+          target.id,
+          target.namaProposal,
+          target.tahun,
+          proposals
+        );
+        if (!slotState || slotState.emptySlots.length === 0) continue;
+        const propRecords = sortedRecords.filter((r) =>
+          target.id && r.proposalId
+            ? r.proposalId === target.id
+            : (r.proposal || '').trim() === target.namaProposal &&
+              (!target.tahun || (r.tahun || '').trim() === target.tahun)
+        );
+        const merged = buildMergedProposalSlots({
+          groupRecords: propRecords,
+          slotState,
+          proposals,
+          catalog: items,
+          wilayahList,
+        });
+        for (const entry of merged) {
+          if (entry.kind === 'empty') {
+            collectedEmptySlots.push({
+              slotNumber: entry.slotNumber,
+              item: (entry.emptySlot.item || '').trim().toUpperCase(),
+              proposalName: target.namaProposal,
+            });
+          }
+        }
+      }
+    }
+
+    const groups: PengelolaPrintGroup[] = Array.from(namedGroupMap.values()).sort((a, b) =>
+      a.label.localeCompare(b.label, 'id')
+    );
+
+    const hasLastEmptyPage = emptyPengelolaRecords.length > 0 || collectedEmptySlots.length > 0;
+    if (hasLastEmptyPage) {
+      const emptyLabel =
+        emptyPengelolaRecords.length > 0 && collectedEmptySlots.length > 0
+          ? 'Tanpa Pengelola & Baris Kosong'
+          : emptyPengelolaRecords.length > 0
+            ? 'Tanpa Pengelola'
+            : 'Baris Kosong';
+      groups.push({
+        key: '__TANPA_PENGELOLA__',
+        label: emptyLabel,
+        isEmpty: true,
+        records: emptyPengelolaRecords,
+      });
+    }
+
+    const grandTotalMoney =
+      groups.length > 1
+        ? {
+            totalNominal: sortedRecords.reduce(
+              (sum, rec) => sum + Math.max(0, Number(rec.payment || 0)),
+              0
+            ),
+            paidCount: sortedRecords.filter((rec) => Number(rec.payment || 0) > 0).length,
+            totalCount: sortedRecords.length,
+          }
+        : undefined;
+
+    groups.forEach((group, idx) => {
+      if (idx > 0) {
+        doc.addPage([F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM], 'portrait');
+      }
+
+      const emptyCountInSection = group.isEmpty ? collectedEmptySlots.length : 0;
+      const sectionTitle = group.isEmpty
+        ? group.label
+        : `Pengelola: ${group.label}`;
+      const countParts: string[] = [];
+      if (group.records.length > 0) countParts.push(`${group.records.length} KPM`);
+      if (emptyCountInSection > 0) countParts.push(`${emptyCountInSection} Baris Kosong`);
+      const sectionSubtitle = [
+        title.trim(),
+        countParts.length > 0 ? `Total: ${countParts.join(' + ')}` : '',
+      ]
+        .filter(Boolean)
+        .join('  ·  ');
+
+      renderSection({
+        sectionRecords: group.records,
+        sectionTitle,
+        sectionSubtitle,
+        proposalTitleForAutoKel: proposalMeta?.namaProposal,
+        grandTotalMoney: idx === groups.length - 1 ? grandTotalMoney : undefined,
+        customEmptySlots: group.isEmpty && collectedEmptySlots.length > 0 ? collectedEmptySlots : undefined,
+        useSequentialRowNumber: true,
+      });
+    });
+  } else if (splitByProposal && sortedRecords.length > 0) {
     interface ProposalPrintGroup {
       key: string;
       tahun: string;

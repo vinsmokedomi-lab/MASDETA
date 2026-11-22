@@ -217,6 +217,7 @@ export function MenuDownloadView({
     return initial.slice(0, MAX_PDF_TOTAL_COLUMNS - MANDATORY_PDF_COLUMN_KEYS.length);
   });
   const [includeSummary, setIncludeSummary] = useState(true);
+  const [splitByPengelola, setSplitByPengelola] = useState(false);
   const [onlyCompleteCheckedColumns, setOnlyCompleteCheckedColumns] = useState(false);
   const [excludedPengelolaKeys, setExcludedPengelolaKeys] = useState<string[]>([]);
   const [excludedKelurahanKeys, setExcludedKelurahanKeys] = useState<string[]>([]);
@@ -1094,6 +1095,24 @@ export function MenuDownloadView({
     };
   };
 
+  const pengelolaSplitSummary = useMemo(() => {
+    const namedSet = new Set<string>();
+    let emptyPengelolaCount = 0;
+    for (const rec of pdfPrintRecords) {
+      const raw = (rec.pengelola || '').trim();
+      const lower = raw.toLowerCase();
+      if (!raw || raw === '-' || lower === 'tanpa pengelola') {
+        emptyPengelolaCount += 1;
+      } else {
+        namedSet.add(lower);
+      }
+    }
+    return {
+      namedCount: namedSet.size,
+      emptyPengelolaCount,
+    };
+  }, [pdfPrintRecords]);
+
   const handleDownloadPdf = async () => {
     if (pdfPrintRecords.length === 0 || isGeneratingPdf) return;
     setPdfFeedback(null);
@@ -1104,6 +1123,7 @@ export function MenuDownloadView({
         pdfPrintRecords.length
       );
       const shouldSplitByProposal =
+        !splitByPengelola &&
         selectedProposal === 'all' &&
         selectedTahun !== 'database' &&
         selectedTahun !== 'arsip';
@@ -1121,6 +1141,7 @@ export function MenuDownloadView({
                 (selectedTahun === 'all' || p.tahun === selectedTahun)
             )
           : undefined;
+      const effectiveFileName = splitByPengelola ? `${fileName}_Per_Pengelola` : fileName;
       const res = await exportKpmTableToPdf({
         records: pdfPrintRecords,
         proposals,
@@ -1129,10 +1150,11 @@ export function MenuDownloadView({
         selectedColumns: activeColumns.map((c) => c.key),
         title,
         subtitle,
-        fileName,
+        fileName: effectiveFileName,
         includeSummary,
         reportTemplate: templateDraft,
         splitByProposal: shouldSplitByProposal,
+        splitByPengelola,
         autoExcludeKelurahanWhenInProposalTitle: shouldSplitByProposal && !isStandaloneSource,
         selectedPengelolaLabel: selectedPengelola !== 'all' ? selectedPengelola : undefined,
         proposalSlotMap,
@@ -1148,8 +1170,8 @@ export function MenuDownloadView({
       setPdfFeedback({
         type: 'success',
         message: res.openedNative
-          ? `PDF "${res.savedFileName}" (${res.count} KPM) berhasil dibuat dan dibuka.`
-          : `PDF "${res.savedFileName}" (${res.count} KPM) berhasil diunduh.`,
+          ? `PDF "${res.savedFileName}" (${res.count} KPM${splitByPengelola ? ' · 1 Halaman/Pengelola' : ''}) berhasil dibuat dan dibuka.`
+          : `PDF "${res.savedFileName}" (${res.count} KPM${splitByPengelola ? ' · 1 Halaman/Pengelola' : ''}) berhasil diunduh.`,
       });
     } catch (err) {
       setPdfFeedback({
@@ -1171,6 +1193,7 @@ export function MenuDownloadView({
         pdfPrintRecords.length
       );
       const shouldSplitByProposal =
+        !splitByPengelola &&
         selectedProposal === 'all' &&
         selectedTahun !== 'database' &&
         selectedTahun !== 'arsip' &&
@@ -1189,6 +1212,7 @@ export function MenuDownloadView({
                 (selectedTahun === 'all' || p.tahun === selectedTahun)
             )
           : undefined;
+      const effectiveFileName = splitByPengelola ? `${fileName}_Per_Pengelola` : fileName;
 
       const res = await exportKpmTableToXlsx({
         records: pdfPrintRecords,
@@ -1198,9 +1222,10 @@ export function MenuDownloadView({
         proposalSlotMap,
         title,
         subtitle,
-        fileName,
+        fileName: effectiveFileName,
         includeEmptySlots,
         splitByProposal: shouldSplitByProposal,
+        splitByPengelola,
         proposalMeta: selectedProposalMeta
           ? {
               id: selectedProposalMeta.id,
@@ -1212,8 +1237,8 @@ export function MenuDownloadView({
       setPdfFeedback({
         type: 'success',
         message: res.openedNative
-          ? `Excel "${res.savedFileName}" (${res.count} KPM${res.emptyCount > 0 ? ` + ${res.emptyCount} baris kosong` : ''}) berhasil dibuat dan dibuka.`
-          : `Excel "${res.savedFileName}" (${res.count} KPM${res.emptyCount > 0 ? ` + ${res.emptyCount} baris kosong` : ''}) berhasil diunduh.`,
+          ? `Excel "${res.savedFileName}" (${res.count} KPM${res.emptyCount > 0 ? ` + ${res.emptyCount} baris kosong` : ''}${splitByPengelola ? ' · Sheet/Pengelola' : ''}) berhasil dibuat dan dibuka.`
+          : `Excel "${res.savedFileName}" (${res.count} KPM${res.emptyCount > 0 ? ` + ${res.emptyCount} baris kosong` : ''}${splitByPengelola ? ' · Sheet/Pengelola' : ''}) berhasil diunduh.`,
       });
     } catch (err) {
       setPdfFeedback({
@@ -2615,6 +2640,47 @@ export function MenuDownloadView({
                   )}
                 </div>
               )}
+
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={splitByPengelola}
+                onClick={() => {
+                  setPdfFeedback(null);
+                  setSplitByPengelola((prev) => !prev);
+                }}
+                className={`flex min-h-[42px] w-full items-start gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                  splitByPengelola
+                    ? 'border-teal-700/50 bg-teal-50/70'
+                    : 'border-slate-200 bg-white hover:bg-slate-50'
+                }`}
+              >
+                <span
+                  className={`mt-0.5 flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-md border transition-colors ${
+                    splitByPengelola
+                      ? 'border-teal-700 bg-teal-700 text-white'
+                      : 'border-slate-300 bg-white'
+                  }`}
+                >
+                  {splitByPengelola && <Check className="h-3 w-3" />}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex flex-wrap items-center gap-1.5 text-xs font-semibold text-slate-800">
+                    <span>Download per Pengelola (1 Halaman per Pengelola)</span>
+                    {splitByPengelola && pdfPrintRecords.length > 0 && (
+                      <span className="rounded-md bg-teal-100 px-1.5 py-0.5 text-[10px] font-bold text-teal-800 tabular-nums">
+                        {pengelolaSplitSummary.namedCount} Pengelola
+                        {pengelolaSplitSummary.emptyPengelolaCount > 0
+                          ? ` + ${pengelolaSplitSummary.emptyPengelolaCount} Kosong`
+                          : ''}
+                      </span>
+                    )}
+                  </span>
+                  <span className="mt-0.5 block text-[10px] leading-relaxed text-slate-500">
+                    Tetap menampilkan seluruh KPM, namun setiap pengelola dicetak di halaman terpisah (PDF) atau sheet terpisah (Excel). KPM tanpa pengelola &amp; baris kosong otomatis diletakkan di halaman terakhir.
+                  </span>
+                </span>
+              </button>
 
               <button
                 type="button"

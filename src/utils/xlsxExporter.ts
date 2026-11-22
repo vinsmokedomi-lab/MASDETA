@@ -33,6 +33,7 @@ export interface ExportKpmXlsxOptions {
   fileName: string;
   includeEmptySlots?: boolean;
   splitByProposal?: boolean;
+  splitByPengelola?: boolean;
   proposalMeta?: {
     id?: string;
     namaProposal: string;
@@ -589,6 +590,7 @@ export async function exportKpmTableToXlsx(
     fileName,
     includeEmptySlots = true,
     splitByProposal = false,
+    splitByPengelola = false,
     proposalMeta,
   } = options;
 
@@ -602,6 +604,220 @@ export async function exportKpmTableToXlsx(
     hour: '2-digit',
     minute: '2-digit',
   });
+
+  if (splitByPengelola) {
+    interface PengelolaXlsxGroup {
+      key: string;
+      label: string;
+      isEmpty: boolean;
+      records: KpmRecord[];
+    }
+
+    const namedGroupMap = new Map<string, PengelolaXlsxGroup>();
+    const emptyPengelolaRecords: KpmRecord[] = [];
+
+    for (const rec of records) {
+      const rawPeng = (rec.pengelola || '').trim();
+      const lowerPeng = rawPeng.toLowerCase();
+      const isUnassigned = !rawPeng || rawPeng === '-' || lowerPeng === 'tanpa pengelola';
+      if (isUnassigned) {
+        emptyPengelolaRecords.push(rec);
+        continue;
+      }
+      const existing = namedGroupMap.get(lowerPeng);
+      if (existing) {
+        existing.records.push(rec);
+      } else {
+        namedGroupMap.set(lowerPeng, {
+          key: lowerPeng,
+          label: rawPeng,
+          isEmpty: false,
+          records: [rec],
+        });
+      }
+    }
+
+    // Kumpulkan Baris Kosong dari proposal terkait untuk halaman/sheet terakhir
+    const emptySlotRows: BuiltSheetRow[] = [];
+    const combinedItemSummary = new Map<string, { name: string; filled: number; empty: number }>();
+
+    if (includeEmptySlots) {
+      const targets = new Map<string, { id?: string; namaProposal: string; tahun: string }>();
+      if (proposalMeta && proposalMeta.namaProposal?.trim()) {
+        targets.set(
+          `${(proposalMeta.tahun || '').trim()}::${proposalMeta.namaProposal.trim().toLowerCase()}`,
+          proposalMeta
+        );
+      } else {
+        for (const rec of records) {
+          if (rec.validasi !== 'accepted') continue;
+          const pName = (rec.proposal || '').trim();
+          if (!pName) continue;
+          const yr = (rec.tahun || '').trim();
+          const k = `${yr}::${pName.toLowerCase()}`;
+          if (!targets.has(k)) {
+            const propObj =
+              (rec.proposalId ? proposals.find((p) => p.id === rec.proposalId) : undefined) ??
+              proposals.find((p) => p.namaProposal === pName && (!yr || p.tahun === yr)) ??
+              proposals.find((p) => p.namaProposal === pName);
+            targets.set(k, {
+              id: propObj?.id ?? rec.proposalId ?? undefined,
+              namaProposal: propObj?.namaProposal || pName,
+              tahun: propObj?.tahun || yr,
+            });
+          }
+        }
+      }
+
+      for (const target of targets.values()) {
+        const slotRes = resolveProposalSlotStateForGroup(
+          proposalSlotMap,
+          target.id,
+          target.namaProposal,
+          target.tahun
+        );
+        if (!slotRes.state || slotRes.state.emptySlots.length === 0) continue;
+        const propRecs = records.filter((r) =>
+          target.id && r.proposalId
+            ? r.proposalId === target.id
+            : (r.proposal || '').trim() === target.namaProposal &&
+              (!target.tahun || (r.tahun || '').trim() === target.tahun)
+        );
+        const builtProp = buildRowsForSingleGroup({
+          groupRecords: propRecs,
+          proposals,
+          items,
+          wilayahList,
+          proposalSlotMap,
+          includeEmptySlots: true,
+          proposalMeta: target,
+        });
+        for (const row of builtProp.rows) {
+          if (row.isEmptySlot) {
+            emptySlotRows.push(row);
+          }
+        }
+      }
+    }
+
+    const orderedGroups: PengelolaXlsxGroup[] = Array.from(namedGroupMap.values()).sort((a, b) =>
+      a.label.localeCompare(b.label, 'id')
+    );
+
+    if (emptyPengelolaRecords.length > 0 || emptySlotRows.length > 0) {
+      const emptyLabel =
+        emptyPengelolaRecords.length > 0 && emptySlotRows.length > 0
+          ? 'Tanpa Pengelola & Kosong'
+          : emptyPengelolaRecords.length > 0
+            ? 'Tanpa Pengelola'
+            : 'Baris Kosong';
+      orderedGroups.push({
+        key: '__TANPA_PENGELOLA__',
+        label: emptyLabel,
+        isEmpty: true,
+        records: emptyPengelolaRecords,
+      });
+    }
+
+    const combinedRows: BuiltSheetRow[] = [];
+    const perPengelolaSheets: Array<{ name: string; ws: XLSXTypes.WorkSheet }> = [];
+    let totalFilled = 0;
+    let totalEmpty = 0;
+
+    for (const grp of orderedGroups) {
+      const built = buildRowsForSingleGroup({
+        groupRecords: grp.records,
+        proposals,
+        items,
+        wilayahList,
+        proposalSlotMap,
+        includeEmptySlots: false,
+      });
+      const grpEmptyRows = grp.isEmpty ? emptySlotRows : [];
+      const grpRows = [...built.rows, ...grpEmptyRows];
+      if (grpRows.length === 0) continue;
+
+      totalFilled += built.filledCount;
+      totalEmpty += grpEmptyRows.length;
+      combinedRows.push(...grpRows);
+
+      for (const [code, meta] of built.itemSummary.entries()) {
+        const cur = combinedItemSummary.get(code) ?? { name: meta.name, filled: 0, empty: 0 };
+        cur.filled += meta.filled;
+        cur.empty += meta.empty;
+        combinedItemSummary.set(code, cur);
+      }
+      for (const er of grpEmptyRows) {
+        const code = (er.item || '').trim().toUpperCase();
+        if (!code) continue;
+        const cur = combinedItemSummary.get(code) ?? {
+          name: er.namaItem || code,
+          filled: 0,
+          empty: 0,
+        };
+        cur.empty += 1;
+        combinedItemSummary.set(code, cur);
+      }
+
+      const ws = createKpmWorksheet(XLSX, {
+        title: `${grp.isEmpty ? grp.label : `PENGELOLA: ${grp.label}`} — ${title}`,
+        subtitle: `Total: ${built.filledCount} KPM${
+          grpEmptyRows.length > 0 ? ` + ${grpEmptyRows.length} Baris Kosong` : ''
+        }  ·  Diekspor: ${exportedAt}`,
+        rows: grpRows,
+        includeProposalCols: !proposalMeta,
+      });
+      perPengelolaSheets.push({ name: grp.label, ws });
+    }
+
+    if (combinedRows.length === 0) {
+      throw new Error('Tidak ada data KPM untuk diekspor ke Excel (.xlsx).');
+    }
+
+    const allSheet = createKpmWorksheet(XLSX, {
+      title: `DAFTAR KPM PER PENGELOLA — ${title}`,
+      subtitle: [
+        subtitle || '',
+        `${orderedGroups.length} Kelompok Pengelola`,
+        `Total: ${totalFilled} KPM${totalEmpty > 0 ? ` + ${totalEmpty} Baris Kosong` : ''}`,
+        `Diekspor: ${exportedAt}`,
+      ]
+        .filter(Boolean)
+        .join('  ·  '),
+      rows: combinedRows,
+      includeProposalCols: !proposalMeta,
+    });
+    XLSX.utils.book_append_sheet(wb, allSheet, sanitizeExcelSheetName('Semua KPM', usedSheetNames));
+
+    if (combinedItemSummary.size > 0) {
+      const summarySheet = createItemSummaryWorksheet(XLSX, {
+        title,
+        itemSummary: combinedItemSummary,
+        items,
+        tahunRef: proposalMeta?.tahun || 'all',
+      });
+      XLSX.utils.book_append_sheet(
+        wb,
+        summarySheet,
+        sanitizeExcelSheetName('Rekap Item', usedSheetNames)
+      );
+    }
+
+    for (const sheet of perPengelolaSheets) {
+      XLSX.utils.book_append_sheet(
+        wb,
+        sheet.ws,
+        sanitizeExcelSheetName(sheet.name, usedSheetNames)
+      );
+    }
+
+    const saved = await saveOrOpenXlsxWorkbook(XLSX, wb, fileName);
+    return {
+      ...saved,
+      count: totalFilled,
+      emptyCount: totalEmpty,
+    };
+  }
 
   if (proposalMeta || !splitByProposal) {
     const built = buildRowsForSingleGroup({
