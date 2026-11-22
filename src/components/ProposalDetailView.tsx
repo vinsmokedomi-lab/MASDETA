@@ -81,6 +81,7 @@ import {
 import {
   AbsenDinasVariant,
   DEFAULT_PDF_COLUMN_KEYS,
+  exportAbsenArsipToPdf,
   exportAbsenDinasPesertaToPdf,
   exportAbsensiDinsosToPdf,
   exportKpmBastBulkToPdf,
@@ -220,9 +221,9 @@ export function ProposalDetailView({
   const [undoBusy, setUndoBusy] = useState(false);
   const [absensiModalOpen, setAbsensiModalOpen] = useState(false);
   const [absensiBusy, setAbsensiBusy] = useState(false);
-  const [absensiVariant, setAbsensiVariant] = useState<'daftar_hadir' | 'makan_minum' | 'kegiatan'>(
-    'daftar_hadir'
-  );
+  const [absensiVariant, setAbsensiVariant] = useState<
+    'daftar_hadir' | 'makan_minum' | 'kegiatan' | 'arsip'
+  >('daftar_hadir');
   const [absensiLokasiJudul, setAbsensiLokasiJudul] = useState<string>('');
   const [absensiExtraBlankRows, setAbsensiExtraBlankRows] = useState<string>('0');
   const [absensiHandoverName, setAbsensiHandoverName] = useState<string>('');
@@ -232,6 +233,10 @@ export function ProposalDetailView({
   const [absensiHari, setAbsensiHari] = useState<string>('');
   const [absensiPukul, setAbsensiPukul] = useState<string>('');
   const [absensiLokasiKegiatan, setAbsensiLokasiKegiatan] = useState<string>(proposal.namaProposal);
+  const [absensiLokasiPembagian, setAbsensiLokasiPembagian] = useState<string>('');
+  const [absensiArsipFooterYear, setAbsensiArsipFooterYear] = useState<string>(
+    proposal.tahun || '2025'
+  );
 
   // Rekap Pergantian KPM & Item
   const [isChangeRecapModalOpen, setIsChangeRecapModalOpen] = useState(false);
@@ -589,6 +594,7 @@ export function ProposalDetailView({
     setAbsensiTanggal(fields.tanggal);
     setAbsensiHari(fields.hari);
     setAbsensiPukul(fields.pukul);
+    setAbsensiLokasiPembagian((ev?.location || '').trim());
   };
 
   const openAbsensiModal = () => {
@@ -604,6 +610,7 @@ export function ProposalDetailView({
     );
     const initialBookId = matchedBook?.id || effectiveScheduleBooks[0]?.id || 'all';
     setAbsensiLokasiKegiatan(proposal.namaProposal);
+    setAbsensiArsipFooterYear(proposal.tahun || String(new Date().getFullYear()));
     setAbsensiLokasiJudul(
       formatAbsenDinasLocationText(
         proposal.namaProposal,
@@ -658,6 +665,34 @@ export function ProposalDetailView({
           text: `PDF ${
             absensiVariant === 'makan_minum' ? 'Daftar Makan & Minum' : 'Daftar Hadir'
           } (${result.totalRows} baris · F4) disimpan: ${result.savedFileName}`,
+        });
+      } else if (absensiVariant === 'arsip') {
+        const parsedExtra = Math.max(0, Math.min(30, Math.floor(Number(absensiExtraBlankRows) || 0)));
+        const result = await exportAbsenArsipToPdf({
+          records: proposalRecords,
+          allRecords: records,
+          proposals: allProposals,
+          items,
+          wilayahList,
+          proposalSlotMap,
+          schedules,
+          scheduleBookId: absensiBookId,
+          singleProposal: proposal,
+          extraBlankRows: parsedExtra,
+          manualOverride: {
+            tanggal: absensiTanggal,
+            hari: absensiHari,
+            pukul: absensiPukul,
+            judulKegiatan: absensiLokasiKegiatan || proposal.namaProposal,
+            lokasiPembagian: absensiLokasiPembagian,
+            footerYear: absensiArsipFooterYear,
+          },
+          fileName: `Absen_Arsip_-_${proposal.namaProposal}_${proposal.tahun}`,
+        });
+        setAbsensiModalOpen(false);
+        setBastFeedback({
+          type: 'success',
+          text: `PDF Absen Arsip (${result.totalRows} baris · F4 DPRD) disimpan: ${result.savedFileName}`,
         });
       } else {
         const result = await exportAbsensiDinsosToPdf({
@@ -5063,28 +5098,33 @@ export function ProposalDetailView({
               </button>
             </div>
 
-            {/* Pilihan 3 Tipe Format Absen */}
+            {/* Pilihan 4 Tipe Format Absen */}
             <div className="space-y-1.5">
               <label className="block text-xs font-semibold text-slate-700">
                 Pilih Jenis Format Absensi
               </label>
-              <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
                 {(
                   [
                     {
                       id: 'daftar_hadir',
                       title: 'Daftar Hadir',
-                      sub: 'Tanpa Yang Menyerahkan',
+                      sub: 'Absen Dinas · Tanpa Yang Menyerahkan',
                     },
                     {
                       id: 'makan_minum',
                       title: 'Daftar Makan & Minum',
-                      sub: 'Dengan Yang Menyerahkan & NIP',
+                      sub: 'Absen Dinas · Dengan Yang Menyerahkan & NIP',
                     },
                     {
                       id: 'kegiatan',
                       title: 'Absensi Kegiatan',
-                      sub: 'Logo Provinsi & Jadwal',
+                      sub: 'Dinas Sosial · Logo Provinsi & Jadwal',
+                    },
+                    {
+                      id: 'arsip',
+                      title: 'Absen Arsip',
+                      sub: 'DPRD Kalbar · TTD, WA, Item, Stat, Ket',
                     },
                   ] as const
                 ).map((opt) => {
@@ -5307,7 +5347,7 @@ export function ProposalDetailView({
                   </div>
                   <div>
                     <label className="mb-1 block text-[11px] font-semibold text-slate-600">
-                      Lokasi Kegiatan (Nama Proposal)
+                      {absensiVariant === 'arsip' ? 'Judul Kegiatan' : 'Lokasi Kegiatan (Nama Proposal)'}
                     </label>
                     <input
                       type="text"
@@ -5317,6 +5357,35 @@ export function ProposalDetailView({
                     />
                   </div>
                 </div>
+
+                {absensiVariant === 'arsip' && (
+                  <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+                    <div className="sm:col-span-2">
+                      <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                        Lokasi Pembagian
+                      </label>
+                      <input
+                        type="text"
+                        value={absensiLokasiPembagian}
+                        onChange={(e) => setAbsensiLokasiPembagian(e.target.value)}
+                        placeholder="cth: Jl. Paralel Tol 1, Gedung Albarokah Center"
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs text-slate-800 focus:border-indigo-500 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                        Tahun Footer ARSP
+                      </label>
+                      <input
+                        type="text"
+                        value={absensiArsipFooterYear}
+                        onChange={(e) => setAbsensiArsipFooterYear(e.target.value)}
+                        placeholder="cth: 2025"
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs text-slate-800 focus:border-indigo-500 focus:outline-none tabular-nums"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -5347,7 +5416,9 @@ export function ProposalDetailView({
                       ? 'Download Makan & Minum'
                       : absensiVariant === 'daftar_hadir'
                         ? 'Download Daftar Hadir'
-                        : 'Download PDF Absensi'}
+                        : absensiVariant === 'arsip'
+                          ? 'Download Absen Arsip'
+                          : 'Download PDF Absensi'}
                 </span>
               </button>
             </div>

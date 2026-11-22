@@ -438,6 +438,7 @@ export type ProposalSlotMap = Record<string, ProposalSlotState>;
 export type SlotRemovalMode = 'vacate' | 'collapse';
 
 export const DEFAULT_KOP_LOGO_URL = '/assets/logo-dinsos-kalbar.png';
+export const DEFAULT_DPRD_LOGO_URL = '/assets/logo-dprd-kalbar.png';
 
 export interface ReportTemplateConfig {
   enabled: boolean;

@@ -24,6 +24,7 @@ import {
   CouponPrintConfig,
   DEFAULT_BAST_TEMPLATE,
   DEFAULT_COUPON_CONFIG,
+  DEFAULT_DPRD_LOGO_URL,
   DEFAULT_KOP_LOGO_URL,
   DEFAULT_PEJABAT_LIST,
   DEFAULT_REPORT_TEMPLATE,
@@ -69,6 +70,7 @@ import {
   SPTJM_DAY_OPTIONS,
   buildCatNomorBarangMatrix,
   doesKpmRecordMatchCheckedColumns,
+  exportAbsenArsipToPdf,
   exportAbsenDinasPesertaToPdf,
   exportAbsensiDinsosToPdf,
   exportCatNomorBarangToPdf,
@@ -1505,9 +1507,9 @@ export function MenuDownloadView({
     () => (scheduleBooks && scheduleBooks.length > 0 ? scheduleBooks : DEFAULT_SCHEDULE_BOOKS),
     [scheduleBooks]
   );
-  const [absensiVariant, setAbsensiVariant] = useState<'daftar_hadir' | 'makan_minum' | 'kegiatan'>(
-    'daftar_hadir'
-  );
+  const [absensiVariant, setAbsensiVariant] = useState<
+    'daftar_hadir' | 'makan_minum' | 'kegiatan' | 'arsip'
+  >('daftar_hadir');
   const [absensiExtraBlankRows, setAbsensiExtraBlankRows] = useState('0');
   const [absensiHandoverName, setAbsensiHandoverName] = useState('');
   const [absensiHandoverNip, setAbsensiHandoverNip] = useState('');
@@ -1517,6 +1519,8 @@ export function MenuDownloadView({
   const [absensiFallbackTanggal, setAbsensiFallbackTanggal] = useState('');
   const [absensiFallbackHari, setAbsensiFallbackHari] = useState('');
   const [absensiFallbackPukul, setAbsensiFallbackPukul] = useState('');
+  const [absensiFallbackLokasiPembagian, setAbsensiFallbackLokasiPembagian] = useState('');
+  const [absensiArsipFooterYear, setAbsensiArsipFooterYear] = useState('');
   const [isGeneratingAbsensi, setIsGeneratingAbsensi] = useState(false);
   const [absensiFeedback, setAbsensiFeedback] = useState<{
     type: 'success' | 'error';
@@ -1581,6 +1585,8 @@ export function MenuDownloadView({
           tanggal: firstFields.tanggal || absensiFallbackTanggal.trim(),
           hari: firstFields.hari || absensiFallbackHari.trim(),
           pukul: firstFields.pukul || absensiFallbackPukul.trim(),
+          arsipLocation: (firstEv?.location || absensiFallbackLokasiPembagian).trim(),
+          arsipFooterYear: absensiArsipFooterYear.trim() || firstProp.tahun || '2025',
           hasSchedule: Boolean(firstEv),
         }
       : null;
@@ -1599,6 +1605,8 @@ export function MenuDownloadView({
     absensiFallbackTanggal,
     absensiFallbackHari,
     absensiFallbackPukul,
+    absensiFallbackLokasiPembagian,
+    absensiArsipFooterYear,
   ]);
 
   const handleDownloadAbsensiPdf = async () => {
@@ -1606,8 +1614,8 @@ export function MenuDownloadView({
     setAbsensiFeedback(null);
     setIsGeneratingAbsensi(true);
     try {
+      const parsedExtra = Math.max(0, Math.min(30, Math.floor(Number(absensiExtraBlankRows) || 0)));
       if (absensiVariant === 'daftar_hadir' || absensiVariant === 'makan_minum') {
-        const parsedExtra = Math.max(0, Math.min(30, Math.floor(Number(absensiExtraBlankRows) || 0)));
         const prefix = absensiVariant === 'makan_minum' ? 'Daftar_Makan_Minum' : 'Daftar_Hadir';
         const { fileName } = buildScopeTitleAndFileName(prefix);
         const res = await exportAbsenDinasPesertaToPdf({
@@ -1630,6 +1638,33 @@ export function MenuDownloadView({
           message: res.openedNative
             ? `${labelType} "${res.savedFileName}" (${res.proposalCount} proposal · ${res.totalRows} baris) berhasil dibuat dan dibuka.`
             : `${labelType} "${res.savedFileName}" (${res.proposalCount} proposal · ${res.totalRows} baris) berhasil diunduh.`,
+        });
+      } else if (absensiVariant === 'arsip') {
+        const { fileName } = buildScopeTitleAndFileName('Absen_Arsip');
+        const res = await exportAbsenArsipToPdf({
+          records: eligibleKuponRecords,
+          allRecords: records,
+          proposals,
+          items,
+          wilayahList,
+          proposalSlotMap,
+          schedules,
+          scheduleBookId: absensiBookId,
+          fallbackFields: {
+            tanggal: absensiFallbackTanggal.trim(),
+            hari: absensiFallbackHari.trim(),
+            pukul: absensiFallbackPukul.trim(),
+            lokasiPembagian: absensiFallbackLokasiPembagian.trim(),
+          },
+          footerYearOverride: absensiArsipFooterYear.trim() || undefined,
+          extraBlankRows: parsedExtra,
+          fileName,
+        });
+        setAbsensiFeedback({
+          type: 'success',
+          message: res.openedNative
+            ? `Absen Arsip "${res.savedFileName}" (${res.proposalCount} proposal · ${res.totalRows} baris) berhasil dibuat dan dibuka.`
+            : `Absen Arsip "${res.savedFileName}" (${res.proposalCount} proposal · ${res.totalRows} baris) berhasil diunduh.`,
         });
       } else {
         const { fileName } = buildScopeTitleAndFileName('Absensi_DINSOS');
@@ -2031,7 +2066,7 @@ export function MenuDownloadView({
                   {
                     id: 'absensi',
                     label: 'Absensi DINSOS',
-                    subtitle: 'Daftar hadir & makan minum',
+                    subtitle: 'Hadir, makan minum & arsip',
                     Icon: ClipboardCheck,
                   },
                 ] as const
@@ -4794,16 +4829,16 @@ export function MenuDownloadView({
             </section>
           )}
 
-          {/* Mode 8: Absensi Dinas Sosial (Daftar Hadir / Daftar Makan Minum + Absensi Kegiatan) */}
+          {/* Mode 8: Absensi Dinas Sosial (Daftar Hadir / Daftar Makan Minum + Absensi Kegiatan + Absen Arsip) */}
           {printMode === 'absensi' && (
             <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-3.5 md:p-4">
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <h2 className="text-sm font-bold text-slate-900">
-                    Absen Dinas &amp; Daftar Hadir (PDF F4)
+                    Absen Dinas, Kegiatan &amp; Arsip (PDF F4)
                   </h2>
                   <p className="mt-0.5 text-[11px] text-slate-500">
-                    Pilih format Daftar Hadir, Daftar Makan &amp; Minum (dengan Yang Menyerahkan &amp; NIP), atau Absensi Kegiatan berlogo
+                    Pilih Daftar Hadir, Daftar Makan &amp; Minum, Absensi Kegiatan (DINSOS), atau Absen Arsip (DPRD Kalbar)
                   </p>
                 </div>
                 <span className="shrink-0 rounded-lg bg-indigo-50 px-2 py-1 text-[10px] font-bold text-indigo-800 border border-indigo-200/70 tabular-nums">
@@ -4825,7 +4860,7 @@ export function MenuDownloadView({
                 <label className="block text-xs font-bold text-slate-800">
                   1. Pilih Jenis Format PDF Absensi
                 </label>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   {(
                     [
                       {
@@ -4840,8 +4875,13 @@ export function MenuDownloadView({
                       },
                       {
                         id: 'kegiatan',
-                        title: 'Absensi Kegiatan (Jadwal)',
-                        desc: 'Kop logo Prov. Kalbar + Tanggal, Hari & Pukul dari Jadwal',
+                        title: 'Absensi Kegiatan (DINSOS)',
+                        desc: 'Kop Dinas Sosial Kalbar + Tanggal, Hari & Pukul dari Jadwal',
+                      },
+                      {
+                        id: 'arsip',
+                        title: 'Absen Arsip (DPRD Kalbar)',
+                        desc: 'Kop DPRD Kalbar · TTD, No. WA, Item, Stat, Ket · Footer ARSP',
                       },
                     ] as const
                   ).map((opt) => {
@@ -5000,7 +5040,7 @@ export function MenuDownloadView({
                   <div className="space-y-2">
                     <div className="flex items-center justify-between gap-2">
                       <label className="text-xs font-bold text-slate-800">
-                        2. Pilih Buku Jadwal (Sumber Tanggal, Hari &amp; Pukul)
+                        2. Pilih Buku Jadwal ({absensiVariant === 'arsip' ? 'Sumber Tanggal, Hari, Pukul & Lokasi' : 'Sumber Tanggal, Hari & Pukul'})
                       </label>
                       <span className="text-[11px] font-semibold text-teal-700 tabular-nums">
                         {absensiMatchStats.matchedCount}/{absensiMatchStats.totalProposals} proposal cocok jadwal
@@ -5073,53 +5113,147 @@ export function MenuDownloadView({
                             : 'Belum Ada Jadwal di Buku Ini'}
                         </span>
                       </div>
-                      <div className="rounded-lg border border-slate-200 bg-white p-3 text-slate-900">
-                        <div className="text-center leading-tight pb-2">
-                          <p className="text-[10px] tracking-wide">
-                            PEMERINTAH PROVINSI KALIMANTAN BARAT
-                          </p>
-                          <p className="text-xs font-extrabold tracking-wide">DINAS SOSIAL</p>
-                        </div>
-                        <div className="flex items-center gap-3 pt-1">
-                          <div className="flex h-14 w-12 shrink-0 items-center justify-center rounded border border-slate-100 bg-slate-50 p-1">
-                            <img
-                              src={(bastTemplate?.kopLogoDataUrl || '').trim() || DEFAULT_KOP_LOGO_URL}
-                              alt="Logo Provinsi Kalimantan Barat"
-                              className="max-h-full max-w-full object-contain"
-                            />
+                      {absensiVariant === 'arsip' ? (
+                        <div className="rounded-lg border border-slate-200 bg-white p-3 text-slate-900 space-y-2.5">
+                          <div className="text-center leading-tight pb-1">
+                            <p className="text-[10.5px] font-bold tracking-wide">
+                              DEWAN PERWAKILAN RAKYAT DAERAH
+                            </p>
+                            <p className="text-[10.5px] font-bold tracking-wide">
+                              PROVINSI KALIMANTAN BARAT
+                            </p>
                           </div>
-                          <div className="min-w-0 flex-1 border-t border-b border-slate-800 divide-y divide-slate-800 text-[10.5px]">
-                            <div className="grid grid-cols-[88px_10px_1fr] py-0.5">
-                              <span>Tanggal</span>
-                              <span>:</span>
-                              <span className="truncate font-medium">
-                                {absensiMatchStats.firstPreview.tanggal || '—'}
-                              </span>
+                          <div className="flex items-center gap-3 pt-0.5">
+                            <div className="flex h-16 w-13 shrink-0 items-center justify-center rounded border border-slate-100 bg-slate-50 p-1">
+                              <img
+                                src={DEFAULT_DPRD_LOGO_URL}
+                                alt="Logo DPRD Provinsi Kalimantan Barat"
+                                className="max-h-full max-w-full object-contain"
+                              />
                             </div>
-                            <div className="grid grid-cols-[88px_10px_1fr] py-0.5">
-                              <span>Hari</span>
-                              <span>:</span>
-                              <span className="truncate font-medium">
-                                {absensiMatchStats.firstPreview.hari || '—'}
-                              </span>
+                            <div className="min-w-0 flex-1 border-t border-b border-slate-800 divide-y divide-slate-800 text-[10px]">
+                              <div className="grid grid-cols-[96px_10px_1fr] py-0.5">
+                                <span>Tanggal</span>
+                                <span>:</span>
+                                <span className="truncate font-medium">
+                                  {absensiMatchStats.firstPreview.tanggal || '—'}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-[96px_10px_1fr] py-0.5">
+                                <span>Hari</span>
+                                <span>:</span>
+                                <span className="truncate font-medium">
+                                  {absensiMatchStats.firstPreview.hari || '—'}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-[96px_10px_1fr] py-0.5">
+                                <span>Pukul</span>
+                                <span>:</span>
+                                <span className="truncate font-medium">
+                                  {absensiMatchStats.firstPreview.pukul || '—'}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-[96px_10px_1fr] py-0.5">
+                                <span>Judul Kegiatan</span>
+                                <span>:</span>
+                                <span className="truncate font-semibold">
+                                  {absensiMatchStats.firstPreview.proposalName}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-[96px_10px_1fr] py-0.5">
+                                <span>Lokasi Pembagian</span>
+                                <span>:</span>
+                                <span className="truncate font-medium">
+                                  {absensiMatchStats.firstPreview.arsipLocation || '—'}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-[96px_10px_1fr] py-0.5">
+                                <span>&nbsp;</span>
+                                <span>:</span>
+                                <span>&nbsp;</span>
+                              </div>
                             </div>
-                            <div className="grid grid-cols-[88px_10px_1fr] py-0.5">
-                              <span>Pukul</span>
-                              <span>:</span>
-                              <span className="truncate font-medium">
-                                {absensiMatchStats.firstPreview.pukul || '—'}
-                              </span>
+                          </div>
+
+                          <div className="overflow-hidden rounded border border-slate-800 text-[9px]">
+                            <div className="grid grid-cols-[24px_1fr_70px_68px_36px_30px_30px] divide-x divide-slate-800 border-b border-slate-800 bg-white font-bold text-center py-1">
+                              <span>No.</span>
+                              <span>Nama</span>
+                              <span>Tanda Tangan</span>
+                              <span>No. Whatsapp</span>
+                              <span>Item</span>
+                              <span>Stat</span>
+                              <span>Ket</span>
                             </div>
-                            <div className="grid grid-cols-[88px_10px_1fr] py-0.5">
-                              <span>Lokasi Kegiatan</span>
-                              <span>:</span>
-                              <span className="truncate font-semibold">
-                                {absensiMatchStats.firstPreview.proposalName}
-                              </span>
+                            <div className="grid grid-cols-[24px_1fr_70px_68px_36px_30px_30px] divide-x divide-slate-800 text-slate-600 py-1">
+                              <span className="text-center tabular-nums">01</span>
+                              <span className="px-1 truncate">NAMA PENERIMA</span>
+                              <span>&nbsp;</span>
+                              <span>&nbsp;</span>
+                              <span className="text-center font-medium">KPR</span>
+                              <span>&nbsp;</span>
+                              <span>&nbsp;</span>
+                            </div>
+                          </div>
+
+                          <div className="text-center text-[9.5px] leading-tight text-slate-700 pt-0.5">
+                            <p className="tracking-widest font-semibold">
+                              - - - - - - - - - - A R S P - - - - - - - - - -
+                            </p>
+                            <p className="font-bold">
+                              DPRD PROVINSI KALIMANTAN BARAT {absensiMatchStats.firstPreview.arsipFooterYear}
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="rounded-lg border border-slate-200 bg-white p-3 text-slate-900">
+                          <div className="text-center leading-tight pb-2">
+                            <p className="text-[10px] tracking-wide">
+                              PEMERINTAH PROVINSI KALIMANTAN BARAT
+                            </p>
+                            <p className="text-xs font-extrabold tracking-wide">DINAS SOSIAL</p>
+                          </div>
+                          <div className="flex items-center gap-3 pt-1">
+                            <div className="flex h-14 w-12 shrink-0 items-center justify-center rounded border border-slate-100 bg-slate-50 p-1">
+                              <img
+                                src={(bastTemplate?.kopLogoDataUrl || '').trim() || DEFAULT_KOP_LOGO_URL}
+                                alt="Logo Provinsi Kalimantan Barat"
+                                className="max-h-full max-w-full object-contain"
+                              />
+                            </div>
+                            <div className="min-w-0 flex-1 border-t border-b border-slate-800 divide-y divide-slate-800 text-[10.5px]">
+                              <div className="grid grid-cols-[88px_10px_1fr] py-0.5">
+                                <span>Tanggal</span>
+                                <span>:</span>
+                                <span className="truncate font-medium">
+                                  {absensiMatchStats.firstPreview.tanggal || '—'}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-[88px_10px_1fr] py-0.5">
+                                <span>Hari</span>
+                                <span>:</span>
+                                <span className="truncate font-medium">
+                                  {absensiMatchStats.firstPreview.hari || '—'}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-[88px_10px_1fr] py-0.5">
+                                <span>Pukul</span>
+                                <span>:</span>
+                                <span className="truncate font-medium">
+                                  {absensiMatchStats.firstPreview.pukul || '—'}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-[88px_10px_1fr] py-0.5">
+                                <span>Lokasi Kegiatan</span>
+                                <span>:</span>
+                                <span className="truncate font-semibold">
+                                  {absensiMatchStats.firstPreview.proposalName}
+                                </span>
+                              </div>
                             </div>
                           </div>
                         </div>
-                      </div>
+                      )}
                     </div>
                   )}
 
@@ -5166,6 +5300,48 @@ export function MenuDownloadView({
                         />
                       </div>
                     </div>
+
+                    {absensiVariant === 'arsip' && (
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 pt-1">
+                        <div>
+                          <label className="mb-1 block text-[10.5px] font-semibold text-slate-600">
+                            Lokasi Pembagian Cadangan
+                          </label>
+                          <input
+                            type="text"
+                            value={absensiFallbackLokasiPembagian}
+                            onChange={(e) => setAbsensiFallbackLokasiPembagian(e.target.value)}
+                            placeholder="Otomatis dari Lokasi Jadwal"
+                            className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 focus:border-teal-600 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-[10.5px] font-semibold text-slate-600">
+                            Tahun Footer ARSP
+                          </label>
+                          <input
+                            type="text"
+                            value={absensiArsipFooterYear}
+                            onChange={(e) => setAbsensiArsipFooterYear(e.target.value)}
+                            placeholder="Otomatis tahun proposal"
+                            className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 focus:border-teal-600 focus:outline-none tabular-nums"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-[10.5px] font-semibold text-slate-600">
+                            Baris Kosong Tambahan
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={30}
+                            value={absensiExtraBlankRows}
+                            onChange={(e) => setAbsensiExtraBlankRows(e.target.value)}
+                            className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 focus:border-teal-600 focus:outline-none tabular-nums"
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </>
               )}
@@ -5207,7 +5383,9 @@ export function MenuDownloadView({
                         ? `Download Daftar Hadir (${absensiMatchStats.totalProposals} Proposal · F4)`
                         : absensiVariant === 'makan_minum'
                           ? `Download Daftar Makan & Minum (${absensiMatchStats.totalProposals} Proposal · F4)`
-                          : `Download Absensi Kegiatan (${absensiMatchStats.totalProposals} Proposal · F4)`}
+                          : absensiVariant === 'arsip'
+                            ? `Download Absen Arsip (${absensiMatchStats.totalProposals} Proposal · F4)`
+                            : `Download Absensi Kegiatan (${absensiMatchStats.totalProposals} Proposal · F4)`}
                     </span>
                   </>
                 )}

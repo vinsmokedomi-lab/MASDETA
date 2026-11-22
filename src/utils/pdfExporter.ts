@@ -9,6 +9,7 @@ import {
   CouponPrintConfig,
   DEFAULT_BAST_TEMPLATE,
   DEFAULT_COUPON_CONFIG,
+  DEFAULT_DPRD_LOGO_URL,
   DEFAULT_KOP_LOGO_URL,
   DEFAULT_SCHEDULE_BOOKS,
   DEFAULT_SPTJM_TEMPLATE,
@@ -9013,6 +9014,393 @@ export async function exportAbsenDinasPesertaToPdf(
   const defaultFileName = singleProposal
     ? `${prefixName}_${singleProposal.tahun || 'DINSOS'}_${singleProposal.namaProposal}`
     : `${prefixName}_DINSOS_${targetProposals.length}_Proposal`;
+
+  const saved = await saveOrOpenPdfDocument(doc, fileName || defaultFileName);
+
+  return {
+    ...saved,
+    proposalCount: targetProposals.length,
+    totalRows: totalRowsRendered,
+  };
+}
+
+export interface AbsenArsipManualOverride {
+  tanggal?: string;
+  hari?: string;
+  pukul?: string;
+  judulKegiatan?: string;
+  lokasiPembagian?: string;
+  footerYear?: string;
+}
+
+export interface ExportAbsenArsipPdfOptions {
+  records: KpmRecord[];
+  allRecords?: KpmRecord[];
+  proposals: ProposalRecord[];
+  items: ItemBantuan[];
+  wilayahList?: WilayahKabKota[];
+  proposalSlotMap?: ProposalSlotMap;
+  schedules?: ScheduleEventItem[];
+  scheduleBookId?: string;
+  singleProposal?: ProposalRecord;
+  manualOverride?: AbsenArsipManualOverride;
+  fallbackFields?: AbsenArsipManualOverride;
+  footerYearOverride?: string;
+  extraBlankRows?: number;
+  logoUrl?: string;
+  fileName?: string;
+}
+
+export async function exportAbsenArsipToPdf(
+  options: ExportAbsenArsipPdfOptions
+): Promise<{ savedFileName: string; openedNative: boolean; proposalCount: number; totalRows: number }> {
+  const {
+    records,
+    allRecords,
+    proposals,
+    items,
+    wilayahList = INITIAL_WILAYAH_LIST,
+    proposalSlotMap = {},
+    schedules = [],
+    scheduleBookId,
+    singleProposal,
+    manualOverride,
+    fallbackFields,
+    footerYearOverride,
+    extraBlankRows = 0,
+    logoUrl = DEFAULT_DPRD_LOGO_URL,
+    fileName,
+  } = options;
+
+  const acceptedSource = (allRecords && allRecords.length > 0 ? allRecords : records).filter(
+    (r) => r.validasi === 'accepted'
+  );
+
+  interface TargetProp {
+    id: string;
+    namaProposal: string;
+    tahun: string;
+  }
+
+  let targetProposals: TargetProp[] = [];
+  if (singleProposal) {
+    targetProposals = [
+      {
+        id: singleProposal.id,
+        namaProposal: singleProposal.namaProposal,
+        tahun: singleProposal.tahun,
+      },
+    ];
+  } else {
+    const proposalById = new Map<string, ProposalRecord>();
+    proposals.forEach((p) => proposalById.set(p.id, p));
+    const matchedIds = new Set<string>();
+    const syntheticMap = new Map<string, TargetProp>();
+
+    records.forEach((rec) => {
+      if (rec.validasi !== 'accepted') return;
+      const matched =
+        (rec.proposalId ? proposalById.get(rec.proposalId) : undefined) ??
+        proposals.find((p) => p.namaProposal === rec.proposal && p.tahun === rec.tahun) ??
+        proposals.find((p) => p.namaProposal === rec.proposal);
+      if (matched) {
+        matchedIds.add(matched.id);
+      } else if ((rec.proposal || '').trim()) {
+        const synKey = `${rec.tahun || ''}::${rec.proposal.trim().toLowerCase()}`;
+        if (!syntheticMap.has(synKey)) {
+          syntheticMap.set(synKey, {
+            id: `syn-${synKey}`,
+            tahun: rec.tahun || '',
+            namaProposal: rec.proposal.trim(),
+          });
+        }
+      }
+    });
+
+    const listFromDb: TargetProp[] = proposals
+      .filter((p) => matchedIds.has(p.id))
+      .map((p) => ({ id: p.id, namaProposal: p.namaProposal, tahun: p.tahun }));
+    const combined: TargetProp[] = [...listFromDb, ...Array.from(syntheticMap.values())];
+
+    const byKec = new Map<string, TargetProp[]>();
+    combined.forEach((prop) => {
+      const kec =
+        resolveProposalKecamatanCategory(prop.namaProposal, proposals, prop.tahun, wilayahList) ||
+        'Lainnya';
+      const arr = byKec.get(kec) || [];
+      arr.push(prop);
+      byKec.set(kec, arr);
+    });
+    const sortedKecNames = Array.from(byKec.keys()).sort(sortKecamatanCategoryNames);
+    targetProposals = sortedKecNames.flatMap((kec) =>
+      sortProposalsWithinKecamatan(byKec.get(kec) || [], (p) => p.namaProposal)
+    );
+  }
+
+  if (targetProposals.length === 0) {
+    throw new Error('Tidak ada data proposal/KPM aktif untuk dibuatkan Absen Arsip.');
+  }
+
+  const pageW = F4_PAPER_WIDTH_MM; // 216 mm
+  const pageH = 330; // F4 Folio 216 x 330 mm
+  const marginX = 18;
+  const contentW = pageW - marginX * 2; // 180 mm
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: [pageW, pageH],
+    compress: true,
+  }) as AutoTableDoc;
+
+  const loadedDprdLogo = logoUrl ? await loadSingleImageForPdf(logoUrl) : null;
+  const extraCount = Math.max(0, Math.min(30, Math.floor(extraBlankRows || 0)));
+  let totalRowsRendered = 0;
+  const pageFooterYearMap = new Map<number, string>();
+
+  targetProposals.forEach((prop, propIdx) => {
+    if (propIdx > 0) {
+      doc.addPage();
+    }
+    const proposalStartPage = doc.getNumberOfPages();
+
+    const propRecords = acceptedSource.filter((r) =>
+      r.proposalId
+        ? r.proposalId === prop.id
+        : r.proposal === prop.namaProposal && (!prop.tahun || r.tahun === prop.tahun)
+    );
+    const slotResolution = resolveProposalSlotStateForGroup(
+      proposalSlotMap,
+      prop.id,
+      prop.namaProposal,
+      prop.tahun
+    );
+    const mergedSlots = buildMergedProposalSlots({
+      groupRecords: propRecords,
+      slotState: slotResolution.state,
+      proposals,
+      catalog: items,
+      wilayahList,
+    });
+
+    const rows: string[][] = mergedSlots.map((slot) => {
+      const noStr = String(slot.slotNumber).padStart(2, '0');
+      if (slot.kind !== 'kpm') {
+        return [noStr, '', '', '', '', '', ''];
+      }
+      const namaStr = (slot.record.nama || '').trim().toUpperCase();
+      const itemStr = (slot.record.item || '').trim().toUpperCase();
+      return [noStr, namaStr, '', '', itemStr, '', ''];
+    });
+
+    const lastNum =
+      mergedSlots.length > 0 ? mergedSlots[mergedSlots.length - 1].slotNumber : 0;
+    for (let e = 1; e <= extraCount; e += 1) {
+      rows.push([String(lastNum + e).padStart(2, '0'), '', '', '', '', '', '']);
+    }
+    if (rows.length === 0) {
+      rows.push(['01', '', '', '', '', '', '']);
+    }
+    totalRowsRendered += rows.length;
+
+    const matchedSchedule = resolveScheduleForProposalInBook(
+      prop.namaProposal,
+      prop.tahun,
+      schedules,
+      scheduleBookId
+    );
+    const autoFields = formatAbsensiScheduleFields(matchedSchedule);
+
+    const isSingle = Boolean(singleProposal);
+    const tanggalVal = (
+      isSingle && manualOverride?.tanggal !== undefined
+        ? manualOverride.tanggal
+        : autoFields.tanggal || fallbackFields?.tanggal || ''
+    ).trim();
+    const hariVal = (
+      isSingle && manualOverride?.hari !== undefined
+        ? manualOverride.hari
+        : autoFields.hari || fallbackFields?.hari || ''
+    ).trim();
+    const pukulVal = (
+      isSingle && manualOverride?.pukul !== undefined
+        ? manualOverride.pukul
+        : autoFields.pukul || fallbackFields?.pukul || ''
+    ).trim();
+    const judulKegiatanVal = (
+      isSingle && manualOverride?.judulKegiatan !== undefined
+        ? manualOverride.judulKegiatan
+        : prop.namaProposal || ''
+    ).trim();
+    const lokasiPembagianVal = (
+      isSingle && manualOverride?.lokasiPembagian !== undefined
+        ? manualOverride.lokasiPembagian
+        : matchedSchedule?.location || fallbackFields?.lokasiPembagian || ''
+    ).trim();
+
+    // --- Blok Logo DPRD Kalbar (kiri) + Metadata Kegiatan (kanan) di Halaman 1 Proposal ---
+    const metaTopY = 29;
+    const metaX = marginX + 37;
+    const metaW = pageW - marginX - metaX; // 143 mm
+    const labelX = metaX + 1.5;
+    const colonX = metaX + 36;
+    const valX = metaX + 40;
+    const valMaxW = metaW - 41.5;
+    const baseRowH = 6.6;
+
+    const metaRows: Array<{ label: string; value: string }> = [
+      { label: 'Tanggal', value: tanggalVal },
+      { label: 'Hari', value: hariVal },
+      { label: 'Pukul', value: pukulVal },
+      { label: 'Judul Kegiatan', value: judulKegiatanVal },
+      { label: 'Lokasi Pembagian', value: lokasiPembagianVal },
+      { label: '', value: '' },
+    ];
+
+    doc.setFont('times', 'normal');
+    doc.setFontSize(10.5);
+    doc.setTextColor(0, 0, 0);
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.25);
+
+    doc.line(metaX, metaTopY, metaX + metaW, metaTopY);
+
+    let cursorY = metaTopY;
+    metaRows.forEach((row) => {
+      const wrappedVal = row.value
+        ? (doc.splitTextToSize(row.value, valMaxW) as string[])
+        : [''];
+      const rowHeight = Math.max(baseRowH, wrappedVal.length * 4.5 + 2.2);
+      const textStartY = cursorY + 4.6;
+
+      if (row.label) {
+        doc.setFont('times', 'normal');
+        doc.setFontSize(10.5);
+        doc.text(row.label, labelX, textStartY);
+      }
+      doc.setFont('times', 'normal');
+      doc.setFontSize(10.5);
+      doc.text(':', colonX, textStartY);
+
+      if (row.value) {
+        doc.setFont('times', 'normal');
+        doc.setFontSize(10.5);
+        wrappedVal.forEach((line, lIdx) => {
+          doc.text(line, valX, textStartY + lIdx * 4.5);
+        });
+      }
+
+      cursorY += rowHeight;
+      doc.line(metaX, cursorY, metaX + metaW, cursorY);
+    });
+
+    const metaTotalH = cursorY - metaTopY;
+
+    if (loadedDprdLogo) {
+      const boxW = 24;
+      const boxH = Math.min(28, metaTotalH - 4);
+      const ratio =
+        loadedDprdLogo.width > 0 && loadedDprdLogo.height > 0
+          ? loadedDprdLogo.width / loadedDprdLogo.height
+          : 0.79;
+      let drawW = boxW;
+      let drawH = drawW / ratio;
+      if (drawH > boxH) {
+        drawH = boxH;
+        drawW = drawH * ratio;
+      }
+      const logoX = marginX + (34 - drawW) / 2;
+      const logoY = metaTopY + (metaTotalH - drawH) / 2;
+      try {
+        doc.addImage(loadedDprdLogo.dataUrl, loadedDprdLogo.format, logoX, logoY, drawW, drawH);
+      } catch {
+        // Lewati jika gagal render gambar
+      }
+    }
+
+    // --- Tabel Absen Arsip 7 Kolom (No., Nama, Tanda Tangan, No. Whatsapp, Item, Stat, Ket) ---
+    autoTable(doc, {
+      startY: cursorY + 4.5,
+      margin: { top: 28, right: marginX, bottom: 20, left: marginX },
+      head: [['No.', 'Nama', 'Tanda Tangan', 'No. Whatsapp', 'Item', 'Stat', 'Ket']],
+      body: rows,
+      theme: 'grid',
+      showHead: 'everyPage',
+      styles: {
+        font: 'times',
+        fontSize: 9.5,
+        textColor: [0, 0, 0],
+        lineColor: [0, 0, 0],
+        lineWidth: 0.25,
+        valign: 'middle',
+        cellPadding: { top: 1.8, right: 2, bottom: 1.8, left: 2 },
+        minCellHeight: 10.2,
+      },
+      headStyles: {
+        font: 'times',
+        fillColor: [255, 255, 255],
+        textColor: [0, 0, 0],
+        fontStyle: 'normal',
+        fontSize: 9.5,
+        halign: 'center',
+        valign: 'middle',
+        minCellHeight: 9.5,
+        lineWidth: 0.25,
+        lineColor: [0, 0, 0],
+      },
+      columnStyles: {
+        0: { cellWidth: 10, halign: 'center' },
+        1: { cellWidth: 50, halign: 'left' },
+        2: { cellWidth: 30, halign: 'center' },
+        3: { cellWidth: 34, halign: 'center' },
+        4: { cellWidth: 17, halign: 'center' },
+        5: { cellWidth: 14, halign: 'center' },
+        6: { cellWidth: contentW - 10 - 50 - 30 - 34 - 17 - 14, halign: 'left' },
+      },
+    });
+
+    const proposalEndPage = doc.getNumberOfPages();
+    const resolvedFooterYear = (
+      (isSingle && manualOverride?.footerYear) ||
+      footerYearOverride ||
+      prop.tahun ||
+      String(new Date().getFullYear())
+    ).trim();
+    for (let p = proposalStartPage; p <= proposalEndPage; p += 1) {
+      pageFooterYearMap.set(p, resolvedFooterYear);
+    }
+  });
+
+  // --- Header & Footer DPRD Provinsi Kalimantan Barat pada SETIAP halaman ---
+  const totalPages = doc.getNumberOfPages();
+  for (let p = 1; p <= totalPages; p += 1) {
+    doc.setPage(p);
+
+    doc.setTextColor(0, 0, 0);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(12.5);
+    doc.text('DEWAN PERWAKILAN RAKYAT DAERAH', pageW / 2, 14.5, { align: 'center' });
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(15.5);
+    doc.text('PROVINSI KALIMANTAN BARAT', pageW / 2, 21.2, { align: 'center' });
+
+    const fYear = pageFooterYearMap.get(p) || '2025';
+    doc.setTextColor(100, 116, 139);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.text('- - - - - - - - - -  A R S P  - - - - - - - - - -', pageW / 2, pageH - 13, {
+      align: 'center',
+    });
+    doc.setFontSize(7.8);
+    doc.text(`DPRD PROVINSI KALIMANTAN BARAT ${fYear}`, pageW / 2, pageH - 8.5, {
+      align: 'center',
+    });
+  }
+
+  const defaultFileName = singleProposal
+    ? `Absen_Arsip_-_${singleProposal.namaProposal}_${singleProposal.tahun || 'DPRD'}`
+    : `Absen_Arsip_DPRD_${targetProposals.length}_Proposal`;
 
   const saved = await saveOrOpenPdfDocument(doc, fileName || defaultFileName);
 
