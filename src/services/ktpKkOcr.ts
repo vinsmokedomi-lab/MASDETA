@@ -134,29 +134,150 @@ export function matchKelurahanOption(rawKel: string, options: string[]): string 
   return partial || '';
 }
 
-function buildImageDescriptor(
+async function compressBase64DataUrlIfLarge(
+  dataUrl: string,
+  maxBase64Chars = 650_000,
+  maxEdge = 1400,
+  quality = 0.82
+): Promise<{ base64: string; mimeType: string } | null> {
+  const commaIdx = dataUrl.indexOf(',');
+  if (commaIdx < 0) return null;
+  const meta = dataUrl.slice(5, commaIdx);
+  const rawMime = meta.split(';')[0] || 'image/jpeg';
+  const rawBase64 = dataUrl.slice(commaIdx + 1);
+  if (!rawBase64) return null;
+  if (rawBase64.length <= maxBase64Chars || typeof document === 'undefined') {
+    return { base64: rawBase64, mimeType: rawMime };
+  }
+
+  let canvas: HTMLCanvasElement | null = null;
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => {
+        el.onload = null;
+        el.onerror = null;
+        resolve(el);
+      };
+      el.onerror = () => {
+        el.onload = null;
+        el.onerror = null;
+        reject(new Error('load failed'));
+      };
+      el.src = dataUrl;
+    });
+    const srcW = img.naturalWidth || img.width || 0;
+    const srcH = img.naturalHeight || img.height || 0;
+    if (srcW > 0 && srcH > 0) {
+      const scale = Math.min(1, maxEdge / Math.max(srcW, srcH));
+      const dstW = Math.max(1, Math.round(srcW * scale));
+      const dstH = Math.max(1, Math.round(srcH * scale));
+      canvas = document.createElement('canvas');
+      canvas.width = dstW;
+      canvas.height = dstH;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, dstW, dstH);
+        ctx.drawImage(img, 0, 0, dstW, dstH);
+        const compressedUrl = canvas.toDataURL('image/jpeg', quality);
+        const idx = compressedUrl.indexOf(',');
+        const compactBase64 = idx >= 0 ? compressedUrl.slice(idx + 1) : '';
+        if (compactBase64) {
+          return { base64: compactBase64, mimeType: 'image/jpeg' };
+        }
+      }
+    }
+  } catch {
+    // Fall back to raw base64 if canvas re-compression fails
+  } finally {
+    if (canvas) {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+  }
+  return { base64: rawBase64, mimeType: rawMime };
+}
+
+async function buildImageDescriptor(
   doc: KpmDocumentFile,
   localOcrImage?: OcrImagePayload | null
-): Record<string, string> {
+): Promise<Record<string, string>> {
   if (localOcrImage?.base64) {
+    const mime = localOcrImage.mimeType || 'image/jpeg';
+    if (localOcrImage.base64.length > 650_000) {
+      const compacted = await compressBase64DataUrlIfLarge(
+        `data:${mime};base64,${localOcrImage.base64}`
+      );
+      if (compacted) return compacted;
+    }
     return {
       base64: localOcrImage.base64,
-      mimeType: localOcrImage.mimeType || 'image/jpeg',
+      mimeType: mime,
     };
   }
   const direct = (doc.directUrl || doc.dataUrl || '').trim();
   if (direct.startsWith('data:image/')) {
-    const commaIdx = direct.indexOf(',');
-    const meta = commaIdx >= 0 ? direct.slice(5, commaIdx) : '';
-    const mimeType = meta.split(';')[0] || doc.mimeType || 'image/jpeg';
-    const base64 = commaIdx >= 0 ? direct.slice(commaIdx + 1) : '';
-    if (base64) return { base64, mimeType };
+    const compacted = await compressBase64DataUrlIfLarge(direct);
+    if (compacted) return compacted;
   }
   return {
     ...(doc.fileId ? { fileId: doc.fileId } : {}),
     ...(direct ? { url: direct } : {}),
     ...(doc.thumbnailUrl ? { thumbnailUrl: doc.thumbnailUrl } : {}),
   };
+}
+
+function isNetworkFetchError(err: unknown): boolean {
+  if (!err) return false;
+  if (err instanceof DOMException && err.name === 'AbortError') return true;
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return (
+    msg.includes('failed to fetch') ||
+    msg.includes('networkerror') ||
+    msg.includes('load failed') ||
+    msg.includes('network request failed') ||
+    msg.includes('aborted')
+  );
+}
+
+async function postJsonWithRetry(
+  endpoint: string,
+  payload: unknown,
+  maxAttempts = 2,
+  timeoutMs = 55_000
+): Promise<Response> {
+  const serialized = JSON.stringify(payload);
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: serialized,
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (response.status === 503 && attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+        continue;
+      }
+      return response;
+    } catch (err) {
+      clearTimeout(timer);
+      lastError = err;
+      if (!isNetworkFetchError(err) || attempt >= maxAttempts) {
+        throw err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Gagal terhubung ke server pemindai.');
 }
 
 export async function scanKtpAndKkDocuments(params: {
@@ -167,9 +288,14 @@ export async function scanKtpAndKkDocuments(params: {
   pekerjaanOptions: string[];
   kelurahanOptions?: string[];
 }): Promise<KtpKkScanResult> {
+  const [ktpDescriptor, kkDescriptor] = await Promise.all([
+    buildImageDescriptor(params.ktpDoc, params.ktpOcrImage),
+    buildImageDescriptor(params.kkDoc, params.kkOcrImage),
+  ]);
+
   const requestBody = {
-    ktp: buildImageDescriptor(params.ktpDoc, params.ktpOcrImage),
-    kk: buildImageDescriptor(params.kkDoc, params.kkOcrImage),
+    ktp: ktpDescriptor,
+    kk: kkDescriptor,
     pekerjaanOptions: params.pekerjaanOptions,
     kelurahanOptions: params.kelurahanOptions || [],
   };
@@ -177,17 +303,12 @@ export async function scanKtpAndKkDocuments(params: {
   const apiBase = String(import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
   let raw: RawOcrResponse | null = null;
   let shouldTrySupabaseEdge = false;
+  let primaryFailureMessage: string | null = null;
 
   if (apiBase || !Capacitor.isNativePlatform()) {
     const endpoint = apiBase ? `${apiBase}/api/ocr/ktp-kk` : '/api/ocr/ktp-kk';
     try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      });
+      const response = await postJsonWithRetry(endpoint, requestBody, 2, 55_000);
 
       const contentType = response.headers.get('content-type') || '';
       const isJson = contentType.includes('application/json');
@@ -205,14 +326,30 @@ export async function scanKtpAndKkDocuments(params: {
         throw new Error(
           typeof json.error === 'string' && json.error
             ? json.error
-            : `Gagal memindai foto KTP & KK (${response.status}).`
+            : `Gagal memindai foto KTP & KK (HTTP ${response.status}).`
         );
       }
     } catch (fetchErr) {
-      if (!apiBase && isSupabaseConfigured) {
+      const isTimeout =
+        (fetchErr instanceof DOMException && fetchErr.name === 'AbortError') ||
+        (fetchErr instanceof Error && fetchErr.name === 'AbortError');
+      if (isTimeout) {
+        primaryFailureMessage =
+          'Waktu tunggu pemindaian KTP & KK habis (timeout). Pastikan koneksi stabil atau unggah ulang foto dengan ukuran lebih ringan lalu coba Scan lagi.';
+      } else if (isNetworkFetchError(fetchErr)) {
+        primaryFailureMessage =
+          'Tidak dapat terhubung ke server pemindai KTP & KK. Pastikan koneksi internet stabil (atau server API sedang aktif) lalu coba klik Scan lagi.';
+      } else {
+        primaryFailureMessage =
+          fetchErr instanceof Error
+            ? fetchErr.message
+            : 'Gagal memindai foto KTP & KK.';
+      }
+
+      if (!apiBase && isSupabaseConfigured && isNetworkFetchError(fetchErr)) {
         shouldTrySupabaseEdge = true;
       } else {
-        throw fetchErr;
+        throw new Error(primaryFailureMessage);
       }
     }
   } else {
@@ -221,21 +358,34 @@ export async function scanKtpAndKkDocuments(params: {
 
   if (!raw && shouldTrySupabaseEdge) {
     if (!isSupabaseConfigured) {
-      throw new Error('Endpoint pemindaian KTP & KK belum tersedia pada lingkungan ini.');
-    }
-    const { data, error } = await supabase.functions.invoke<RawOcrResponse>('ocr-ktp-kk', {
-      body: requestBody,
-    });
-    if (error) {
       throw new Error(
-        error.message ||
-          'Layanan scan KTP & KK membutuhkan endpoint server (VITE_API_BASE_URL) atau Supabase Edge Function "ocr-ktp-kk".'
+        primaryFailureMessage ||
+          'Endpoint pemindaian KTP & KK belum tersedia pada lingkungan ini.'
       );
     }
-    if (data && typeof data.error === 'string' && data.error) {
-      throw new Error(data.error);
+    try {
+      const { data, error } = await supabase.functions.invoke<RawOcrResponse>('ocr-ktp-kk', {
+        body: requestBody,
+      });
+      if (error) {
+        throw new Error(
+          primaryFailureMessage ||
+            'Layanan scan KTP & KK tidak dapat dijangkau dari domain ini (endpoint server /api/ocr/ktp-kk atau Supabase Edge Function "ocr-ktp-kk" belum aktif).'
+        );
+      }
+      if (data && typeof data.error === 'string' && data.error) {
+        throw new Error(data.error);
+      }
+      raw = data;
+    } catch (edgeErr) {
+      if (edgeErr instanceof Error && !isNetworkFetchError(edgeErr)) {
+        throw edgeErr;
+      }
+      throw new Error(
+        primaryFailureMessage ||
+          'Gagal terhubung ke layanan scan KTP & KK. Periksa koneksi internet atau konfigurasi server (VITE_API_BASE_URL).'
+      );
     }
-    raw = data;
   }
 
   if (!raw) {

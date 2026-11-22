@@ -180,18 +180,24 @@ export function DashboardView({
     return proposals.filter((p) => p.tahun === selectedYear);
   }, [proposals, selectedYear]);
 
+  const acceptedYearRecords = useMemo(
+    () => filteredRecords.filter((r) => r.validasi === 'accepted'),
+    [filteredRecords]
+  );
+
   const kpmStats = useMemo(() => {
-    const accepted = filteredRecords.filter((r) => r.validasi === 'accepted').length;
-    const pending = filteredRecords.filter((r) => r.validasi === 'pending').length;
-    const rejected = filteredRecords.filter((r) => r.validasi === 'rejected').length;
-    const total = filteredRecords.length;
+    const accepted = acceptedYearRecords.length;
+    // Database KPM & Arsip bersifat global (standalone, tanpa proposal) agar cocok dengan halaman tujuan saat diklik
+    const pending = records.filter((r) => r.validasi === 'pending' && !(r.proposal || '').trim()).length;
+    const rejected = records.filter((r) => r.validasi === 'rejected' && !(r.proposal || '').trim()).length;
+    const total = accepted;
     return {
       accepted,
       pending,
       rejected,
       total,
     };
-  }, [filteredRecords]);
+  }, [acceptedYearRecords, records]);
 
   // Item package delivery overview (per-KPM completed item package & sub-item unit status)
   const itemDeliveryOverview = useMemo(() => {
@@ -216,7 +222,7 @@ export function DashboardView({
     };
   }, [filteredRecords, items]);
 
-  // DTSEN classification breakdown (multi-color segments)
+  // DTSEN classification breakdown (khusus KPM aktif berstatus Diterima agar tidak tercampur data Ditolak/Arsip)
   const dtsenStats = useMemo(() => {
     let priorityCount = 0; // Desil 1-4 (Hijau)
     let reviewCount = 0; // Desil 5 (Oranye)
@@ -224,22 +230,31 @@ export function DashboardView({
     let notFoundCount = 0; // Data Tidak Ditemukan (Hitam)
     let unassignedCount = 0; // Belum Ada Desil (Abu-abu)
 
-    for (const r of filteredRecords) {
-      const d = (r.dtsen || '').trim();
+    for (const r of acceptedYearRecords) {
+      const raw = (r.dtsen || '').trim();
+      const d = raw.replace(/^desil\s+/i, '').trim();
       if (d === '1' || d === '2' || d === '3' || d === '4') {
         priorityCount += 1;
       } else if (d === '5') {
         reviewCount += 1;
-      } else if (d === '6' || d === '7' || d === '8' || d === '9' || d === '10' || d === '6 - 10') {
+      } else if (
+        d === '6' ||
+        d === '7' ||
+        d === '8' ||
+        d === '9' ||
+        d === '10' ||
+        d === '6 - 10' ||
+        d === '6-10'
+      ) {
         highCount += 1;
-      } else if (d === 'Data Tidak Ditemukan') {
+      } else if (raw.toLowerCase() === 'data tidak ditemukan') {
         notFoundCount += 1;
       } else {
         unassignedCount += 1;
       }
     }
 
-    const total = filteredRecords.length;
+    const total = acceptedYearRecords.length;
     const priorityPct = total > 0 ? Math.round((priorityCount / total) * 100) : 0;
     const rawSegments = [
       { key: 'd14', label: 'Desil 1–4', count: priorityCount, barClass: 'bg-teal-700' },
@@ -265,7 +280,7 @@ export function DashboardView({
       priorityPct,
       segments,
     };
-  }, [filteredRecords]);
+  }, [acceptedYearRecords]);
 
   // Dinas attention counts
   const attentionCounts = useMemo(() => {
@@ -333,7 +348,7 @@ export function DashboardView({
       }
     >();
 
-    for (const rec of filteredRecords) {
+    for (const rec of acceptedYearRecords) {
       const code = (rec.item || '').trim();
       if (!code) continue;
       const pkg = resolvePackageForKpm(items, rec.tahun, code);
@@ -346,8 +361,7 @@ export function DashboardView({
         pending: 0,
       };
       existing.total += 1;
-      if (rec.validasi === 'accepted') existing.accepted += 1;
-      if (rec.validasi === 'pending') existing.pending += 1;
+      existing.accepted += 1;
       itemMap.set(code, existing);
     }
 
@@ -357,17 +371,17 @@ export function DashboardView({
       if (rankA !== rankB) return rankA - rankB;
       return a.code.localeCompare(b.code, 'id');
     });
-  }, [filteredRecords, items, selectedYear]);
+  }, [acceptedYearRecords, items, selectedYear]);
 
   const missingItemCount = useMemo(
-    () => filteredRecords.filter((r) => !(r.item || '').trim()).length,
-    [filteredRecords]
+    () => acceptedYearRecords.filter((r) => !(r.item || '').trim()).length,
+    [acceptedYearRecords]
   );
 
-  // Top field coordinators (Pengelola)
+  // Top field coordinators (Pengelola — khusus KPM aktif Diterima agar konsisten dengan statistik Beranda)
   const pengelolaBreakdown = useMemo(() => {
     const map = new Map<string, number>();
-    for (const r of filteredRecords) {
+    for (const r of acceptedYearRecords) {
       const name = (r.pengelola || '').trim();
       if (!name) continue;
       map.set(name, (map.get(name) ?? 0) + 1);

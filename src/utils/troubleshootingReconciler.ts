@@ -516,6 +516,15 @@ function findMatchingBastSlot(
     })[0];
   };
 
+  // 0. Prioritas tertinggi: kecocokan eksak NIK 16 digit (mengatasi perbedaan ejaan/singkatan nama di BAST Dinas)
+  const cleanPropNik = (propRow.nik || '').replace(/\D/g, '');
+  if (cleanPropNik.length === 16) {
+    const nikMatches = bastSlots.filter(
+      (s) => s.nik.replace(/\D/g, '') === cleanPropNik
+    );
+    if (nikMatches.length > 0) return pickBest(nikMatches);
+  }
+
   const strictMatches = bastSlots.filter((s) => s.strictName === strictProp);
   if (strictMatches.length > 0) return pickBest(strictMatches);
 
@@ -601,7 +610,7 @@ export function buildProposalRowsFromDatabase(params: {
     .sort((a, b) => {
       if (a.slotNumber !== b.slotNumber) return a.slotNumber - b.slotNumber;
       if (a.rank !== b.rank) return a.rank - b.rank;
-      return a.rec.nama.localeCompare(b.rec.nama, 'id');
+      return (a.rec.nama || '').localeCompare(b.rec.nama || '', 'id');
     });
 
   return ordered.map(({ rec, slotNumber }, idx) => {

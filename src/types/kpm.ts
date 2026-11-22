@@ -624,3 +624,52 @@ export interface TroubleshootingReconcileSnapshot {
   filledFromDatabaseOriginalItems?: Record<string, string>;
 }
 
+export type ProposalDestinationType = 'OPD' | 'Kecamatan' | 'Kelurahan';
+
+export interface SavedRabSubItem {
+  id: string;
+  namaBarang: string;
+  volumePerPaket: number;
+  satuan: string;
+  hargaDasar: number;
+  hargaSatuan: number;
+  isBalancer: boolean;
+}
+
+export interface SavedRabPackage {
+  id: string;
+  kode: string;
+  namaPaket: string;
+  jumlahPenerima: number;
+  customTargetHarga: number | null;
+  balancerMode: 'proportional' | 'primary';
+  subItems: SavedRabSubItem[];
+}
+
+export interface SavedProposalRabConfig {
+  proposalId: string;
+  proposalName: string;
+  tahun: string;
+  judulRab: string;
+  totalAnggaran: number;
+  totalTerhitung: number;
+  paguStandarPerKpm: number;
+  totalKpmSnapshot: number;
+  itemCountsSnapshot: Record<string, number>;
+  packages: SavedRabPackage[];
+  updatedAt: string;
+  updatedBy?: string;
+}
+
+export type ProposalRabMap = Record<string, SavedProposalRabConfig>;
+
+export interface ProposalStyleUsageRecord {
+  id: string;
+  styleId: number; // 1..15
+  proposalId: string;
+  namaProposal: string;
+  tahun: string;
+  jenisTujuan: ProposalDestinationType;
+  createdAt: string;
+  createdBy?: string;
+}

@@ -455,8 +455,92 @@ async function startServer() {
   });
   saveStore(store);
 
+  const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 hari
+
+  function isSessionExpired(session: { createdAt?: string } | undefined): boolean {
+    if (!session?.createdAt) return true;
+    const createdMs = Date.parse(session.createdAt);
+    if (!Number.isFinite(createdMs)) return true;
+    return Date.now() - createdMs > SESSION_TTL_MS;
+  }
+
+  function pruneExpiredSessions(): boolean {
+    let removed = false;
+    for (const [token, sess] of Object.entries(store.sessions)) {
+      if (isSessionExpired(sess)) {
+        delete store.sessions[token];
+        removed = true;
+      }
+    }
+    if (removed) {
+      saveStore(store);
+    }
+    return removed;
+  }
+
+  pruneExpiredSessions();
+
+  function getClientIp(req: Request): string {
+    const fwd = req.headers['x-forwarded-for'];
+    if (typeof fwd === 'string' && fwd.trim()) {
+      return fwd.split(',')[0].trim();
+    }
+    return req.socket?.remoteAddress || 'unknown';
+  }
+
+  function createRateLimiter(maxRequests: number, windowMs: number, message: string) {
+    const hits = new Map<string, number[]>();
+    return (req: Request, res: Response, next: express.NextFunction) => {
+      const now = Date.now();
+      const ip = getClientIp(req);
+      const timestamps = (hits.get(ip) || []).filter((ts) => now - ts < windowMs);
+      if (timestamps.length >= maxRequests) {
+        const retryAfterSec = Math.max(1, Math.ceil((windowMs - (now - timestamps[0])) / 1000));
+        res.setHeader('Retry-After', String(retryAfterSec));
+        res.status(429).json({ error: message });
+        return;
+      }
+      timestamps.push(now);
+      hits.set(ip, timestamps);
+      if (hits.size > 5000) {
+        for (const [key, list] of hits.entries()) {
+          const fresh = list.filter((ts) => now - ts < windowMs);
+          if (fresh.length === 0) hits.delete(key);
+          else hits.set(key, fresh);
+        }
+      }
+      next();
+    };
+  }
+
+  const authRateLimiter = createRateLimiter(
+    25,
+    15 * 60 * 1000,
+    'Terlalu banyak percobaan autentikasi. Tunggu beberapa menit lalu coba kembali.'
+  );
+  const ocrRateLimiter = createRateLimiter(
+    30,
+    10 * 60 * 1000,
+    'Terlalu banyak permintaan pemindaian dokumen. Tunggu beberapa saat lalu coba lagi.'
+  );
+  const publicLookupRateLimiter = createRateLimiter(
+    60,
+    5 * 60 * 1000,
+    'Terlalu banyak permintaan verifikasi QR. Silakan tunggu sejenak.'
+  );
+
   const app = express();
   app.use(express.json({ limit: '50mb' }));
+  app.use('/api', (req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true });
   });
@@ -573,6 +657,11 @@ async function startServer() {
     if (!token) return null;
     const session = store.sessions[token];
     if (!session) return null;
+    if (isSessionExpired(session)) {
+      delete store.sessions[token];
+      saveStore(store);
+      return null;
+    }
     const user = store.users.find((u) => u.id === session.userId);
     if (!user || user.status !== 'active') return null;
     return user;
@@ -597,7 +686,7 @@ async function startServer() {
   }
 
   // REST: Login (username atau email)
-  app.post('/api/auth/login', (req: Request, res: Response) => {
+  app.post('/api/auth/login', authRateLimiter, (req: Request, res: Response) => {
     const identifier = String(req.body?.email || req.body?.identifier || '')
       .trim()
       .toLowerCase();
@@ -632,6 +721,7 @@ async function startServer() {
       return;
     }
 
+    pruneExpiredSessions();
     const token = crypto.randomBytes(32).toString('hex');
     const now = new Date().toISOString();
     store.sessions[token] = { userId: user.id, createdAt: now };
@@ -707,7 +797,7 @@ async function startServer() {
   });
 
   // REST: Register new account (pending SuperAdmin approval)
-  app.post('/api/auth/register', (req: Request, res: Response) => {
+  app.post('/api/auth/register', authRateLimiter, (req: Request, res: Response) => {
     const nama = String(req.body?.nama || '').trim();
     const username = normalizeUsernameInput(req.body?.username);
     const email = String(req.body?.email || '').trim().toLowerCase();
@@ -786,8 +876,8 @@ async function startServer() {
     });
   });
 
-  // REST: Safe forgot-password guidance (never leaks passwords)
-  app.post('/api/auth/forgot-password', (req: Request, res: Response) => {
+  // REST: Safe forgot-password guidance (never leaks account existence or passwords)
+  app.post('/api/auth/forgot-password', authRateLimiter, (req: Request, res: Response) => {
     const identifier = String(req.body?.email || req.body?.identifier || '')
       .trim()
       .toLowerCase();
@@ -796,13 +886,8 @@ async function startServer() {
       return;
     }
 
-    const user = store.users.find(
-      (u) =>
-        u.email.toLowerCase() === identifier ||
-        (u.username && u.username.toLowerCase() === identifier)
-    );
     res.json({
-      exists: Boolean(user),
+      ok: true,
       message:
         'Demi keamanan akun, reset kata sandi hanya dapat dilakukan oleh SuperAdmin melalui menu Manajemen User & Akses.',
     });
@@ -1343,8 +1428,8 @@ async function startServer() {
     });
   }
 
-  // REST: Public read-only KPM profile lookup for QR code scans
-  app.get('/api/public/kpm/:id', (req: Request, res: Response) => {
+  // REST: Public read-only KPM profile lookup for QR code scans (PII-masked)
+  app.get('/api/public/kpm/:id', publicLookupRateLimiter, (req: Request, res: Response) => {
     const token = String(req.params.id || '').trim().toLowerCase();
     if (!token) {
       res.status(400).json({ error: 'Parameter KPM tidak valid.' });
@@ -1363,9 +1448,45 @@ async function startServer() {
       res.status(404).json({ error: 'Data KPM tidak ditemukan.' });
       return;
     }
+
+    const rawNik = String(found.nikKtp || '').replace(/\D+/g, '');
+    const maskedNik =
+      rawNik.length >= 10
+        ? `${rawNik.slice(0, 6)}${'*'.repeat(Math.max(4, rawNik.length - 10))}${rawNik.slice(-4)}`
+        : rawNik;
+    const rawDocs =
+      found.documents && typeof found.documents === 'object'
+        ? (found.documents as Record<string, unknown>)
+        : {};
+    const safeRecord: Record<string, unknown> = {
+      ...found,
+      nikKtp: maskedNik,
+      nikKk: '',
+      kontak: '',
+      payment: 0,
+      catatan: '',
+      documents: {
+        ...rawDocs,
+        ktp: null,
+        kk: null,
+      },
+    };
+
+    const allProps = Array.isArray(dataStore.proposals)
+      ? (dataStore.proposals as Array<Record<string, unknown>>)
+      : [];
+    const matchedProp = allProps.find(
+      (p) =>
+        (found.proposalId && String(p?.id || '') === String(found.proposalId)) ||
+        (found.proposal &&
+          String(p?.namaProposal || '').trim().toLowerCase() ===
+            String(found.proposal || '').trim().toLowerCase() &&
+          String(p?.tahun || '').trim() === String(found.tahun || '').trim())
+    );
+
     res.json({
-      record: found,
-      proposals: Array.isArray(dataStore.proposals) ? dataStore.proposals : [],
+      record: safeRecord,
+      proposals: matchedProp ? [matchedProp] : [],
       items: Array.isArray(dataStore.items) ? dataStore.items : [],
       wilayahList: Array.isArray(dataStore.wilayahList) ? dataStore.wilayahList : [],
     });
@@ -1565,6 +1686,31 @@ async function startServer() {
     url?: string;
   }
 
+  function isAllowedOcrImageUrl(rawUrl: string): boolean {
+    try {
+      const parsed = new URL(rawUrl);
+      if (parsed.protocol !== 'https:') return false;
+      const host = parsed.hostname.toLowerCase();
+      if (
+        host === 'localhost' ||
+        host.endsWith('.local') ||
+        host.endsWith('.internal') ||
+        /^\d{1,3}(\.\d{1,3}){3}$/.test(host) ||
+        host.includes(':')
+      ) {
+        return false;
+      }
+      return (
+        host === 'drive.google.com' ||
+        host === 'docs.google.com' ||
+        host.endsWith('.googleusercontent.com') ||
+        host.endsWith('.supabase.co')
+      );
+    } catch {
+      return false;
+    }
+  }
+
   async function resolveImagePartForOcr(
     rawDescriptor: unknown,
     label: string
@@ -1594,14 +1740,14 @@ async function startServer() {
 
     const candidates: string[] = [];
     const fileId = typeof desc.fileId === 'string' ? desc.fileId.trim() : '';
-    if (fileId) {
+    if (fileId && /^[A-Za-z0-9_-]{10,120}$/.test(fileId)) {
       candidates.push(`https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w1600`);
       candidates.push(`https://drive.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`);
     }
-    if (typeof desc.url === 'string' && /^https?:\/\//i.test(desc.url.trim())) {
+    if (typeof desc.url === 'string' && isAllowedOcrImageUrl(desc.url.trim())) {
       candidates.push(desc.url.trim());
     }
-    if (typeof desc.thumbnailUrl === 'string' && /^https?:\/\//i.test(desc.thumbnailUrl.trim())) {
+    if (typeof desc.thumbnailUrl === 'string' && isAllowedOcrImageUrl(desc.thumbnailUrl.trim())) {
       candidates.push(desc.thumbnailUrl.trim());
     }
 
@@ -1615,6 +1761,7 @@ async function startServer() {
         }).finally(() => clearTimeout(timer));
 
         if (!resp.ok) continue;
+        if (resp.url && !isAllowedOcrImageUrl(resp.url)) continue;
         const contentType = (resp.headers.get('content-type') || '').toLowerCase();
         if (!contentType.startsWith('image/')) continue;
 
@@ -1637,7 +1784,7 @@ async function startServer() {
     );
   }
 
-  app.post('/api/ocr/ktp-kk', async (req: Request, res: Response) => {
+  app.post('/api/ocr/ktp-kk', ocrRateLimiter, async (req: Request, res: Response) => {
     const apiKey = (process.env.GEMINI_API_KEY || '').trim();
     if (!apiKey) {
       res.status(503).json({
@@ -1707,57 +1854,99 @@ async function startServer() {
         .filter(Boolean)
         .join('\n');
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: {
-          parts: [
-            { text: 'FOTO 1 (KTP):' },
-            ktpPart,
-            { text: 'FOTO 2 (KARTU KELUARGA / KK):' },
-            kkPart,
-            { text: promptText },
-          ],
-        },
-        config: {
-          systemInstruction:
-            'Anda adalah asisten OCR dokumen kependudukan Indonesia (e-KTP dan Kartu Keluarga) yang sangat teliti dan konservatif. Jangan pernah menebak angka atau huruf yang buram/silau/terpotong. Kembalikan string kosong dan catat di blurryFields setiap kali ada keraguan sekecil apa pun.',
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              nikKk: { type: Type.STRING, description: '16 digit Nomor KK atau "" jika buram' },
-              nikKtp: { type: Type.STRING, description: '16 digit NIK KTP atau "" jika buram' },
-              nama: { type: Type.STRING, description: 'Nama lengkap sesuai KTP dalam HURUF KAPITAL atau ""' },
-              alamat: { type: Type.STRING, description: 'Alamat jalan/gang/nomor rumah tanpa RT/RW atau ""' },
-              rt: { type: Type.STRING, description: '3 digit RT misal 001 atau ""' },
-              rw: { type: Type.STRING, description: '3 digit RW misal 002 atau ""' },
-              pekerjaan: { type: Type.STRING, description: 'Pekerjaan orang pada KTP atau ""' },
-              kelurahan: { type: Type.STRING, description: 'Nama kelurahan/desa jika terbaca atau ""' },
-              ktpNameMatchesKk: {
-                type: Type.BOOLEAN,
-                description: 'Apakah identitas KTP sesuai / ditemukan dalam KK tersebut',
-              },
-              blurryFields: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: 'Daftar key field yang buram atau tidak terbaca yakin',
-              },
-              fieldIssues: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    field: { type: Type.STRING },
-                    reason: { type: Type.STRING },
-                  },
-                },
-                description: 'Penjelasan singkat berbahasa Indonesia untuk field yang buram',
+      const responseSchema = {
+        type: Type.OBJECT,
+        properties: {
+          nikKk: { type: Type.STRING, description: '16 digit Nomor KK atau "" jika buram' },
+          nikKtp: { type: Type.STRING, description: '16 digit NIK KTP atau "" jika buram' },
+          nama: { type: Type.STRING, description: 'Nama lengkap sesuai KTP dalam HURUF KAPITAL atau ""' },
+          alamat: { type: Type.STRING, description: 'Alamat jalan/gang/nomor rumah tanpa RT/RW atau ""' },
+          rt: { type: Type.STRING, description: '3 digit RT misal 001 atau ""' },
+          rw: { type: Type.STRING, description: '3 digit RW misal 002 atau ""' },
+          pekerjaan: { type: Type.STRING, description: 'Pekerjaan orang pada KTP atau ""' },
+          kelurahan: { type: Type.STRING, description: 'Nama kelurahan/desa jika terbaca atau ""' },
+          ktpNameMatchesKk: {
+            type: Type.BOOLEAN,
+            description: 'Apakah identitas KTP sesuai / ditemukan dalam KK tersebut',
+          },
+          blurryFields: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: 'Daftar key field yang buram atau tidak terbaca yakin',
+          },
+          fieldIssues: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                field: { type: Type.STRING },
+                reason: { type: Type.STRING },
               },
             },
+            description: 'Penjelasan singkat berbahasa Indonesia untuk field yang buram',
           },
         },
-      });
+      };
+
+      const systemInstruction =
+        'Anda adalah asisten OCR dokumen kependudukan Indonesia (e-KTP dan Kartu Keluarga) yang sangat teliti dan konservatif. Jangan pernah menebak angka atau huruf yang buram/silau/terpotong. Kembalikan string kosong dan catat di blurryFields setiap kali ada keraguan sekecil apa pun.';
+
+      const ocrContents = {
+        parts: [
+          { text: 'FOTO 1 (KTP):' },
+          ktpPart,
+          { text: 'FOTO 2 (KARTU KELUARGA / KK):' },
+          kkPart,
+          { text: promptText },
+        ],
+      };
+
+      const modelAttempts: { model: string; thinkingLevel?: ThinkingLevel }[] = [
+        { model: 'gemini-4-hydrogen', thinkingLevel: ThinkingLevel.LOW },
+        { model: 'gemini-4-hydrogen', thinkingLevel: ThinkingLevel.LOW },
+      ];
+
+      let response: Awaited<ReturnType<typeof ai.models.generateContent>> | null = null;
+      let lastModelErr: unknown = null;
+
+      for (let attemptIdx = 0; attemptIdx < modelAttempts.length; attemptIdx += 1) {
+        const attempt = modelAttempts[attemptIdx];
+        try {
+          response = await ai.models.generateContent({
+            model: attempt.model,
+            contents: ocrContents,
+            config: {
+              systemInstruction,
+              ...(attempt.thinkingLevel
+                ? { thinkingConfig: { thinkingLevel: attempt.thinkingLevel } }
+                : {}),
+              responseMimeType: 'application/json',
+              responseSchema,
+            },
+          });
+          lastModelErr = null;
+          break;
+        } catch (modelErr: unknown) {
+          lastModelErr = modelErr;
+          const errText = modelErr instanceof Error ? modelErr.message : String(modelErr);
+          const isTransient =
+            errText.includes('503') ||
+            errText.includes('UNAVAILABLE') ||
+            errText.includes('high demand') ||
+            errText.includes('500') ||
+            errText.includes('INTERNAL') ||
+            errText.includes('fetch failed') ||
+            errText.includes('ECONNRESET');
+          if (!isTransient || attemptIdx === modelAttempts.length - 1) {
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 900 * (attemptIdx + 1)));
+        }
+      }
+
+      if (!response) {
+        throw lastModelErr ?? new Error('Gagal memanggil layanan OCR Gemini.');
+      }
 
       const rawText = (response.text || '{}').trim();
       let parsed: Record<string, unknown> = {};
@@ -1774,6 +1963,14 @@ async function startServer() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error('[OCR KTP/KK] Error:', msg);
+
+      if (msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('high demand')) {
+        res.status(503).json({
+          error:
+            'Server pemindai AI sedang sibuk sementara (503). Tunggu beberapa detik lalu klik Scan ulang.',
+        });
+        return;
+      }
 
       if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
         res.status(429).json({
@@ -1792,12 +1989,12 @@ async function startServer() {
       }
 
       res.status(500).json({
-        error: msg || 'Terjadi gangguan saat memindai foto KTP & KK. Silakan coba lagi.',
+        error: 'Terjadi gangguan saat memindai foto KTP & KK. Pastikan gambar jelas lalu coba lagi.',
       });
     }
   });
 
-  app.post('/api/troubleshooting/extract-pdf', async (req: Request, res: Response) => {
+  app.post('/api/troubleshooting/extract-pdf', ocrRateLimiter, async (req: Request, res: Response) => {
     const apiKey = (process.env.GEMINI_API_KEY || '').trim();
     if (!apiKey) {
       res.status(503).json({
@@ -1846,6 +2043,31 @@ async function startServer() {
         },
       };
 
+      const runWithTransientRetry = async (
+        callFn: () => Promise<Awaited<ReturnType<typeof ai.models.generateContent>>>
+      ) => {
+        let lastErr: unknown = null;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            return await callFn();
+          } catch (err: unknown) {
+            lastErr = err;
+            const errText = err instanceof Error ? err.message : String(err);
+            const isTransient =
+              errText.includes('503') ||
+              errText.includes('UNAVAILABLE') ||
+              errText.includes('high demand') ||
+              errText.includes('500') ||
+              errText.includes('INTERNAL') ||
+              errText.includes('fetch failed') ||
+              errText.includes('ECONNRESET');
+            if (!isTransient || attempt === 1) break;
+            await new Promise((resolve) => setTimeout(resolve, 1200));
+          }
+        }
+        throw lastErr ?? new Error('Gagal memanggil layanan ekstraksi PDF.');
+      };
+
       if (kind === 'bast') {
         const bastPrompt = [
           'Ekstrak SELURUH tabel penerima bantuan dari dokumen PDF BAST Dinas ini mulai dari halaman pertama hingga halaman terakhir.',
@@ -1857,48 +2079,58 @@ async function startServer() {
           '5. Ekstrak nama setiap item barang di kolom BARANG/NAMA BARANG secara lengkap apa adanya (contoh: "MIXER", "OVEN GAS", "BLENDER", "TEFLON KUE", "SELANG GAS", "REGULATOR", "KOMPOR GAS", "DISPENSER", "RICE COOKER", "MESIN JAHIT", "MESIN CUCI", "KERANJANG PAKAIAN", "MESIN POTONG PAPAN", "MESIN GERINDA KAYU", "MESIN SERUT KAYU", "MESIN AMPLAS", "MESIN BOR", "ALAT CUP ES", "ALAT SERUT ES", "TERMOS ES", "MESIN CUCI KENDARAAN", "MESIN POTONG RUMPUT", "MINI CHAINSAW", "ALAT SEMPROT", "KOMPOR 1000", "PANCI 30 CM", "PANCI 28 CM", "PANCI 26 CM", "PANCI 24 CM", "TEKO SIUL", "TERMOS").',
         ].join('\n');
 
-        const response = await ai.models.generateContent({
-          model: 'gemini-4-hydrogen',
-          contents: {
-            parts: [pdfPart, { text: bastPrompt }],
-          },
-          config: {
-            systemInstruction:
-              'Anda adalah mesin ekstraksi tabel dokumen resmi BAST Dinas Indonesia yang sangat presisi. Selalu ekstrak semua baris dari halaman 1 sampai halaman terakhir secara lengkap dan akurat.',
-            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                documentTitle: {
-                  type: Type.STRING,
-                  description: 'Judul atau nama wilayah dokumen BAST jika ada, atau nama ringkas dokumen',
-                },
-                rows: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      no: { type: Type.INTEGER, description: 'Nomor urut integer dari kolom NO' },
-                      nama: { type: Type.STRING, description: 'Nama lengkap penerima' },
-                      nik: { type: Type.STRING, description: 'NIK 16 digit tanpa spasi' },
-                      alamat: { type: Type.STRING, description: 'Alamat lengkap 1 baris rapi' },
-                      barangList: {
-                        type: Type.ARRAY,
-                        items: { type: Type.STRING },
-                        description: 'Daftar semua nama barang untuk penerima ini (termasuk lanjutan lintas halaman)',
+        const response = await runWithTransientRetry(() =>
+          ai.models.generateContent({
+            model: 'gemini-4-hydrogen',
+            contents: {
+              parts: [pdfPart, { text: bastPrompt }],
+            },
+            config: {
+              systemInstruction:
+                'Anda adalah mesin ekstraksi tabel dokumen resmi BAST Dinas Indonesia yang sangat presisi. Selalu ekstrak semua baris dari halaman 1 sampai halaman terakhir secara lengkap dan akurat.',
+              thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  documentTitle: {
+                    type: Type.STRING,
+                    description: 'Judul atau nama wilayah dokumen BAST jika ada, atau nama ringkas dokumen',
+                  },
+                  rows: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        no: { type: Type.INTEGER, description: 'Nomor urut integer dari kolom NO' },
+                        nama: { type: Type.STRING, description: 'Nama lengkap penerima' },
+                        nik: { type: Type.STRING, description: 'NIK 16 digit tanpa spasi' },
+                        alamat: { type: Type.STRING, description: 'Alamat lengkap 1 baris rapi' },
+                        barangList: {
+                          type: Type.ARRAY,
+                          items: { type: Type.STRING },
+                          description: 'Daftar semua nama barang untuk penerima ini (termasuk lanjutan lintas halaman)',
+                        },
                       },
+                      required: ['no', 'nama', 'nik', 'alamat', 'barangList'],
                     },
-                    required: ['no', 'nama', 'nik', 'alamat', 'barangList'],
                   },
                 },
+                required: ['documentTitle', 'rows'],
               },
-              required: ['documentTitle', 'rows'],
             },
-          },
-        });
+          })
+        );
 
-        const parsed = JSON.parse((response.text || '{}').trim());
+        let parsed: Record<string, unknown>;
+        try {
+          parsed = JSON.parse((response.text || '{}').trim()) as Record<string, unknown>;
+        } catch {
+          res.status(502).json({
+            error: 'Format hasil ekstraksi PDF BAST tidak valid. Silakan unggah PDF digital asli atau coba ulang.',
+          });
+          return;
+        }
         res.json(parsed);
         return;
       }
@@ -1916,60 +2148,78 @@ async function startServer() {
         '7. JANGAN memasukkan daftar ringkasan di bagian paling bawah dokumen ("DAFTAR ITEM :" dan "PENGELOLA :") ke dalam rows. Jika terdapat daftar "PENGELOLA :" di ringkasan bawah, masukkan ke array summaryPengelola.',
       ].join('\n');
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: {
-          parts: [pdfPart, { text: proposalPrompt }],
-        },
-        config: {
-          systemInstruction:
-            'Anda adalah mesin ekstraksi tabel Daftar KPM Proposal yang sangat teliti. Ekstrak seluruh baris KPM non-kosong dari halaman 1 hingga halaman terakhir sesuai urutan tabel asli.',
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              documentTitle: {
-                type: Type.STRING,
-                description: 'Judul proposal pada header halaman pertama',
-              },
-              rows: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    no: { type: Type.STRING, description: 'Nomor urut di tabel Proposal (misal "01")' },
-                    item: { type: Type.STRING, description: 'Kode item (OV, KPR, JHT, MC, TKG, ES, CMT, TBS, MSK, dll.)' },
-                    nama: { type: Type.STRING, description: 'Nama KPM lengkap' },
-                    alamat: { type: Type.STRING, description: 'Alamat jalan/gang/no rumah' },
-                    rtRw: { type: Type.STRING, description: 'Isi kolom RT / RW jika tersedia, atau ""' },
-                    kelurahan: { type: Type.STRING, description: 'Isi kolom Kelurahan jika tersedia, atau ""' },
-                    pengelola: { type: Type.STRING, description: 'Nama Pengelola jika tersedia di kolom tabel, atau ""' },
-                  },
-                  required: ['no', 'item', 'nama', 'alamat', 'rtRw', 'kelurahan', 'pengelola'],
-                },
-              },
-              summaryPengelola: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    name: { type: Type.STRING },
-                    count: { type: Type.INTEGER },
-                  },
-                },
-              },
-            },
-            required: ['documentTitle', 'rows'],
+      const response = await runWithTransientRetry(() =>
+        ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: {
+            parts: [pdfPart, { text: proposalPrompt }],
           },
-        },
-      });
+          config: {
+            systemInstruction:
+              'Anda adalah mesin ekstraksi tabel Daftar KPM Proposal yang sangat teliti. Ekstrak seluruh baris KPM non-kosong dari halaman 1 hingga halaman terakhir sesuai urutan tabel asli.',
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                documentTitle: {
+                  type: Type.STRING,
+                  description: 'Judul proposal pada header halaman pertama',
+                },
+                rows: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      no: { type: Type.STRING, description: 'Nomor urut di tabel Proposal (misal "01")' },
+                      item: { type: Type.STRING, description: 'Kode item (OV, KPR, JHT, MC, TKG, ES, CMT, TBS, MSK, dll.)' },
+                      nama: { type: Type.STRING, description: 'Nama KPM lengkap' },
+                      alamat: { type: Type.STRING, description: 'Alamat jalan/gang/no rumah' },
+                      rtRw: { type: Type.STRING, description: 'Isi kolom RT / RW jika tersedia, atau ""' },
+                      kelurahan: { type: Type.STRING, description: 'Isi kolom Kelurahan jika tersedia, atau ""' },
+                      pengelola: { type: Type.STRING, description: 'Nama Pengelola jika tersedia di kolom tabel, atau ""' },
+                    },
+                    required: ['no', 'item', 'nama', 'alamat', 'rtRw', 'kelurahan', 'pengelola'],
+                  },
+                },
+                summaryPengelola: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      name: { type: Type.STRING },
+                      count: { type: Type.INTEGER },
+                    },
+                  },
+                },
+              },
+              required: ['documentTitle', 'rows'],
+            },
+          },
+        })
+      );
 
-      const parsed = JSON.parse((response.text || '{}').trim());
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse((response.text || '{}').trim()) as Record<string, unknown>;
+      } catch {
+        res.status(502).json({
+          error: 'Format hasil ekstraksi PDF Proposal tidak valid. Silakan unggah PDF digital asli atau coba ulang.',
+        });
+        return;
+      }
       res.json(parsed);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error('[Troubleshooting PDF Extract] Error:', msg);
+
+      if (msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('high demand')) {
+        res.status(503).json({
+          error:
+            'Server ekstraksi AI sedang sibuk sementara (503). Tunggu beberapa detik lalu coba proses ulang.',
+        });
+        return;
+      }
 
       if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
         res.status(429).json({
@@ -1988,12 +2238,19 @@ async function startServer() {
       }
 
       res.status(500).json({
-        error: msg || 'Terjadi gangguan saat membaca file PDF. Silakan coba lagi.',
+        error: 'Terjadi gangguan saat membaca file PDF. Gunakan file PDF digital asli atau coba lagi.',
       });
     }
   });
 
   app.get('/api/supabase-files/:filename', (req: Request, res: Response) => {
+    const actor = requireAuth(req, res);
+    if (!actor) return;
+    if (actor.role !== 'SuperAdmin') {
+      res.status(403).json({ error: 'Hanya SuperAdmin yang berhak mengunduh berkas skema/impor database.' });
+      return;
+    }
+
     const allowedFiles = new Set([
       'fix_standalone_kpm_no_year.sql',
       'kpm_records_import.sql',
@@ -2035,6 +2292,11 @@ async function startServer() {
         if (eventType === 'auth') {
           const token = String(parsed.token || '').trim();
           const session = token ? store.sessions[token] : undefined;
+          if (session && isSessionExpired(session)) {
+            delete store.sessions[token];
+            saveStore(store);
+            return;
+          }
           const userId = session?.userId || '';
           const user = store.users.find((u) => u.id === userId && u.status === 'active');
           if (!user) return;

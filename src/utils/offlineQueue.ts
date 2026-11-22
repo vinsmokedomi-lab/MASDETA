@@ -46,9 +46,13 @@ const DB_NAME = 'masdeta_offline_queue_v1';
 const STORE_NAME = 'actions';
 const FALLBACK_KEY = 'masdeta_offline_queue_fallback_v1';
 
+let queueDbPromise: Promise<IDBDatabase | null> | null = null;
+
 function openQueueDb(): Promise<IDBDatabase | null> {
   if (typeof indexedDB === 'undefined') return Promise.resolve(null);
-  return new Promise((resolve) => {
+  if (queueDbPromise) return queueDbPromise;
+
+  queueDbPromise = new Promise((resolve) => {
     try {
       const req = indexedDB.open(DB_NAME, 1);
       req.onupgradeneeded = () => {
@@ -57,23 +61,49 @@ function openQueueDb(): Promise<IDBDatabase | null> {
           db.createObjectStore(STORE_NAME, { keyPath: 'id' });
         }
       };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => resolve(null);
+      req.onsuccess = () => {
+        const db = req.result;
+        db.onversionchange = () => {
+          db.close();
+          queueDbPromise = null;
+        };
+        db.onclose = () => {
+          queueDbPromise = null;
+        };
+        resolve(db);
+      };
+      req.onerror = () => {
+        queueDbPromise = null;
+        resolve(null);
+      };
+      req.onblocked = () => {
+        queueDbPromise = null;
+        resolve(null);
+      };
     } catch {
+      queueDbPromise = null;
       resolve(null);
     }
   });
+
+  return queueDbPromise;
+}
+
+function readFallbackQueue(): OfflineQueuedAction[] {
+  try {
+    const raw = localStorage.getItem(FALLBACK_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as OfflineQueuedAction[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 export async function getOfflineQueue(): Promise<OfflineQueuedAction[]> {
   const db = await openQueueDb();
   if (!db) {
-    try {
-      const raw = localStorage.getItem(FALLBACK_KEY);
-      return raw ? (JSON.parse(raw) as OfflineQueuedAction[]) : [];
-    } catch {
-      return [];
-    }
+    return readFallbackQueue();
   }
   return new Promise((resolve) => {
     try {
@@ -86,7 +116,9 @@ export async function getOfflineQueue(): Promise<OfflineQueuedAction[]> {
         resolve(rows);
       };
       req.onerror = () => resolve([]);
+      tx.onabort = () => resolve([]);
     } catch {
+      queueDbPromise = null;
       resolve([]);
     }
   });
@@ -96,11 +128,8 @@ export async function enqueueOfflineAction(action: OfflineQueuedAction): Promise
   const db = await openQueueDb();
   if (!db) {
     try {
-      const curr = await getOfflineQueue();
-      const serializable =
-        action.kind === 'upload_doc'
-          ? null
-          : action;
+      const curr = readFallbackQueue();
+      const serializable = action.kind === 'upload_doc' ? null : action;
       if (serializable) {
         localStorage.setItem(FALLBACK_KEY, JSON.stringify([...curr, serializable]));
       }
@@ -115,7 +144,9 @@ export async function enqueueOfflineAction(action: OfflineQueuedAction): Promise
       tx.objectStore(STORE_NAME).put(action);
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
     } catch {
+      queueDbPromise = null;
       resolve();
     }
   });
@@ -125,7 +156,7 @@ export async function removeOfflineAction(id: string): Promise<void> {
   const db = await openQueueDb();
   if (!db) {
     try {
-      const curr = await getOfflineQueue();
+      const curr = readFallbackQueue();
       localStorage.setItem(FALLBACK_KEY, JSON.stringify(curr.filter((a) => a.id !== id)));
     } catch {
       // ignore
@@ -138,7 +169,9 @@ export async function removeOfflineAction(id: string): Promise<void> {
       tx.objectStore(STORE_NAME).delete(id);
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
     } catch {
+      queueDbPromise = null;
       resolve();
     }
   });

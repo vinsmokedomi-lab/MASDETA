@@ -4,6 +4,7 @@ import {
   Archive,
   ArrowLeft,
   Banknote,
+  Bell,
   BookOpen,
   Briefcase,
   Calculator,
@@ -50,6 +51,7 @@ import { DriveImage } from './DriveImage';
 import { FilterSelect, SegmentedTabs } from './FormControls';
 import { ItemManagerView } from './ItemManagerView';
 import { MenuDownloadView } from './MenuDownloadView';
+import { ProposalBuilderView } from './ProposalBuilderView';
 import { RabBuilderView } from './RabBuilderView';
 import { TroubleshootingView } from './TroubleshootingView';
 import { AddPengelolaModal } from './PengelolaSelectorModal';
@@ -84,10 +86,14 @@ import {
   PejabatProfile,
   PengelolaProfile,
   ProposalBastMap,
+  ProposalDestinationType,
   ProposalKpmHistoryEntry,
+  ProposalRabMap,
   ProposalRecord,
   ProposalSlotMap,
+  ProposalStyleUsageRecord,
   ReportTemplateConfig,
+  SavedProposalRabConfig,
   SCHEDULE_CATEGORY_LABELS,
   SCHEDULE_CATEGORY_OPTIONS,
   ScheduleBook,
@@ -136,6 +142,7 @@ export type MenuSection =
   | 'changelog'
   | 'troubleshooting'
   | 'rab'
+  | 'buat-proposal'
   | 'laporan';
 
 export type AdminDataActionType =
@@ -171,6 +178,9 @@ interface MenuHubViewProps {
   proposalHistory?: ProposalKpmHistoryEntry[];
   kpmAuditLogs?: KpmAuditLogEntry[];
   onOpenChat: (peerId?: string) => void;
+  onOpenNotifications?: () => void;
+  unreadNotificationsCount?: number;
+  bellHasUnread?: boolean;
   onOpenProfile: () => void;
   onCheckAppUpdate?: () => void;
   checkingAppUpdate?: boolean;
@@ -221,6 +231,8 @@ interface MenuHubViewProps {
   onSelectKpmFromDuplicate: (record: KpmRecord) => void;
   onPreviewDocument: (file: KpmDocumentFile, title: string) => void;
   schedules?: ScheduleEventItem[];
+  unseenSchedulesCount?: number;
+  unseenUrgentSchedulesCount?: number;
   scheduleBooks?: ScheduleBook[];
   scheduleBookMap?: Record<string, string>;
   onSaveScheduleBooks?: (nextBooks: ScheduleBook[]) => void;
@@ -287,6 +299,25 @@ interface MenuHubViewProps {
     snapshotOrProposalId: string
   ) => Promise<{ ok: boolean; message?: string; warning?: string }>;
   onOpenProposalDetailFromTroubleshooting?: (proposalId: string) => void;
+  proposalRabMap?: ProposalRabMap;
+  proposalStyleHistory?: ProposalStyleUsageRecord[];
+  proposalBuilderInitialId?: string | null;
+  proposalBuilderBackLabel?: string;
+  onBackFromProposalBuilder?: () => void;
+  rabInitialProposalId?: string | null;
+  rabReturnToProposalBuilder?: boolean;
+  onSaveProposalRab?: (config: SavedProposalRabConfig) => Promise<void> | void;
+  onOpenRabForProposal?: (proposalId: string) => void;
+  onReturnFromRabToProposalBuilder?: (proposalId: string) => void;
+  onRecordProposalStyleUsage?: (params: {
+    styleId: number;
+    proposalId: string;
+    namaProposal: string;
+    tahun: string;
+    jenisTujuan: ProposalDestinationType;
+  }) => Promise<void> | void;
+  onDeleteProposalStyleUsage?: (id: string) => Promise<void> | void;
+  proposalSchemaMissingNotice?: boolean;
 }
 
 export function MenuHubView({
@@ -315,6 +346,9 @@ export function MenuHubView({
   proposalHistory = [],
   kpmAuditLogs = [],
   onOpenChat,
+  onOpenNotifications,
+  unreadNotificationsCount = 0,
+  bellHasUnread = false,
   onOpenProfile,
   onCheckAppUpdate,
   checkingAppUpdate = false,
@@ -346,6 +380,8 @@ export function MenuHubView({
   onSelectKpmFromDuplicate,
   onPreviewDocument,
   schedules = [],
+  unseenSchedulesCount,
+  unseenUrgentSchedulesCount,
   scheduleBooks = DEFAULT_SCHEDULE_BOOKS,
   scheduleBookMap = {},
   onSaveScheduleBooks,
@@ -378,6 +414,19 @@ export function MenuHubView({
   onApplyTroubleshootingReconciliation,
   onUndoTroubleshootingSnapshot,
   onOpenProposalDetailFromTroubleshooting,
+  proposalRabMap = {},
+  proposalStyleHistory = [],
+  proposalBuilderInitialId = null,
+  proposalBuilderBackLabel = 'Kembali',
+  onBackFromProposalBuilder,
+  rabInitialProposalId = null,
+  rabReturnToProposalBuilder = false,
+  onSaveProposalRab,
+  onOpenRabForProposal,
+  onReturnFromRabToProposalBuilder,
+  onRecordProposalStyleUsage,
+  onDeleteProposalStyleUsage,
+  proposalSchemaMissingNotice = false,
 }: MenuHubViewProps) {
   const isDesktopWeb = useIsDesktopWeb();
   const isNativeApp = !isDesktopWeb;
@@ -1015,17 +1064,36 @@ export function MenuHubView({
     return { paidRecords, totalAmount };
   }, [records]);
 
+  const normalizeDtsenKey = (raw?: string | null): string => {
+    const trimmed = String(raw || '').trim();
+    if (!trimmed) return 'Belum Ada Desil';
+    if (trimmed.toLowerCase() === 'data tidak ditemukan') return 'Data Tidak Ditemukan';
+    if (trimmed.toLowerCase() === 'belum ada desil') return 'Belum Ada Desil';
+    const stripped = trimmed.replace(/^desil\s+/i, '').trim();
+    if (stripped === '6-10' || stripped === '6 - 10') return '6 - 10';
+    if (/^(10|[1-9])$/.test(stripped)) return stripped;
+    return trimmed;
+  };
+
+  const dtsenScopedRecords = useMemo(() => {
+    return records.filter((r) => {
+      if (r.validasi !== 'accepted') return false;
+      if (selectedYear && selectedYear !== 'all' && r.tahun !== selectedYear) return false;
+      return true;
+    });
+  }, [records, selectedYear]);
+
   const dtsenSummary = useMemo(() => {
     const map = new Map<string, number>();
-    for (const r of records) {
-      const key = r.dtsen || 'Belum Ada Desil';
+    for (const r of dtsenScopedRecords) {
+      const key = normalizeDtsenKey(r.dtsen);
       map.set(key, (map.get(key) ?? 0) + 1);
     }
     return DTSEN_OPTION_ITEMS.map((opt) => ({
       ...opt,
       count: map.get(opt.value) ?? 0,
     }));
-  }, [records]);
+  }, [dtsenScopedRecords]);
 
 
 
@@ -1339,38 +1407,51 @@ export function MenuHubView({
                     onClick={() => onChangeSection('jadwal')}
                     className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
                   >
-                    <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
-                      <CalendarClock className="h-5 w-5" />
-                      {urgentSchedulesCount > 0 && (
-                        <span
-                          aria-label={`${urgentSchedulesCount} jadwal mendesak`}
-                          className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full bg-rose-600 ring-2 ring-white"
-                        />
-                      )}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-sm font-semibold text-slate-900">
-                          Jadwal &amp; Target Proposal
-                        </p>
-                        {schedules.filter((s) => !s.completed).length > 0 && (
-                          <span
-                            className={`rounded-full px-2 py-0.5 text-[10px] font-bold tabular-nums ${
-                              urgentSchedulesCount > 0
-                                ? 'bg-rose-600 text-white'
-                                : 'bg-amber-100 text-amber-800'
-                            }`}
-                          >
-                            {schedules.filter((s) => !s.completed).length}
-                          </span>
-                        )}
-                      </div>
-                      <p className="mt-0.5 truncate text-xs text-slate-500">
-                        {urgentSchedulesCount > 0
-                          ? `${urgentSchedulesCount} agenda jatuh tempo / mendekati target`
-                          : 'Agenda survey, antar Dinas & penyaluran'}
-                      </p>
-                    </div>
+                    {(() => {
+                      const activeSchedulesTotal = schedules.filter((s) => !s.completed).length;
+                      const unseenTotal =
+                        typeof unseenSchedulesCount === 'number' ? unseenSchedulesCount : 0;
+                      const unseenUrgent =
+                        typeof unseenUrgentSchedulesCount === 'number'
+                          ? unseenUrgentSchedulesCount
+                          : 0;
+                      const hasUnseenAlert = unseenTotal > 0 || unseenUrgent > 0;
+                      const badgeValue = unseenTotal > 0 ? unseenTotal : unseenUrgent;
+                      return (
+                        <>
+                          <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                            <CalendarClock className="h-5 w-5" />
+                            {hasUnseenAlert && (
+                              <span
+                                aria-label={`${badgeValue} jadwal belum dilihat`}
+                                className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full bg-rose-600 ring-2 ring-white"
+                              />
+                            )}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-sm font-semibold text-slate-900">
+                                Jadwal &amp; Target Proposal
+                              </p>
+                              {hasUnseenAlert && badgeValue > 0 && (
+                                <span className="rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-bold text-white tabular-nums">
+                                  {badgeValue}
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-0.5 truncate text-xs text-slate-500">
+                              {activeSchedulesTotal > 0
+                                ? `${activeSchedulesTotal} agenda aktif${
+                                    urgentSchedulesCount > 0
+                                      ? ` · ${urgentSchedulesCount} mendekati target`
+                                      : ''
+                                  }`
+                                : 'Agenda survey, antar Dinas & penyaluran'}
+                            </p>
+                          </div>
+                        </>
+                      );
+                    })()}
                     <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
                   </button>
 
@@ -1385,7 +1466,24 @@ export function MenuHubView({
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-semibold text-slate-900">Download</p>
                       <p className="mt-0.5 truncate text-xs text-slate-500">
-                        Unduh PDF F4, Kupon &amp; BAST
+                        Unduh PDF F4, Kupon, BAST &amp; Absensi
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onChangeSection('buat-proposal')}
+                    className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                      <FileText className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-slate-900">Buat Proposal</p>
+                      <p className="mt-0.5 truncate text-xs text-slate-500">
+                        Generate dokumen Proposal F4 (OPD / Kecamatan / Kelurahan) &amp; 15 template tetap
                       </p>
                     </div>
                     <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -1400,9 +1498,9 @@ export function MenuHubView({
                       <Calculator className="h-5 w-5" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold text-slate-900">Pembuat RAB</p>
+                      <p className="text-sm font-semibold text-slate-900">RAB</p>
                       <p className="mt-0.5 truncate text-xs text-slate-500">
-                        Hitung anggaran paket Master Item &amp; penyesuaian harga sub-item otomatis
+                        Hitung &amp; simpan anggaran paket Master Item per Proposal secara presisi
                       </p>
                     </div>
                     <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -1489,6 +1587,38 @@ export function MenuHubView({
                     </div>
                     <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
                   </button>
+
+                  {onOpenNotifications && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenNotifications()}
+                      className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                    >
+                      <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                        <Bell className="h-5 w-5" />
+                        {(unreadNotificationsCount > 0 || bellHasUnread) && (
+                          <span
+                            aria-label="Notifikasi belum dibaca"
+                            className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full bg-rose-600 ring-2 ring-white"
+                          />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-semibold text-slate-900">Notifikasi</p>
+                          {unreadNotificationsCount > 0 && (
+                            <span className="flex h-5 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
+                              {unreadNotificationsCount > 99 ? '99+' : unreadNotificationsCount}
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-0.5 truncate text-xs text-slate-500">
+                          Pemberitahuan aktivitas, pendaftaran &amp; pengingat sistem
+                        </p>
+                      </div>
+                      <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                    </button>
+                  )}
 
                   {currentUser.role === 'SuperAdmin' && (
                     <button
@@ -3932,8 +4062,8 @@ export function MenuHubView({
 
     if (dtsenDrill) {
       const drillLabel = getDtsenDisplayLabel(dtsenDrill);
-      const drillRecords = records.filter(
-        (r) => (r.dtsen || 'Belum Ada Desil') === dtsenDrill
+      const drillRecords = dtsenScopedRecords.filter(
+        (r) => normalizeDtsenKey(r.dtsen) === dtsenDrill
       );
 
       return (
@@ -7011,6 +7141,7 @@ export function MenuHubView({
         pengelolaList={pengelolaList}
         proposalSlotMap={proposalSlotMap}
         schedules={schedules}
+        scheduleBooks={scheduleBooks}
         reportTemplate={reportTemplate}
         onSaveReportTemplate={onSaveReportTemplate}
         couponConfig={couponConfig}
@@ -7047,14 +7178,69 @@ export function MenuHubView({
     );
   }
 
-  // 12C. PEMBUAT RAB (RENCANA ANGGARAN BIAYA OTOMATIS)
+  // 12C. RAB (RENCANA ANGGARAN BIAYA OTOMATIS & TERSIMPAN PER PROPOSAL)
   if (activeSection === 'rab') {
     return (
       <RabBuilderView
         proposals={proposals}
         records={records}
         items={items}
-        onBack={() => onChangeSection('root')}
+        initialProposalId={rabInitialProposalId}
+        savedRabMap={proposalRabMap}
+        canUpdate={canUpdate}
+        returnToProposalBuilder={rabReturnToProposalBuilder}
+        onSaveProposalRab={onSaveProposalRab}
+        onReturnToProposalBuilder={onReturnFromRabToProposalBuilder}
+        onBack={() => {
+          if (rabReturnToProposalBuilder && onReturnFromRabToProposalBuilder && rabInitialProposalId) {
+            onReturnFromRabToProposalBuilder(rabInitialProposalId);
+          } else {
+            onChangeSection('root');
+          }
+        }}
+      />
+    );
+  }
+
+  // 12D. BUAT PROPOSAL (GENERATOR DOKUMEN F4 216x330mm · 15 TEMPLATE TETAP)
+  if (activeSection === 'buat-proposal') {
+    return (
+      <ProposalBuilderView
+        proposals={proposals}
+        records={records}
+        items={items}
+        wilayahList={wilayahList}
+        proposalSlotMap={proposalSlotMap}
+        savedRabMap={proposalRabMap}
+        styleHistory={proposalStyleHistory}
+        initialProposalId={proposalBuilderInitialId}
+        backLabel={proposalBuilderBackLabel}
+        schemaMissingNotice={proposalSchemaMissingNotice}
+        canUpdate={canUpdate}
+        onBack={() => {
+          if (onBackFromProposalBuilder) {
+            onBackFromProposalBuilder();
+          } else {
+            onChangeSection('root');
+          }
+        }}
+        onOpenRabForProposal={(proposalId) => {
+          if (onOpenRabForProposal) {
+            onOpenRabForProposal(proposalId);
+          } else {
+            onChangeSection('rab');
+          }
+        }}
+        onRecordStyleUsage={(params) => {
+          if (onRecordProposalStyleUsage) {
+            return onRecordProposalStyleUsage(params);
+          }
+        }}
+        onDeleteStyleUsage={(id) => {
+          if (onDeleteProposalStyleUsage) {
+            return onDeleteProposalStyleUsage(id);
+          }
+        }}
       />
     );
   }

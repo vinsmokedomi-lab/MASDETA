@@ -40,7 +40,7 @@ export function ScrollToTopButton({
 
   return (
     <div
-      className={`pointer-events-none fixed left-1/2 z-30 flex w-full -translate-x-1/2 justify-end px-4 transition-all ${
+      className={`pointer-events-none fixed left-1/2 z-30 flex w-full -translate-x-1/2 justify-end px-4 transition-all print:hidden masdeta-no-print ${
         hasBottomNav || hasFloatingAction ? 'bottom-22' : 'bottom-6'
       } ${
         !isNativeApp

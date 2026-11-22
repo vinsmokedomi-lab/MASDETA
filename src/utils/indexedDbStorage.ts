@@ -78,6 +78,9 @@ function openOfflineDb(): Promise<IDBDatabase | null> {
           db.close();
           dbPromise = null;
         };
+        db.onclose = () => {
+          dbPromise = null;
+        };
         resolve(db);
       };
       request.onerror = () => {
@@ -85,6 +88,7 @@ function openOfflineDb(): Promise<IDBDatabase | null> {
         resolve(null);
       };
       request.onblocked = () => {
+        dbPromise = null;
         resolve(null);
       };
     } catch {
@@ -112,6 +116,7 @@ export async function saveIdbValue<K extends OperationalStoreKey>(
       tx.onerror = () => resolve(false);
       tx.onabort = () => resolve(false);
     } catch {
+      dbPromise = null;
       resolve(false);
     }
   });
@@ -122,6 +127,13 @@ export async function loadIdbSnapshot(): Promise<OperationalIdbSnapshot> {
   if (!db) return {};
 
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (snap: OperationalIdbSnapshot) => {
+      if (settled) return;
+      settled = true;
+      resolve(snap);
+    };
+
     try {
       const tx = db.transaction(STORE_NAME, 'readonly');
       const store = tx.objectStore(STORE_NAME);
@@ -135,18 +147,19 @@ export async function loadIdbSnapshot(): Promise<OperationalIdbSnapshot> {
             (snapshot as Record<string, unknown>)[key] = req.result;
           }
           remaining -= 1;
-          if (remaining === 0) resolve(snapshot);
+          if (remaining === 0) finish(snapshot);
         };
         req.onerror = () => {
           remaining -= 1;
-          if (remaining === 0) resolve(snapshot);
+          if (remaining === 0) finish(snapshot);
         };
       }
 
-      tx.onerror = () => resolve(snapshot);
-      tx.onabort = () => resolve(snapshot);
+      tx.onerror = () => finish(snapshot);
+      tx.onabort = () => finish(snapshot);
     } catch {
-      resolve({});
+      dbPromise = null;
+      finish({});
     }
   });
 }

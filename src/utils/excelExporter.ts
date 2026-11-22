@@ -23,6 +23,14 @@ function sanitizeExcelFileName(name: string): string {
   return base.toLowerCase().endsWith('.xlsx') ? base : `${base}.xlsx`;
 }
 
+function safeCellText(raw: string): string {
+  const val = raw ?? '';
+  if (val && val !== '-' && /^[=+\-@\t\r]/.test(val)) {
+    return `'${val}`;
+  }
+  return val;
+}
+
 export async function exportKpmRecordsToExcel({
   records,
   proposals,
@@ -73,30 +81,31 @@ export async function exportKpmRecordsToExcel({
 
     return {
       No: noAbsen,
-      'Kode Register': rec.registerCode || '-',
+      'Kode Register': safeCellText(rec.registerCode || '-'),
       Tahun: rec.tahun || 'Tanpa Tahun',
-      Proposal: proposalLabel,
-      Kecamatan: kecamatan,
-      'Kelurahan / Desa': kelurahan,
-      'Kode Item': rec.item || '-',
-      'Nama Paket': pkg.name && pkg.name !== pkg.code ? pkg.name : rec.item || '-',
+      Proposal: safeCellText(proposalLabel),
+      Kecamatan: safeCellText(kecamatan),
+      'Kelurahan / Desa': safeCellText(kelurahan),
+      'Kode Item': safeCellText(rec.item || '-'),
+      'Nama Paket': safeCellText(pkg.name && pkg.name !== pkg.code ? pkg.name : rec.item || '-'),
       'NIK KTP': rec.nikKtp || '-',
       'Nomor KK': rec.nikKk || '-',
-      'Nama Lengkap': (rec.nama || '-').toUpperCase(),
-      Alamat: rec.alamat || '-',
+      'Nama Lengkap': safeCellText((rec.nama || '-').toUpperCase()),
+      Alamat: safeCellText(rec.alamat || '-'),
       RT: rec.rt ? rec.rt.padStart(3, '0') : '-',
       RW: rec.rw ? rec.rw.padStart(3, '0') : '-',
-      'Status DTSEN': rec.dtsen || '-',
+      'Status DTSEN': safeCellText(rec.dtsen || '-'),
       'Status Validasi': statusLabel,
-      Kontak: rec.kontak || '-',
-      Pekerjaan: rec.pekerjaan || '-',
-      Pengelola: rec.pengelola || '-',
+      Kontak: safeCellText(rec.kontak || '-'),
+      Pekerjaan: safeCellText(rec.pekerjaan || '-'),
+      Pengelola: safeCellText(rec.pengelola || '-'),
       'Biaya Administrasi': rec.payment || 0,
-      Catatan: rec.catatan || '-',
+      Catatan: safeCellText(rec.catatan || '-'),
     };
   });
 
   let worksheet: XLSX.WorkSheet;
+  let headerRowIdx = 0;
   if (reportTemplate?.enabled) {
     const kopRows: string[][] = [];
     if (reportTemplate.orgHeaderLine1?.trim()) {
@@ -109,12 +118,26 @@ export async function exportKpmRecordsToExcel({
       kopRows.push([reportTemplate.orgAddress.trim()]);
     }
     kopRows.push([]);
+    headerRowIdx = kopRows.length;
     worksheet = XLSX.utils.aoa_to_sheet(kopRows);
     XLSX.utils.sheet_add_json(worksheet, rows, {
       origin: `A${kopRows.length + 1}`,
     });
   } else {
     worksheet = XLSX.utils.json_to_sheet(rows);
+  }
+
+  // Paksa kolom angka panjang / berawalan nol menjadi teks agar NIK/KK tidak berubah ke notasi ilmiah
+  const textColIndices = [0, 8, 9, 12, 13, 16];
+  for (let r = headerRowIdx + 1; r <= headerRowIdx + rows.length; r += 1) {
+    for (const c of textColIndices) {
+      const addr = XLSX.utils.encode_cell({ r, c });
+      const cell = worksheet[addr];
+      if (!cell) continue;
+      cell.t = 's';
+      cell.v = String(cell.v ?? '');
+      cell.z = '@';
+    }
   }
   worksheet['!cols'] = [
     { wch: 6 },  // No

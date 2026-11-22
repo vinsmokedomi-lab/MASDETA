@@ -714,6 +714,95 @@ export function resolveScheduleForProposal(
   })[0];
 }
 
+export function resolveScheduleForProposalInBook(
+  proposalName: string | undefined,
+  tahun: string | undefined,
+  schedules: ScheduleEventItem[] = [],
+  bookId?: string
+): ScheduleEventItem | undefined {
+  const targetName = (proposalName || '').trim().toLowerCase();
+  if (!targetName || !Array.isArray(schedules) || schedules.length === 0) return undefined;
+  const targetYear = (tahun || '').trim();
+  const normalizedBookId = (bookId || '').trim();
+
+  if (!normalizedBookId || normalizedBookId === 'all') {
+    return resolveScheduleForProposal(proposalName, tahun, schedules);
+  }
+
+  const matches = schedules.filter((ev) => {
+    if (resolveScheduleBookId(ev) !== normalizedBookId) return false;
+    const evProp = (ev.proposalName || '').trim().toLowerCase();
+    if (!evProp || evProp !== targetName) return false;
+    const evYear = (ev.tahun || '').trim();
+    if (evYear && targetYear && evYear !== targetYear) return false;
+    return true;
+  });
+
+  if (matches.length === 0) return undefined;
+
+  return [...matches].sort((a, b) => {
+    const activeDiff = (a.completed ? 0 : 1) - (b.completed ? 0 : 1);
+    if (activeDiff !== 0) return -activeDiff;
+    const yearCmp =
+      ((b.tahun || '').trim() === targetYear ? 1 : 0) -
+      ((a.tahun || '').trim() === targetYear ? 1 : 0);
+    if (yearCmp !== 0) return yearCmp;
+    return (b.targetDate || '').localeCompare(a.targetDate || '');
+  })[0];
+}
+
+export interface AbsensiScheduleFields {
+  tanggal: string;
+  hari: string;
+  pukul: string;
+}
+
+export function formatAbsensiScheduleFields(
+  schedule?: Pick<ScheduleEventItem, 'targetDate' | 'targetDay' | 'targetTime'>
+): AbsensiScheduleFields {
+  if (!schedule) {
+    return { tanggal: '', hari: '', pukul: '' };
+  }
+  const iso = (schedule.targetDate || '').trim();
+  const days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+  const months = [
+    'Januari',
+    'Februari',
+    'Maret',
+    'April',
+    'Mei',
+    'Juni',
+    'Juli',
+    'Agustus',
+    'September',
+    'Oktober',
+    'November',
+    'Desember',
+  ];
+
+  let tanggal = '';
+  let autoDay = '';
+  if (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+    const [y, m, d] = iso.split('-').map((n) => Number(n));
+    const dt = new Date(y, m - 1, d);
+    if (!Number.isNaN(dt.getTime())) {
+      const dd = String(dt.getDate()).padStart(2, '0');
+      const monthName = months[dt.getMonth()] || '';
+      tanggal = `${dd} ${monthName} ${dt.getFullYear()}`;
+      autoDay = days[dt.getDay()] || '';
+    }
+  }
+
+  const hari = (schedule.targetDay || '').trim() || autoDay;
+  const rawTime = (schedule.targetTime || '').trim();
+  let pukul = '';
+  if (rawTime) {
+    pukul = /\bwib\b/i.test(rawTime) ? rawTime : `${rawTime} WIB`;
+  }
+
+  return { tanggal, hari, pukul };
+}
+
 export function resolveCouponScheduleForRecord(
   record: Pick<KpmRecord, 'proposal' | 'proposalId' | 'tahun'>,
   schedules: ScheduleEventItem[] = [],
@@ -7290,5 +7379,371 @@ export async function exportCatNomorBarangToPdf(
     totalSlots: matrix.totalSlots,
   };
 }
+
+// ============================================================================
+// EXPORT DAFTAR ABSENSI DINAS SOSIAL (F4 PORTRAIT · 216 × 330 mm)
+// ============================================================================
+
+export interface AbsensiManualOverride {
+  tanggal?: string;
+  hari?: string;
+  pukul?: string;
+  lokasiKegiatan?: string;
+}
+
+export interface ExportAbsensiDinsosPdfOptions {
+  records: KpmRecord[];
+  allRecords?: KpmRecord[];
+  proposals: ProposalRecord[];
+  items: ItemBantuan[];
+  wilayahList?: WilayahKabKota[];
+  proposalSlotMap?: ProposalSlotMap;
+  schedules?: ScheduleEventItem[];
+  scheduleBookId?: string;
+  bastConfig?: BastTemplateConfig;
+  reportTemplate?: ReportTemplateConfig;
+  /** Jika diisi untuk 1 proposal spesifik, override jadwal/lokasi manual */
+  manualOverride?: AbsensiManualOverride;
+  /** Fallback jika proposal belum punya jadwal di buku yang dipilih */
+  fallbackFields?: AbsensiManualOverride;
+  /** Batasi ke 1 proposal spesifik (dari Detail Proposal) */
+  singleProposal?: ProposalRecord;
+  fileName?: string;
+}
+
+export async function exportAbsensiDinsosToPdf(
+  options: ExportAbsensiDinsosPdfOptions
+): Promise<{ savedFileName: string; openedNative: boolean; proposalCount: number; totalRows: number }> {
+  const {
+    records,
+    allRecords,
+    proposals,
+    items,
+    wilayahList = INITIAL_WILAYAH_LIST,
+    proposalSlotMap = {},
+    schedules = [],
+    scheduleBookId,
+    bastConfig = DEFAULT_BAST_TEMPLATE,
+    reportTemplate,
+    manualOverride,
+    fallbackFields,
+    singleProposal,
+    fileName,
+  } = options;
+
+  const acceptedSource = (allRecords && allRecords.length > 0 ? allRecords : records).filter(
+    (r) => r.validasi === 'accepted'
+  );
+
+  interface AbsensiTargetProposal {
+    id: string;
+    namaProposal: string;
+    tahun: string;
+  }
+
+  // Tentukan daftar proposal target
+  let targetProposals: AbsensiTargetProposal[] = [];
+  if (singleProposal) {
+    targetProposals = [
+      {
+        id: singleProposal.id,
+        namaProposal: singleProposal.namaProposal,
+        tahun: singleProposal.tahun,
+      },
+    ];
+  } else {
+    const proposalById = new Map<string, ProposalRecord>();
+    proposals.forEach((p) => proposalById.set(p.id, p));
+
+    const matchedIds = new Set<string>();
+    const syntheticMap = new Map<string, AbsensiTargetProposal>();
+
+    records.forEach((rec) => {
+      if (rec.validasi !== 'accepted') return;
+      const matched =
+        (rec.proposalId ? proposalById.get(rec.proposalId) : undefined) ??
+        proposals.find((p) => p.namaProposal === rec.proposal && p.tahun === rec.tahun) ??
+        proposals.find((p) => p.namaProposal === rec.proposal);
+      if (matched) {
+        matchedIds.add(matched.id);
+      } else if ((rec.proposal || '').trim()) {
+        const synKey = `${rec.tahun || ''}::${rec.proposal.trim().toLowerCase()}`;
+        if (!syntheticMap.has(synKey)) {
+          syntheticMap.set(synKey, {
+            id: `syn-${synKey}`,
+            tahun: rec.tahun || '',
+            namaProposal: rec.proposal.trim(),
+          });
+        }
+      }
+    });
+
+    const listFromDb: AbsensiTargetProposal[] = proposals
+      .filter((p) => matchedIds.has(p.id))
+      .map((p) => ({ id: p.id, namaProposal: p.namaProposal, tahun: p.tahun }));
+    const combined: AbsensiTargetProposal[] = [
+      ...listFromDb,
+      ...Array.from(syntheticMap.values()),
+    ];
+
+    // Urutkan konsisten berdasarkan Kecamatan -> Proposal -> Tahun
+    const byKec = new Map<string, AbsensiTargetProposal[]>();
+    combined.forEach((prop) => {
+      const kec =
+        resolveProposalKecamatanCategory(prop.namaProposal, proposals, prop.tahun, wilayahList) ||
+        'Lainnya';
+      const arr = byKec.get(kec) || [];
+      arr.push(prop);
+      byKec.set(kec, arr);
+    });
+    const sortedKecNames = Array.from(byKec.keys()).sort(sortKecamatanCategoryNames);
+    targetProposals = sortedKecNames.flatMap((kec) =>
+      sortProposalsWithinKecamatan(byKec.get(kec) || [], (p) => p.namaProposal)
+    );
+  }
+
+  if (targetProposals.length === 0) {
+    throw new Error('Tidak ada data proposal/KPM aktif untuk dibuatkan daftar absensi.');
+  }
+
+  const pageW = F4_PAPER_WIDTH_MM; // 216 mm
+  const pageH = 330; // F4 Folio 216 × 330 mm (sesuai format Absen Dinsos)
+  const marginX = 18;
+  const contentW = pageW - marginX * 2; // 180 mm
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: [pageW, pageH],
+    compress: true,
+  }) as AutoTableDoc;
+
+  const kopConfig = resolveEffectiveBastConfig(bastConfig, undefined, undefined, reportTemplate);
+  const logoUrl = (kopConfig.kopLogoDataUrl || '').trim() || DEFAULT_KOP_LOGO_URL;
+  const loadedKopLogo = logoUrl ? await loadSingleImageForPdf(logoUrl) : null;
+
+  let totalRowsRendered = 0;
+
+  targetProposals.forEach((prop, propIdx) => {
+    if (propIdx > 0) {
+      doc.addPage();
+    }
+
+    const propRecords = acceptedSource.filter((r) =>
+      r.proposalId
+        ? r.proposalId === prop.id
+        : r.proposal === prop.namaProposal && (!prop.tahun || r.tahun === prop.tahun)
+    );
+
+    const slotResolution = resolveProposalSlotStateForGroup(
+      proposalSlotMap,
+      prop.id,
+      prop.namaProposal,
+      prop.tahun
+    );
+    const mergedSlots = buildMergedProposalSlots({
+      groupRecords: propRecords,
+      slotState: slotResolution.state,
+      proposals,
+      catalog: items,
+      wilayahList,
+    });
+
+    const rows: string[][] = mergedSlots.map((slot) => {
+      const noStr = String(slot.slotNumber).padStart(2, '0');
+      const namaStr = slot.kind === 'kpm' ? (slot.record.nama || '').trim().toUpperCase() : '';
+      return [noStr, namaStr, '', ''];
+    });
+    totalRowsRendered += rows.length;
+
+    // Resolve jadwal dari buku jadwal yang dipilih
+    const matchedSchedule = resolveScheduleForProposalInBook(
+      prop.namaProposal,
+      prop.tahun,
+      schedules,
+      scheduleBookId
+    );
+    const autoFields = formatAbsensiScheduleFields(matchedSchedule);
+
+    const isSingle = Boolean(singleProposal);
+    const tanggalVal =
+      (isSingle && manualOverride?.tanggal !== undefined
+        ? manualOverride.tanggal
+        : autoFields.tanggal || fallbackFields?.tanggal || ''
+      ).trim();
+    const hariVal =
+      (isSingle && manualOverride?.hari !== undefined
+        ? manualOverride.hari
+        : autoFields.hari || fallbackFields?.hari || ''
+      ).trim();
+    const pukulVal =
+      (isSingle && manualOverride?.pukul !== undefined
+        ? manualOverride.pukul
+        : autoFields.pukul || fallbackFields?.pukul || ''
+      ).trim();
+    const lokasiKegiatanVal =
+      (isSingle && manualOverride?.lokasiKegiatan !== undefined
+        ? manualOverride.lokasiKegiatan
+        : prop.namaProposal || ''
+      ).trim();
+
+    // --- Blok Logo Provinsi (kiri) + Metadata Kegiatan (kanan) di Halaman 1 Proposal ---
+    const metaTopY = 29;
+    const metaX = marginX + 37; // x = 55mm
+    const metaW = pageW - marginX - metaX; // 143mm
+    const labelX = metaX + 1.5;
+    const colonX = metaX + 34;
+    const valX = metaX + 38;
+    const valMaxW = metaW - 39.5;
+    const baseRowH = 6.9;
+
+    const metaRows: Array<{ label: string; value: string }> = [
+      { label: 'Tanggal', value: tanggalVal },
+      { label: 'Hari', value: hariVal },
+      { label: 'Pukul', value: pukulVal },
+      { label: 'Lokasi Kegiatan', value: lokasiKegiatanVal },
+      { label: '', value: '' },
+    ];
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10.5);
+    doc.setTextColor(0, 0, 0);
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.25);
+
+    // Garis atas blok metadata
+    doc.line(metaX, metaTopY, metaX + metaW, metaTopY);
+
+    let cursorY = metaTopY;
+    metaRows.forEach((row) => {
+      const wrappedVal = row.value
+        ? (doc.splitTextToSize(row.value, valMaxW) as string[])
+        : [''];
+      const rowHeight = Math.max(baseRowH, wrappedVal.length * 4.7 + 2.4);
+      const textStartY = cursorY + 4.8;
+
+      if (row.label) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10.5);
+        doc.text(row.label, labelX, textStartY);
+      }
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10.5);
+      doc.text(':', colonX, textStartY);
+
+      if (row.value) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10.5);
+        wrappedVal.forEach((line, lIdx) => {
+          doc.text(line, valX, textStartY + lIdx * 4.7);
+        });
+      }
+
+      cursorY += rowHeight;
+      doc.line(metaX, cursorY, metaX + metaW, cursorY);
+    });
+
+    const metaTotalH = cursorY - metaTopY;
+
+    // Gambar Logo Provinsi Kalimantan Barat di sebelah kiri blok metadata (proporsional & center vertikal)
+    if (loadedKopLogo) {
+      const boxW = 24;
+      const boxH = Math.min(28, metaTotalH - 2);
+      const ratio =
+        loadedKopLogo.width > 0 && loadedKopLogo.height > 0
+          ? loadedKopLogo.width / loadedKopLogo.height
+          : 0.82;
+      let drawW = boxW;
+      let drawH = drawW / ratio;
+      if (drawH > boxH) {
+        drawH = boxH;
+        drawW = drawH * ratio;
+      }
+      const logoX = marginX + (34 - drawW) / 2;
+      const logoY = metaTopY + (metaTotalH - drawH) / 2;
+      try {
+        doc.addImage(loadedKopLogo.dataUrl, loadedKopLogo.format, logoX, logoY, drawW, drawH);
+      } catch {
+        // Lewati bila format gambar tidak didukung
+      }
+    }
+
+    // --- Tabel Absensi 4 Kolom (No., Nama, Tanda Tangan, Keterangan) ---
+    autoTable(doc, {
+      startY: cursorY + 5,
+      margin: { top: 28, right: marginX, bottom: 20, left: marginX },
+      head: [['No.', 'Nama', 'Tanda Tangan', 'Keterangan']],
+      body: rows.length > 0 ? rows : [['01', '', '', '']],
+      theme: 'grid',
+      showHead: 'everyPage',
+      styles: {
+        font: 'helvetica',
+        fontSize: 10,
+        textColor: [0, 0, 0],
+        lineColor: [0, 0, 0],
+        lineWidth: 0.25,
+        valign: 'middle',
+        cellPadding: { top: 2, right: 2.5, bottom: 2, left: 2.5 },
+        minCellHeight: 10.2,
+      },
+      headStyles: {
+        fillColor: [232, 236, 239],
+        textColor: [0, 0, 0],
+        fontStyle: 'bold',
+        fontSize: 10.5,
+        halign: 'center',
+        valign: 'middle',
+        minCellHeight: 9.5,
+      },
+      columnStyles: {
+        0: { cellWidth: 14, halign: 'center' },
+        1: { cellWidth: 76, halign: 'left' },
+        2: { cellWidth: 46, halign: 'center' },
+        3: { cellWidth: contentW - 14 - 76 - 46, halign: 'left' },
+      },
+    });
+  });
+
+  // --- Header & Footer Dinas Sosial Provinsi Kalimantan Barat pada SETIAP halaman ---
+  const totalPages = doc.getNumberOfPages();
+  const footerLine1 =
+    'Jalan Sutan Syahrir Nomor 3 Pontianak, Kalimantan Barat 78116 Telepon (0561) 732523 \u2013 732524';
+  const footerLine2 =
+    'Laman www.dinsos.kalbarprov.go.id Pos-el dinsos@kalbarprov.go.id';
+
+  for (let p = 1; p <= totalPages; p += 1) {
+    doc.setPage(p);
+
+    // Header (sesuai Absen_Dinsos.pdf)
+    doc.setTextColor(0, 0, 0);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(13);
+    doc.text('PEMERINTAH PROVINSI KALIMANTAN BARAT', pageW / 2, 14.5, { align: 'center' });
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(16);
+    doc.text('DINAS SOSIAL', pageW / 2, 21.5, { align: 'center' });
+
+    // Footer
+    doc.setTextColor(71, 85, 105);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.text(footerLine1, pageW / 2, pageH - 12.5, { align: 'center' });
+    doc.text(footerLine2, pageW / 2, pageH - 8.5, { align: 'center' });
+  }
+
+  const defaultFileName = singleProposal
+    ? `Absensi_${singleProposal.tahun || 'DINSOS'}_${singleProposal.namaProposal}`
+    : `Absensi_DINSOS_${targetProposals.length}_Proposal`;
+
+  const saved = await saveOrOpenPdfDocument(doc, fileName || defaultFileName);
+
+  return {
+    ...saved,
+    proposalCount: targetProposals.length,
+    totalRows: totalRowsRendered,
+  };
+}
+
 
 

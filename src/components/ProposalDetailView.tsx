@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  ClipboardCheck,
   Database,
   Download,
   FileCheck2,
@@ -37,6 +38,7 @@ import { INITIAL_WILAYAH_LIST } from '../data/kpmOptions';
 import {
   BastTemplateConfig,
   DEFAULT_PEJABAT_LIST,
+  DEFAULT_SCHEDULE_BOOKS,
   ItemBantuan,
   KpmDocumentFile,
   KpmRecord,
@@ -48,6 +50,7 @@ import {
   ProposalRecord,
   ProposalSlotMap,
   ReportTemplateConfig,
+  ScheduleBook,
   ScheduleEventItem,
   TroubleshootingReconcileSnapshot,
   WilayahKabKota,
@@ -71,15 +74,18 @@ import {
 } from '../utils/imageProcessor';
 import {
   DEFAULT_PDF_COLUMN_KEYS,
+  exportAbsensiDinsosToPdf,
   exportKpmBastBulkToPdf,
   exportKpmTableToPdf,
   exportNomorDinsosToPdf,
+  formatAbsensiScheduleFields,
   formatBastProposalLocation,
   formatIndonesianDateWords,
   formatScheduleDateTimeForCoupon,
   normalizePejabatNipNumber,
   resolveEffectiveBastConfig,
   resolveScheduleForProposal,
+  resolveScheduleForProposalInBook,
   shouldAutoIncludeKelurahanColumn,
 } from '../utils/pdfExporter';
 import { exportKpmTableToXlsx } from '../utils/xlsxExporter';
@@ -95,6 +101,7 @@ interface ProposalDetailViewProps {
   wilayahList?: WilayahKabKota[];
   proposalSlotMap?: ProposalSlotMap;
   schedules?: ScheduleEventItem[];
+  scheduleBooks?: ScheduleBook[];
   reportTemplate?: ReportTemplateConfig;
   bastTemplate?: BastTemplateConfig;
   pejabatList?: PejabatProfile[];
@@ -133,6 +140,7 @@ interface ProposalDetailViewProps {
   ) => Promise<{ ok: boolean; message?: string; warning?: string }>;
   highlightEmptySlots?: boolean;
   onDismissHighlightEmptySlots?: () => void;
+  onOpenProposalBuilder?: (proposalId: string) => void;
 }
 
 export function ProposalDetailView({
@@ -143,6 +151,7 @@ export function ProposalDetailView({
   wilayahList = INITIAL_WILAYAH_LIST,
   proposalSlotMap = {},
   schedules = [],
+  scheduleBooks = DEFAULT_SCHEDULE_BOOKS,
   reportTemplate,
   bastTemplate,
   pejabatList = DEFAULT_PEJABAT_LIST,
@@ -158,6 +167,7 @@ export function ProposalDetailView({
   onSelectKpm,
   onTransferKpm,
   onOpenFullHistory,
+  onOpenProposalBuilder,
   onPreviewDocument,
   onUpdateProposalDocuments,
   onFillEmptySlotFromDatabase,
@@ -173,6 +183,13 @@ export function ProposalDetailView({
   const firstEmptySlotRef = useRef<HTMLDivElement | null>(null);
   const [confirmUndoOpen, setConfirmUndoOpen] = useState(false);
   const [undoBusy, setUndoBusy] = useState(false);
+  const [absensiModalOpen, setAbsensiModalOpen] = useState(false);
+  const [absensiBusy, setAbsensiBusy] = useState(false);
+  const [absensiBookId, setAbsensiBookId] = useState<string>('');
+  const [absensiTanggal, setAbsensiTanggal] = useState<string>('');
+  const [absensiHari, setAbsensiHari] = useState<string>('');
+  const [absensiPukul, setAbsensiPukul] = useState<string>('');
+  const [absensiLokasiKegiatan, setAbsensiLokasiKegiatan] = useState<string>(proposal.namaProposal);
   const [dbPickerTargetSlot, setDbPickerTargetSlot] = useState<{
     slotNumber: number;
     item?: string;
@@ -436,6 +453,93 @@ export function ProposalDetailView({
       });
     } finally {
       setKpmXlsxBusy(false);
+    }
+  };
+
+  const effectiveScheduleBooks = useMemo(
+    () => (scheduleBooks && scheduleBooks.length > 0 ? scheduleBooks : DEFAULT_SCHEDULE_BOOKS),
+    [scheduleBooks]
+  );
+
+  const applyAbsensiBookSchedule = (bookId: string) => {
+    setAbsensiBookId(bookId);
+    const ev = resolveScheduleForProposalInBook(
+      proposal.namaProposal,
+      proposal.tahun,
+      schedules,
+      bookId
+    );
+    const fields = formatAbsensiScheduleFields(ev);
+    setAbsensiTanggal(fields.tanggal);
+    setAbsensiHari(fields.hari);
+    setAbsensiPukul(fields.pukul);
+  };
+
+  const openAbsensiModal = () => {
+    const matchedBook = effectiveScheduleBooks.find((b) =>
+      Boolean(
+        resolveScheduleForProposalInBook(
+          proposal.namaProposal,
+          proposal.tahun,
+          schedules,
+          b.id
+        )
+      )
+    );
+    const initialBookId = matchedBook?.id || effectiveScheduleBooks[0]?.id || 'all';
+    setAbsensiLokasiKegiatan(proposal.namaProposal);
+    applyAbsensiBookSchedule(initialBookId);
+    setAbsensiModalOpen(true);
+  };
+
+  const selectedAbsensiBookSchedule = useMemo(
+    () =>
+      resolveScheduleForProposalInBook(
+        proposal.namaProposal,
+        proposal.tahun,
+        schedules,
+        absensiBookId
+      ),
+    [proposal.namaProposal, proposal.tahun, schedules, absensiBookId]
+  );
+
+  const handleExportProposalAbsensi = async () => {
+    if ((proposalRecords.length === 0 && emptySlotsCount === 0) || absensiBusy) return;
+    setAbsensiBusy(true);
+    setBastFeedback(null);
+    try {
+      const result = await exportAbsensiDinsosToPdf({
+        records: proposalRecords,
+        allRecords: records,
+        proposals: allProposals,
+        items,
+        wilayahList,
+        proposalSlotMap,
+        schedules,
+        scheduleBookId: absensiBookId,
+        bastConfig: effectiveBastConfig,
+        reportTemplate,
+        singleProposal: proposal,
+        manualOverride: {
+          tanggal: absensiTanggal,
+          hari: absensiHari,
+          pukul: absensiPukul,
+          lokasiKegiatan: absensiLokasiKegiatan || proposal.namaProposal,
+        },
+        fileName: `Absensi_${proposal.tahun}_${proposal.namaProposal}`,
+      });
+      setAbsensiModalOpen(false);
+      setBastFeedback({
+        type: 'success',
+        text: `PDF Daftar Absensi (${result.totalRows} baris · F4 DINSOS) disimpan: ${result.savedFileName}`,
+      });
+    } catch (err) {
+      setBastFeedback({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Gagal membuat PDF Daftar Absensi.',
+      });
+    } finally {
+      setAbsensiBusy(false);
     }
   };
 
@@ -1558,19 +1662,46 @@ export function ProposalDetailView({
               </button>
             </div>
 
-            <button
-              type="button"
-              disabled={proposalRecords.length === 0 || dinsosBusy}
-              onClick={() => void handleExportProposalDinsos()}
-              className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50/70 px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100 disabled:opacity-50"
-            >
-              {dinsosBusy ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Tag className="h-3.5 w-3.5" />
-              )}
-              <span>Cetak Nomor DINSOS ({kpmCounts.accepted} Label · F4 216×330)</span>
-            </button>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                disabled={proposalRecords.length === 0 || dinsosBusy}
+                onClick={() => void handleExportProposalDinsos()}
+                className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50/70 px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100 disabled:opacity-50"
+              >
+                {dinsosBusy ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Tag className="h-3.5 w-3.5" />
+                )}
+                <span>Nomor DINSOS ({kpmCounts.accepted})</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={(proposalRecords.length === 0 && emptySlotsCount === 0) || absensiBusy}
+                onClick={openAbsensiModal}
+                className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-indigo-200 bg-indigo-50/80 px-3 text-xs font-semibold text-indigo-800 transition-colors hover:bg-indigo-100 disabled:opacity-50"
+              >
+                {absensiBusy ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <ClipboardCheck className="h-3.5 w-3.5" />
+                )}
+                <span>Download Absensi (PDF)</span>
+              </button>
+            </div>
+
+            {onOpenProposalBuilder && (
+              <button
+                type="button"
+                onClick={() => onOpenProposalBuilder(proposal.id)}
+                className="inline-flex min-h-[42px] w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-3 text-xs font-semibold text-white transition-colors hover:bg-slate-800"
+              >
+                <FileText className="h-4 w-4" />
+                <span>Buat Proposal (F4 · OPD / Wilayah)</span>
+              </button>
+            )}
           </div>
         </section>
     </>
@@ -3457,6 +3588,178 @@ export function ProposalDetailView({
               >
                 {undoBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                 <span>{undoBusy ? 'Mengembalikan...' : 'Ya, Batalkan Apply'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Download Daftar Absensi (Dinas Sosial · Pilih Buku Jadwal) */}
+      {absensiModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Download Daftar Absensi Dinas Sosial"
+          onClick={() => !absensiBusy && setAbsensiModalOpen(false)}
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-xs sm:items-center sm:p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md space-y-4 rounded-t-3xl border border-slate-200 bg-white p-5 shadow-2xl sm:rounded-3xl"
+          >
+            <div className="mx-auto h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-2.5">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-indigo-700 border border-indigo-200/70">
+                  <ClipboardCheck className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Download Absensi (PDF)</h3>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Format Dinas Sosial Prov. Kalbar (F4 · Logo Provinsi)
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={absensiBusy}
+                onClick={() => setAbsensiModalOpen(false)}
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold text-slate-700">
+                  Pilih Buku Jadwal (Sumber Tanggal, Hari &amp; Pukul)
+                </label>
+                <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                  {effectiveScheduleBooks.map((book) => {
+                    const hasMatch = Boolean(
+                      resolveScheduleForProposalInBook(
+                        proposal.namaProposal,
+                        proposal.tahun,
+                        schedules,
+                        book.id
+                      )
+                    );
+                    const active = absensiBookId === book.id;
+                    return (
+                      <button
+                        key={book.id}
+                        type="button"
+                        onClick={() => applyAbsensiBookSchedule(book.id)}
+                        className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-left text-xs transition-all ${
+                          active
+                            ? 'border-indigo-600 bg-indigo-50 font-semibold text-indigo-900 ring-1 ring-indigo-600/20'
+                            : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
+                        }`}
+                      >
+                        <span className="truncate">{book.title}</span>
+                        <span
+                          className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                            hasMatch
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-slate-100 text-slate-500'
+                          }`}
+                        >
+                          {hasMatch ? 'Ada' : 'Kosong'}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <p
+                  className={`mt-1.5 text-[11px] font-medium ${
+                    selectedAbsensiBookSchedule ? 'text-emerald-700' : 'text-amber-700'
+                  }`}
+                >
+                  {selectedAbsensiBookSchedule
+                    ? `Terisi otomatis dari jadwal proposal di buku "${
+                        effectiveScheduleBooks.find((b) => b.id === absensiBookId)?.title ||
+                        'Terpilih'
+                      }".`
+                    : 'Belum ada agenda proposal ini di buku terpilih — bisa diisi manual atau dikosongkan.'}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                    Tanggal
+                  </label>
+                  <input
+                    type="text"
+                    value={absensiTanggal}
+                    onChange={(e) => setAbsensiTanggal(e.target.value)}
+                    placeholder="cth: 23 November 2026"
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs text-slate-800 focus:border-indigo-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                    Hari
+                  </label>
+                  <input
+                    type="text"
+                    value={absensiHari}
+                    onChange={(e) => setAbsensiHari(e.target.value)}
+                    placeholder="cth: Senin"
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs text-slate-800 focus:border-indigo-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                    Pukul
+                  </label>
+                  <input
+                    type="text"
+                    value={absensiPukul}
+                    onChange={(e) => setAbsensiPukul(e.target.value)}
+                    placeholder="cth: 09:00 WIB"
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs text-slate-800 focus:border-indigo-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                    Lokasi Kegiatan (Nama Proposal)
+                  </label>
+                  <input
+                    type="text"
+                    value={absensiLokasiKegiatan}
+                    onChange={(e) => setAbsensiLokasiKegiatan(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-800 focus:border-indigo-500 focus:bg-white focus:outline-none"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2.5 pt-1">
+              <button
+                type="button"
+                disabled={absensiBusy}
+                onClick={() => setAbsensiModalOpen(false)}
+                className="inline-flex min-h-[42px] flex-1 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={absensiBusy}
+                onClick={() => void handleExportProposalAbsensi()}
+                className="inline-flex min-h-[42px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-indigo-600 px-4 text-xs font-bold text-white hover:bg-indigo-700 disabled:opacity-60"
+              >
+                {absensiBusy ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Download className="h-3.5 w-3.5" />
+                )}
+                <span>{absensiBusy ? 'Menyiapkan PDF...' : 'Download PDF Absensi'}</span>
               </button>
             </div>
           </div>

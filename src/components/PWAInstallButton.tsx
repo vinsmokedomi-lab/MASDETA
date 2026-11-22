@@ -33,7 +33,7 @@ export function OfflineIndicator({
     <div
       role="status"
       aria-live="polite"
-      className={`sticky top-0 z-40 border-b border-amber-300/80 bg-amber-50/95 text-amber-950 shadow-xs backdrop-blur-md ${
+      className={`sticky top-0 z-40 border-b border-amber-300/80 bg-amber-50/95 text-amber-950 shadow-xs backdrop-blur-md print:hidden masdeta-no-print ${
         withSidebarOffset && !isNativeApp ? 'md:pl-64' : ''
       }`}
     >

@@ -1,18 +1,11 @@
 import { useMemo } from 'react';
 import {
   Archive,
-  Bell,
-  Calculator,
-  CalendarClock,
-  CopyCheck,
   Database,
-  Download,
   FolderOpen,
   Home,
   LayoutGrid,
   LogOut,
-  MessageSquare,
-  Package,
   Plus,
   User,
   Users,
@@ -43,10 +36,7 @@ interface DesktopSidebarProps {
   canAdd: boolean;
   appNotifications: AppNotificationItem[];
   bellHasUnread: boolean;
-  onOpenNotifications: () => void;
   onSelectTab: (tab: MainTab) => void;
-  onOpenSubItemRecap: () => void;
-  onOpenChat: () => void;
   onOpenMenuSection: (section: MenuSection) => void;
   onOpenQuickAdd: () => void;
   onOpenProfile: () => void;
@@ -71,10 +61,7 @@ export function DesktopSidebar({
   canAdd,
   appNotifications,
   bellHasUnread,
-  onOpenNotifications,
   onSelectTab,
-  onOpenSubItemRecap,
-  onOpenChat,
   onOpenMenuSection,
   onOpenQuickAdd,
   onOpenProfile,
@@ -94,14 +81,13 @@ export function DesktopSidebar({
     [visibleNotifications]
   );
 
-  const totalNotifCount =
+  const menuBadgeCount =
+    pendingUsersCount +
+    urgentSchedulesCount +
     unreadChatCount +
     unreadAppNotifCount +
-    (currentUser.role === 'SuperAdmin' && pendingUsersCount > 0 ? pendingUsersCount : 0);
-
-  const showBellRedDot = bellHasUnread || totalNotifCount > 0;
-
-  const menuBadgeCount = pendingUsersCount + urgentSchedulesCount + (hasAppUpdate ? 1 : 0);
+    (hasAppUpdate ? 1 : 0);
+  const showMenuDotOnly = menuBadgeCount === 0 && bellHasUnread;
   const presenceMeta = getPresenceMeta(currentUser.presenceStatus);
 
   const isDashboardActive = activeSubView === 'none' && activeTab === 'dashboard';
@@ -116,27 +102,23 @@ export function DesktopSidebar({
     activeSubView === 'proposal-history' ||
     activeSubView === 'add-proposal' ||
     activeSubView === 'edit-proposal';
-  const isRecapActive = activeSubView === 'subitem-recap';
-  const isChatActive = activeSubView === 'chat';
-  const isNotificationsActive = activeSubView === 'notifications';
   const isDatabaseKpmActive =
     activeSubView === 'none' && activeTab === 'menu' && activeMenuSection === 'database-kpm';
   const isArsipActive =
     activeSubView === 'none' && activeTab === 'menu' && activeMenuSection === 'arsip';
   const isMenuActive =
-    activeSubView === 'none' &&
-    activeTab === 'menu' &&
-    activeMenuSection !== 'database-kpm' &&
-    activeMenuSection !== 'arsip' &&
-    activeMenuSection !== 'jadwal' &&
-    activeMenuSection !== 'duplikasi' &&
-    activeMenuSection !== 'download' &&
-    activeMenuSection !== 'rab';
+    activeSubView === 'subitem-recap' ||
+    activeSubView === 'chat' ||
+    activeSubView === 'notifications' ||
+    (activeSubView === 'none' &&
+      activeTab === 'menu' &&
+      activeMenuSection !== 'database-kpm' &&
+      activeMenuSection !== 'arsip');
 
   return (
     <aside
       aria-label="Navigasi desktop"
-      className="hidden md:fixed md:inset-y-0 md:left-0 md:z-30 md:flex md:w-64 md:flex-col md:border-r md:border-slate-200 md:bg-white"
+      className="hidden md:fixed md:inset-y-0 md:left-0 md:z-30 md:flex md:w-64 md:flex-col md:border-r md:border-slate-200 md:bg-white print:hidden masdeta-no-print"
     >
         {/* Top Brand Header */}
         <div className="flex items-center justify-between gap-2.5 border-b border-slate-100 px-4 py-4">
@@ -233,21 +215,6 @@ export function DesktopSidebar({
 
           <button
             type="button"
-            onClick={onOpenSubItemRecap}
-            className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
-              isRecapActive
-                ? 'bg-teal-50 text-teal-800'
-                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-            }`}
-          >
-            <Package
-              className={`h-4 w-4 shrink-0 ${isRecapActive ? 'text-teal-700' : 'text-slate-400'}`}
-            />
-            <span className="flex-1 truncate">Rekap Item</span>
-          </button>
-
-          <button
-            type="button"
             onClick={() => onOpenMenuSection('database-kpm')}
             className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
               isDatabaseKpmActive
@@ -284,132 +251,6 @@ export function DesktopSidebar({
 
           <button
             type="button"
-            onClick={() => onOpenMenuSection('jadwal')}
-            className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
-              activeSubView === 'none' && activeTab === 'menu' && activeMenuSection === 'jadwal'
-                ? 'bg-teal-50 text-teal-800'
-                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-            }`}
-          >
-            <CalendarClock
-              className={`h-4 w-4 shrink-0 ${
-                activeSubView === 'none' && activeTab === 'menu' && activeMenuSection === 'jadwal'
-                  ? 'text-teal-700'
-                  : 'text-slate-400'
-              }`}
-            />
-            <span className="flex-1 truncate">Jadwal &amp; Target</span>
-            {urgentSchedulesCount > 0 && (
-              <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800 tabular-nums">
-                {urgentSchedulesCount}
-              </span>
-            )}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onOpenMenuSection('download')}
-            className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
-              activeSubView === 'none' && activeTab === 'menu' && activeMenuSection === 'download'
-                ? 'bg-teal-50 text-teal-800'
-                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-            }`}
-          >
-            <Download
-              className={`h-4 w-4 shrink-0 ${
-                activeSubView === 'none' && activeTab === 'menu' && activeMenuSection === 'download'
-                  ? 'text-teal-700'
-                  : 'text-slate-400'
-              }`}
-            />
-            <span className="flex-1 truncate">Download PDF</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onOpenMenuSection('rab')}
-            className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
-              activeSubView === 'none' && activeTab === 'menu' && activeMenuSection === 'rab'
-                ? 'bg-teal-50 text-teal-800'
-                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-            }`}
-          >
-            <Calculator
-              className={`h-4 w-4 shrink-0 ${
-                activeSubView === 'none' && activeTab === 'menu' && activeMenuSection === 'rab'
-                  ? 'text-teal-700'
-                  : 'text-slate-400'
-              }`}
-            />
-            <span className="flex-1 truncate">Pembuat RAB</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onOpenMenuSection('duplikasi')}
-            className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
-              activeSubView === 'none' && activeTab === 'menu' && activeMenuSection === 'duplikasi'
-                ? 'bg-teal-50 text-teal-800'
-                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-            }`}
-          >
-            <CopyCheck
-              className={`h-4 w-4 shrink-0 ${
-                activeSubView === 'none' && activeTab === 'menu' && activeMenuSection === 'duplikasi'
-                  ? 'text-teal-700'
-                  : 'text-slate-400'
-              }`}
-            />
-            <span className="flex-1 truncate">Duplikasi NIK/KK</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={onOpenChat}
-            className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
-              isChatActive
-                ? 'bg-teal-50 text-teal-800'
-                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-            }`}
-          >
-            <MessageSquare
-              className={`h-4 w-4 shrink-0 ${isChatActive ? 'text-teal-700' : 'text-slate-400'}`}
-            />
-            <span className="flex-1 truncate">Obrolan Tim</span>
-            {unreadChatCount > 0 && (
-              <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
-                {unreadChatCount > 99 ? '99+' : unreadChatCount}
-              </span>
-            )}
-          </button>
-
-          <button
-            type="button"
-            onClick={onOpenNotifications}
-            aria-current={isNotificationsActive ? 'page' : undefined}
-            className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
-              isNotificationsActive
-                ? 'bg-teal-50 text-teal-800'
-                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-            }`}
-          >
-            <Bell
-              className={`h-4 w-4 shrink-0 ${
-                isNotificationsActive ? 'text-teal-700' : 'text-slate-400'
-              }`}
-            />
-            <span className="flex-1 truncate">Notifikasi</span>
-            {totalNotifCount > 0 ? (
-              <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
-                {totalNotifCount > 99 ? '99+' : totalNotifCount}
-              </span>
-            ) : (
-              showBellRedDot && <span className="h-2 w-2 rounded-full bg-rose-600" />
-            )}
-          </button>
-
-          <button
-            type="button"
             onClick={() => onSelectTab('menu')}
             className={`flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-xs font-semibold transition-colors ${
               isMenuActive
@@ -421,10 +262,12 @@ export function DesktopSidebar({
               className={`h-4 w-4 shrink-0 ${isMenuActive ? 'text-teal-700' : 'text-slate-400'}`}
             />
             <span className="flex-1 truncate">Menu</span>
-            {menuBadgeCount > 0 && (
+            {menuBadgeCount > 0 ? (
               <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white tabular-nums">
                 {menuBadgeCount > 99 ? '99+' : menuBadgeCount}
               </span>
+            ) : (
+              showMenuDotOnly && <span className="h-2 w-2 rounded-full bg-rose-600" />
             )}
           </button>
         </div>

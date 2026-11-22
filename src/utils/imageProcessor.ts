@@ -2441,7 +2441,7 @@ export function exportKpmRecordsToCsv(
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 export function exportSubItemRecapToCsv(
@@ -2484,7 +2484,7 @@ export function exportSubItemRecapToCsv(
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 export function loadKpmAuditLogs(fallback: KpmAuditLogEntry[]): KpmAuditLogEntry[] {

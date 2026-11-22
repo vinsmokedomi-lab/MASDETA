@@ -11,13 +11,21 @@ import {
   FileSpreadsheet,
   FolderOpen,
   Plus,
+  RefreshCw,
   RotateCcw,
+  Save,
   SlidersHorizontal,
   Sparkles,
   Trash2,
   Wand2,
 } from 'lucide-react';
-import { ItemBantuan, KpmRecord, ProposalRecord } from '../types/kpm';
+import {
+  ItemBantuan,
+  KpmRecord,
+  ProposalRabMap,
+  ProposalRecord,
+  SavedProposalRabConfig,
+} from '../types/kpm';
 import {
   DEFAULT_PAGU_PER_KPM,
   RAB_SIMULATION_PRESETS,
@@ -40,6 +48,12 @@ interface RabBuilderViewProps {
   proposals: ProposalRecord[];
   records: KpmRecord[];
   items: ItemBantuan[];
+  initialProposalId?: string | null;
+  savedRabMap?: ProposalRabMap;
+  canUpdate?: boolean;
+  returnToProposalBuilder?: boolean;
+  onSaveProposalRab?: (config: SavedProposalRabConfig) => Promise<void> | void;
+  onReturnToProposalBuilder?: (proposalId: string) => void;
   onBack: () => void;
 }
 
@@ -50,14 +64,30 @@ export function RabBuilderView({
   proposals,
   records,
   items,
+  initialProposalId = null,
+  savedRabMap = {},
+  canUpdate = true,
+  returnToProposalBuilder = false,
+  onSaveProposalRab,
+  onReturnToProposalBuilder,
   onBack,
 }: RabBuilderViewProps) {
   // Urutkan proposal terbaru lebih dulu dan hitung jumlah KPM diterima
   const sortedProposals = useMemo(() => {
     const countMap = new Map<string, number>();
+    const proposalIdByNameYear = new Map<string, string>();
+    proposals.forEach((p) => {
+      proposalIdByNameYear.set(`${p.namaProposal.trim().toLowerCase()}__${String(p.tahun)}`, p.id);
+    });
     records.forEach((rec) => {
-      if (rec.validasi === 'accepted' && rec.proposalId) {
-        countMap.set(rec.proposalId, (countMap.get(rec.proposalId) || 0) + 1);
+      if (rec.validasi !== 'accepted') return;
+      const pid =
+        rec.proposalId ||
+        proposalIdByNameYear.get(
+          `${(rec.proposal || '').trim().toLowerCase()}__${String(rec.tahun)}`
+        );
+      if (pid) {
+        countMap.set(pid, (countMap.get(pid) || 0) + 1);
       }
     });
 
@@ -77,9 +107,12 @@ export function RabBuilderView({
   const defaultPreset = RAB_SIMULATION_PRESETS[0];
 
   const [sourceMode, setSourceMode] = useState<RabSourceMode>(() =>
-    sortedProposals.some((p) => p.acceptedCount > 0) ? 'proposal' : 'manual'
+    initialProposalId || sortedProposals.some((p) => p.acceptedCount > 0) ? 'proposal' : 'manual'
   );
   const [selectedProposalId, setSelectedProposalId] = useState<string>(() => {
+    if (initialProposalId && proposals.some((p) => p.id === initialProposalId)) {
+      return initialProposalId;
+    }
     const firstWithKpm = sortedProposals.find((p) => p.acceptedCount > 0);
     return firstWithKpm?.proposal.id || sortedProposals[0]?.proposal.id || '';
   });
@@ -106,58 +139,41 @@ export function RabBuilderView({
     text: string;
   } | null>(null);
   const [isExportingPdf, setIsExportingPdf] = useState<boolean>(false);
+  const [isSavingRab, setIsSavingRab] = useState<boolean>(false);
 
-  // Sinkronisasi awal saat membuka halaman jika mode default = 'proposal'
-  const [hasInitializedProposal, setHasInitializedProposal] = useState<boolean>(false);
-  useEffect(() => {
-    if (hasInitializedProposal) return;
-    if (sourceMode === 'proposal' && selectedProposalId) {
-      const found = sortedProposals.find((item) => item.proposal.id === selectedProposalId);
-      if (found) {
-        const built = buildRabPackagesFromProposal(
-          found.proposal,
-          records,
-          items,
-          found.acceptedCount > 0 ? found.acceptedCount * DEFAULT_PAGU_PER_KPM : 0
-        );
-        setJudulRab(built.judul);
-        setTotalAnggaran(built.suggestedBudget);
-        setBudgetInputText(formatRupiahPlain(built.suggestedBudget));
-        setPackages(built.packages);
-
-        const initialExpanded: Record<string, boolean> = {};
-        built.packages.forEach((pkg) => {
-          initialExpanded[pkg.id] = pkg.jumlahPenerima > 0;
-        });
-        setExpandedPackageIds(initialExpanded);
-      }
-    } else {
-      const initialExpanded: Record<string, boolean> = {};
-      packages.forEach((pkg) => {
-        initialExpanded[pkg.id] = pkg.jumlahPenerima > 0;
-      });
-      setExpandedPackageIds(initialExpanded);
-    }
-    setHasInitializedProposal(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasInitializedProposal, sourceMode, selectedProposalId]);
-
-  const summary = useMemo(
-    () => calculateRabSummary(packages, totalAnggaran),
-    [packages, totalAnggaran]
-  );
-
-  // Terapkan pilihan Proposal MASDETA
-  const handleSelectProposal = (proposalId: string) => {
-    setSelectedProposalId(proposalId);
-    setStatusNotice(null);
+  const loadProposalIntoEditor = (proposalId: string, silent = false) => {
     const found = sortedProposals.find((p) => p.proposal.id === proposalId);
     if (!found) return;
 
+    const existingSaved = savedRabMap[proposalId];
+    if (existingSaved && Array.isArray(existingSaved.packages) && existingSaved.packages.length > 0) {
+      setJudulRab(existingSaved.judulRab || found.proposal.namaProposal.toUpperCase());
+      setTotalAnggaran(existingSaved.totalAnggaran);
+      setBudgetInputText(formatRupiahPlain(existingSaved.totalAnggaran));
+      setPackages(
+        existingSaved.packages.map((pkg) => ({
+          ...pkg,
+          subItems: (pkg.subItems || []).map((s) => ({ ...s })),
+        }))
+      );
+      const nextExpanded: Record<string, boolean> = {};
+      existingSaved.packages.forEach((pkg) => {
+        nextExpanded[pkg.id] = pkg.jumlahPenerima > 0;
+      });
+      setExpandedPackageIds(nextExpanded);
+      if (!silent) {
+        setStatusNotice({
+          tone: 'teal',
+          text: `RAB tersimpan untuk "${found.proposal.namaProposal}" dimuat (${formatRupiahCurrency(
+            existingSaved.totalTerhitung
+          )}).`,
+        });
+      }
+      return;
+    }
+
     const nextBudget =
-      found.acceptedCount > 0
-        ? found.acceptedCount * DEFAULT_PAGU_PER_KPM
-        : totalAnggaran;
+      found.acceptedCount > 0 ? found.acceptedCount * DEFAULT_PAGU_PER_KPM : 0;
 
     const built = buildRabPackagesFromProposal(found.proposal, records, items, nextBudget);
     setJudulRab(built.judul);
@@ -171,10 +187,213 @@ export function RabBuilderView({
     });
     setExpandedPackageIds(nextExpanded);
 
+    if (!silent) {
+      setStatusNotice({
+        tone: 'teal',
+        text: `Kuota ${built.totalKpm} KPM berhasil dimuat dari proposal "${found.proposal.namaProposal}". Klik "Simpan RAB Proposal" setelah selesai mengatur harga.`,
+      });
+    }
+  };
+
+  // Sinkronisasi awal saat membuka halaman jika mode default = 'proposal'
+  const [hasInitializedProposal, setHasInitializedProposal] = useState<boolean>(false);
+  useEffect(() => {
+    if (hasInitializedProposal) return;
+    if (sourceMode === 'proposal' && selectedProposalId) {
+      loadProposalIntoEditor(selectedProposalId, true);
+    } else {
+      const initialExpanded: Record<string, boolean> = {};
+      packages.forEach((pkg) => {
+        initialExpanded[pkg.id] = pkg.jumlahPenerima > 0;
+      });
+      setExpandedPackageIds(initialExpanded);
+    }
+    setHasInitializedProposal(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasInitializedProposal, sourceMode, selectedProposalId]);
+
+  useEffect(() => {
+    if (!hasInitializedProposal || !initialProposalId) return;
+    if (proposals.some((p) => p.id === initialProposalId) && initialProposalId !== selectedProposalId) {
+      setSourceMode('proposal');
+      setSelectedProposalId(initialProposalId);
+      loadProposalIntoEditor(initialProposalId, true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialProposalId]);
+
+  const summary = useMemo(
+    () => calculateRabSummary(packages, totalAnggaran),
+    [packages, totalAnggaran]
+  );
+
+  // Hitung kuota KPM aktif saat ini untuk proposal terpilih guna mendeteksi selisih terhadap editor/RAB tersimpan
+  const liveSelectedProposalCounts = useMemo(() => {
+    if (sourceMode !== 'proposal' || !selectedProposalId) return null;
+    const prop = proposals.find((p) => p.id === selectedProposalId);
+    if (!prop) return null;
+    const accepted = records.filter(
+      (r) =>
+        r.validasi === 'accepted' &&
+        (r.proposalId
+          ? r.proposalId === prop.id
+          : r.proposal.trim().toLowerCase() === prop.namaProposal.trim().toLowerCase() &&
+            String(r.tahun) === String(prop.tahun))
+    );
+    const counts: Record<string, number> = {};
+    accepted.forEach((r) => {
+      const code = String(r.item || '').trim().toUpperCase();
+      if (!code) return;
+      counts[code] = (counts[code] || 0) + 1;
+    });
+    const editorCounts: Record<string, number> = {};
+    packages.forEach((p) => {
+      if (p.jumlahPenerima > 0) {
+        editorCounts[p.kode.trim().toUpperCase()] = p.jumlahPenerima;
+      }
+    });
+    const allCodes = new Set([...Object.keys(counts), ...Object.keys(editorCounts)]);
+    const mismatches: string[] = [];
+    allCodes.forEach((code) => {
+      const liveC = counts[code] || 0;
+      const editC = editorCounts[code] || 0;
+      if (liveC !== editC) {
+        mismatches.push(`${code} (Proposal: ${liveC}, Editor RAB: ${editC})`);
+      }
+    });
+    return {
+      proposal: prop,
+      liveTotal: accepted.length,
+      counts,
+      mismatches,
+      isSyncedWithLive: mismatches.length === 0 && accepted.length === summary.totalPenerima,
+    };
+  }, [sourceMode, selectedProposalId, proposals, records, packages, summary.totalPenerima]);
+
+  // Terapkan pilihan Proposal MASDETA
+  const handleSelectProposal = (proposalId: string) => {
+    setSelectedProposalId(proposalId);
+    setStatusNotice(null);
+    loadProposalIntoEditor(proposalId, false);
+  };
+
+  // Sinkronkan jumlah penerima editor RAB mengikuti data KPM aktif terbaru di Proposal
+  const handleSyncLiveProposalCounts = () => {
+    if (!liveSelectedProposalCounts) return;
+    const { proposal, counts, liveTotal } = liveSelectedProposalCounts;
+    const builtFresh = buildRabPackagesFromProposal(
+      proposal,
+      records,
+      items,
+      totalAnggaran > 0 ? totalAnggaran : liveTotal * DEFAULT_PAGU_PER_KPM
+    );
+    // Pertahankan harga satuan & custom target dari paket yang sudah diedit user, hanya perbarui jumlahPenerima
+    const existingByCode = new Map(packages.map((p) => [p.kode.toUpperCase(), p]));
+    const merged: RabPackage[] = builtFresh.packages.map((freshPkg) => {
+      const prev = existingByCode.get(freshPkg.kode.toUpperCase());
+      if (!prev) return freshPkg;
+      return {
+        ...prev,
+        jumlahPenerima: counts[freshPkg.kode.toUpperCase()] || 0,
+      };
+    });
+    const nextBudget =
+      totalAnggaran > 0 ? totalAnggaran : liveTotal * DEFAULT_PAGU_PER_KPM;
+    const pagu = computeStandardPaguPerKpm(nextBudget, liveTotal);
+    const rebalanced = autoRebalanceOnChange
+      ? rebalanceAllPackages(merged, pagu.paguStandarPerKpm)
+      : merged;
+    setTotalAnggaran(nextBudget);
+    setBudgetInputText(formatRupiahPlain(nextBudget));
+    setPackages(rebalanced);
     setStatusNotice({
       tone: 'teal',
-      text: `Kuota ${built.totalKpm} KPM berhasil dimuat dari proposal "${found.proposal.namaProposal}".`,
+      text: `Kuota KPM pada editor RAB disinkronkan ke data terbaru (${liveTotal} KPM). Klik "Simpan RAB Proposal" untuk menyimpan perubahan.`,
     });
+  };
+
+  // Simpan RAB permanen terikat ke proposal terpilih
+  const handleSaveCurrentProposalRab = async (returnAfterSave = false) => {
+    if (!onSaveProposalRab || sourceMode !== 'proposal' || !selectedProposalId || isSavingRab) {
+      return;
+    }
+    const found = proposals.find((p) => p.id === selectedProposalId);
+    if (!found) return;
+    if (summary.totalPenerima <= 0 || summary.totalTerhitung <= 0) {
+      setStatusNotice({
+        tone: 'rose',
+        text: 'Total penerima dan total anggaran terhitung harus lebih dari Rp 0 sebelum disimpan.',
+      });
+      return;
+    }
+    if (liveSelectedProposalCounts && !liveSelectedProposalCounts.isSyncedWithLive) {
+      setStatusNotice({
+        tone: 'rose',
+        text: `Kuota KPM di editor RAB belum sinkron dengan data KPM aktif proposal (${liveSelectedProposalCounts.mismatches.join(
+          ', '
+        )}). Klik tombol "Sinkronkan Kuota KPM" terlebih dahulu sebelum menyimpan.`,
+      });
+      return;
+    }
+    if (summary.selisihTotal !== 0) {
+      setStatusNotice({
+        tone: 'rose',
+        text: `Total terhitung RAB masih berselisih ${formatRupiahCurrency(
+          summary.selisihTotal
+        )} dari Target Total Anggaran. Klik "Optimalkan Pembulatan" atau sesuaikan harga/target agar selisih Rp 0 sebelum disimpan.`,
+      });
+      return;
+    }
+
+    setIsSavingRab(true);
+    setStatusNotice(null);
+    try {
+      const itemCountsSnapshot: Record<string, number> = {};
+      summary.packages.forEach((pkg) => {
+        if (pkg.jumlahPenerima > 0) {
+          itemCountsSnapshot[pkg.kode.trim().toUpperCase()] = pkg.jumlahPenerima;
+        }
+      });
+
+      const payload: SavedProposalRabConfig = {
+        proposalId: found.id,
+        proposalName: found.namaProposal,
+        tahun: found.tahun,
+        judulRab: judulRab.trim() || `${found.tahun} ${found.namaProposal}`.toUpperCase(),
+        totalAnggaran: summary.totalAnggaranTarget,
+        totalTerhitung: summary.totalTerhitung,
+        paguStandarPerKpm: summary.paguInfo.paguStandarPerKpm,
+        totalKpmSnapshot: summary.totalPenerima,
+        itemCountsSnapshot,
+        packages: packages.map((pkg) => ({
+          id: pkg.id,
+          kode: pkg.kode,
+          namaPaket: pkg.namaPaket,
+          jumlahPenerima: pkg.jumlahPenerima,
+          customTargetHarga: pkg.customTargetHarga,
+          balancerMode: pkg.balancerMode,
+          subItems: pkg.subItems.map((s) => ({ ...s })),
+        })),
+        updatedAt: new Date().toISOString(),
+      };
+
+      await onSaveProposalRab(payload);
+      setStatusNotice({
+        tone: 'teal',
+        text: `RAB Proposal "${found.namaProposal}" berhasil disimpan (${summary.totalPenerima} KPM · ${formatRupiahCurrency(
+          summary.totalTerhitung
+        )}) dan siap dipakai di fitur Buat Proposal Mode OPD.`,
+      });
+
+      if (returnAfterSave && onReturnToProposalBuilder) {
+        onReturnToProposalBuilder(found.id);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Gagal menyimpan RAB proposal.';
+      setStatusNotice({ tone: 'rose', text: msg });
+    } finally {
+      setIsSavingRab(false);
+    }
   };
 
   // Beralih antara mode Proposal MASDETA vs Manual / Simulasi
@@ -221,7 +440,12 @@ export function RabBuilderView({
     if (autoRebalanceOnChange) {
       const totalKpm = packages.reduce((sum, p) => sum + Math.max(0, p.jumlahPenerima), 0);
       const pagu = computeStandardPaguPerKpm(parsed, totalKpm);
-      setPackages((prev) => rebalanceAllPackages(prev, pagu.paguStandarPerKpm));
+      setPackages((prev) =>
+        rebalanceAllPackages(
+          prev.map((pkg) => ({ ...pkg, customTargetHarga: null })),
+          pagu.paguStandarPerKpm
+        )
+      );
     }
   };
 
@@ -479,15 +703,15 @@ export function RabBuilderView({
             </div>
             <div className="min-w-0">
               <h1 className="truncate text-base font-bold tracking-tight text-slate-900">
-                Pembuat RAB
+                RAB
               </h1>
               <p className="truncate text-xs text-slate-500">
-                Rencana Anggaran Biaya otomatis &amp; penyeimbang harga sub-item presisi
+                Rencana Anggaran Biaya per Proposal &amp; penyeimbang harga sub-item presisi
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {/* Switcher Editor / Pratinjau Dokumen */}
             <div className="inline-flex rounded-xl border border-slate-200 bg-slate-100/80 p-0.5">
               <button
@@ -516,6 +740,24 @@ export function RabBuilderView({
               </button>
             </div>
 
+            {sourceMode === 'proposal' && selectedProposalId && onSaveProposalRab && canUpdate && (
+              <button
+                type="button"
+                onClick={() => handleSaveCurrentProposalRab(returnToProposalBuilder)}
+                disabled={isSavingRab}
+                className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-slate-900 px-3.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Save className="h-3.5 w-3.5" />
+                <span>
+                  {isSavingRab
+                    ? 'Menyimpan...'
+                    : returnToProposalBuilder
+                    ? 'Simpan & Kembali ke Proposal'
+                    : 'Simpan RAB Proposal'}
+                </span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={handleDownloadPdf}
@@ -530,6 +772,32 @@ export function RabBuilderView({
       </header>
 
       <main className="mx-auto max-w-6xl space-y-5 px-4 pt-5 sm:px-6">
+        {/* Banner Sinkronisasi Kuota KPM Terbaru jika ada perubahan */}
+        {liveSelectedProposalCounts && !liveSelectedProposalCounts.isSyncedWithLive && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+              <div>
+                <p className="font-bold">
+                  Kuota KPM aktif di Proposal berbeda dengan editor RAB saat ini
+                </p>
+                <p className="mt-0.5 text-amber-800">
+                  {liveSelectedProposalCounts.mismatches.join(', ')}. Sinkronkan kuota lalu klik
+                  Simpan RAB Proposal agar Mode OPD selalu valid.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleSyncLiveProposalCounts}
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-amber-600 px-3 text-xs font-semibold text-white hover:bg-amber-700"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              <span>Sinkronkan Kuota KPM Terbaru</span>
+            </button>
+          </div>
+        )}
+
         {/* Notifikasi Status Inline */}
         {statusNotice && (
           <div
@@ -619,9 +887,16 @@ export function RabBuilderView({
                     {sortedProposals.map(({ proposal, acceptedCount }) => (
                       <option key={proposal.id} value={proposal.id}>
                         {proposal.tahun} · {proposal.namaProposal} ({acceptedCount} KPM)
+                        {savedRabMap[proposal.id] ? ' ✓ RAB Tersimpan' : ''}
                       </option>
                     ))}
                   </select>
+                  {selectedProposalId && savedRabMap[selectedProposalId] && (
+                    <p className="mt-1 text-[11px] font-medium text-emerald-700">
+                      Tersimpan di database ·{' '}
+                      {formatRupiahCurrency(savedRabMap[selectedProposalId].totalTerhitung)}
+                    </p>
+                  )}
                 </div>
               ) : (
                 <div className="lg:col-span-4">

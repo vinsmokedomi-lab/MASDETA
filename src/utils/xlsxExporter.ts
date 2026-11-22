@@ -116,6 +116,15 @@ function applyWorksheetColumnWidths(
   ws['!cols'] = cols;
 }
 
+function sanitizeSpreadsheetText(raw: string): string {
+  if (!raw) return '';
+  // Lindungi dari Excel/CSV formula injection tanpa merusak placeholder '-' tunggal
+  if (raw !== '-' && /^[=+\-@\t\r]/.test(raw)) {
+    return `'${raw}`;
+  }
+  return raw;
+}
+
 function forceTextColumnsOnWorksheet(
   XLSX: typeof XLSXTypes,
   ws: XLSXTypes.WorkSheet,
@@ -391,42 +400,42 @@ function createKpmWorksheet(
         ? [
             r.no,
             r.tahun || '',
-            r.proposal || '',
-            r.item,
-            r.namaItem,
-            r.nama,
+            sanitizeSpreadsheetText(r.proposal || ''),
+            sanitizeSpreadsheetText(r.item),
+            sanitizeSpreadsheetText(r.namaItem),
+            sanitizeSpreadsheetText(r.nama),
             r.nikKtp,
             r.nikKk,
-            r.alamat,
+            sanitizeSpreadsheetText(r.alamat),
             r.rt,
             r.rw,
-            r.kelurahan,
-            r.kecamatan,
-            r.desil,
-            r.kontak,
-            r.pekerjaan,
-            r.pengelola,
-            r.status,
-            r.catatan,
+            sanitizeSpreadsheetText(r.kelurahan),
+            sanitizeSpreadsheetText(r.kecamatan),
+            sanitizeSpreadsheetText(r.desil),
+            sanitizeSpreadsheetText(r.kontak),
+            sanitizeSpreadsheetText(r.pekerjaan),
+            sanitizeSpreadsheetText(r.pengelola),
+            sanitizeSpreadsheetText(r.status),
+            sanitizeSpreadsheetText(r.catatan),
           ]
         : [
             r.no,
-            r.item,
-            r.namaItem,
-            r.nama,
+            sanitizeSpreadsheetText(r.item),
+            sanitizeSpreadsheetText(r.namaItem),
+            sanitizeSpreadsheetText(r.nama),
             r.nikKtp,
             r.nikKk,
-            r.alamat,
+            sanitizeSpreadsheetText(r.alamat),
             r.rt,
             r.rw,
-            r.kelurahan,
-            r.kecamatan,
-            r.desil,
-            r.kontak,
-            r.pekerjaan,
-            r.pengelola,
-            r.status,
-            r.catatan,
+            sanitizeSpreadsheetText(r.kelurahan),
+            sanitizeSpreadsheetText(r.kecamatan),
+            sanitizeSpreadsheetText(r.desil),
+            sanitizeSpreadsheetText(r.kontak),
+            sanitizeSpreadsheetText(r.pekerjaan),
+            sanitizeSpreadsheetText(r.pengelola),
+            sanitizeSpreadsheetText(r.status),
+            sanitizeSpreadsheetText(r.catatan),
           ]
     ),
   ];
@@ -519,7 +528,7 @@ async function saveOrOpenXlsxWorkbook(
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+    window.setTimeout(() => URL.revokeObjectURL(url), 15_000);
     return { savedFileName: fileName, openedNative: false };
   }
 

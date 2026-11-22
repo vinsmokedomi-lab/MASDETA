@@ -177,8 +177,8 @@ const DEFAULT_PACKAGE_TEMPLATES: DefaultPackageTemplate[] = [
     kode: 'TND',
     namaPaket: 'Paket Tenda & Kursi',
     subItems: [
-      { namaBarang: 'Tenda', volumePerPaket: 1, satuan: 'Unit', hargaDasar: 1_800_000, isBalancer: false },
-      { namaBarang: 'Kursi Plastik', volumePerPaket: 6, satuan: 'Unit', hargaDasar: 158_334, isBalancer: true },
+      { namaBarang: 'Tenda', volumePerPaket: 1, satuan: 'Unit', hargaDasar: 1_850_000, isBalancer: true },
+      { namaBarang: 'Kursi Plastik', volumePerPaket: 6, satuan: 'Unit', hargaDasar: 150_000, isBalancer: false },
     ],
   },
   {
@@ -348,11 +348,16 @@ export function rebalancePackage(pkg: RabPackage, standardPaguPerKpm: number): R
 
   const nextPriceById = new Map<string, number>();
 
+  // Pilih penyeimbang utama: prioritaskan yang bervolume 1 agar tidak menyisakan pembulatan rupiah
+  const primaryIdx = Math.max(
+    0,
+    balancers.findIndex((sub) => Math.max(1, sub.volumePerPaket) === 1)
+  );
+  const primary = balancers[primaryIdx];
+  const others = balancers.filter((_, idx) => idx !== primaryIdx);
+
   if (pkg.balancerMode === 'primary') {
-    // Penyeimbang sekunder mempertahankan harga dasarnya (atau harga saat ini jika masih valid),
-    // seluruh selisih diserap oleh penyeimbang utama (indeks pertama, mis. Kompor Gas)
-    const primary = balancers[0];
-    const others = balancers.slice(1);
+    // Penyeimbang sekunder mempertahankan harga dasarnya, seluruh selisih diserap oleh penyeimbang utama
     const othersTotal = others.reduce(
       (sum, sub) => sum + Math.max(1, sub.volumePerPaket) * Math.max(0, Math.round(sub.hargaDasar)),
       0
@@ -389,8 +394,8 @@ export function rebalancePackage(pkg: RabPackage, standardPaguPerKpm: number): R
   let allocatedTotal = 0;
   balancers.forEach((sub, idx) => {
     const vol = Math.max(1, sub.volumePerPaket);
-    if (idx === 0) {
-      // Penyeimbang pertama diisi terakhir agar menyerap sisa pembulatan rupiah
+    if (idx === primaryIdx) {
+      // Penyeimbang utama (prioritas vol=1) diisi terakhir agar menyerap sisa pembulatan rupiah
       return;
     }
     const shareBudget = Math.round((remainingForBalancers * weights[idx]) / totalWeight);
@@ -399,7 +404,6 @@ export function rebalancePackage(pkg: RabPackage, standardPaguPerKpm: number): R
     allocatedTotal += unitPrice * vol;
   });
 
-  const primary = balancers[0];
   const primaryVol = Math.max(1, primary.volumePerPaket);
   const primaryBudget = Math.max(0, remainingForBalancers - allocatedTotal);
   nextPriceById.set(primary.id, Math.max(0, Math.round(primaryBudget / primaryVol)));
@@ -459,9 +463,12 @@ export function buildRabPackagesFromProposal(
   const existingCodes = new Set(packages.map((p) => p.kode.toUpperCase()));
   Object.entries(countsByKode).forEach(([kode, count]) => {
     if (existingCodes.has(kode) || count <= 0) return;
-    const catalogMatch = catalogItems.find(
-      (item) => item.code.trim().toUpperCase() === kode
-    );
+    const catalogMatch =
+      catalogItems.find(
+        (item) =>
+          String(item.tahun) === String(proposal.tahun) &&
+          item.code.trim().toUpperCase() === kode
+      ) ?? catalogItems.find((item) => item.code.trim().toUpperCase() === kode);
     const rawSubNames = catalogMatch?.subItems?.length
       ? catalogMatch.subItems
       : [catalogMatch?.name || kode];
@@ -626,21 +633,23 @@ export function optimizeRabRounding(
     const balancers = pkg.subItems
       .map((sub, subIndex) => ({ sub, subIndex }))
       .filter(({ sub }) => sub.isBalancer);
-    // Ambil penyeimbang utama tiap paket aktif agar perubahan tetap bersih & terpusat
-    if (balancers.length > 0) {
-      const first = balancers[0];
-      const vol = Math.max(1, Math.floor(first.sub.volumePerPaket || 1));
+    // Sertakan seluruh penyeimbang aktif (prioritas volumePerPaket === 1) agar pembulatan sekecil mungkin tercapai
+    const orderedBalancers = [...balancers].sort(
+      (a, b) => Math.max(1, a.sub.volumePerPaket || 1) - Math.max(1, b.sub.volumePerPaket || 1)
+    );
+    orderedBalancers.forEach((item) => {
+      const vol = Math.max(1, Math.floor(item.sub.volumePerPaket || 1));
       candidates.push({
         pkgIndex,
-        subIndex: first.subIndex,
+        subIndex: item.subIndex,
         kodePaket: pkg.kode,
-        namaBarang: first.sub.namaBarang,
+        namaBarang: item.sub.namaBarang,
         jumlahPenerima: penerima,
         volumePerPaket: vol,
         step: penerima * vol,
-        currentPrice: Math.max(0, Math.round(first.sub.hargaSatuan || 0)),
+        currentPrice: Math.max(0, Math.round(item.sub.hargaSatuan || 0)),
       });
-    }
+    });
   });
 
   if (candidates.length === 0) {

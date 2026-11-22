@@ -15,16 +15,22 @@ import {
   deleteKpmRecordWithSideEffectsInSupabase,
   deleteKpmsBatchInSupabase,
   deletePengelolaInSupabase,
+  deleteProposalRabConfigFromSupabase,
+  deleteProposalStyleUsageInSupabase,
   deleteScheduleFromSupabase,
   fetchAppStateSlice,
   fetchChatDeliveryWatermarks,
   fetchDocumentTemplateFromSupabase,
   fetchOperationalDataFromSupabase,
+  fetchProposalRabConfigsFromSupabase,
+  fetchProposalStyleHistoryFromSupabase,
   fetchSchedulesFromSupabase,
   isSchemaMissingError,
+  recordProposalStyleUsageInSupabase,
   runAdminDataActionInSupabase,
   saveAppStateSlice,
   saveDocumentTemplateInSupabase,
+  saveProposalRabConfigInSupabase,
   supabaseAdminControlInternalUser,
   supabaseCreateInternalUserBySuperAdmin,
   supabaseDeleteInternalUser,
@@ -92,15 +98,19 @@ import {
   PengelolaProfile,
   ProposalBastMap,
   ProposalChecklist,
+  ProposalDestinationType,
   ProposalDocuments,
   ProposalEmptySlot,
   ProposalFormValues,
   ProposalKpmHistoryEntry,
   ProposalLockStatus,
+  ProposalRabMap,
   ProposalRecord,
   ProposalSlotMap,
   ProposalSlotState,
+  ProposalStyleUsageRecord,
   ReportTemplateConfig,
+  SavedProposalRabConfig,
   SCHEDULE_CATEGORY_LABELS,
   ScheduleBook,
   ScheduleBooksState,
@@ -645,6 +655,15 @@ export default function App() {
   const [sptjmTemplate, setSptjmTemplate] = useState<SptjmTemplateConfig>(DEFAULT_SPTJM_TEMPLATE);
   const [pejabatList, setPejabatList] = useState<PejabatProfile[]>(DEFAULT_PEJABAT_LIST);
   const [proposalBastMap, setProposalBastMap] = useState<ProposalBastMap>({});
+  const [proposalRabMap, setProposalRabMap] = useState<ProposalRabMap>({});
+  const [proposalStyleHistory, setProposalStyleHistory] = useState<ProposalStyleUsageRecord[]>([]);
+  const [proposalSchemaMissingNotice, setProposalSchemaMissingNotice] = useState<boolean>(false);
+  const [proposalBuilderInitialId, setProposalBuilderInitialId] = useState<string | null>(null);
+  const [proposalBuilderReturnTarget, setProposalBuilderReturnTarget] = useState<
+    'menu' | 'proposal-detail'
+  >('menu');
+  const [rabInitialProposalId, setRabInitialProposalId] = useState<string | null>(null);
+  const [rabReturnToProposalBuilder, setRabReturnToProposalBuilder] = useState<boolean>(false);
   const [kpmBastMap, setKpmBastMap] = useState<Record<string, KpmBastInfo>>({});
   const [kpmAttendanceMap, setKpmAttendanceMap] = useState<Record<string, KpmAttendanceInfo>>({});
   const [proposalSlotMap, setProposalSlotMap] = useState<ProposalSlotMap>({});
@@ -1032,10 +1051,70 @@ export default function App() {
 
   currentUserAliasesRef.current = currentUserAliases;
 
-  const urgentSchedulesCount = useMemo(() => {
+  const [seenScheduleFingerprints, setSeenScheduleFingerprints] = useState<
+    Record<string, string>
+  >(() => {
+    try {
+      const raw = localStorage.getItem('masdeta_seen_schedules_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed as Record<string, string>;
+        }
+      }
+    } catch {
+      // ignore storage errors
+    }
+    return {};
+  });
+
+  const getScheduleSeenFingerprint = useCallback(
+    (s: ScheduleEventItem) =>
+      `${(s.targetDate || '').trim()}|${(s.targetTime || '').trim()}|${s.completed ? '1' : '0'}`,
+    []
+  );
+
+  useEffect(() => {
+    if (activeTab !== 'menu' || menuSection !== 'jadwal' || subView !== 'none') return;
+    if (schedules.length === 0) return;
+
+    setSeenScheduleFingerprints((prev) => {
+      let changed = false;
+      const next: Record<string, string> = { ...prev };
+      schedules.forEach((s) => {
+        const fp = getScheduleSeenFingerprint(s);
+        if (next[s.id] !== fp) {
+          next[s.id] = fp;
+          changed = true;
+        }
+      });
+      if (!changed) return prev;
+      try {
+        localStorage.setItem('masdeta_seen_schedules_v1', JSON.stringify(next));
+      } catch {
+        // ignore quota errors
+      }
+      return next;
+    });
+  }, [activeTab, menuSection, subView, schedules, getScheduleSeenFingerprint]);
+
+  const unseenSchedulesCount = useMemo(
+    () =>
+      schedules.filter(
+        (s) => !s.completed && seenScheduleFingerprints[s.id] !== getScheduleSeenFingerprint(s)
+      ).length,
+    [schedules, seenScheduleFingerprints, getScheduleSeenFingerprint]
+  );
+
+  const unseenUrgentSchedulesCount = useMemo(() => {
     const limitDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    return schedules.filter((s) => !s.completed && s.targetDate <= limitDate).length;
-  }, [schedules]);
+    return schedules.filter(
+      (s) =>
+        !s.completed &&
+        s.targetDate <= limitDate &&
+        seenScheduleFingerprints[s.id] !== getScheduleSeenFingerprint(s)
+    ).length;
+  }, [schedules, seenScheduleFingerprints, getScheduleSeenFingerprint]);
 
   const unreadChatCount = useMemo(() => {
     if (!currentUser) return 0;
@@ -1556,6 +1635,8 @@ export default function App() {
         fetchedReconcileSnapshots,
         fetchedProposalBastMap,
         fetchedPejabatList,
+        fetchedProposalRabRes,
+        fetchedProposalStyleRes,
       ] = await Promise.all([
         fetchSchedulesFromSupabase(),
         fetchAppStateSlice<ScheduleBooksState>('masdeta_schedule_books_v1', {
@@ -1602,6 +1683,8 @@ export default function App() {
           'masdeta_pejabat_master_v1',
           DEFAULT_PEJABAT_LIST
         ),
+        fetchProposalRabConfigsFromSupabase(),
+        fetchProposalStyleHistoryFromSupabase(),
       ]);
 
       const nowMs = Date.now();
@@ -1745,6 +1828,15 @@ export default function App() {
         });
       }
       setProposalBastMap(normalizedProposalBastMap);
+      if (fetchedProposalRabRes?.map && typeof fetchedProposalRabRes.map === 'object') {
+        setProposalRabMap(fetchedProposalRabRes.map);
+      }
+      if (Array.isArray(fetchedProposalStyleRes?.items)) {
+        setProposalStyleHistory(fetchedProposalStyleRes.items);
+      }
+      setProposalSchemaMissingNotice(
+        Boolean(fetchedProposalRabRes?.schemaMissing || fetchedProposalStyleRes?.schemaMissing)
+      );
       if (fetchedWatermarks && typeof fetchedWatermarks === 'object') {
         setChatDeliveryWatermarks(fetchedWatermarks);
       }
@@ -2704,6 +2796,20 @@ export default function App() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'document_templates' },
+        () => {
+          void loadAppStateSlicesRef.current();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'proposal_rab_configs' },
+        () => {
+          void loadAppStateSlicesRef.current();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'proposal_style_history' },
         () => {
           void loadAppStateSlicesRef.current();
         }
@@ -6922,6 +7028,133 @@ export default function App() {
     });
   };
 
+  const handleSaveProposalRab = async (config: SavedProposalRabConfig) => {
+    if (!requirePermission('update', 'menyimpan konfigurasi RAB proposal')) {
+      throw new Error('Anda tidak memiliki izin untuk menyimpan konfigurasi RAB proposal.');
+    }
+    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+      const msg = 'Mode Offline (Read-Only): Penyimpanan RAB dinonaktifkan saat offline.';
+      setFeedback({ type: 'error', message: msg });
+      throw new Error(msg);
+    }
+    const enriched: SavedProposalRabConfig = {
+      ...config,
+      updatedBy: currentUser?.nama || config.updatedBy || 'Admin',
+      updatedAt: new Date().toISOString(),
+    };
+    const prevMap = proposalRabMap;
+    const nextMap: ProposalRabMap = {
+      ...prevMap,
+      [enriched.proposalId]: enriched,
+    };
+    setProposalRabMap(nextMap);
+    try {
+      const res = await saveProposalRabConfigInSupabase(enriched, prevMap);
+      if (res.schemaMissing) {
+        setProposalSchemaMissingNotice(true);
+      }
+      setFeedback({
+        type: 'success',
+        message: `RAB Proposal "${enriched.proposalName}" berhasil disimpan.`,
+      });
+    } catch (err) {
+      setProposalRabMap(prevMap);
+      const msg =
+        err instanceof Error
+          ? err.message
+          : err && typeof err === 'object' && 'message' in err
+            ? String((err as { message: unknown }).message)
+            : 'Gagal menyimpan konfigurasi RAB ke Supabase.';
+      setFeedback({
+        type: 'error',
+        message: `Gagal menyimpan RAB Proposal "${enriched.proposalName}": ${msg}`,
+      });
+      throw new Error(msg);
+    }
+  };
+
+  const handleRecordProposalStyleUsage = async (params: {
+    styleId: number;
+    proposalId: string;
+    namaProposal: string;
+    tahun: string;
+    jenisTujuan: ProposalDestinationType;
+  }) => {
+    if (!requirePermission('update', 'mencatat riwayat pemakaian style proposal')) return;
+    const entry: ProposalStyleUsageRecord = {
+      id: `style-use-${params.styleId}-${params.proposalId}-${params.jenisTujuan}-${Date.now()}`,
+      styleId: params.styleId,
+      proposalId: params.proposalId,
+      namaProposal: params.namaProposal,
+      tahun: params.tahun,
+      jenisTujuan: params.jenisTujuan,
+      createdAt: new Date().toISOString(),
+      createdBy: currentUser?.nama || 'Admin',
+    };
+    const prevList = proposalStyleHistory;
+    const deduped = prevList.filter(
+      (item) =>
+        !(
+          item.styleId === entry.styleId &&
+          item.proposalId === entry.proposalId &&
+          item.jenisTujuan === entry.jenisTujuan
+        )
+    );
+    const nextList = [entry, ...deduped];
+    setProposalStyleHistory(nextList);
+    try {
+      const res = await recordProposalStyleUsageInSupabase(entry, prevList);
+      if (res.schemaMissing) {
+        setProposalSchemaMissingNotice(true);
+      }
+    } catch (err) {
+      setProposalStyleHistory(prevList);
+      const msg =
+        err instanceof Error ? err.message : 'Gagal menyimpan riwayat pemakaian style proposal.';
+      setFeedback({ type: 'error', message: msg });
+    }
+  };
+
+  const handleDeleteProposalStyleUsage = async (id: string) => {
+    if (!requirePermission('delete', 'menghapus riwayat pemakaian style proposal')) return;
+    const prevList = proposalStyleHistory;
+    const nextList = prevList.filter((item) => item.id !== id);
+    setProposalStyleHistory(nextList);
+    try {
+      const res = await deleteProposalStyleUsageInSupabase(id, prevList);
+      if (res.schemaMissing) {
+        setProposalSchemaMissingNotice(true);
+      }
+    } catch (err) {
+      setProposalStyleHistory(prevList);
+      const msg =
+        err instanceof Error ? err.message : 'Gagal menghapus riwayat pemakaian style proposal.';
+      setFeedback({ type: 'error', message: msg });
+    }
+  };
+
+  const openProposalBuilder = (
+    proposalId: string | null,
+    source: 'menu' | 'proposal-detail'
+  ) => {
+    navigateForwardScroll();
+    setProposalBuilderInitialId(proposalId);
+    setProposalBuilderReturnTarget(source);
+    setRabReturnToProposalBuilder(false);
+    setSubView('none');
+    setActiveTab('menu');
+    setMenuSection('buat-proposal');
+  };
+
+  const openRabForProposal = (proposalId: string, returnToBuilder = true) => {
+    navigateForwardScroll();
+    setRabInitialProposalId(proposalId);
+    setRabReturnToProposalBuilder(returnToBuilder);
+    setSubView('none');
+    setActiveTab('menu');
+    setMenuSection('rab');
+  };
+
   const handleSaveUserAlias = (targetUserId: string, alias: string) => {
     if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
       setFeedback({
@@ -7079,6 +7312,27 @@ export default function App() {
 
   const handleDeleteCatalogItem = (tahun: string, code: string) => {
     if (!requirePermission('delete', 'menghapus master item')) return;
+    const normalizedCode = code.trim().toUpperCase();
+    const usedByKpmCount = records.filter(
+      (r) => r.tahun === tahun && (r.item || '').trim().toUpperCase() === normalizedCode
+    ).length;
+    const usedInRabCount = Object.values(proposalRabMap).filter(
+      (rab) =>
+        rab.tahun === tahun &&
+        (rab.packages || []).some(
+          (pkg) => pkg.kode.trim().toUpperCase() === normalizedCode && pkg.jumlahPenerima > 0
+        )
+    ).length;
+    if (usedByKpmCount > 0 || usedInRabCount > 0) {
+      const parts: string[] = [];
+      if (usedByKpmCount > 0) parts.push(`${usedByKpmCount} data KPM`);
+      if (usedInRabCount > 0) parts.push(`${usedInRabCount} RAB Proposal`);
+      setFeedback({
+        type: 'error',
+        message: `Master item "${code}" (${tahun}) tidak dapat dihapus karena masih digunakan oleh ${parts.join(' dan ')}. Ubah item KPM/RAB terkait terlebih dahulu.`,
+      });
+      return;
+    }
     const removed = items.find((i) => i.tahun === tahun && i.code === code);
     const nextItems = items.filter((i) => !(i.tahun === tahun && i.code === code));
     const actEntry = createActivityHistoryEntry('item_deleted', {
@@ -7703,12 +7957,36 @@ export default function App() {
     setTrashBin(nextTrash);
     void saveAppStateSlice('masdeta_trash_bin_v1', nextTrash);
 
+    // Lepaskan KPM yang terikat pada proposal yang dihapus ke Database KPM agar tidak menjadi data yatim
+    const targetNameLower = target.namaProposal.trim().toLowerCase();
+    const detachedKpms: KpmRecord[] = [];
+    const nextRecords = latestDataRef.current.records.map((rec) => {
+      const belongsToProposal =
+        rec.proposalId === proposalId ||
+        (!rec.proposalId &&
+          (rec.proposal || '').trim().toLowerCase() === targetNameLower &&
+          String(rec.tahun) === String(target.tahun));
+      if (!belongsToProposal) return rec;
+      const updatedRec: KpmRecord = {
+        ...rec,
+        validasi: 'pending',
+        proposal: '',
+        proposalId: null,
+        registerCode: '',
+        updatedAt: nowIso,
+      };
+      detachedKpms.push(updatedRec);
+      return updatedRec;
+    });
+
     const nextProposals = proposalsRef.current.filter((p) => p.id !== proposalId);
     const deletedNotif: AppNotificationItem = {
       id: `notif-prop-del-${proposalId}-${Date.now()}`,
       type: 'proposal_deleted',
       title: 'Proposal Dihapus',
-      message: `Proposal "${target.namaProposal}" (${target.tahun}) dipindahkan ke Tempat Sampah oleh ${actorName}.`,
+      message: `Proposal "${target.namaProposal}" (${target.tahun}) dipindahkan ke Tempat Sampah oleh ${actorName}.${
+        detachedKpms.length > 0 ? ` ${detachedKpms.length} KPM dipindahkan ke Database KPM.` : ''
+      }`,
       actorName,
       createdAt: nowIso,
       read: true,
@@ -7717,7 +7995,9 @@ export default function App() {
 
     const actEntry = createActivityHistoryEntry('proposal_deleted', {
       proposalName: target.namaProposal,
-      detail: `Memindahkan proposal "${target.namaProposal}" (${target.tipe}, ${target.tahun}) ke Tempat Sampah.`,
+      detail: `Memindahkan proposal "${target.namaProposal}" (${target.tipe}, ${target.tahun}) ke Tempat Sampah${
+        detachedKpms.length > 0 ? ` (${detachedKpms.length} KPM dialihkan ke Database KPM)` : ''
+      }.`,
       tahun: target.tahun,
       action: 'removed',
       actorName,
@@ -7732,16 +8012,33 @@ export default function App() {
     proposalHistoryRef.current = nextHistory;
     latestDataRef.current = {
       ...latestDataRef.current,
+      records: nextRecords,
       proposals: nextProposals,
       proposalHistory: nextHistory,
     };
 
+    if (detachedKpms.length > 0) {
+      setRecords(nextRecords);
+    }
     setProposals((prev) => prev.filter((p) => p.id !== proposalId));
     const deletedSlotKey = getProposalSlotKey(target.id, target.namaProposal, target.tahun, proposals);
     if (proposalSlotMapRef.current[deletedSlotKey]) {
       const nextSlotMap = { ...proposalSlotMapRef.current };
       delete nextSlotMap[deletedSlotKey];
       persistProposalSlotMap(nextSlotMap);
+    }
+    if (proposalRabMap[proposalId]) {
+      const prevRabMap = proposalRabMap;
+      const nextRabMap = { ...prevRabMap };
+      delete nextRabMap[proposalId];
+      setProposalRabMap(nextRabMap);
+      void deleteProposalRabConfigFromSupabase(proposalId, prevRabMap);
+    }
+    if (proposalBastMap[proposalId]) {
+      const nextBastMap = { ...proposalBastMap };
+      delete nextBastMap[proposalId];
+      setProposalBastMap(nextBastMap);
+      void saveDocumentTemplateInSupabase('proposal_bast', 'masdeta_proposal_bast_v1', nextBastMap);
     }
     setProposalHistory((prev) => [actEntry, ...prev]);
     if (activeProposalId === proposalId) {
@@ -7760,6 +8057,13 @@ export default function App() {
       }
       void enqueueOperationalSync(async () => {
         try {
+          if (detachedKpms.length > 0) {
+            await upsertKpmRecordsBatchInSupabase({
+              records: detachedKpms,
+              proposals: nextProposals,
+              pengelolaList,
+            });
+          }
           await supabaseDeleteProposalDirect(target, [actEntry]);
           if (realtimeChannelRef.current) {
             void realtimeChannelRef.current.send({
@@ -7790,14 +8094,16 @@ export default function App() {
       });
     } else {
       void syncOperationalData(
-        { proposals: nextProposals, proposalHistory: nextHistory },
+        { records: nextRecords, proposals: nextProposals, proposalHistory: nextHistory },
         'delete'
       );
     }
 
     setFeedback({
       type: 'success',
-      message: `Proposal "${target.namaProposal}" (${target.tahun}) dipindahkan ke Tempat Sampah (tersimpan 30 hari).`,
+      message: `Proposal "${target.namaProposal}" (${target.tahun}) dipindahkan ke Tempat Sampah (tersimpan 30 hari)${
+        detachedKpms.length > 0 ? `. ${detachedKpms.length} KPM dialihkan aman ke Database KPM.` : '.'
+      }`,
     });
   };
 
@@ -8245,6 +8551,7 @@ export default function App() {
         applyRemoteOperationalState(freshSnapshot);
         if (action === 'delete_all_kpm') {
           persistProposalSlotMap({});
+          setReconcileSnapshots({});
           setActiveKpmId(null);
           setFeedback({
             type: 'success',
@@ -8252,11 +8559,15 @@ export default function App() {
           });
         } else if (action === 'delete_all_proposal') {
           persistProposalSlotMap({});
+          setProposalRabMap({});
+          setProposalStyleHistory([]);
+          setProposalBastMap({});
+          setReconcileSnapshots({});
           setActiveProposalId(null);
           setActiveKpmId(null);
           setFeedback({
             type: 'success',
-            message: 'Seluruh daftar proposal, KPM terkait, dan rekam jejak telah dihapus.',
+            message: 'Seluruh daftar proposal, KPM terkait, RAB, dan rekam jejak telah dihapus.',
           });
         } else if (action === 'delete_all_items') {
           setFeedback({
@@ -8265,21 +8576,33 @@ export default function App() {
           });
         } else if (action === 'delete_all_data') {
           persistProposalSlotMap({});
+          setProposalRabMap({});
+          setProposalStyleHistory([]);
+          setProposalBastMap({});
+          setReconcileSnapshots({});
+          setTrashBin([]);
+          setSchedules([]);
           setActiveKpmId(null);
           setActiveProposalId(null);
           setFeedback({
             type: 'success',
-            message: 'Seluruh data KPM, proposal, item, wilayah, pengelola, dan riwayat telah dihapus.',
+            message: 'Seluruh data KPM, proposal, RAB, jadwal, pengelola, dan riwayat telah dihapus.',
           });
         } else if (action === 'reset_total') {
           persistProposalSlotMap({});
+          setProposalRabMap({});
+          setProposalStyleHistory([]);
+          setProposalBastMap({});
+          setReconcileSnapshots({});
+          setTrashBin([]);
+          setSchedules([]);
           setDirectMessages([]);
           setActiveKpmId(null);
           setActiveProposalId(null);
           setFeedback({
             type: 'success',
             message:
-              'Reset total selesai. Seluruh data proposal, KPM, item, pengelola, pekerjaan, dan riwayat chat telah dikosongkan.',
+              'Reset total selesai. Seluruh data proposal, KPM, RAB, jadwal, item, pengelola, pekerjaan, dan riwayat chat telah dikosongkan.',
           });
         }
       } catch (err) {
@@ -9888,6 +10211,17 @@ export default function App() {
     [records]
   );
 
+  const sidebarKpmCount = useMemo(() => {
+    const active = records.filter((r) => r.validasi === 'accepted');
+    if (selectedYear === 'all') return active.length;
+    return active.filter((r) => r.tahun === selectedYear).length;
+  }, [records, selectedYear]);
+
+  const sidebarProposalCount = useMemo(() => {
+    if (selectedYear === 'all') return proposals.length;
+    return proposals.filter((p) => p.tahun === selectedYear).length;
+  }, [proposals, selectedYear]);
+
   const handleDismissUpdateLater = () => {
     if (appUpdateInfo && !appUpdateInfo.isMandatory) {
       setDismissedUpdateVersion(appUpdateInfo.latestVersion);
@@ -10004,7 +10338,7 @@ export default function App() {
 
   return (
     <OfflineProvider isOnline={isOnline} isChecking={checkingInternet} checkConnection={checkConnection}>
-      <div className={isNativeApp ? 'min-h-screen bg-slate-200/70 sm:py-3' : 'min-h-screen bg-slate-100'}>
+      <div className={isNativeApp ? 'min-h-screen bg-slate-200/70 sm:py-3 print:bg-white print:py-0' : 'min-h-screen bg-slate-100 print:bg-white'}>
         <OfflineIndicator
           isOnline={isOnline}
           isChecking={checkingInternet}
@@ -10021,18 +10355,17 @@ export default function App() {
           activeTab={activeTab}
           activeSubView={subView}
           activeMenuSection={menuSection}
-          kpmCount={records.length}
-          proposalCount={proposals.length}
+          kpmCount={sidebarKpmCount}
+          proposalCount={sidebarProposalCount}
           databaseKpmCount={databaseKpmCount}
           archivedKpmCount={archivedKpmCount}
           unreadChatCount={unreadChatCount}
           pendingUsersCount={currentUser.role === 'SuperAdmin' ? pendingUsersCount : 0}
-          urgentSchedulesCount={urgentSchedulesCount}
+          urgentSchedulesCount={unseenUrgentSchedulesCount}
           hasAppUpdate={isNativeApp && Boolean(appUpdateInfo?.hasUpdate)}
           canAdd={hasPermission('add')}
           appNotifications={appNotifications}
           bellHasUnread={bellHasUnread}
-          onOpenNotifications={openNotificationsView}
           onSelectTab={(tab) => {
             setFeedback(null);
             setMenuOpenedFromDashboard(false);
@@ -10055,8 +10388,6 @@ export default function App() {
             }
             setActiveTab(tab);
           }}
-          onOpenSubItemRecap={() => openSubItemRecap(activeTab)}
-          onOpenChat={() => openChatView()}
           onOpenMenuSection={(section) => {
             navigateForwardScroll();
             setSubView('none');
@@ -10078,7 +10409,7 @@ export default function App() {
       )}
 
       {supabaseSchemaMissing && !dismissedSchemaNotice && (
-        <div className={isNativeApp ? 'mx-auto mb-2 w-full max-w-md px-3 sm:px-0' : 'mx-auto mb-2 w-full px-4 pt-3 md:pl-64 md:pr-6'}>
+        <div className={`print:hidden masdeta-no-print ${isNativeApp ? 'mx-auto mb-2 w-full max-w-md px-3 sm:px-0' : 'mx-auto mb-2 w-full px-4 pt-3 md:pl-64 md:pr-6'}`}>
           <div className="flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 shadow-xs">
             <Database className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
             <div className="min-w-0 flex-1">
@@ -10102,7 +10433,7 @@ export default function App() {
       {/* Global Bottom Toast Notification for Success / Error Feedback */}
       {feedback && (
         <div
-          className={`fixed left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2 animate-[toastSlideUp_0.22s_ease-out] ${
+          className={`fixed left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2 animate-[toastSlideUp_0.22s_ease-out] print:hidden masdeta-no-print ${
             showBottomNav ||
             subView === 'kpm-detail' ||
             subView === 'proposal-detail' ||
@@ -10145,7 +10476,7 @@ export default function App() {
       {/* Interactive In-App Push Toast for Incoming 1-on-1 Direct Message */}
       {incomingToast && (
         <div
-          className={`fixed top-3 left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2 ${
+          className={`fixed top-3 left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2 print:hidden masdeta-no-print ${
             !isNativeApp ? 'md:top-4 md:right-6 md:left-auto md:w-96 md:translate-x-0' : ''
           }`}
         >
@@ -10187,7 +10518,7 @@ export default function App() {
         !incomingToast &&
         (appAlertToast.type !== 'user_registered' || currentUser.role === 'SuperAdmin') && (
         <div
-          className={`fixed top-3 left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2 ${
+          className={`fixed top-3 left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[416px] -translate-x-1/2 print:hidden masdeta-no-print ${
             !isNativeApp ? 'md:top-4 md:right-6 md:left-auto md:w-96 md:translate-x-0' : ''
           }`}
         >
@@ -10271,8 +10602,8 @@ export default function App() {
         <div
           className={
             isNativeApp
-              ? 'mx-auto min-h-screen w-full max-w-md overflow-x-clip bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm'
-              : 'min-h-screen w-full overflow-x-clip bg-slate-100 md:overflow-x-visible md:pl-64'
+              ? 'mx-auto min-h-screen w-full max-w-md overflow-x-clip bg-slate-50 sm:min-h-[calc(100vh-1.5rem)] sm:rounded-3xl sm:border sm:border-slate-200 sm:shadow-sm print:max-w-none print:rounded-none print:border-0 print:bg-white print:shadow-none'
+              : 'min-h-screen w-full overflow-x-clip bg-slate-100 md:overflow-x-visible md:pl-64 print:pl-0 print:bg-white'
           }
         >
         {/* Sub-Views */}
@@ -10606,6 +10937,7 @@ export default function App() {
               historyEntries={proposalHistory}
               proposalSlotMap={proposalSlotMap}
               schedules={schedulesWithBooks}
+              scheduleBooks={scheduleBooksState.books}
               reportTemplate={reportTemplate}
               bastTemplate={bastTemplate}
               pejabatList={pejabatList}
@@ -10657,6 +10989,9 @@ export default function App() {
               onUndoReconcileSnapshot={handleUndoTroubleshootingSnapshot}
               highlightEmptySlots={highlightEmptySlotsProposalId === activeProposal.id}
               onDismissHighlightEmptySlots={() => setHighlightEmptySlotsProposalId(null)}
+              onOpenProposalBuilder={(proposalId) =>
+                openProposalBuilder(proposalId, 'proposal-detail')
+              }
             />
           </div>
         )}
@@ -10908,6 +11243,14 @@ export default function App() {
               if (section !== 'users' && section !== 'superadmin') {
                 setUsersOpenedFromSuperAdmin(false);
               }
+              if (section === 'buat-proposal') {
+                setProposalBuilderInitialId(null);
+                setProposalBuilderReturnTarget('menu');
+              }
+              if (section === 'rab') {
+                setRabInitialProposalId(null);
+                setRabReturnToProposalBuilder(false);
+              }
               if (section === 'root' && menuOpenedFromDashboard) {
                 setMenuOpenedFromDashboard(false);
                 setMenuSection('root');
@@ -10960,6 +11303,9 @@ export default function App() {
             proposalHistory={proposalHistory}
             kpmAuditLogs={kpmAuditLogs}
             onOpenChat={(peerId) => openChatView(peerId)}
+            onOpenNotifications={openNotificationsView}
+            unreadNotificationsCount={visibleUnreadAppNotifCount}
+            bellHasUnread={bellHasUnread}
             onOpenProfile={openProfileView}
             onCheckAppUpdate={isNativeApp ? () => void handleManualCheckAppUpdate() : undefined}
             checkingAppUpdate={checkingAppUpdate}
@@ -11033,6 +11379,8 @@ export default function App() {
             onSelectKpmFromDuplicate={(rec) => openKpmDetail(rec, 'menu')}
             onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
             schedules={schedulesWithBooks}
+            unseenSchedulesCount={unseenSchedulesCount}
+            unseenUrgentSchedulesCount={unseenUrgentSchedulesCount}
             scheduleBooks={scheduleBooksState.books}
             scheduleBookMap={scheduleBooksState.scheduleBookMap}
             onSaveScheduleBooks={handleSaveScheduleBooks}
@@ -11069,6 +11417,38 @@ export default function App() {
             onOpenProposalDetailFromTroubleshooting={(proposalId) =>
               openProposalDetailById(proposalId, 'menu')
             }
+            proposalRabMap={proposalRabMap}
+            proposalStyleHistory={proposalStyleHistory}
+            proposalBuilderInitialId={proposalBuilderInitialId}
+            proposalBuilderBackLabel={
+              proposalBuilderReturnTarget === 'proposal-detail'
+                ? 'Kembali ke Detail Proposal'
+                : 'Kembali'
+            }
+            onBackFromProposalBuilder={() => {
+              navigateRestoreScroll();
+              if (proposalBuilderReturnTarget === 'proposal-detail' && activeProposal) {
+                setProposalBuilderReturnTarget('menu');
+                setSubView('proposal-detail');
+              } else {
+                setMenuSection('root');
+              }
+            }}
+            rabInitialProposalId={rabInitialProposalId}
+            rabReturnToProposalBuilder={rabReturnToProposalBuilder}
+            onSaveProposalRab={handleSaveProposalRab}
+            onOpenRabForProposal={(proposalId) => openRabForProposal(proposalId, true)}
+            onReturnFromRabToProposalBuilder={(proposalId) => {
+              navigateRestoreScroll();
+              setRabReturnToProposalBuilder(false);
+              setProposalBuilderInitialId(proposalId);
+              setSubView('none');
+              setActiveTab('menu');
+              setMenuSection('buat-proposal');
+            }}
+            onRecordProposalStyleUsage={handleRecordProposalStyleUsage}
+            onDeleteProposalStyleUsage={handleDeleteProposalStyleUsage}
+            proposalSchemaMissingNotice={proposalSchemaMissingNotice}
           />
         </div>
         </div>
@@ -11086,7 +11466,7 @@ export default function App() {
           activeTab={activeTab}
           pendingUsersCount={currentUser.role === 'SuperAdmin' ? pendingUsersCount : 0}
           unreadChatCount={unreadChatCount}
-          urgentSchedulesCount={urgentSchedulesCount}
+          urgentSchedulesCount={unseenUrgentSchedulesCount}
           hasAppUpdate={isNativeApp && Boolean(appUpdateInfo?.hasUpdate)}
           onSelectTab={(tab) => {
             setFeedback(null);

@@ -379,6 +379,35 @@ CREATE TABLE IF NOT EXISTS public.document_templates (
 );
 
 -- ----------------------------------------------------------------------------
+-- 8C. KONFIGURASI RAB PER PROPOSAL & RIWAYAT PEMAKAIAN STYLE PROPOSAL (01-15)
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.proposal_rab_configs (
+  proposal_id TEXT PRIMARY KEY REFERENCES public.proposals(id) ON DELETE CASCADE,
+  proposal_name TEXT NOT NULL DEFAULT '',
+  tahun VARCHAR(10) NOT NULL DEFAULT '',
+  judul_rab TEXT NOT NULL DEFAULT '',
+  total_anggaran NUMERIC(16, 0) NOT NULL DEFAULT 0,
+  total_terhitung NUMERIC(16, 0) NOT NULL DEFAULT 0,
+  pagu_standar_per_kpm NUMERIC(16, 0) NOT NULL DEFAULT 0,
+  total_kpm_snapshot INTEGER NOT NULL DEFAULT 0,
+  item_counts_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+  packages_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  updated_by TEXT NOT NULL DEFAULT 'Petugas Internal',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.proposal_style_history (
+  id TEXT PRIMARY KEY,
+  style_id INTEGER NOT NULL CHECK (style_id >= 1 AND style_id <= 15),
+  proposal_id TEXT NOT NULL REFERENCES public.proposals(id) ON DELETE CASCADE,
+  nama_proposal TEXT NOT NULL DEFAULT '',
+  tahun VARCHAR(10) NOT NULL DEFAULT '',
+  jenis_tujuan VARCHAR(20) NOT NULL CHECK (jenis_tujuan IN ('OPD', 'Kecamatan', 'Kelurahan')),
+  created_by TEXT NOT NULL DEFAULT 'Petugas Internal',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ----------------------------------------------------------------------------
 -- 9. INDEKS PERFORMA TINGGI (Pencarian NIK, KK, Wilayah, Proposal, Audit, Chat)
 -- ----------------------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_wilayah_kec_kabkota ON public.wilayah_kecamatan (kabkota_id);
@@ -415,6 +444,9 @@ CREATE INDEX IF NOT EXISTS idx_chat_conv_created ON public.direct_chat_messages 
 CREATE INDEX IF NOT EXISTS idx_chat_recipient_unread ON public.direct_chat_messages (recipient_id, read_at);
 CREATE INDEX IF NOT EXISTS idx_schedules_target_date ON public.schedules (target_date, target_time);
 CREATE INDEX IF NOT EXISTS idx_schedules_tahun_proposal ON public.schedules (tahun, proposal_name);
+CREATE INDEX IF NOT EXISTS idx_proposal_rab_configs_tahun ON public.proposal_rab_configs (tahun);
+CREATE INDEX IF NOT EXISTS idx_proposal_style_history_style_id ON public.proposal_style_history (style_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_proposal_style_history_proposal ON public.proposal_style_history (proposal_id, jenis_tujuan);
 
 -- ----------------------------------------------------------------------------
 -- 10. ROW LEVEL SECURITY (RLS) MULTI-ADMIN
@@ -446,6 +478,8 @@ ALTER TABLE public.direct_chat_messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.masdeta_app_state ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.schedules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.document_templates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.proposal_rab_configs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.proposal_style_history ENABLE ROW LEVEL SECURITY;
 
 DO $$
 DECLARE
@@ -470,7 +504,9 @@ BEGIN
     'direct_chat_messages',
     'masdeta_app_state',
     'schedules',
-    'document_templates'
+    'document_templates',
+    'proposal_rab_configs',
+    'proposal_style_history'
   ]
   LOOP
     EXECUTE format('DROP POLICY IF EXISTS "masdeta_multiadmin_select_%s" ON public.%I;', tbl, tbl);
@@ -523,7 +559,9 @@ BEGIN
     'direct_chat_messages',
     'masdeta_app_state',
     'schedules',
-    'document_templates'
+    'document_templates',
+    'proposal_rab_configs',
+    'proposal_style_history'
   ]
   LOOP
     BEGIN

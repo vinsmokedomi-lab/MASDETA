@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Check,
   ChevronDown,
+  ClipboardCheck,
   FileCheck2,
   FileSpreadsheet,
   FileText,
@@ -26,6 +27,7 @@ import {
   DEFAULT_KOP_LOGO_URL,
   DEFAULT_PEJABAT_LIST,
   DEFAULT_REPORT_TEMPLATE,
+  DEFAULT_SCHEDULE_BOOKS,
   DEFAULT_SPTJM_TEMPLATE,
   ItemBantuan,
   KpmRecord,
@@ -36,6 +38,7 @@ import {
   ProposalSlotMap,
   ProposalTipe,
   ReportTemplateConfig,
+  ScheduleBook,
   ScheduleEventItem,
   SptjmTemplateConfig,
   WilayahKabKota,
@@ -63,6 +66,7 @@ import {
   SPTJM_DAY_OPTIONS,
   buildCatNomorBarangMatrix,
   doesKpmRecordMatchCheckedColumns,
+  exportAbsensiDinsosToPdf,
   exportCatNomorBarangToPdf,
   exportKpmBastBulkToPdf,
   exportKpmSptjmBulkToPdf,
@@ -70,6 +74,7 @@ import {
   exportKpmTableToPdf,
   exportKuponPdf,
   exportNomorDinsosToPdf,
+  formatAbsensiScheduleFields,
   formatIndonesianDDMonthYYYY,
   formatIndonesianDateWords,
   formatScheduleDateTimeForCoupon,
@@ -80,6 +85,7 @@ import {
   resolveCouponScheduleForRecord,
   resolveEffectiveBastConfig,
   resolveScheduleForProposal,
+  resolveScheduleForProposalInBook,
   shouldAutoIncludeKelurahanColumn,
 } from '../utils/pdfExporter';
 import { exportKpmTableToXlsx } from '../utils/xlsxExporter';
@@ -87,7 +93,15 @@ import { SelectionPickerModal, SelectionPickerOption } from './SelectionPickerMo
 import { useIsDesktopWeb } from '../utils/platform';
 import { useOfflineStatus } from '../contexts/OfflineContext';
 
-type DownloadPrintMode = 'kpm' | 'subitem' | 'kupon' | 'bast' | 'sptjm' | 'dinsos' | 'cat_nomor';
+type DownloadPrintMode =
+  | 'kpm'
+  | 'subitem'
+  | 'kupon'
+  | 'bast'
+  | 'sptjm'
+  | 'dinsos'
+  | 'cat_nomor'
+  | 'absensi';
 
 interface MenuDownloadViewProps {
   records: KpmRecord[];
@@ -97,6 +111,7 @@ interface MenuDownloadViewProps {
   pengelolaList: PengelolaProfile[];
   proposalSlotMap?: ProposalSlotMap;
   schedules?: ScheduleEventItem[];
+  scheduleBooks?: ScheduleBook[];
   reportTemplate?: ReportTemplateConfig;
   onSaveReportTemplate?: (next: ReportTemplateConfig) => void;
   couponConfig?: CouponPrintConfig;
@@ -157,6 +172,7 @@ export function MenuDownloadView({
   pengelolaList,
   proposalSlotMap = {},
   schedules = [],
+  scheduleBooks = DEFAULT_SCHEDULE_BOOKS,
   reportTemplate,
   onSaveReportTemplate,
   couponConfig,
@@ -320,12 +336,12 @@ export function MenuDownloadView({
     selectedTahun === 'database_arsip';
 
   const databaseRecordCount = useMemo(
-    () => records.filter((r) => r.validasi === 'pending').length,
+    () => records.filter((r) => r.validasi === 'pending' && !(r.proposal || '').trim()).length,
     [records]
   );
 
   const arsipRecordCount = useMemo(
-    () => records.filter((r) => r.validasi === 'rejected').length,
+    () => records.filter((r) => r.validasi === 'rejected' && !(r.proposal || '').trim()).length,
     [records]
   );
 
@@ -486,13 +502,20 @@ export function MenuDownloadView({
   const recordsBeforePengelola = useMemo(() => {
     return records.filter((rec) => {
       if (selectedTahun === 'database') {
-        if (rec.validasi !== 'pending') return false;
+        if (rec.validasi !== 'pending' || Boolean((rec.proposal || '').trim())) return false;
       } else if (selectedTahun === 'arsip') {
-        if (rec.validasi !== 'rejected') return false;
+        if (rec.validasi !== 'rejected' || Boolean((rec.proposal || '').trim())) return false;
       } else if (selectedTahun === 'database_arsip') {
-        if (rec.validasi !== 'pending' && rec.validasi !== 'rejected') return false;
-      } else if (selectedTahun !== 'all') {
-        if (rec.tahun !== selectedTahun) return false;
+        if (
+          (rec.validasi !== 'pending' && rec.validasi !== 'rejected') ||
+          Boolean((rec.proposal || '').trim())
+        ) {
+          return false;
+        }
+      } else {
+        // Sumber Proposal / Tahun Anggaran / Semua Data aktif: wajib hanya KPM Diterima agar KPM Ditolak/Menunggu tidak bocor ke dokumen cetak
+        if (rec.validasi !== 'accepted') return false;
+        if (selectedTahun !== 'all' && rec.tahun !== selectedTahun) return false;
       }
       if (!isStandaloneSource && selectedProposalTipe !== 'all') {
         const propName = (rec.proposal || '').trim();
@@ -552,11 +575,11 @@ export function MenuDownloadView({
     [filteredRecords]
   );
 
-  // BAST dapat dicetak untuk KPM Diterima (atau semua bila difilter proposal spesifik)
-  const eligibleBastRecords = useMemo(() => {
-    const accepted = filteredRecords.filter((rec) => rec.validasi === 'accepted');
-    return accepted.length > 0 ? accepted : filteredRecords;
-  }, [filteredRecords]);
+  // BAST wajib hanya mencetak KPM berstatus Diterima agar KPM Ditolak/Menunggu tidak pernah tercetak
+  const eligibleBastRecords = useMemo(
+    () => filteredRecords.filter((rec) => rec.validasi === 'accepted'),
+    [filteredRecords]
+  );
 
   const previewKuponSample = eligibleKuponRecords[0] || filteredRecords[0] || null;
   const previewKuponShowKelurahan = previewKuponSample
@@ -1341,6 +1364,133 @@ export function MenuDownloadView({
     }
   };
 
+  // --- Mode 8: Absensi Dinas Sosial (F4 Portrait · Logo Provinsi + Pilih Buku Jadwal) ---
+  const effectiveScheduleBooks = useMemo(
+    () => (scheduleBooks && scheduleBooks.length > 0 ? scheduleBooks : DEFAULT_SCHEDULE_BOOKS),
+    [scheduleBooks]
+  );
+  const [absensiBookId, setAbsensiBookId] = useState<string>(
+    () => (scheduleBooks && scheduleBooks[0]?.id) || DEFAULT_SCHEDULE_BOOKS[0].id
+  );
+  const [absensiFallbackTanggal, setAbsensiFallbackTanggal] = useState('');
+  const [absensiFallbackHari, setAbsensiFallbackHari] = useState('');
+  const [absensiFallbackPukul, setAbsensiFallbackPukul] = useState('');
+  const [isGeneratingAbsensi, setIsGeneratingAbsensi] = useState(false);
+  const [absensiFeedback, setAbsensiFeedback] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (
+      effectiveScheduleBooks.length > 0 &&
+      !effectiveScheduleBooks.some((b) => b.id === absensiBookId)
+    ) {
+      setAbsensiBookId(effectiveScheduleBooks[0].id);
+    }
+  }, [effectiveScheduleBooks, absensiBookId]);
+
+  const absensiTargetProposals = useMemo(() => {
+    if (isStandaloneSource) return [];
+    const matchedIds = new Set<string>();
+    const propById = new Map<string, ProposalRecord>();
+    proposals.forEach((p) => propById.set(p.id, p));
+    eligibleKuponRecords.forEach((rec) => {
+      const m =
+        (rec.proposalId ? propById.get(rec.proposalId) : undefined) ??
+        proposals.find((p) => p.namaProposal === rec.proposal && p.tahun === rec.tahun) ??
+        proposals.find((p) => p.namaProposal === rec.proposal);
+      if (m) matchedIds.add(m.id);
+    });
+    return proposals.filter((p) => matchedIds.has(p.id));
+  }, [isStandaloneSource, proposals, eligibleKuponRecords]);
+
+  const absensiMatchStats = useMemo(() => {
+    let matchedCount = 0;
+    for (const prop of absensiTargetProposals) {
+      const ev = resolveScheduleForProposalInBook(
+        prop.namaProposal,
+        prop.tahun,
+        schedules,
+        absensiBookId
+      );
+      if (ev) matchedCount += 1;
+    }
+
+    const firstProp = absensiTargetProposals[0];
+    const firstEv = firstProp
+      ? resolveScheduleForProposalInBook(
+          firstProp.namaProposal,
+          firstProp.tahun,
+          schedules,
+          absensiBookId
+        )
+      : undefined;
+    const firstFields = formatAbsensiScheduleFields(firstEv);
+    const firstPreview = firstProp
+      ? {
+          proposalName: firstProp.namaProposal,
+          tanggal: firstFields.tanggal || absensiFallbackTanggal.trim(),
+          hari: firstFields.hari || absensiFallbackHari.trim(),
+          pukul: firstFields.pukul || absensiFallbackPukul.trim(),
+          hasSchedule: Boolean(firstEv),
+        }
+      : null;
+
+    return {
+      totalProposals: absensiTargetProposals.length,
+      matchedCount,
+      firstPreview,
+    };
+  }, [
+    absensiTargetProposals,
+    schedules,
+    absensiBookId,
+    absensiFallbackTanggal,
+    absensiFallbackHari,
+    absensiFallbackPukul,
+  ]);
+
+  const handleDownloadAbsensiPdf = async () => {
+    if (absensiTargetProposals.length === 0 || isGeneratingAbsensi) return;
+    setAbsensiFeedback(null);
+    setIsGeneratingAbsensi(true);
+    try {
+      const { fileName } = buildScopeTitleAndFileName('Absensi_DINSOS');
+      const res = await exportAbsensiDinsosToPdf({
+        records: eligibleKuponRecords,
+        allRecords: records,
+        proposals,
+        items,
+        wilayahList,
+        proposalSlotMap,
+        schedules,
+        scheduleBookId: absensiBookId,
+        bastConfig: bastTemplate,
+        reportTemplate,
+        fallbackFields: {
+          tanggal: absensiFallbackTanggal.trim(),
+          hari: absensiFallbackHari.trim(),
+          pukul: absensiFallbackPukul.trim(),
+        },
+        fileName,
+      });
+      setAbsensiFeedback({
+        type: 'success',
+        message: res.openedNative
+          ? `Absensi "${res.savedFileName}" (${res.proposalCount} proposal · ${res.totalRows} baris) berhasil dibuat dan dibuka.`
+          : `Absensi "${res.savedFileName}" (${res.proposalCount} proposal · ${res.totalRows} baris) berhasil diunduh.`,
+      });
+    } catch (err) {
+      setAbsensiFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Gagal membuat file PDF Absensi.',
+      });
+    } finally {
+      setIsGeneratingAbsensi(false);
+    }
+  };
+
   const catNomorMatrix = useMemo(
     () =>
       buildCatNomorBarangMatrix({
@@ -1645,13 +1795,15 @@ export function MenuDownloadView({
                 <p className="mt-0.5 text-[11px] text-slate-500">
                   {printMode === 'dinsos'
                     ? 'Ukuran kertas F4 (216 × 330 mm · 2 Label/Lembar)'
-                    : printMode === 'cat_nomor'
-                      ? `Matriks rentang nomor cat (${catNomorOrientation === 'landscape' ? 'Landscape' : 'Portrait'} · ${catNomorPaperSize.toUpperCase()})`
-                      : 'Ukuran kertas F4 Portrait (216 × 310 mm)'}
+                    : printMode === 'absensi'
+                      ? 'Ukuran kertas F4 Portrait (216 × 330 mm · Format Dinas Sosial)'
+                      : printMode === 'cat_nomor'
+                        ? `Matriks rentang nomor cat (${catNomorOrientation === 'landscape' ? 'Landscape' : 'Portrait'} · ${catNomorPaperSize.toUpperCase()})`
+                        : 'Ukuran kertas F4 Portrait (216 × 310 mm)'}
                 </p>
               </div>
               <span className="shrink-0 rounded-lg bg-teal-50 px-2 py-1 text-[10px] font-bold text-teal-800 border border-teal-200/70">
-                7 Format
+                8 Format
               </span>
             </div>
             <div className="grid grid-cols-2 gap-2">
@@ -1698,6 +1850,12 @@ export function MenuDownloadView({
                     label: 'Cat Nomor Barang',
                     subtitle: 'Rentang nomor per item',
                     Icon: Paintbrush,
+                  },
+                  {
+                    id: 'absensi',
+                    label: 'Absensi DINSOS',
+                    subtitle: 'Daftar hadir & jadwal',
+                    Icon: ClipboardCheck,
                   },
                 ] as const
               ).map(({ id, label, subtitle, Icon }) => {
@@ -4411,6 +4569,249 @@ export function MenuDownloadView({
 
               <p className="text-center text-[11px] leading-relaxed text-slate-500">
                 Header berulang tiap halaman · Kolom lokasi anti potong kata · Rentang nomor otomatis dari urutan slot proposal
+              </p>
+            </section>
+          )}
+
+          {/* Mode 8: Absensi Dinas Sosial (F4 Portrait · Logo Provinsi + Pilih Buku Jadwal) */}
+          {printMode === 'absensi' && (
+            <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-3.5 md:p-4">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900">
+                    Daftar Absensi Dinas Sosial (PDF F4)
+                  </h2>
+                  <p className="mt-0.5 text-[11px] text-slate-500">
+                    Tanggal, Hari &amp; Pukul terisi otomatis dari Buku Jadwal yang dipilih · Lokasi Kegiatan = Judul Proposal · Logo Provinsi Kalbar
+                  </p>
+                </div>
+                <span className="shrink-0 rounded-lg bg-indigo-50 px-2 py-1 text-[10px] font-bold text-indigo-800 border border-indigo-200/70">
+                  {absensiMatchStats.totalProposals} Proposal
+                </span>
+              </div>
+
+              {isStandaloneSource && (
+                <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-900">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                  <p className="leading-snug">
+                    Absensi hanya tersedia untuk sumber data Proposal (bukan Database/Arsip Standalone). Silakan pilih Tahun Anggaran di filter atas.
+                  </p>
+                </div>
+              )}
+
+              {/* Pilihan Buku Jadwal */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="text-xs font-bold text-slate-800">
+                    1. Pilih Buku Jadwal (Sumber Tanggal, Hari &amp; Pukul)
+                  </label>
+                  <span className="text-[11px] font-semibold text-teal-700 tabular-nums">
+                    {absensiMatchStats.matchedCount}/{absensiMatchStats.totalProposals} proposal cocok jadwal
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {effectiveScheduleBooks.map((book) => {
+                    const active = absensiBookId === book.id;
+                    const countInBook = absensiTargetProposals.filter((prop) =>
+                      Boolean(
+                        resolveScheduleForProposalInBook(
+                          prop.namaProposal,
+                          prop.tahun,
+                          schedules,
+                          book.id
+                        )
+                      )
+                    ).length;
+                    return (
+                      <button
+                        key={book.id}
+                        type="button"
+                        onClick={() => {
+                          setAbsensiBookId(book.id);
+                          setAbsensiFeedback(null);
+                        }}
+                        className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2.5 text-left transition-all ${
+                          active
+                            ? 'border-teal-700 bg-teal-50/90 text-teal-950 ring-1 ring-teal-700/20'
+                            : 'border-slate-200 bg-slate-50/50 text-slate-700 hover:border-slate-300 hover:bg-slate-50'
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-bold">{book.title}</p>
+                          {book.subtitle && (
+                            <p className="truncate text-[10px] text-slate-500">{book.subtitle}</p>
+                          )}
+                        </div>
+                        <span
+                          className={`shrink-0 rounded-md px-2 py-0.5 text-[10px] font-bold tabular-nums ${
+                            countInBook > 0
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-slate-200/80 text-slate-600'
+                          }`}
+                        >
+                          {countInBook} cocok
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Preview Mini Kop & Metadata Absensi */}
+              {absensiMatchStats.firstPreview && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-700">
+                      Pratinjau Kepala Dokumen (Proposal Pertama)
+                    </span>
+                    <span
+                      className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                        absensiMatchStats.firstPreview.hasSchedule
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-amber-100 text-amber-800'
+                      }`}
+                    >
+                      {absensiMatchStats.firstPreview.hasSchedule
+                        ? 'Jadwal Terisi Otomatis'
+                        : 'Belum Ada Jadwal di Buku Ini'}
+                    </span>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white p-3 text-slate-900">
+                    <div className="text-center leading-tight pb-2">
+                      <p className="text-[10px] tracking-wide">
+                        PEMERINTAH PROVINSI KALIMANTAN BARAT
+                      </p>
+                      <p className="text-xs font-extrabold tracking-wide">DINAS SOSIAL</p>
+                    </div>
+                    <div className="flex items-center gap-3 pt-1">
+                      <div className="flex h-14 w-12 shrink-0 items-center justify-center rounded border border-slate-100 bg-slate-50 p-1">
+                        <img
+                          src={(bastTemplate?.kopLogoDataUrl || '').trim() || DEFAULT_KOP_LOGO_URL}
+                          alt="Logo Provinsi Kalimantan Barat"
+                          className="max-h-full max-w-full object-contain"
+                        />
+                      </div>
+                      <div className="min-w-0 flex-1 border-t border-b border-slate-800 divide-y divide-slate-800 text-[10.5px]">
+                        <div className="grid grid-cols-[88px_10px_1fr] py-0.5">
+                          <span>Tanggal</span>
+                          <span>:</span>
+                          <span className="truncate font-medium">
+                            {absensiMatchStats.firstPreview.tanggal || '—'}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-[88px_10px_1fr] py-0.5">
+                          <span>Hari</span>
+                          <span>:</span>
+                          <span className="truncate font-medium">
+                            {absensiMatchStats.firstPreview.hari || '—'}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-[88px_10px_1fr] py-0.5">
+                          <span>Pukul</span>
+                          <span>:</span>
+                          <span className="truncate font-medium">
+                            {absensiMatchStats.firstPreview.pukul || '—'}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-[88px_10px_1fr] py-0.5">
+                          <span>Lokasi Kegiatan</span>
+                          <span>:</span>
+                          <span className="truncate font-semibold">
+                            {absensiMatchStats.firstPreview.proposalName}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Isian Cadangan Opsional bila Proposal Belum Punya Jadwal */}
+              <div className="rounded-xl border border-slate-200/80 bg-slate-50/40 p-3 space-y-2">
+                <p className="text-[11px] font-bold text-slate-700">
+                  Isian Cadangan Opsional (Dipakai hanya jika proposal belum punya jadwal di buku terpilih)
+                </p>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <div>
+                    <label className="mb-1 block text-[10.5px] font-semibold text-slate-600">
+                      Tanggal Cadangan
+                    </label>
+                    <input
+                      type="text"
+                      value={absensiFallbackTanggal}
+                      onChange={(e) => setAbsensiFallbackTanggal(e.target.value)}
+                      placeholder="Kosongkan agar garis kosong"
+                      className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 focus:border-teal-600 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[10.5px] font-semibold text-slate-600">
+                      Hari Cadangan
+                    </label>
+                    <input
+                      type="text"
+                      value={absensiFallbackHari}
+                      onChange={(e) => setAbsensiFallbackHari(e.target.value)}
+                      placeholder="cth: Senin"
+                      className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 focus:border-teal-600 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[10.5px] font-semibold text-slate-600">
+                      Pukul Cadangan
+                    </label>
+                    <input
+                      type="text"
+                      value={absensiFallbackPukul}
+                      onChange={(e) => setAbsensiFallbackPukul(e.target.value)}
+                      placeholder="cth: 09:00 WIB"
+                      className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 focus:border-teal-600 focus:outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {absensiFeedback && (
+                <div
+                  role="status"
+                  className={`flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs ${
+                    absensiFeedback.type === 'success'
+                      ? 'border-teal-200 bg-teal-50 text-teal-900'
+                      : 'border-rose-200 bg-rose-50 text-rose-900'
+                  }`}
+                >
+                  {absensiFeedback.type === 'success' ? (
+                    <Check className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+                  ) : (
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+                  )}
+                  <p className="font-medium leading-snug">{absensiFeedback.message}</p>
+                </div>
+              )}
+
+              <button
+                type="button"
+                disabled={absensiTargetProposals.length === 0 || isGeneratingAbsensi}
+                onClick={() => void handleDownloadAbsensiPdf()}
+                className="inline-flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-teal-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
+              >
+                {isGeneratingAbsensi ? (
+                  <>
+                    <Loader2 className="h-4.5 w-4.5 animate-spin" />
+                    <span>Menyiapkan PDF Absensi DINSOS...</span>
+                  </>
+                ) : (
+                  <>
+                    <ClipboardCheck className="h-4.5 w-4.5" />
+                    <span>
+                      Download Absensi PDF ({absensiMatchStats.totalProposals} Proposal · F4)
+                    </span>
+                  </>
+                )}
+              </button>
+
+              <p className="text-center text-[11px] leading-relaxed text-slate-500">
+                Tiap proposal mulai di halaman baru · Nomor urut mengikuti slot proposal &amp; baris kosong · Header &amp; Footer resmi Dinas Sosial Prov. Kalbar
               </p>
             </section>
           )}

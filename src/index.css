@@ -71,3 +71,77 @@ select[data-empty='true'] {
   font-size: 0.75rem;
   line-height: 1rem;
 }
+
+/* ============================================================================
+ * CETAK PROPOSAL F4 PRESISI (216mm x 330mm)
+ * Margin standar: Atas 1cm, Kanan 1.5cm, Bawah 1cm, Kiri 2cm
+ * Halaman 1 (Cover) penuh tanpa running header; Halaman 2+ otomatis running header
+ * ============================================================================ */
+.masdeta-proposal-print-only {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: 216mm 330mm;
+    margin: 1cm 1.5cm 1cm 2cm;
+  }
+
+  @page :first {
+    size: 216mm 330mm;
+    margin: 0;
+  }
+
+  html,
+  body {
+    background: #ffffff !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  aside,
+  nav,
+  .fixed,
+  .masdeta-no-print {
+    display: none !important;
+  }
+
+  .masdeta-proposal-print-only {
+    display: block !important;
+  }
+
+  .masdeta-proposal-cover-page {
+    width: 216mm;
+    height: 330mm;
+    page-break-after: always;
+    break-after: page;
+    overflow: hidden;
+  }
+
+  .masdeta-proposal-body-pages {
+    width: 100%;
+  }
+
+  .masdeta-proposal-print-doc table {
+    border-collapse: collapse;
+    width: 100%;
+  }
+
+  .masdeta-proposal-print-doc thead {
+    display: table-header-group;
+  }
+
+  .masdeta-proposal-print-doc tr,
+  .masdeta-proposal-print-doc h2,
+  .masdeta-proposal-print-doc h3 {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  .masdeta-proposal-print-doc h2,
+  .masdeta-proposal-print-doc h3 {
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+}
+

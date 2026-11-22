@@ -30,7 +30,7 @@ export function BottomNavBar({
   return (
     <nav
       aria-label="Navigasi utama"
-      className={`fixed bottom-0 left-1/2 z-30 w-full -translate-x-1/2 border-t border-slate-200 bg-white/95 backdrop-blur-md ${
+      className={`fixed bottom-0 left-1/2 z-30 w-full -translate-x-1/2 border-t border-slate-200 bg-white/95 backdrop-blur-md print:hidden masdeta-no-print ${
         !isNativeApp ? 'md:hidden' : 'max-w-md'
       }`}
     >

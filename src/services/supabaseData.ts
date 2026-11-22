@@ -20,10 +20,15 @@ import {
   KpmRecord,
   PengelolaProfile,
   ProposalChecklist,
+  ProposalDestinationType,
   ProposalDocuments,
   ProposalKpmHistoryEntry,
   ProposalLockStatus,
+  ProposalRabMap,
   ProposalRecord,
+  ProposalStyleUsageRecord,
+  SavedProposalRabConfig,
+  SavedRabPackage,
   ScheduleCategory,
   ScheduleEventItem,
   SharedKpmCard,
@@ -114,7 +119,7 @@ async function fetchAllPages<T = Record<string, unknown>>(
     from: number,
     to: number
   ) => PromiseLike<{ data: T[] | null; error: unknown }>,
-  maxRows = 50_000
+  maxRows = 250_000
 ): Promise<T[]> {
   const all: T[] = [];
   let from = 0;
@@ -126,6 +131,9 @@ async function fetchAllPages<T = Record<string, unknown>>(
     all.push(...chunk);
     if (chunk.length < SUPABASE_PAGE_SIZE) break;
     from += SUPABASE_PAGE_SIZE;
+  }
+  if (all.length >= maxRows) {
+    console.warn(`[MASDETA] fetchAllPages mencapai batas maksimum ${maxRows} baris; sebagian data mungkin terpotong.`);
   }
   return all;
 }
@@ -250,6 +258,15 @@ export async function hashPasswordForSupabase(password: string): Promise<string>
   return `sha256:${salt}:${hex}`;
 }
 
+function timingSafeEqualString(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 export async function verifyPasswordHashForSupabase(
   password: string,
   storedHash: string
@@ -260,9 +277,9 @@ export async function verifyPasswordHashForSupabase(
     if (parts.length !== 3) return false;
     const [, salt, expectedHex] = parts;
     const actualHex = await sha256Hex(`${salt}:${password}`);
-    return actualHex === expectedHex;
+    return timingSafeEqualString(actualHex, expectedHex);
   }
-  return storedHash === password;
+  return timingSafeEqualString(storedHash, password);
 }
 
 export function mapSupabaseUserRow(row: Record<string, unknown>): InternalUser {
@@ -2772,58 +2789,121 @@ export async function syncAllOperationalDataToSupabase(
 export async function runAdminDataActionInSupabase(
   action: AdminDataActionType
 ): Promise<void> {
-  const deleteAll = async (table: string) => {
-    const { error } = await supabase.from(table).delete().neq('id', '');
-    if (error) throw error;
+  const deleteAllByCol = async (table: string, col = 'id', optional = false) => {
+    const { error } = await supabase.from(table).delete().neq(col, '');
+    if (error) {
+      if (optional && isSchemaMissingError(error)) return;
+      throw error;
+    }
+  };
+
+  const clearOperationalAppStateKeys = async (keys: string[]) => {
+    if (keys.length === 0) return;
+    const { error } = await supabase.from('masdeta_app_state').delete().in('state_key', keys);
+    if (error && !isSchemaMissingError(error)) {
+      console.warn('App state cleanup warning:', error.message);
+    }
   };
 
   if (action === 'delete_all_kpm') {
-    await deleteAll('kpm_audit_logs');
-    await deleteAll('kpm_sub_item_deliveries');
-    await deleteAll('kpm_documents');
-    await deleteAll('proposal_kpm_history');
-    await deleteAll('kpm_records');
+    await deleteAllByCol('kpm_audit_logs');
+    await deleteAllByCol('kpm_sub_item_deliveries');
+    await deleteAllByCol('kpm_documents');
+    await deleteAllByCol('proposal_kpm_history');
+    await deleteAllByCol('kpm_records');
+    await clearOperationalAppStateKeys(['masdeta_proposal_slots_v1', 'masdeta_reconcile_snapshots_v1']);
     return;
   }
 
   if (action === 'delete_all_proposal') {
-    await deleteAll('proposal_kpm_history');
-    await deleteAll('proposal_documents');
-    await deleteAll('proposals');
+    // Hapus KPM yang terikat ke proposal beserta dokumen/auditnya agar tidak menyisakan data yatim
+    const boundRows = await fetchAllPages<{ id: string }>((from, to) =>
+      supabase
+        .from('kpm_records')
+        .select('id')
+        .or('proposal_id.not.is.null,proposal.neq.')
+        .order('id', { ascending: true })
+        .range(from, to)
+    );
+    const boundIds = boundRows.map((r) => String(r.id)).filter(Boolean);
+    for (let i = 0; i < boundIds.length; i += 200) {
+      const chunk = boundIds.slice(i, i + 200);
+      await supabase.from('kpm_audit_logs').delete().in('kpm_id', chunk);
+      await supabase.from('kpm_sub_item_deliveries').delete().in('kpm_id', chunk);
+      await supabase.from('kpm_documents').delete().in('kpm_id', chunk);
+      const { error: delKpmErr } = await supabase.from('kpm_records').delete().in('id', chunk);
+      if (delKpmErr) throw delKpmErr;
+    }
+    await deleteAllByCol('proposal_style_history', 'id', true);
+    await deleteAllByCol('proposal_rab_configs', 'proposal_id', true);
+    await deleteAllByCol('proposal_kpm_history');
+    await deleteAllByCol('proposal_documents');
+    await deleteAllByCol('proposals');
+    await clearOperationalAppStateKeys([
+      'masdeta_proposal_slots_v1',
+      'masdeta_proposal_rab_configs_v1',
+      'masdeta_proposal_style_history_v1',
+      'masdeta_reconcile_snapshots_v1',
+      'masdeta_proposal_bast_v1',
+    ]);
     return;
   }
 
   if (action === 'delete_all_items') {
-    await deleteAll('item_sub_items');
-    await deleteAll('item_bantuan');
+    await deleteAllByCol('item_sub_items');
+    await deleteAllByCol('item_bantuan');
     return;
   }
 
   if (action === 'delete_all_data') {
-    await deleteAll('kpm_audit_logs');
-    await deleteAll('kpm_sub_item_deliveries');
-    await deleteAll('kpm_documents');
-    await deleteAll('proposal_kpm_history');
-    await deleteAll('kpm_records');
-    await deleteAll('proposal_documents');
-    await deleteAll('proposals');
-    await deleteAll('pengelola');
+    await deleteAllByCol('kpm_audit_logs');
+    await deleteAllByCol('kpm_sub_item_deliveries');
+    await deleteAllByCol('kpm_documents');
+    await deleteAllByCol('proposal_kpm_history');
+    await deleteAllByCol('kpm_records');
+    await deleteAllByCol('proposal_style_history', 'id', true);
+    await deleteAllByCol('proposal_rab_configs', 'proposal_id', true);
+    await deleteAllByCol('proposal_documents');
+    await deleteAllByCol('proposals');
+    await deleteAllByCol('pengelola');
+    await deleteAllByCol('schedules', 'id', true);
+    await clearOperationalAppStateKeys([
+      'masdeta_proposal_slots_v1',
+      'masdeta_proposal_rab_configs_v1',
+      'masdeta_proposal_style_history_v1',
+      'masdeta_reconcile_snapshots_v1',
+      'masdeta_trash_bin_v1',
+      'masdeta_schedules_v1',
+      'masdeta_proposal_bast_v1',
+    ]);
     return;
   }
 
   if (action === 'reset_total') {
-    await deleteAll('direct_chat_messages');
-    await deleteAll('kpm_audit_logs');
-    await deleteAll('kpm_sub_item_deliveries');
-    await deleteAll('kpm_documents');
-    await deleteAll('proposal_kpm_history');
-    await deleteAll('kpm_records');
-    await deleteAll('proposal_documents');
-    await deleteAll('proposals');
-    await deleteAll('pengelola');
-    await deleteAll('item_sub_items');
-    await deleteAll('item_bantuan');
-    await deleteAll('pekerjaan_master');
+    await deleteAllByCol('direct_chat_messages');
+    await deleteAllByCol('kpm_audit_logs');
+    await deleteAllByCol('kpm_sub_item_deliveries');
+    await deleteAllByCol('kpm_documents');
+    await deleteAllByCol('proposal_kpm_history');
+    await deleteAllByCol('kpm_records');
+    await deleteAllByCol('proposal_style_history', 'id', true);
+    await deleteAllByCol('proposal_rab_configs', 'proposal_id', true);
+    await deleteAllByCol('proposal_documents');
+    await deleteAllByCol('proposals');
+    await deleteAllByCol('pengelola');
+    await deleteAllByCol('item_sub_items');
+    await deleteAllByCol('item_bantuan');
+    await deleteAllByCol('pekerjaan_master');
+    await deleteAllByCol('schedules', 'id', true);
+    await clearOperationalAppStateKeys([
+      'masdeta_proposal_slots_v1',
+      'masdeta_proposal_rab_configs_v1',
+      'masdeta_proposal_style_history_v1',
+      'masdeta_reconcile_snapshots_v1',
+      'masdeta_trash_bin_v1',
+      'masdeta_schedules_v1',
+      'masdeta_proposal_bast_v1',
+    ]);
   }
 }
 
@@ -3065,12 +3145,12 @@ export async function supabaseRegisterInternalUser(payload: {
     id: `usr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     nama: payload.nama.trim(),
     email: normalizedEmail,
-    jabatan: payload.jabatan.trim() || 'Admin Lapangan',
+    jabatan: payload.jabatan.trim() || 'Menunggu Penetapan SuperAdmin',
     kontak: payload.kontak.trim(),
-    role: 'Admin',
+    role: 'Viewer',
     status: 'pending',
-    perm_add: true,
-    perm_update: true,
+    perm_add: false,
+    perm_update: false,
     perm_delete: false,
     presence_status: 'offline',
     presence_manual: false,
@@ -3644,21 +3724,26 @@ export async function fetchSchedulesFromSupabase(): Promise<ScheduleEventItem[]>
   if (!isSupabaseConfigured) return localList;
 
   try {
-    const { data, error } = await supabase
-      .from('schedules')
-      .select('*')
-      .order('target_date', { ascending: true })
-      .order('target_time', { ascending: true });
-
-    if (error) {
+    let data: Record<string, unknown>[] = [];
+    try {
+      data = await fetchAllPages<Record<string, unknown>>((from, to) =>
+        supabase
+          .from('schedules')
+          .select('*')
+          .order('target_date', { ascending: true })
+          .order('target_time', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to)
+      );
+    } catch (error) {
       if (isSchemaMissingError(error)) {
         return await fetchAppStateSlice<ScheduleEventItem[]>(SCHEDULES_LEGACY_STATE_KEY, localList);
       }
       return localList;
     }
 
-    if (data && data.length > 0) {
-      const mapped = data.map((row) => mapRowToSchedule(row as Record<string, unknown>));
+    if (data.length > 0) {
+      const mapped = data.map((row) => mapRowToSchedule(row));
       try {
         localStorage.setItem(localKey, JSON.stringify(mapped));
       } catch {
@@ -3894,40 +3979,104 @@ export async function fetchPublicKpmContextFromSupabase(
     if (!kpmRow) return null;
     const kpmId = String(kpmRow.id);
 
+    const matchedProposalId = kpmRow.proposal_id ? String(kpmRow.proposal_id) : '';
+    const matchedProposalName = String(kpmRow.proposal || '').trim();
+    const matchedProposalYear = String(kpmRow.tahun || '').trim();
+
     const [
       docsRes,
       deliveriesRes,
-      proposalsRes,
-      itemsRes,
-      subItemsRes,
-      kabRes,
-      kecRes,
-      kelRes,
+      proposalsRows,
+      itemsRows,
+      subItemsRows,
+      kabRows,
+      kecRows,
+      kelRows,
     ] = await Promise.all([
       supabase
         .from('kpm_documents')
         .select('*')
         .eq('kpm_id', kpmId)
+        .not('doc_category', 'in', '("ktp","kk")')
         .order('sort_order', { ascending: true })
         .order('id', { ascending: true }),
       supabase.from('kpm_sub_item_deliveries').select('*').eq('kpm_id', kpmId),
-      supabase.from('proposals').select('*').order('created_at', { ascending: false }),
-      supabase.from('item_bantuan').select('*').order('sort_order', { ascending: true }),
-      supabase.from('item_sub_items').select('*').order('sort_order', { ascending: true }),
-      supabase.from('wilayah_kabkota').select('*').order('sort_order', { ascending: true }),
-      supabase.from('wilayah_kecamatan').select('*').order('sort_order', { ascending: true }),
-      supabase.from('wilayah_kelurahan').select('*').order('sort_order', { ascending: true }),
+      (async (): Promise<Record<string, unknown>[]> => {
+        if (matchedProposalId) {
+          const { data, error } = await supabase
+            .from('proposals')
+            .select('*')
+            .eq('id', matchedProposalId)
+            .limit(1);
+          if (!error && Array.isArray(data) && data.length > 0) {
+            return data as Record<string, unknown>[];
+          }
+        }
+        if (matchedProposalName) {
+          let q = supabase
+            .from('proposals')
+            .select('*')
+            .eq('nama_proposal', matchedProposalName)
+            .limit(1);
+          if (matchedProposalYear) q = q.eq('tahun', matchedProposalYear);
+          const { data, error } = await q;
+          if (!error && Array.isArray(data)) {
+            return data as Record<string, unknown>[];
+          }
+        }
+        return [];
+      })().catch(() => [] as Record<string, unknown>[]),
+      fetchAllPages<Record<string, unknown>>((from, to) =>
+        supabase
+          .from('item_bantuan')
+          .select('*')
+          .order('sort_order', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to)
+      ).catch(() => [] as Record<string, unknown>[]),
+      fetchAllPages<Record<string, unknown>>((from, to) =>
+        supabase
+          .from('item_sub_items')
+          .select('*')
+          .order('sort_order', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to)
+      ).catch(() => [] as Record<string, unknown>[]),
+      fetchAllPages<Record<string, unknown>>((from, to) =>
+        supabase
+          .from('wilayah_kabkota')
+          .select('*')
+          .order('sort_order', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to)
+      ).catch(() => [] as Record<string, unknown>[]),
+      fetchAllPages<Record<string, unknown>>((from, to) =>
+        supabase
+          .from('wilayah_kecamatan')
+          .select('*')
+          .order('sort_order', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to)
+      ).catch(() => [] as Record<string, unknown>[]),
+      fetchAllPages<Record<string, unknown>>((from, to) =>
+        supabase
+          .from('wilayah_kelurahan')
+          .select('*')
+          .order('sort_order', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to)
+      ).catch(() => [] as Record<string, unknown>[]),
     ]);
 
     const kelByKec = new Map<string, string[]>();
-    for (const kel of kelRes.data || []) {
+    for (const kel of kelRows) {
       const kecId = String(kel.kecamatan_id);
       const arr = kelByKec.get(kecId) || [];
       arr.push(String(kel.nama));
       kelByKec.set(kecId, arr);
     }
     const kecByKab = new Map<string, WilayahKabKota['kecamatanList']>();
-    for (const kec of kecRes.data || []) {
+    for (const kec of kecRows) {
       const kabId = String(kec.kabkota_id);
       const arr = kecByKab.get(kabId) || [];
       arr.push({
@@ -3937,20 +4086,20 @@ export async function fetchPublicKpmContextFromSupabase(
       });
       kecByKab.set(kabId, arr);
     }
-    const wilayahList: WilayahKabKota[] = (kabRes.data || []).map((kab) => ({
+    const wilayahList: WilayahKabKota[] = kabRows.map((kab) => ({
       id: String(kab.id),
       nama: String(kab.nama),
       kecamatanList: kecByKab.get(String(kab.id)) || [],
     }));
 
     const subByItem = new Map<string, string[]>();
-    for (const sub of subItemsRes.data || []) {
+    for (const sub of subItemsRows) {
       const itemId = String(sub.item_id);
       const arr = subByItem.get(itemId) || [];
       arr.push(String(sub.sub_item_name));
       subByItem.set(itemId, arr);
     }
-    const items: ItemBantuan[] = (itemsRes.data || []).map((it) => ({
+    const items: ItemBantuan[] = itemsRows.map((it) => ({
       id: String(it.id),
       tahun: String(it.tahun),
       code: String(it.code),
@@ -3958,7 +4107,7 @@ export async function fetchPublicKpmContextFromSupabase(
       subItems: subByItem.get(String(it.id)) || [],
     }));
 
-    const proposals: ProposalRecord[] = (proposalsRes.data || [])
+    const proposals: ProposalRecord[] = proposalsRows
       .filter((p) => {
         const tipeRaw = String(p.tipe || '').trim();
         return tipeRaw === 'Murni' || tipeRaw === 'Perubahan';
@@ -4004,22 +4153,8 @@ export async function fetchPublicKpmContextFromSupabase(
     }
 
     const documents: KpmDocuments = {
-      ktp:
-        bag.ktp ||
-        buildDocFileFromUrlFallback(
-          kpmRow.foto_ktp_url as string | null,
-          kpmRow.foto_ktp_thumb_url as string | null,
-          `${kpmId}-ktp`,
-          'Foto KTP'
-        ),
-      kk:
-        bag.kk ||
-        buildDocFileFromUrlFallback(
-          kpmRow.foto_kk_url as string | null,
-          kpmRow.foto_kk_thumb_url as string | null,
-          `${kpmId}-kk`,
-          'Foto KK'
-        ),
+      ktp: undefined,
+      kk: undefined,
       penerima:
         bag.penerima ||
         buildDocFileFromUrlFallback(
@@ -4062,6 +4197,12 @@ export async function fetchPublicKpmContextFromSupabase(
         proposals.find((p) => p.namaProposal === rawPropName)
       : undefined;
 
+    const rawNikDigits = String(kpmRow.nik_ktp || '').replace(/\D+/g, '');
+    const maskedNikKtp =
+      rawNikDigits.length >= 10
+        ? `${rawNikDigits.slice(0, 6)}${'*'.repeat(Math.max(4, rawNikDigits.length - 10))}${rawNikDigits.slice(-4)}`
+        : rawNikDigits;
+
     const record: KpmRecord = {
       id: kpmId,
       registerCode: isDetached ? '' : String(kpmRow.register_code || ''),
@@ -4076,15 +4217,15 @@ export async function fetchPublicKpmContextFromSupabase(
       alamat: String(kpmRow.alamat || ''),
       rt: String(kpmRow.rt || ''),
       rw: String(kpmRow.rw || ''),
-      nikKk: String(kpmRow.nik_kk || ''),
-      nikKtp: String(kpmRow.nik_ktp || ''),
+      nikKk: '',
+      nikKtp: maskedNikKtp,
       dtsen: String(kpmRow.dtsen || ''),
       validasi: effectiveValidasi,
-      kontak: String(kpmRow.kontak || ''),
+      kontak: '',
       pekerjaan: String(kpmRow.pekerjaan || ''),
       pengelola: String(kpmRow.pengelola || ''),
-      catatan: String(kpmRow.catatan || ''),
-      payment: Number(kpmRow.payment || 0),
+      catatan: '',
+      payment: 0,
       documents,
       subItemDeliveries,
       berkasDikembalikan: Boolean(kpmRow.berkas_dikembalikan),
@@ -4103,5 +4244,320 @@ export async function fetchPublicKpmContextFromSupabase(
     return null;
   }
 }
+
+// ============================================================================
+// PROPOSAL RAB CONFIGS (public.proposal_rab_configs) &
+// PROPOSAL STYLE HISTORY (public.proposal_style_history)
+// ============================================================================
+const PROPOSAL_RAB_FALLBACK_STATE_KEY = 'masdeta_proposal_rab_configs_v1';
+const PROPOSAL_STYLE_HISTORY_FALLBACK_STATE_KEY = 'masdeta_proposal_style_history_v1';
+
+function mapRowToSavedProposalRabConfig(row: Record<string, unknown>): SavedProposalRabConfig {
+  const rawCounts = (row.item_counts_snapshot as Record<string, unknown> | null) || {};
+  const itemCountsSnapshot: Record<string, number> = {};
+  for (const [k, v] of Object.entries(rawCounts)) {
+    const cleanKey = String(k || '').trim().toUpperCase();
+    const num = Number(v || 0);
+    if (cleanKey && Number.isFinite(num) && num >= 0) {
+      itemCountsSnapshot[cleanKey] = Math.floor(num);
+    }
+  }
+  const rawPackagesSource = row.packages_json ?? row.packages;
+  const rawPackages = Array.isArray(rawPackagesSource) ? (rawPackagesSource as SavedRabPackage[]) : [];
+  return {
+    proposalId: String(row.proposal_id || ''),
+    proposalName: String(row.proposal_name || ''),
+    tahun: String(row.tahun || ''),
+    judulRab: String(row.judul_rab || ''),
+    totalAnggaran: Number(row.total_anggaran || 0),
+    totalTerhitung: Number(row.total_terhitung || 0),
+    paguStandarPerKpm: Number(row.pagu_standar_per_kpm || 0),
+    totalKpmSnapshot: Number(row.total_kpm_snapshot || 0),
+    itemCountsSnapshot,
+    packages: rawPackages,
+    updatedAt: String(row.updated_at || new Date().toISOString()),
+    updatedBy: row.updated_by ? String(row.updated_by) : undefined,
+  };
+}
+
+function mapRowToStyleUsageRecord(row: Record<string, unknown>): ProposalStyleUsageRecord {
+  const rawDest = String(row.jenis_tujuan || 'OPD');
+  const jenisTujuan: ProposalDestinationType =
+    rawDest === 'Kecamatan' || rawDest === 'Kelurahan' ? rawDest : 'OPD';
+  return {
+    id: String(row.id || ''),
+    styleId: Math.min(15, Math.max(1, Number(row.style_id || 1))),
+    proposalId: String(row.proposal_id || ''),
+    namaProposal: String(row.nama_proposal || ''),
+    tahun: String(row.tahun || ''),
+    jenisTujuan,
+    createdAt: String(row.created_at || new Date().toISOString()),
+    createdBy: row.created_by ? String(row.created_by) : undefined,
+  };
+}
+
+export async function fetchProposalRabConfigsFromSupabase(): Promise<{
+  map: ProposalRabMap;
+  schemaMissing: boolean;
+}> {
+  const localKey = `masdeta_slice_${PROPOSAL_RAB_FALLBACK_STATE_KEY}`;
+  let localMap: ProposalRabMap = {};
+  try {
+    const raw = localStorage.getItem(localKey);
+    if (raw) localMap = JSON.parse(raw) as ProposalRabMap;
+  } catch {
+    // ignore storage error
+  }
+
+  if (!isSupabaseConfigured) {
+    return { map: localMap, schemaMissing: false };
+  }
+
+  try {
+    const rows = await fetchAllPages((from, to) =>
+      supabase
+        .from('proposal_rab_configs')
+        .select('*')
+        .order('updated_at', { ascending: false })
+        .range(from, to)
+    );
+    const map: ProposalRabMap = {};
+    for (const row of rows) {
+      const cfg = mapRowToSavedProposalRabConfig(row as Record<string, unknown>);
+      if (cfg.proposalId) {
+        map[cfg.proposalId] = cfg;
+      }
+    }
+    try {
+      localStorage.setItem(localKey, JSON.stringify(map));
+    } catch {
+      // ignore quota error
+    }
+    return { map, schemaMissing: false };
+  } catch (error) {
+    if (isSchemaMissingError(error)) {
+      const fallbackMap = await fetchAppStateSlice<ProposalRabMap>(
+        PROPOSAL_RAB_FALLBACK_STATE_KEY,
+        localMap
+      );
+      return { map: fallbackMap, schemaMissing: true };
+    }
+    return { map: localMap, schemaMissing: false };
+  }
+}
+
+export async function saveProposalRabConfigInSupabase(
+  config: SavedProposalRabConfig,
+  currentMap: ProposalRabMap
+): Promise<{ schemaMissing: boolean }> {
+  const nextMap: ProposalRabMap = {
+    ...currentMap,
+    [config.proposalId]: config,
+  };
+  const localKey = `masdeta_slice_${PROPOSAL_RAB_FALLBACK_STATE_KEY}`;
+  try {
+    localStorage.setItem(localKey, JSON.stringify(nextMap));
+  } catch {
+    // ignore quota error
+  }
+
+  if (!isSupabaseConfigured) {
+    return { schemaMissing: false };
+  }
+
+  const payload = {
+    proposal_id: config.proposalId,
+    proposal_name: config.proposalName,
+    tahun: config.tahun,
+    judul_rab: config.judulRab,
+    total_anggaran: Math.round(config.totalAnggaran),
+    total_terhitung: Math.round(config.totalTerhitung),
+    pagu_standar_per_kpm: Math.round(config.paguStandarPerKpm),
+    total_kpm_snapshot: Math.floor(config.totalKpmSnapshot),
+    item_counts_snapshot: config.itemCountsSnapshot,
+    packages_json: config.packages,
+    updated_by: (config.updatedBy || 'Admin').trim() || 'Admin',
+    updated_at: config.updatedAt || new Date().toISOString(),
+  };
+
+  const { error } = await supabase
+    .from('proposal_rab_configs')
+    .upsert(payload, { onConflict: 'proposal_id' });
+
+  if (error) {
+    if (isSchemaMissingError(error)) {
+      await saveAppStateSlice(PROPOSAL_RAB_FALLBACK_STATE_KEY, nextMap);
+      return { schemaMissing: true };
+    }
+    // Kembalikan cache lokal ke kondisi sebelumnya bila gagal simpan ke Supabase
+    try {
+      localStorage.setItem(localKey, JSON.stringify(currentMap));
+    } catch {
+      // ignore quota error
+    }
+    throw error;
+  }
+
+  return { schemaMissing: false };
+}
+
+export async function deleteProposalRabConfigFromSupabase(
+  proposalId: string,
+  currentMap: ProposalRabMap
+): Promise<void> {
+  const nextMap: ProposalRabMap = { ...currentMap };
+  delete nextMap[proposalId];
+  const localKey = `masdeta_slice_${PROPOSAL_RAB_FALLBACK_STATE_KEY}`;
+  try {
+    localStorage.setItem(localKey, JSON.stringify(nextMap));
+  } catch {
+    // ignore quota error
+  }
+  if (!isSupabaseConfigured) return;
+  const { error } = await supabase
+    .from('proposal_rab_configs')
+    .delete()
+    .eq('proposal_id', proposalId);
+  if (error && isSchemaMissingError(error)) {
+    await saveAppStateSlice(PROPOSAL_RAB_FALLBACK_STATE_KEY, nextMap);
+  }
+}
+
+export async function fetchProposalStyleHistoryFromSupabase(): Promise<{
+  items: ProposalStyleUsageRecord[];
+  schemaMissing: boolean;
+}> {
+  const localKey = `masdeta_slice_${PROPOSAL_STYLE_HISTORY_FALLBACK_STATE_KEY}`;
+  let localItems: ProposalStyleUsageRecord[] = [];
+  try {
+    const raw = localStorage.getItem(localKey);
+    if (raw) localItems = JSON.parse(raw) as ProposalStyleUsageRecord[];
+  } catch {
+    // ignore storage error
+  }
+
+  if (!isSupabaseConfigured) {
+    return { items: localItems, schemaMissing: false };
+  }
+
+  try {
+    const rows = await fetchAllPages((from, to) =>
+      supabase
+        .from('proposal_style_history')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .range(from, to)
+    );
+    const items = rows
+      .map((row) => mapRowToStyleUsageRecord(row as Record<string, unknown>))
+      .filter((item) => Boolean(item.id));
+    try {
+      localStorage.setItem(localKey, JSON.stringify(items));
+    } catch {
+      // ignore quota error
+    }
+    return { items, schemaMissing: false };
+  } catch (error) {
+    if (isSchemaMissingError(error)) {
+      const fallbackItems = await fetchAppStateSlice<ProposalStyleUsageRecord[]>(
+        PROPOSAL_STYLE_HISTORY_FALLBACK_STATE_KEY,
+        localItems
+      );
+      return { items: Array.isArray(fallbackItems) ? fallbackItems : [], schemaMissing: true };
+    }
+    return { items: localItems, schemaMissing: false };
+  }
+}
+
+export async function recordProposalStyleUsageInSupabase(
+  entry: ProposalStyleUsageRecord,
+  currentList: ProposalStyleUsageRecord[]
+): Promise<{ schemaMissing: boolean }> {
+  const deduped = currentList.filter(
+    (item) =>
+      !(
+        item.styleId === entry.styleId &&
+        item.proposalId === entry.proposalId &&
+        item.jenisTujuan === entry.jenisTujuan
+      )
+  );
+  const nextList = [entry, ...deduped];
+  const localKey = `masdeta_slice_${PROPOSAL_STYLE_HISTORY_FALLBACK_STATE_KEY}`;
+  try {
+    localStorage.setItem(localKey, JSON.stringify(nextList));
+  } catch {
+    // ignore quota error
+  }
+
+  if (!isSupabaseConfigured) {
+    return { schemaMissing: false };
+  }
+
+  // Hapus entri duplikat sebelumnya untuk kombinasi style + proposal + jenis_tujuan yang sama agar riwayat rapi
+  const { error: delDupErr } = await supabase
+    .from('proposal_style_history')
+    .delete()
+    .eq('style_id', entry.styleId)
+    .eq('proposal_id', entry.proposalId)
+    .eq('jenis_tujuan', entry.jenisTujuan);
+
+  if (delDupErr && isSchemaMissingError(delDupErr)) {
+    await saveAppStateSlice(PROPOSAL_STYLE_HISTORY_FALLBACK_STATE_KEY, nextList);
+    return { schemaMissing: true };
+  }
+
+  const { error } = await supabase.from('proposal_style_history').upsert(
+    {
+      id: entry.id,
+      style_id: entry.styleId,
+      proposal_id: entry.proposalId,
+      nama_proposal: entry.namaProposal,
+      tahun: entry.tahun,
+      jenis_tujuan: entry.jenisTujuan,
+      created_by: (entry.createdBy || 'Admin').trim() || 'Admin',
+      created_at: entry.createdAt || new Date().toISOString(),
+    },
+    { onConflict: 'id' }
+  );
+
+  if (error) {
+    if (isSchemaMissingError(error)) {
+      await saveAppStateSlice(PROPOSAL_STYLE_HISTORY_FALLBACK_STATE_KEY, nextList);
+      return { schemaMissing: true };
+    }
+    throw error;
+  }
+
+  return { schemaMissing: false };
+}
+
+export async function deleteProposalStyleUsageInSupabase(
+  id: string,
+  currentList: ProposalStyleUsageRecord[]
+): Promise<{ schemaMissing: boolean }> {
+  const nextList = currentList.filter((item) => item.id !== id);
+  const localKey = `masdeta_slice_${PROPOSAL_STYLE_HISTORY_FALLBACK_STATE_KEY}`;
+  try {
+    localStorage.setItem(localKey, JSON.stringify(nextList));
+  } catch {
+    // ignore quota error
+  }
+
+  if (!isSupabaseConfigured) {
+    return { schemaMissing: false };
+  }
+
+  const { error } = await supabase.from('proposal_style_history').delete().eq('id', id);
+  if (error) {
+    if (isSchemaMissingError(error)) {
+      await saveAppStateSlice(PROPOSAL_STYLE_HISTORY_FALLBACK_STATE_KEY, nextList);
+      return { schemaMissing: true };
+    }
+    throw error;
+  }
+
+  return { schemaMissing: false };
+}
+
 
 

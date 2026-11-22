@@ -110,10 +110,14 @@ export function measureImageFileDimensions(
     img.onload = () => {
       const width = img.naturalWidth || img.width || 0;
       const height = img.naturalHeight || img.height || 0;
+      img.onload = null;
+      img.onerror = null;
       URL.revokeObjectURL(objectUrl);
       resolve({ width, height });
     };
     img.onerror = () => {
+      img.onload = null;
+      img.onerror = null;
       URL.revokeObjectURL(objectUrl);
       resolve({ width: 0, height: 0 });
     };
@@ -130,50 +134,96 @@ function validateFileSize(file: File): void {
   }
 }
 
-async function postToGasEndpoint<T>(payload: Record<string, unknown>): Promise<T> {
+async function postToGasEndpoint<T>(
+  payload: Record<string, unknown>,
+  options?: { timeoutMs?: number; maxAttempts?: number }
+): Promise<T> {
   const { uploadUrl } = getGasConfig();
+  const timeoutMs = options?.timeoutMs ?? 45_000;
+  const maxAttempts = options?.maxAttempts ?? 2;
+  const body = JSON.stringify(payload);
+  let lastError: unknown = null;
 
-  const response = await fetch(uploadUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'text/plain;charset=utf-8',
-    },
-    redirect: 'follow',
-    body: JSON.stringify(payload),
-  });
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(uploadUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/plain;charset=utf-8',
+        },
+        redirect: 'follow',
+        body,
+        signal: controller.signal,
+      });
 
-  const rawText = await response.text();
-  let parsed: Record<string, unknown> = {};
-  try {
-    parsed = rawText ? (JSON.parse(rawText) as Record<string, unknown>) : {};
-  } catch {
-    throw new Error(
-      response.ok
-        ? 'Respon Google Apps Script bukan format JSON yang valid.'
-        : `Gagal menghubungi layanan Google Drive (${response.status}).`
-    );
+      const rawText = await response.text();
+      if (response.status >= 500 && attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, 1200 * attempt));
+        continue;
+      }
+
+      let parsed: Record<string, unknown> = {};
+      try {
+        parsed = rawText ? (JSON.parse(rawText) as Record<string, unknown>) : {};
+      } catch {
+        throw new Error(
+          response.ok
+            ? 'Respon Google Apps Script bukan format JSON yang valid.'
+            : `Gagal menghubungi layanan Google Drive (${response.status}).`
+        );
+      }
+
+      if (
+        !response.ok ||
+        parsed.success === false ||
+        parsed.ok === false ||
+        parsed.status === 'error' ||
+        typeof parsed.error === 'string'
+      ) {
+        const msg =
+          (typeof parsed.error === 'string' && parsed.error) ||
+          (typeof parsed.message === 'string' && parsed.message) ||
+          `Operasi Google Drive gagal (${response.status}).`;
+        throw new Error(msg);
+      }
+
+      const dataLayer =
+        parsed.data && typeof parsed.data === 'object'
+          ? (parsed.data as Record<string, unknown>)
+          : parsed;
+
+      return dataLayer as T;
+    } catch (err) {
+      lastError = err;
+      const isAbort =
+        (err instanceof DOMException && err.name === 'AbortError') ||
+        (err instanceof Error && err.name === 'AbortError');
+      const isTransient =
+        isAbort ||
+        err instanceof TypeError ||
+        (err instanceof Error && /failed to fetch|networkerror|load failed/i.test(err.message));
+
+      if (!isTransient || attempt >= maxAttempts) {
+        if (isAbort) {
+          throw new Error(
+            'Koneksi ke Google Drive melewati batas waktu (timeout). Periksa koneksi internet lalu coba lagi.'
+          );
+        }
+        throw err instanceof Error
+          ? err
+          : new Error('Gagal terhubung ke layanan penyimpanan Google Drive.');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1200 * attempt));
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
-  if (
-    !response.ok ||
-    parsed.success === false ||
-    parsed.ok === false ||
-    parsed.status === 'error' ||
-    typeof parsed.error === 'string'
-  ) {
-    const msg =
-      (typeof parsed.error === 'string' && parsed.error) ||
-      (typeof parsed.message === 'string' && parsed.message) ||
-      `Operasi Google Drive gagal (${response.status}).`;
-    throw new Error(msg);
-  }
-
-  const dataLayer =
-    parsed.data && typeof parsed.data === 'object'
-      ? (parsed.data as Record<string, unknown>)
-      : parsed;
-
-  return dataLayer as T;
+  throw lastError instanceof Error
+    ? lastError
+    : new Error('Gagal terhubung ke layanan penyimpanan Google Drive.');
 }
 
 function normalizeDriveMediaResponse(raw: Record<string, unknown>): DriveMediaResult {
@@ -266,11 +316,14 @@ export async function deleteMediaFromDrive(fileUrlOrId: string): Promise<DriveDe
   }
 
   const { apiKey } = getGasConfig();
-  const result = await postToGasEndpoint<Record<string, unknown>>({
-    apiKey,
-    action: 'delete',
-    fileUrl: cleanTarget,
-  });
+  const result = await postToGasEndpoint<Record<string, unknown>>(
+    {
+      apiKey,
+      action: 'delete',
+      fileUrl: cleanTarget,
+    },
+    { timeoutMs: 20_000, maxAttempts: 2 }
+  );
 
   return {
     ok: true,
