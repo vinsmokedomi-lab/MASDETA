@@ -1579,6 +1579,56 @@ export function assignKpmToProposalSlot(
   };
 }
 
+export function replaceKpmInProposalSlotMap(
+  slotMap: ProposalSlotMap,
+  proposalId: string | null | undefined,
+  proposalName: string | undefined,
+  tahun: string | undefined,
+  oldKpmId: string,
+  newKpmId: string,
+  allRecordsBeforeChange: KpmRecord[],
+  proposals: ProposalRecord[],
+  catalog: ItemBantuan[],
+  wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST
+): { slotMap: ProposalSlotMap; slotNumber: number | null } {
+  const cleanName = (proposalName || '').trim();
+  if (!cleanName) return { slotMap, slotNumber: null };
+
+  const { key, state, merged } = ensureProposalPinnedOrder(
+    slotMap,
+    proposalId,
+    cleanName,
+    tahun,
+    allRecordsBeforeChange,
+    proposals,
+    catalog,
+    wilayahList
+  );
+
+  const foundSlot = merged.find((m) => m.kind === 'kpm' && m.record.id === oldKpmId);
+  const slotNumber = foundSlot ? foundSlot.slotNumber : null;
+
+  const nextPinned = state.pinnedOrder.filter((id) => id !== newKpmId);
+  const oldIdx = nextPinned.indexOf(oldKpmId);
+  if (oldIdx >= 0) {
+    nextPinned.splice(oldIdx, 1, newKpmId);
+  } else {
+    nextPinned.push(newKpmId);
+  }
+
+  return {
+    slotMap: {
+      ...slotMap,
+      [key]: {
+        pinnedOrder: nextPinned,
+        emptySlots: state.emptySlots,
+        updatedAt: new Date().toISOString(),
+      },
+    },
+    slotNumber,
+  };
+}
+
 export function moveProposalSlotDirection(
   slotMap: ProposalSlotMap,
   proposalId: string | null | undefined,

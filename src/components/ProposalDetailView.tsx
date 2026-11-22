@@ -22,6 +22,7 @@ import {
   Lock,
   MapPin,
   Pencil,
+  Plus,
   RotateCcw,
   Search,
   SlidersHorizontal,
@@ -41,10 +42,13 @@ import {
   DEFAULT_SCHEDULE_BOOKS,
   DEFAULT_SPTJM_TEMPLATE,
   ItemBantuan,
+  KpmAuditLogEntry,
   KpmDocumentFile,
   KpmRecord,
   PejabatProfile,
   ProposalBastMap,
+  ProposalChangeKind,
+  ProposalChangeLogEntry,
   ProposalChecklist,
   ProposalDocuments,
   ProposalKpmHistoryEntry,
@@ -75,12 +79,16 @@ import {
   uploadProposalDocumentToDrive,
 } from '../utils/imageProcessor';
 import {
+  AbsenDinasVariant,
   DEFAULT_PDF_COLUMN_KEYS,
+  exportAbsenDinasPesertaToPdf,
   exportAbsensiDinsosToPdf,
   exportKpmBastBulkToPdf,
   exportKpmSptjmBulkToPdf,
   exportKpmTableToPdf,
   exportNomorDinsosToPdf,
+  exportProposalChangeRecapToPdf,
+  formatAbsenDinasLocationText,
   formatAbsensiScheduleFields,
   formatBastProposalLocation,
   formatIndonesianDateWords,
@@ -145,6 +153,22 @@ interface ProposalDetailViewProps {
   highlightEmptySlots?: boolean;
   onDismissHighlightEmptySlots?: () => void;
   onOpenProposalBuilder?: (proposalId: string) => void;
+  proposalChangeLogs?: ProposalChangeLogEntry[];
+  kpmAuditLogs?: KpmAuditLogEntry[];
+  onReplaceKpmInProposal?: (params: {
+    proposalId: string;
+    slotNumber: number;
+    oldKpmId: string;
+    newKpmId: string;
+    oldKpmDestination: 'database' | 'rejected';
+    followSlotItem: boolean;
+    reason?: string;
+  }) => Promise<boolean>;
+  onAddManualProposalChange?: (
+    draft: Omit<ProposalChangeLogEntry, 'id' | 'actorName' | 'timestamp'>
+  ) => void;
+  onUpdateProposalChangeReason?: (entryId: string, reason: string) => void;
+  onDeleteProposalChange?: (entryId: string) => void;
 }
 
 export function ProposalDetailView({
@@ -180,6 +204,12 @@ export function ProposalDetailView({
   onUndoReconcileSnapshot,
   highlightEmptySlots = false,
   onDismissHighlightEmptySlots,
+  proposalChangeLogs = [],
+  kpmAuditLogs = [],
+  onReplaceKpmInProposal,
+  onAddManualProposalChange,
+  onUpdateProposalChangeReason,
+  onDeleteProposalChange,
 }: ProposalDetailViewProps) {
   const { isOffline } = useOfflineStatus();
   const isNativeApp = isNativeAppPlatform();
@@ -190,11 +220,52 @@ export function ProposalDetailView({
   const [undoBusy, setUndoBusy] = useState(false);
   const [absensiModalOpen, setAbsensiModalOpen] = useState(false);
   const [absensiBusy, setAbsensiBusy] = useState(false);
+  const [absensiVariant, setAbsensiVariant] = useState<'daftar_hadir' | 'makan_minum' | 'kegiatan'>(
+    'daftar_hadir'
+  );
+  const [absensiLokasiJudul, setAbsensiLokasiJudul] = useState<string>('');
+  const [absensiExtraBlankRows, setAbsensiExtraBlankRows] = useState<string>('0');
+  const [absensiHandoverName, setAbsensiHandoverName] = useState<string>('');
+  const [absensiHandoverNip, setAbsensiHandoverNip] = useState<string>('');
   const [absensiBookId, setAbsensiBookId] = useState<string>('');
   const [absensiTanggal, setAbsensiTanggal] = useState<string>('');
   const [absensiHari, setAbsensiHari] = useState<string>('');
   const [absensiPukul, setAbsensiPukul] = useState<string>('');
   const [absensiLokasiKegiatan, setAbsensiLokasiKegiatan] = useState<string>(proposal.namaProposal);
+
+  // Rekap Pergantian KPM & Item
+  const [isChangeRecapModalOpen, setIsChangeRecapModalOpen] = useState(false);
+  const [recapSubMode, setRecapSubMode] = useState<'list' | 'replace' | 'manual'>('list');
+  const [recapKindFilter, setRecapKindFilter] = useState<'all' | ProposalChangeKind>('all');
+  const [recapQuery, setRecapQuery] = useState('');
+  const [recapPdfBusy, setRecapPdfBusy] = useState(false);
+  const [recapFeedback, setRecapFeedback] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
+  const [editingReasonId, setEditingReasonId] = useState<string | null>(null);
+  const [editingReasonText, setEditingReasonText] = useState('');
+
+  // Form Ganti KPM (1-Klik)
+  const [replaceOldKpmId, setReplaceOldKpmId] = useState('');
+  const [replaceOldQuery, setReplaceOldQuery] = useState('');
+  const [replaceNewKpmId, setReplaceNewKpmId] = useState('');
+  const [replaceNewQuery, setReplaceNewQuery] = useState('');
+  const [replaceDestination, setReplaceDestination] = useState<'database' | 'rejected'>('database');
+  const [replaceFollowSlotItem, setReplaceFollowSlotItem] = useState(true);
+  const [replaceReason, setReplaceReason] = useState('');
+  const [replaceBusy, setReplaceBusy] = useState(false);
+
+  // Form Catat Manual Perubahan
+  const [manualKind, setManualKind] = useState<ProposalChangeKind>('kpm_replaced');
+  const [manualSlotNumber, setManualSlotNumber] = useState('');
+  const [manualOldName, setManualOldName] = useState('');
+  const [manualOldNik, setManualOldNik] = useState('');
+  const [manualOldItem, setManualOldItem] = useState('');
+  const [manualNewName, setManualNewName] = useState('');
+  const [manualNewNik, setManualNewNik] = useState('');
+  const [manualNewItem, setManualNewItem] = useState('');
+  const [manualReason, setManualReason] = useState('');
   const [dbPickerTargetSlot, setDbPickerTargetSlot] = useState<{
     slotNumber: number;
     item?: string;
@@ -232,6 +303,7 @@ export function ProposalDetailView({
     subItem: false,
     pengelola: false,
     pekerjaan: false,
+    rekapPergantian: false,
     rekamJejak: false,
   });
   const toggleBreakdownSection = (key: keyof typeof expandedSections) => {
@@ -532,6 +604,15 @@ export function ProposalDetailView({
     );
     const initialBookId = matchedBook?.id || effectiveScheduleBooks[0]?.id || 'all';
     setAbsensiLokasiKegiatan(proposal.namaProposal);
+    setAbsensiLokasiJudul(
+      formatAbsenDinasLocationText(
+        proposal.namaProposal,
+        allProposals,
+        proposal.tahun,
+        wilayahList
+      )
+    );
+    setAbsensiExtraBlankRows('0');
     applyAbsensiBookSchedule(initialBookId);
     setAbsensiModalOpen(true);
   };
@@ -552,31 +633,59 @@ export function ProposalDetailView({
     setAbsensiBusy(true);
     setBastFeedback(null);
     try {
-      const result = await exportAbsensiDinsosToPdf({
-        records: proposalRecords,
-        allRecords: records,
-        proposals: allProposals,
-        items,
-        wilayahList,
-        proposalSlotMap,
-        schedules,
-        scheduleBookId: absensiBookId,
-        bastConfig: effectiveBastConfig,
-        reportTemplate,
-        singleProposal: proposal,
-        manualOverride: {
-          tanggal: absensiTanggal,
-          hari: absensiHari,
-          pukul: absensiPukul,
-          lokasiKegiatan: absensiLokasiKegiatan || proposal.namaProposal,
-        },
-        fileName: `Absensi_${proposal.tahun}_${proposal.namaProposal}`,
-      });
-      setAbsensiModalOpen(false);
-      setBastFeedback({
-        type: 'success',
-        text: `PDF Daftar Absensi (${result.totalRows} baris · F4 DINSOS) disimpan: ${result.savedFileName}`,
-      });
+      if (absensiVariant === 'daftar_hadir' || absensiVariant === 'makan_minum') {
+        const parsedExtra = Math.max(0, Math.min(30, Math.floor(Number(absensiExtraBlankRows) || 0)));
+        const variantPrefix =
+          absensiVariant === 'makan_minum' ? 'Daftar_Makan_Minum' : 'Daftar_Hadir';
+        const result = await exportAbsenDinasPesertaToPdf({
+          variant: absensiVariant as AbsenDinasVariant,
+          records: proposalRecords,
+          allRecords: records,
+          proposals: allProposals,
+          items,
+          wilayahList,
+          proposalSlotMap,
+          singleProposal: proposal,
+          extraBlankRows: parsedExtra,
+          locationOverride: absensiLokasiJudul,
+          handoverName: absensiVariant === 'makan_minum' ? absensiHandoverName : undefined,
+          handoverNip: absensiVariant === 'makan_minum' ? absensiHandoverNip : undefined,
+          fileName: `${variantPrefix}_${proposal.tahun}_${proposal.namaProposal}`,
+        });
+        setAbsensiModalOpen(false);
+        setBastFeedback({
+          type: 'success',
+          text: `PDF ${
+            absensiVariant === 'makan_minum' ? 'Daftar Makan & Minum' : 'Daftar Hadir'
+          } (${result.totalRows} baris · F4) disimpan: ${result.savedFileName}`,
+        });
+      } else {
+        const result = await exportAbsensiDinsosToPdf({
+          records: proposalRecords,
+          allRecords: records,
+          proposals: allProposals,
+          items,
+          wilayahList,
+          proposalSlotMap,
+          schedules,
+          scheduleBookId: absensiBookId,
+          bastConfig: effectiveBastConfig,
+          reportTemplate,
+          singleProposal: proposal,
+          manualOverride: {
+            tanggal: absensiTanggal,
+            hari: absensiHari,
+            pukul: absensiPukul,
+            lokasiKegiatan: absensiLokasiKegiatan || proposal.namaProposal,
+          },
+          fileName: `Absensi_${proposal.tahun}_${proposal.namaProposal}`,
+        });
+        setAbsensiModalOpen(false);
+        setBastFeedback({
+          type: 'success',
+          text: `PDF Absensi Kegiatan (${result.totalRows} baris · F4 DINSOS) disimpan: ${result.savedFileName}`,
+        });
+      }
     } catch (err) {
       setBastFeedback({
         type: 'error',
@@ -1051,6 +1160,379 @@ export function ProposalDetailView({
       )
       .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   }, [historyEntries, proposal.namaProposal, proposal.tahun]);
+
+  // Gabungan Rekap Pergantian KPM & Item (stored + retroaktif dari emptySlots & audit Item Bantuan)
+  const combinedChangeRecapEntries = useMemo(() => {
+    const scopedStored = proposalChangeLogs.filter(
+      (entry) =>
+        (entry.proposalId && entry.proposalId === proposal.id) ||
+        (entry.proposalName === proposal.namaProposal &&
+          (!entry.tahun || entry.tahun === proposal.tahun))
+    );
+
+    const coveredSlots = new Set<number>();
+    const coveredItemSignatures = new Set<string>();
+    const recById = new Map(records.map((r) => [r.id, r]));
+
+    for (const entry of scopedStored) {
+      if (
+        (entry.kind === 'kpm_vacated' || entry.kind === 'kpm_replaced') &&
+        entry.slotNumber &&
+        entry.slotNumber > 0
+      ) {
+        coveredSlots.add(entry.slotNumber);
+      }
+      if (entry.kind === 'item_changed') {
+        const dayKey = entry.timestamp.slice(0, 10);
+        const kpmKey = entry.oldKpmId || entry.newKpmId || (entry.oldKpmName || '').toLowerCase();
+        coveredItemSignatures.add(
+          `${kpmKey}::${(entry.oldItem || '').toUpperCase()}::${(entry.newItem || '').toUpperCase()}::${dayKey}`
+        );
+      }
+    }
+
+    const derivedEntries: ProposalChangeLogEntry[] = [];
+
+    // 1. Baris kosong yang sudah punya previousKpmName namun belum tercatat di proposalChangeLogs
+    for (const slot of mergedProposalSlots) {
+      if (slot.kind !== 'empty') continue;
+      if (!slot.emptySlot.previousKpmName?.trim()) continue;
+      if (coveredSlots.has(slot.slotNumber)) continue;
+      const oldRec = slot.emptySlot.previousKpmId
+        ? recById.get(slot.emptySlot.previousKpmId)
+        : undefined;
+      derivedEntries.push({
+        id: `derived-empty-${proposal.id}-${slot.slotNumber}`,
+        proposalId: proposal.id,
+        proposalName: proposal.namaProposal,
+        tahun: proposal.tahun,
+        slotNumber: slot.slotNumber,
+        kind: 'kpm_vacated',
+        oldKpmId: slot.emptySlot.previousKpmId,
+        oldKpmName: slot.emptySlot.previousKpmName,
+        oldNik: oldRec?.nikKtp,
+        oldItem: slot.emptySlot.item || oldRec?.item,
+        oldKelurahan: oldRec?.kelurahan,
+        reason: 'Baris kosong dari KPM sebelumnya (siap diisi pengganti)',
+        source: 'auto',
+        actorName: 'Sistem Slot',
+        timestamp: slot.emptySlot.vacatedAt || proposal.updatedAt || proposal.createdAt,
+      });
+    }
+
+    // 2. Audit log pergantian Item Bantuan pada KPM proposal ini yang belum masuk proposalChangeLogs
+    const slotByKpmId = new Map<string, number>();
+    orderedProposalRecords.forEach(({ record, displaySeq }) => {
+      if (displaySeq < 999999) {
+        slotByKpmId.set(record.id, displaySeq);
+      }
+    });
+    const proposalKpmIds = new Set(proposalRecords.map((r) => r.id));
+
+    for (const audit of kpmAuditLogs) {
+      const belongsHere =
+        proposalKpmIds.has(audit.kpmId) ||
+        (audit.proposal === proposal.namaProposal &&
+          (!audit.tahun || audit.tahun === proposal.tahun));
+      if (!belongsHere) continue;
+      const itemChange = audit.changes.find((c) => c.field === 'Item Bantuan');
+      if (!itemChange) continue;
+      const beforeClean = (itemChange.before || '').trim();
+      const afterClean = (itemChange.after || '').trim();
+      if (!beforeClean || beforeClean === '-' || beforeClean.toUpperCase() === afterClean.toUpperCase()) {
+        continue;
+      }
+      const sig = `${audit.kpmId}::${beforeClean.toUpperCase()}::${afterClean.toUpperCase()}::${audit.timestamp.slice(0, 10)}`;
+      if (coveredItemSignatures.has(sig)) continue;
+      coveredItemSignatures.add(sig);
+
+      const recObj = recById.get(audit.kpmId);
+      derivedEntries.push({
+        id: `derived-audit-${audit.id}`,
+        proposalId: proposal.id,
+        proposalName: proposal.namaProposal,
+        tahun: proposal.tahun,
+        slotNumber: slotByKpmId.get(audit.kpmId) ?? null,
+        kind: 'item_changed',
+        oldKpmId: audit.kpmId,
+        oldKpmName: recObj?.nama || '-',
+        oldNik: recObj?.nikKtp,
+        oldItem: beforeClean,
+        oldKelurahan: recObj?.kelurahan,
+        newKpmId: audit.kpmId,
+        newKpmName: recObj?.nama || '-',
+        newNik: recObj?.nikKtp,
+        newItem: afterClean,
+        newKelurahan: recObj?.kelurahan,
+        reason: 'Riwayat perubahan item bantuan KPM',
+        source: 'auto',
+        actorName: audit.actorName || 'Admin',
+        timestamp: audit.timestamp,
+      });
+    }
+
+    return [...scopedStored, ...derivedEntries].sort((a, b) =>
+      b.timestamp.localeCompare(a.timestamp)
+    );
+  }, [
+    proposalChangeLogs,
+    proposal.id,
+    proposal.namaProposal,
+    proposal.tahun,
+    proposal.updatedAt,
+    proposal.createdAt,
+    records,
+    mergedProposalSlots,
+    orderedProposalRecords,
+    proposalRecords,
+    kpmAuditLogs,
+  ]);
+
+  const recapCounts = useMemo(() => {
+    let kpmReplaced = 0;
+    let itemChanged = 0;
+    let kpmVacated = 0;
+    for (const item of combinedChangeRecapEntries) {
+      if (item.kind === 'kpm_replaced') kpmReplaced += 1;
+      else if (item.kind === 'item_changed') itemChanged += 1;
+      else if (item.kind === 'kpm_vacated') kpmVacated += 1;
+    }
+    return {
+      total: combinedChangeRecapEntries.length,
+      kpmReplaced,
+      itemChanged,
+      kpmVacated,
+    };
+  }, [combinedChangeRecapEntries]);
+
+  const filteredChangeRecapEntries = useMemo(() => {
+    const q = recapQuery.trim().toLowerCase();
+    return combinedChangeRecapEntries.filter((entry) => {
+      if (recapKindFilter !== 'all' && entry.kind !== recapKindFilter) return false;
+      if (!q) return true;
+      const slotStr = entry.slotNumber ? String(entry.slotNumber).padStart(2, '0') : '';
+      return (
+        slotStr.includes(q) ||
+        (entry.oldKpmName || '').toLowerCase().includes(q) ||
+        (entry.newKpmName || '').toLowerCase().includes(q) ||
+        (entry.oldNik || '').toLowerCase().includes(q) ||
+        (entry.newNik || '').toLowerCase().includes(q) ||
+        (entry.oldItem || '').toLowerCase().includes(q) ||
+        (entry.newItem || '').toLowerCase().includes(q) ||
+        (entry.reason || '').toLowerCase().includes(q) ||
+        (entry.actorName || '').toLowerCase().includes(q)
+      );
+    });
+  }, [combinedChangeRecapEntries, recapKindFilter, recapQuery]);
+
+  const replaceOldOptions = useMemo(() => {
+    const q = replaceOldQuery.trim().toLowerCase();
+    return orderedProposalRecords.filter(({ record, displaySeq }) => {
+      if (!q) return true;
+      const seq = displaySeq < 999999 ? String(displaySeq).padStart(2, '0') : '';
+      return (
+        seq.includes(q) ||
+        record.nama.toLowerCase().includes(q) ||
+        record.nikKtp.includes(q) ||
+        record.item.toLowerCase().includes(q) ||
+        record.kelurahan.toLowerCase().includes(q)
+      );
+    });
+  }, [orderedProposalRecords, replaceOldQuery]);
+
+  const replaceNewCandidates = useMemo(() => {
+    const q = replaceNewQuery.trim().toLowerCase();
+    const selectedOldRec = records.find((r) => r.id === replaceOldKpmId);
+    const oldItemUpper = (selectedOldRec?.item || '').trim().toUpperCase();
+
+    return records
+      .filter((r) => {
+        if (r.validasi !== 'pending') return false;
+        const propStr = (r.proposal || '').trim();
+        if (propStr && propStr !== proposal.namaProposal) return false;
+        if (
+          !doesKpmMatchProposalDomicile({
+            record: r,
+            proposalName: proposal.namaProposal,
+            proposalTahun: proposal.tahun,
+            proposals: allProposals,
+            wilayahList,
+          })
+        ) {
+          return false;
+        }
+        if (!q) return true;
+        const dom = resolveKpmDomicile(r, allProposals, wilayahList);
+        return (
+          r.nama.toLowerCase().includes(q) ||
+          r.nikKtp.includes(q) ||
+          r.item.toLowerCase().includes(q) ||
+          dom.kelurahan.toLowerCase().includes(q) ||
+          dom.kecamatan.toLowerCase().includes(q) ||
+          r.pengelola.toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => {
+        if (oldItemUpper) {
+          const aMatch = (a.item || '').trim().toUpperCase() === oldItemUpper ? 0 : 1;
+          const bMatch = (b.item || '').trim().toUpperCase() === oldItemUpper ? 0 : 1;
+          if (aMatch !== bMatch) return aMatch - bMatch;
+        }
+        return a.nama.localeCompare(b.nama, 'id');
+      });
+  }, [records, replaceNewQuery, replaceOldKpmId, proposal.namaProposal, proposal.tahun, allProposals, wilayahList]);
+
+  const openChangeRecapModal = (initialMode: 'list' | 'replace' | 'manual' = 'list') => {
+    setRecapFeedback(null);
+    setRecapSubMode(initialMode);
+    if (initialMode === 'replace') {
+      const firstRec = orderedProposalRecords[0]?.record;
+      setReplaceOldKpmId((prev) => prev || firstRec?.id || '');
+      setReplaceOldQuery('');
+      setReplaceNewKpmId('');
+      setReplaceNewQuery('');
+      setReplaceDestination('database');
+      setReplaceFollowSlotItem(true);
+      setReplaceReason('');
+    } else if (initialMode === 'manual') {
+      setManualKind('kpm_replaced');
+      setManualSlotNumber('');
+      setManualOldName('');
+      setManualOldNik('');
+      setManualOldItem('');
+      setManualNewName('');
+      setManualNewNik('');
+      setManualNewItem('');
+      setManualReason('');
+    }
+    setIsChangeRecapModalOpen(true);
+  };
+
+  const handleExportChangeRecapPdf = async (
+    entriesToExport: ProposalChangeLogEntry[] = filteredChangeRecapEntries,
+    filterLabel?: string
+  ) => {
+    if (recapPdfBusy) return;
+    setRecapPdfBusy(true);
+    setRecapFeedback(null);
+    try {
+      const res = await exportProposalChangeRecapToPdf({
+        proposal,
+        changes: entriesToExport,
+        items,
+        wilayahList,
+        bastConfig: effectiveBastConfig,
+        reportTemplate,
+        totalActiveKpm: proposalRecords.length,
+        emptySlotsCount,
+        filterLabel,
+        fileName: `Rekap_Perubahan_${proposal.tahun}_${proposal.namaProposal}`,
+      });
+      const msg = `PDF Rekap Perubahan (${res.totalChanges} catatan · F4) disimpan: ${res.savedFileName}`;
+      setRecapFeedback({ type: 'success', text: msg });
+      setBastFeedback({ type: 'success', text: msg });
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : 'Gagal membuat PDF Rekap Perubahan.';
+      setRecapFeedback({ type: 'error', text: errMsg });
+      setBastFeedback({ type: 'error', text: errMsg });
+    } finally {
+      setRecapPdfBusy(false);
+    }
+  };
+
+  const handleSubmitReplaceKpm = async () => {
+    if (!onReplaceKpmInProposal || replaceBusy) return;
+    const selectedSlotEntry = orderedProposalRecords.find(
+      ({ record }) => record.id === replaceOldKpmId
+    );
+    if (!selectedSlotEntry || !replaceNewKpmId) {
+      setRecapFeedback({
+        type: 'error',
+        text: 'Pilih KPM lama pada proposal dan KPM pengganti dari Database KPM terlebih dahulu.',
+      });
+      return;
+    }
+    const slotNum =
+      selectedSlotEntry.displaySeq < 999999 ? selectedSlotEntry.displaySeq : 1;
+    setReplaceBusy(true);
+    setRecapFeedback(null);
+    try {
+      const ok = await onReplaceKpmInProposal({
+        proposalId: proposal.id,
+        slotNumber: slotNum,
+        oldKpmId: selectedSlotEntry.record.id,
+        newKpmId: replaceNewKpmId,
+        oldKpmDestination: replaceDestination,
+        followSlotItem: replaceFollowSlotItem,
+        reason: replaceReason.trim() || undefined,
+      });
+      if (ok) {
+        setRecapSubMode('list');
+        setReplaceOldKpmId('');
+        setReplaceNewKpmId('');
+        setReplaceReason('');
+        setRecapFeedback({
+          type: 'success',
+          text: `Pergantian KPM di No. #${String(slotNum).padStart(2, '0')} berhasil dicatat ke rekap.`,
+        });
+      }
+    } finally {
+      setReplaceBusy(false);
+    }
+  };
+
+  const handleSubmitManualProposalChange = () => {
+    if (!onAddManualProposalChange) return;
+    const cleanOld = manualOldName.trim();
+    const cleanNew = manualNewName.trim();
+    const cleanOldItem = manualOldItem.trim().toUpperCase();
+    const cleanNewItem = manualNewItem.trim().toUpperCase();
+
+    if (manualKind === 'kpm_replaced' && (!cleanOld || !cleanNew)) {
+      setRecapFeedback({
+        type: 'error',
+        text: 'Untuk Pergantian KPM, isi Nama KPM Lama dan Nama KPM Baru.',
+      });
+      return;
+    }
+    if (manualKind === 'item_changed' && (!cleanOld || !cleanOldItem || !cleanNewItem)) {
+      setRecapFeedback({
+        type: 'error',
+        text: 'Untuk Pergantian Item, isi Nama KPM, Item Lama, dan Item Baru.',
+      });
+      return;
+    }
+    if (manualKind === 'kpm_vacated' && !cleanOld) {
+      setRecapFeedback({
+        type: 'error',
+        text: 'Isi Nama KPM yang keluar / dikosongkan.',
+      });
+      return;
+    }
+
+    const parsedSlot = Number(manualSlotNumber.replace(/\D/g, ''));
+    onAddManualProposalChange({
+      proposalId: proposal.id,
+      proposalName: proposal.namaProposal,
+      tahun: proposal.tahun,
+      slotNumber: parsedSlot > 0 ? parsedSlot : null,
+      kind: manualKind,
+      oldKpmName: cleanOld || undefined,
+      oldNik: manualOldNik.trim() || undefined,
+      oldItem: cleanOldItem || undefined,
+      newKpmName: manualKind === 'item_changed' ? cleanOld : cleanNew || undefined,
+      newNik: manualNewNik.trim() || undefined,
+      newItem: cleanNewItem || undefined,
+      reason: manualReason.trim() || undefined,
+      source: 'manual',
+    });
+
+    setRecapSubMode('list');
+    setRecapFeedback({
+      type: 'success',
+      text: 'Catatan perubahan manual berhasil ditambahkan ke rekap proposal.',
+    });
+  };
 
   // Transfer KPM helpers
   const unlockedTargetProposals = useMemo(
@@ -2259,6 +2741,180 @@ export function ProposalDetailView({
 
   const historyBlock = (
     <>
+        {/* Rekap Pergantian KPM & Item (Spesifik Proposal · Bisa Download PDF) */}
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+          <div
+            className={`flex items-center justify-between gap-2 px-4 py-2.5 ${
+              expandedSections.rekapPergantian ? 'border-b border-slate-100' : ''
+            }`}
+          >
+            <button
+              type="button"
+              aria-expanded={expandedSections.rekapPergantian}
+              onClick={() => toggleBreakdownSection('rekapPergantian')}
+              className="flex min-w-0 flex-1 items-center gap-2 py-0.5 text-left transition-colors hover:opacity-80"
+            >
+              <ArrowRightLeft className="h-4 w-4 shrink-0 text-teal-700" />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <h2 className="text-sm font-bold text-slate-900">Rekap Pergantian</h2>
+                  <span className="text-xs font-medium text-slate-500 tabular-nums">
+                    · {recapCounts.total} Perubahan
+                  </span>
+                </div>
+              </div>
+              <ChevronDown
+                className={`h-4 w-4 shrink-0 text-slate-500 transition-transform duration-200 ${
+                  expandedSections.rekapPergantian ? 'rotate-180' : ''
+                }`}
+              />
+            </button>
+
+            <button
+              type="button"
+              disabled={recapPdfBusy}
+              onClick={() => void handleExportChangeRecapPdf(combinedChangeRecapEntries)}
+              title="Download Rekap Pergantian PDF (F4)"
+              className="inline-flex min-h-[34px] shrink-0 items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-50 disabled:opacity-50 whitespace-nowrap"
+            >
+              {recapPdfBusy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download className="h-3.5 w-3.5" />
+              )}
+              <span>PDF</span>
+            </button>
+          </div>
+
+          {expandedSections.rekapPergantian && (
+            <div className="space-y-3 p-4 pt-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-slate-500">
+                  {recapCounts.kpmReplaced} Ganti KPM · {recapCounts.itemChanged} Ubah Item ·{' '}
+                  {recapCounts.kpmVacated} KPM Keluar
+                </p>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {onReplaceKpmInProposal &&
+                    canUpdate &&
+                    proposal.status !== 'locked' &&
+                    proposalRecords.length > 0 && (
+                      <button
+                        type="button"
+                        disabled={isOffline}
+                        onClick={() => openChangeRecapModal('replace')}
+                        className="inline-flex min-h-[34px] items-center gap-1 rounded-xl bg-teal-700 px-2.5 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:opacity-50 whitespace-nowrap"
+                      >
+                        <ArrowRightLeft className="h-3.5 w-3.5" />
+                        <span>Ganti KPM</span>
+                      </button>
+                    )}
+                  {onAddManualProposalChange && canUpdate && (
+                    <button
+                      type="button"
+                      disabled={isOffline}
+                      onClick={() => openChangeRecapModal('manual')}
+                      className="inline-flex min-h-[34px] items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      <span>Catat Manual</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {combinedChangeRecapEntries.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/70 px-3 py-5 text-center text-xs text-slate-500">
+                  Belum ada catatan pergantian KPM atau item pada proposal ini.
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100 rounded-xl border border-slate-200">
+                  {combinedChangeRecapEntries.slice(0, 4).map((entry) => {
+                    const slotTag =
+                      entry.slotNumber && entry.slotNumber > 0
+                        ? `No. #${String(entry.slotNumber).padStart(2, '0')}`
+                        : 'Tanpa No.';
+                    const kindText =
+                      entry.kind === 'kpm_replaced'
+                        ? 'Pergantian KPM'
+                        : entry.kind === 'item_changed'
+                          ? 'Pergantian Item'
+                          : entry.kind === 'kpm_vacated'
+                            ? 'KPM Keluar'
+                            : 'KPM Masuk';
+                    const kindColor =
+                      entry.kind === 'kpm_replaced'
+                        ? 'text-teal-700'
+                        : entry.kind === 'item_changed'
+                          ? 'text-blue-700'
+                          : entry.kind === 'kpm_vacated'
+                            ? 'text-amber-700'
+                            : 'text-emerald-700';
+
+                    return (
+                      <div key={entry.id} className="px-3.5 py-2.5 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-mono font-bold text-slate-800 tabular-nums">
+                            {slotTag}
+                          </span>
+                          <span className={`font-semibold ${kindColor}`}>{kindText}</span>
+                        </div>
+                        {entry.kind === 'kpm_replaced' ? (
+                          <p className="mt-1 font-medium text-slate-900">
+                            <span className="text-slate-500 line-through">
+                              {entry.oldKpmName || '-'}
+                              {entry.oldItem ? ` (${entry.oldItem})` : ''}
+                            </span>
+                            <span className="mx-1.5 text-slate-400">→</span>
+                            <span className="font-semibold text-teal-800">
+                              {entry.newKpmName || '-'}
+                              {entry.newItem ? ` (${entry.newItem})` : ''}
+                            </span>
+                          </p>
+                        ) : entry.kind === 'item_changed' ? (
+                          <p className="mt-1 font-medium text-slate-900">
+                            {entry.oldKpmName || entry.newKpmName || '-'} ·{' '}
+                            <span className="font-mono text-slate-500 line-through">
+                              {entry.oldItem || '-'}
+                            </span>{' '}
+                            <span className="text-slate-400">→</span>{' '}
+                            <span className="font-mono font-bold text-blue-700">
+                              {entry.newItem || '-'}
+                            </span>
+                          </p>
+                        ) : (
+                          <p className="mt-1 font-medium text-slate-900">
+                            {entry.oldKpmName || entry.newKpmName || '-'}
+                            {entry.oldItem ? ` (${entry.oldItem})` : ''}
+                          </p>
+                        )}
+                        {entry.reason && (
+                          <p className="mt-0.5 line-clamp-1 text-[11px] text-slate-500">
+                            {entry.reason}
+                          </p>
+                        )}
+                        <p className="mt-1 text-[11px] text-slate-400 tabular-nums">
+                          {formatUploadDateTime(entry.timestamp)} · {entry.actorName}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => openChangeRecapModal('list')}
+                className="flex min-h-[40px] w-full items-center justify-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-teal-700 transition-colors hover:bg-slate-100"
+              >
+                <span>
+                  Kelola &amp; Unduh Rekap Lengkap ({combinedChangeRecapEntries.length})
+                </span>
+                <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+        </section>
+
         {/* Paling Bawah: Rekam Jejak (Collapsible, default collapsed + Lihat selengkapnya) */}
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
           <button
@@ -3693,7 +4349,685 @@ export function ProposalDetailView({
         </div>
       )}
 
-      {/* Modal Download Daftar Absensi (Dinas Sosial · Pilih Buku Jadwal) */}
+      {/* Modal Rekap Pergantian KPM & Item (Spesifik Proposal + Ganti KPM 1-Klik + Export PDF) */}
+      {isChangeRecapModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Rekap Pergantian KPM dan Item"
+          onClick={() => !replaceBusy && !recapPdfBusy && setIsChangeRecapModalOpen(false)}
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-xs sm:items-center sm:p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-t-3xl border border-slate-200 bg-white shadow-2xl sm:rounded-3xl"
+          >
+            <div className="mx-auto mt-2.5 h-1.5 w-10 shrink-0 rounded-full bg-slate-300 sm:hidden" />
+            <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+              <div className="min-w-0">
+                <h3 className="text-base font-bold text-slate-900">
+                  Rekap Pergantian KPM &amp; Item
+                </h3>
+                <p className="mt-0.5 truncate text-xs text-slate-500">
+                  {proposal.namaProposal} · {proposal.tahun} ({recapCounts.total} Catatan Perubahan)
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={replaceBusy || recapPdfBusy}
+                onClick={() => setIsChangeRecapModalOpen(false)}
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Sub-Navigation & Action Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50/70 px-5 py-2.5">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRecapFeedback(null);
+                    setRecapSubMode('list');
+                  }}
+                  className={`inline-flex min-h-[34px] items-center rounded-xl px-3 text-xs font-semibold transition-colors whitespace-nowrap ${
+                    recapSubMode === 'list'
+                      ? 'bg-slate-900 text-white'
+                      : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  Daftar Rekap ({recapCounts.total})
+                </button>
+                {onReplaceKpmInProposal &&
+                  canUpdate &&
+                  proposal.status !== 'locked' &&
+                  proposalRecords.length > 0 && (
+                    <button
+                      type="button"
+                      disabled={isOffline}
+                      onClick={() => {
+                        setRecapFeedback(null);
+                        setRecapSubMode('replace');
+                        if (!replaceOldKpmId && orderedProposalRecords[0]) {
+                          setReplaceOldKpmId(orderedProposalRecords[0].record.id);
+                        }
+                      }}
+                      className={`inline-flex min-h-[34px] items-center gap-1 rounded-xl px-3 text-xs font-semibold transition-colors whitespace-nowrap disabled:opacity-50 ${
+                        recapSubMode === 'replace'
+                          ? 'bg-teal-700 text-white'
+                          : 'border border-slate-200 bg-white text-teal-800 hover:bg-teal-50'
+                      }`}
+                    >
+                      <ArrowRightLeft className="h-3.5 w-3.5" />
+                      <span>Ganti KPM</span>
+                    </button>
+                  )}
+                {onAddManualProposalChange && canUpdate && (
+                  <button
+                    type="button"
+                    disabled={isOffline}
+                    onClick={() => {
+                      setRecapFeedback(null);
+                      setRecapSubMode('manual');
+                    }}
+                    className={`inline-flex min-h-[34px] items-center gap-1 rounded-xl px-3 text-xs font-semibold transition-colors whitespace-nowrap disabled:opacity-50 ${
+                      recapSubMode === 'manual'
+                        ? 'bg-slate-800 text-white'
+                        : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    <span>Catat Manual</span>
+                  </button>
+                )}
+              </div>
+
+              {recapSubMode === 'list' && (
+                <button
+                  type="button"
+                  disabled={recapPdfBusy}
+                  onClick={() => {
+                    const activeFilterName =
+                      recapKindFilter === 'kpm_replaced'
+                        ? 'Pergantian KPM'
+                        : recapKindFilter === 'item_changed'
+                          ? 'Pergantian Item'
+                          : recapKindFilter === 'kpm_vacated'
+                            ? 'KPM Keluar'
+                            : undefined;
+                    void handleExportChangeRecapPdf(filteredChangeRecapEntries, activeFilterName);
+                  }}
+                  className="inline-flex min-h-[34px] items-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-bold text-white transition-colors hover:bg-teal-800 disabled:opacity-50 whitespace-nowrap"
+                >
+                  {recapPdfBusy ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Download className="h-3.5 w-3.5" />
+                  )}
+                  <span>Download PDF ({filteredChangeRecapEntries.length})</span>
+                </button>
+              )}
+            </div>
+
+            {recapFeedback && (
+              <div
+                className={`mx-5 mt-3 rounded-xl border px-3 py-2 text-xs font-medium ${
+                  recapFeedback.type === 'success'
+                    ? 'border-teal-200 bg-teal-50 text-teal-900'
+                    : 'border-rose-200 bg-rose-50 text-rose-900'
+                }`}
+              >
+                {recapFeedback.text}
+              </div>
+            )}
+
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {recapSubMode === 'list' && (
+                <div className="space-y-3">
+                  {/* Filter & Search */}
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <div className="relative flex-1">
+                      <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="text"
+                        value={recapQuery}
+                        onChange={(e) => setRecapQuery(e.target.value)}
+                        placeholder="Cari nomor urut, nama KPM lama/baru, item, keterangan..."
+                        className="min-h-[38px] w-full rounded-xl border border-slate-200 bg-slate-50 pl-8 pr-3 text-xs text-slate-800 focus:border-teal-600 focus:bg-white focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {(
+                      [
+                        { key: 'all', label: `Semua (${recapCounts.total})` },
+                        { key: 'kpm_replaced', label: `Ganti KPM (${recapCounts.kpmReplaced})` },
+                        { key: 'item_changed', label: `Ubah Item (${recapCounts.itemChanged})` },
+                        { key: 'kpm_vacated', label: `KPM Keluar (${recapCounts.kpmVacated})` },
+                      ] as const
+                    ).map((tab) => (
+                      <button
+                        key={tab.key}
+                        type="button"
+                        onClick={() => setRecapKindFilter(tab.key)}
+                        className={`rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                          recapKindFilter === tab.key
+                            ? 'bg-teal-50 text-teal-800 ring-1 ring-teal-300'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200/70'
+                        }`}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {filteredChangeRecapEntries.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 px-4 py-10 text-center">
+                      <p className="text-xs font-semibold text-slate-700">
+                        Belum ada catatan perubahan sesuai filter ini.
+                      </p>
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        Pergantian KPM, perubahan item bantuan, maupun KPM keluar otomatis tercatat di sini.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-slate-200 rounded-2xl border border-slate-200">
+                      {filteredChangeRecapEntries.map((entry) => {
+                        const isStoredEntry =
+                          !entry.id.startsWith('derived-empty-') &&
+                          !entry.id.startsWith('derived-audit-');
+                        const slotBadge =
+                          entry.slotNumber && entry.slotNumber > 0
+                            ? `#${String(entry.slotNumber).padStart(2, '0')}`
+                            : '—';
+                        const kindTitle =
+                          entry.kind === 'kpm_replaced'
+                            ? 'Pergantian KPM'
+                            : entry.kind === 'item_changed'
+                              ? 'Pergantian Item'
+                              : entry.kind === 'kpm_vacated'
+                                ? 'KPM Keluar (Kosong)'
+                                : 'KPM Masuk';
+                        const kindClass =
+                          entry.kind === 'kpm_replaced'
+                            ? 'bg-teal-50 text-teal-800 border-teal-200'
+                            : entry.kind === 'item_changed'
+                              ? 'bg-blue-50 text-blue-800 border-blue-200'
+                              : entry.kind === 'kpm_vacated'
+                                ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                : 'bg-emerald-50 text-emerald-800 border-emerald-200';
+
+                        return (
+                          <div key={entry.id} className="space-y-2 p-3.5 text-xs">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="rounded-lg bg-slate-900 px-2 py-0.5 font-mono text-[11px] font-bold text-white tabular-nums">
+                                  {slotBadge}
+                                </span>
+                                <span
+                                  className={`rounded-lg border px-2 py-0.5 text-[11px] font-semibold ${kindClass}`}
+                                >
+                                  {kindTitle}
+                                </span>
+                                {entry.source === 'manual' && (
+                                  <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                                    Manual
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-[11px] text-slate-500 tabular-nums">
+                                {formatUploadDateTime(entry.timestamp)} · {entry.actorName}
+                              </span>
+                            </div>
+
+                            {entry.kind === 'kpm_replaced' && (
+                              <div className="grid grid-cols-1 gap-2 rounded-xl bg-slate-50 p-2.5 sm:grid-cols-2">
+                                <div>
+                                  <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                                    KPM Lama (Sebelum)
+                                  </p>
+                                  <p className="mt-0.5 font-semibold text-slate-800">
+                                    {entry.oldKpmName || '-'}
+                                  </p>
+                                  <p className="text-[11px] text-slate-500 tabular-nums">
+                                    {entry.oldNik ? `NIK ${entry.oldNik}` : 'NIK -'}
+                                    {entry.oldItem ? ` · ${entry.oldItem}` : ''}
+                                    {entry.oldKelurahan ? ` · ${entry.oldKelurahan}` : ''}
+                                  </p>
+                                </div>
+                                <div className="sm:border-l sm:border-slate-200 sm:pl-3">
+                                  <p className="text-[10px] font-bold uppercase tracking-wide text-teal-700">
+                                    KPM Baru (Pengganti)
+                                  </p>
+                                  <p className="mt-0.5 font-bold text-teal-950">
+                                    {entry.newKpmName || '-'}
+                                  </p>
+                                  <p className="text-[11px] text-teal-800/80 tabular-nums">
+                                    {entry.newNik ? `NIK ${entry.newNik}` : 'NIK -'}
+                                    {entry.newItem ? ` · ${entry.newItem}` : ''}
+                                    {entry.newKelurahan ? ` · ${entry.newKelurahan}` : ''}
+                                  </p>
+                                </div>
+                              </div>
+                            )}
+
+                            {entry.kind === 'item_changed' && (
+                              <div className="rounded-xl bg-slate-50 p-2.5">
+                                <p className="font-semibold text-slate-900">
+                                  {entry.oldKpmName || entry.newKpmName || '-'}
+                                  {entry.oldNik ? ` · NIK ${entry.oldNik}` : ''}
+                                </p>
+                                <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
+                                  <span className="rounded bg-white px-1.5 py-0.5 font-mono text-slate-500 line-through border border-slate-200">
+                                    {entry.oldItem || '-'}
+                                  </span>
+                                  <span className="text-slate-400">→</span>
+                                  <span className="rounded bg-blue-100 px-1.5 py-0.5 font-mono font-bold text-blue-900">
+                                    {entry.newItem || '-'}
+                                  </span>
+                                </p>
+                              </div>
+                            )}
+
+                            {(entry.kind === 'kpm_vacated' || entry.kind === 'kpm_added') && (
+                              <div className="rounded-xl bg-slate-50 p-2.5">
+                                <p className="font-semibold text-slate-900">
+                                  {entry.kind === 'kpm_vacated'
+                                    ? `${entry.oldKpmName || '-'} → Baris Kosong`
+                                    : `Slot Baru → ${entry.newKpmName || '-'}`}
+                                </p>
+                                <p className="mt-0.5 text-[11px] text-slate-500 tabular-nums">
+                                  {(entry.oldNik || entry.newNik) &&
+                                    `NIK ${entry.oldNik || entry.newNik} · `}
+                                  {entry.oldItem || entry.newItem || 'Tanpa Item'}
+                                </p>
+                              </div>
+                            )}
+
+                            {/* Keterangan + Edit/Delete untuk entri tersimpan */}
+                            {editingReasonId === entry.id ? (
+                              <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                                <input
+                                  type="text"
+                                  value={editingReasonText}
+                                  onChange={(e) => setEditingReasonText(e.target.value)}
+                                  placeholder="Tulis keterangan alasan perubahan..."
+                                  className="min-h-[34px] flex-1 rounded-lg border border-teal-400 px-2.5 text-xs text-slate-800 focus:outline-none"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onUpdateProposalChangeReason?.(entry.id, editingReasonText);
+                                    setEditingReasonId(null);
+                                  }}
+                                  className="min-h-[34px] rounded-lg bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800"
+                                >
+                                  Simpan
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingReasonId(null)}
+                                  className="min-h-[34px] rounded-lg border border-slate-200 px-2.5 text-xs text-slate-600 hover:bg-slate-50"
+                                >
+                                  Batal
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="text-[11px] text-slate-600">
+                                  <span className="font-semibold text-slate-700">Ket:</span>{' '}
+                                  {entry.reason || '—'}
+                                </p>
+                                {isStoredEntry && canUpdate && !isOffline && (
+                                  <div className="flex items-center gap-1.5">
+                                    {onUpdateProposalChangeReason && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setEditingReasonId(entry.id);
+                                          setEditingReasonText(entry.reason || '');
+                                        }}
+                                        className="rounded-lg px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-100"
+                                      >
+                                        Ubah Ket
+                                      </button>
+                                    )}
+                                    {onDeleteProposalChange && (
+                                      <button
+                                        type="button"
+                                        onClick={() => onDeleteProposalChange(entry.id)}
+                                        className="rounded-lg px-2 py-1 text-[11px] font-semibold text-rose-600 hover:bg-rose-50"
+                                      >
+                                        Hapus
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {recapSubMode === 'replace' && (
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-teal-200 bg-teal-50/60 px-3.5 py-2.5 text-xs text-teal-950">
+                    Ganti KPM secara langsung di slot nomor urut yang sama. Nomor urut BAST tidak akan bergeser dan pergantian otomatis masuk ke Rekap Perubahan.
+                  </div>
+
+                  {/* Step 1: Pilih KPM Lama */}
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-800">
+                      1. Pilih KPM yang Diganti (Dari Proposal Ini)
+                    </label>
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="text"
+                        value={replaceOldQuery}
+                        onChange={(e) => setReplaceOldQuery(e.target.value)}
+                        placeholder="Cari nomor urut atau nama KPM lama..."
+                        className="min-h-[36px] w-full rounded-xl border border-slate-200 bg-slate-50 pl-8 pr-3 text-xs focus:border-teal-600 focus:bg-white focus:outline-none"
+                      />
+                    </div>
+                    <div className="max-h-40 divide-y divide-slate-100 overflow-y-auto rounded-xl border border-slate-200">
+                      {replaceOldOptions.map(({ record, displaySeq }) => {
+                        const active = replaceOldKpmId === record.id;
+                        const seqLabel =
+                          displaySeq < 999999 ? String(displaySeq).padStart(2, '0') : '--';
+                        return (
+                          <button
+                            key={record.id}
+                            type="button"
+                            onClick={() => setReplaceOldKpmId(record.id)}
+                            className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs transition-colors ${
+                              active ? 'bg-teal-50 font-semibold text-teal-950' : 'hover:bg-slate-50'
+                            }`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <span className="mr-2 font-mono font-bold text-teal-800">
+                                #{seqLabel}
+                              </span>
+                              <span>{record.nama}</span>
+                              <span className="ml-1.5 text-[11px] text-slate-500">
+                                ({record.item || '-'}) · {record.kelurahan}
+                              </span>
+                            </div>
+                            {active && <Check className="h-4 w-4 shrink-0 text-teal-700" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Step 2: Pilih KPM Pengganti dari Database */}
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-800">
+                      2. Pilih KPM Pengganti (Database KPM ·{' '}
+                      {proposalAreaScope.hasScope ? proposalAreaScope.scopeLabel : 'Semua Wilayah'})
+                    </label>
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="text"
+                        value={replaceNewQuery}
+                        onChange={(e) => setReplaceNewQuery(e.target.value)}
+                        placeholder="Cari nama, NIK, atau kelurahan KPM pengganti..."
+                        className="min-h-[36px] w-full rounded-xl border border-slate-200 bg-slate-50 pl-8 pr-3 text-xs focus:border-teal-600 focus:bg-white focus:outline-none"
+                      />
+                    </div>
+                    <div className="max-h-44 divide-y divide-slate-100 overflow-y-auto rounded-xl border border-slate-200">
+                      {replaceNewCandidates.length === 0 ? (
+                        <p className="px-3 py-6 text-center text-xs text-slate-500">
+                          Tidak ada KPM berstatus Database yang cocok di wilayah proposal ini.
+                        </p>
+                      ) : (
+                        replaceNewCandidates.slice(0, 50).map((cand) => {
+                          const active = replaceNewKpmId === cand.id;
+                          const dom = resolveKpmDomicile(cand, allProposals, wilayahList);
+                          return (
+                            <button
+                              key={cand.id}
+                              type="button"
+                              onClick={() => setReplaceNewKpmId(cand.id)}
+                              className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs transition-colors ${
+                                active
+                                  ? 'bg-teal-50 font-semibold text-teal-950'
+                                  : 'hover:bg-slate-50'
+                              }`}
+                            >
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate font-semibold text-slate-900">{cand.nama}</p>
+                                <p className="truncate text-[11px] text-slate-500 tabular-nums">
+                                  {cand.item || 'Tanpa Item'} · {formatNikDisplay(cand.nikKtp)}
+                                  {dom.kelurahan ? ` · ${dom.kelurahan}` : ''}
+                                </p>
+                              </div>
+                              {active && <Check className="h-4 w-4 shrink-0 text-teal-700" />}
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Step 3: Opsi Tujuan & Keterangan */}
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">
+                        KPM Lama Dipindahkan Ke
+                      </label>
+                      <select
+                        value={replaceDestination}
+                        onChange={(e) =>
+                          setReplaceDestination(e.target.value as 'database' | 'rejected')
+                        }
+                        className="min-h-[38px] w-full rounded-xl border border-slate-200 bg-white px-3 text-xs text-slate-800 focus:border-teal-600 focus:outline-none"
+                      >
+                        <option value="database">Database KPM (Menunggu)</option>
+                        <option value="rejected">Arsip Berkas Ditolak</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">
+                        Item Bantuan KPM Pengganti
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setReplaceFollowSlotItem((prev) => !prev)}
+                        className={`flex min-h-[38px] w-full items-center justify-between rounded-xl border px-3 text-xs font-semibold ${
+                          replaceFollowSlotItem
+                            ? 'border-teal-600 bg-teal-50 text-teal-900'
+                            : 'border-slate-200 bg-white text-slate-700'
+                        }`}
+                      >
+                        <span>
+                          {replaceFollowSlotItem
+                            ? 'Ikuti Item KPM Lama (Slot)'
+                            : 'Pakai Item Asli Pengganti'}
+                        </span>
+                        {replaceFollowSlotItem && <Check className="h-3.5 w-3.5 text-teal-700" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">
+                      Alasan / Keterangan Pergantian (Opsional)
+                    </label>
+                    <input
+                      type="text"
+                      value={replaceReason}
+                      onChange={(e) => setReplaceReason(e.target.value)}
+                      placeholder="cth: Mengundurkan diri / Pindah domisili / Tidak hadir verifikasi"
+                      className="min-h-[38px] w-full rounded-xl border border-slate-200 px-3 text-xs text-slate-800 focus:border-teal-600 focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      disabled={replaceBusy}
+                      onClick={() => setRecapSubMode('list')}
+                      className="min-h-[42px] flex-1 rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="button"
+                      disabled={replaceBusy || !replaceOldKpmId || !replaceNewKpmId}
+                      onClick={() => void handleSubmitReplaceKpm()}
+                      className="inline-flex min-h-[42px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-bold text-white hover:bg-teal-800 disabled:opacity-50"
+                    >
+                      {replaceBusy ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <ArrowRightLeft className="h-3.5 w-3.5" />
+                      )}
+                      <span>{replaceBusy ? 'Memproses...' : 'Simpan Pergantian'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {recapSubMode === 'manual' && (
+                <div className="space-y-3">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs text-slate-600">
+                    Catat riwayat pergantian KPM atau perubahan item secara manual (misalnya dari catatan berkas sebelum masuk sistem) agar ikut tercetak dalam PDF Rekap Perubahan.
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">
+                        Jenis Perubahan
+                      </label>
+                      <select
+                        value={manualKind}
+                        onChange={(e) => setManualKind(e.target.value as ProposalChangeKind)}
+                        className="min-h-[38px] w-full rounded-xl border border-slate-200 bg-white px-3 text-xs text-slate-800 focus:border-teal-600 focus:outline-none"
+                      >
+                        <option value="kpm_replaced">Pergantian KPM (Lama → Baru)</option>
+                        <option value="item_changed">Pergantian Item Bantuan</option>
+                        <option value="kpm_vacated">KPM Keluar / Dikosongkan</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">
+                        Nomor Urut Proposal (Opsional)
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={200}
+                        value={manualSlotNumber}
+                        onChange={(e) => setManualSlotNumber(e.target.value)}
+                        placeholder="cth: 4"
+                        className="min-h-[38px] w-full rounded-xl border border-slate-200 px-3 text-xs text-slate-800 focus:border-teal-600 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+                    <div className="sm:col-span-2">
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">
+                        {manualKind === 'item_changed' ? 'Nama KPM' : 'Nama KPM Lama'}
+                      </label>
+                      <input
+                        type="text"
+                        value={manualOldName}
+                        onChange={(e) => setManualOldName(e.target.value)}
+                        placeholder="cth: USMAN"
+                        className="min-h-[38px] w-full rounded-xl border border-slate-200 px-3 text-xs focus:border-teal-600 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">
+                        Item Lama
+                      </label>
+                      <input
+                        type="text"
+                        value={manualOldItem}
+                        onChange={(e) => setManualOldItem(e.target.value)}
+                        placeholder="cth: KPR"
+                        className="min-h-[38px] w-full rounded-xl border border-slate-200 px-3 text-xs uppercase focus:border-teal-600 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  {manualKind !== 'kpm_vacated' && (
+                    <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+                      {manualKind === 'kpm_replaced' && (
+                        <div className="sm:col-span-2">
+                          <label className="mb-1 block text-xs font-semibold text-slate-700">
+                            Nama KPM Baru (Pengganti)
+                          </label>
+                          <input
+                            type="text"
+                            value={manualNewName}
+                            onChange={(e) => setManualNewName(e.target.value)}
+                            placeholder="cth: AHMAD YANI"
+                            className="min-h-[38px] w-full rounded-xl border border-slate-200 px-3 text-xs focus:border-teal-600 focus:outline-none"
+                          />
+                        </div>
+                      )}
+                      <div className={manualKind === 'item_changed' ? 'sm:col-span-3' : ''}>
+                        <label className="mb-1 block text-xs font-semibold text-slate-700">
+                          Item Baru
+                        </label>
+                        <input
+                          type="text"
+                          value={manualNewItem}
+                          onChange={(e) => setManualNewItem(e.target.value)}
+                          placeholder="cth: OV"
+                          className="min-h-[38px] w-full rounded-xl border border-slate-200 px-3 text-xs uppercase focus:border-teal-600 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-700">
+                      Keterangan / Alasan Perubahan
+                    </label>
+                    <input
+                      type="text"
+                      value={manualReason}
+                      onChange={(e) => setManualReason(e.target.value)}
+                      placeholder="cth: Pengajuan pergantian sebelum cetak BAST"
+                      className="min-h-[38px] w-full rounded-xl border border-slate-200 px-3 text-xs focus:border-teal-600 focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setRecapSubMode('list')}
+                      className="min-h-[42px] flex-1 rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSubmitManualProposalChange}
+                      className="min-h-[42px] flex-1 rounded-xl bg-teal-700 px-4 text-xs font-bold text-white hover:bg-teal-800"
+                    >
+                      Tambahkan ke Rekap
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Download Daftar Absensi (Absen Dinas 2 Tipe + Absensi Kegiatan) */}
       {absensiModalOpen && (
         <div
           role="dialog"
@@ -3704,18 +5038,18 @@ export function ProposalDetailView({
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md space-y-4 rounded-t-3xl border border-slate-200 bg-white p-5 shadow-2xl sm:rounded-3xl"
+            className="max-h-[90vh] w-full max-w-lg space-y-4 overflow-y-auto rounded-t-3xl border border-slate-200 bg-white p-5 shadow-2xl sm:rounded-3xl"
           >
             <div className="mx-auto h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-start gap-2.5">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-indigo-700 border border-indigo-200/70">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-indigo-200/70 bg-indigo-50 text-indigo-700">
                   <ClipboardCheck className="h-5 w-5" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold text-slate-900">Download Absensi (PDF)</h3>
+                  <h3 className="text-sm font-bold text-slate-900">Download Absensi (PDF F4)</h3>
                   <p className="mt-0.5 text-xs text-slate-500">
-                    Format Dinas Sosial Prov. Kalbar (F4 · Logo Provinsi)
+                    Pilih tipe format Absen Dinas atau Absensi Kegiatan dengan kop logo
                   </p>
                 </div>
               </div>
@@ -3729,114 +5063,262 @@ export function ProposalDetailView({
               </button>
             </div>
 
-            <div className="space-y-3">
-              <div>
-                <label className="mb-1.5 block text-xs font-semibold text-slate-700">
-                  Pilih Buku Jadwal (Sumber Tanggal, Hari &amp; Pukul)
-                </label>
-                <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-                  {effectiveScheduleBooks.map((book) => {
-                    const hasMatch = Boolean(
-                      resolveScheduleForProposalInBook(
-                        proposal.namaProposal,
-                        proposal.tahun,
-                        schedules,
-                        book.id
-                      )
-                    );
-                    const active = absensiBookId === book.id;
-                    return (
-                      <button
-                        key={book.id}
-                        type="button"
-                        onClick={() => applyAbsensiBookSchedule(book.id)}
-                        className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-left text-xs transition-all ${
-                          active
-                            ? 'border-indigo-600 bg-indigo-50 font-semibold text-indigo-900 ring-1 ring-indigo-600/20'
-                            : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
-                        }`}
-                      >
-                        <span className="truncate">{book.title}</span>
-                        <span
-                          className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold ${
-                            hasMatch
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-slate-100 text-slate-500'
-                          }`}
-                        >
-                          {hasMatch ? 'Ada' : 'Kosong'}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-                <p
-                  className={`mt-1.5 text-[11px] font-medium ${
-                    selectedAbsensiBookSchedule ? 'text-emerald-700' : 'text-amber-700'
-                  }`}
-                >
-                  {selectedAbsensiBookSchedule
-                    ? `Terisi otomatis dari jadwal proposal di buku "${
-                        effectiveScheduleBooks.find((b) => b.id === absensiBookId)?.title ||
-                        'Terpilih'
-                      }".`
-                    : 'Belum ada agenda proposal ini di buku terpilih — bisa diisi manual atau dikosongkan.'}
-                </p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2.5">
-                <div>
-                  <label className="mb-1 block text-[11px] font-semibold text-slate-600">
-                    Tanggal
-                  </label>
-                  <input
-                    type="text"
-                    value={absensiTanggal}
-                    onChange={(e) => setAbsensiTanggal(e.target.value)}
-                    placeholder="cth: 23 November 2026"
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs text-slate-800 focus:border-indigo-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-[11px] font-semibold text-slate-600">
-                    Hari
-                  </label>
-                  <input
-                    type="text"
-                    value={absensiHari}
-                    onChange={(e) => setAbsensiHari(e.target.value)}
-                    placeholder="cth: Senin"
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs text-slate-800 focus:border-indigo-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-[11px] font-semibold text-slate-600">
-                    Pukul
-                  </label>
-                  <input
-                    type="text"
-                    value={absensiPukul}
-                    onChange={(e) => setAbsensiPukul(e.target.value)}
-                    placeholder="cth: 09:00 WIB"
-                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs text-slate-800 focus:border-indigo-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-[11px] font-semibold text-slate-600">
-                    Lokasi Kegiatan (Nama Proposal)
-                  </label>
-                  <input
-                    type="text"
-                    value={absensiLokasiKegiatan}
-                    onChange={(e) => setAbsensiLokasiKegiatan(e.target.value)}
-                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-800 focus:border-indigo-500 focus:bg-white focus:outline-none"
-                  />
-                </div>
+            {/* Pilihan 3 Tipe Format Absen */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-slate-700">
+                Pilih Jenis Format Absensi
+              </label>
+              <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
+                {(
+                  [
+                    {
+                      id: 'daftar_hadir',
+                      title: 'Daftar Hadir',
+                      sub: 'Tanpa Yang Menyerahkan',
+                    },
+                    {
+                      id: 'makan_minum',
+                      title: 'Daftar Makan & Minum',
+                      sub: 'Dengan Yang Menyerahkan & NIP',
+                    },
+                    {
+                      id: 'kegiatan',
+                      title: 'Absensi Kegiatan',
+                      sub: 'Logo Provinsi & Jadwal',
+                    },
+                  ] as const
+                ).map((opt) => {
+                  const active = absensiVariant === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setAbsensiVariant(opt.id)}
+                      className={`rounded-xl border px-3 py-2 text-left transition-all ${
+                        active
+                          ? 'border-indigo-600 bg-indigo-50 text-indigo-950 ring-1 ring-indigo-600/20'
+                          : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
+                      }`}
+                    >
+                      <p className="text-xs font-bold leading-snug">{opt.title}</p>
+                      <p className="mt-0.5 text-[10px] text-slate-500 leading-tight">{opt.sub}</p>
+                    </button>
+                  );
+                })}
               </div>
             </div>
+
+            {absensiVariant === 'daftar_hadir' || absensiVariant === 'makan_minum' ? (
+              <div className="space-y-3">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-center">
+                  <p className="text-[11px] font-bold leading-snug text-slate-900 uppercase">
+                    {absensiVariant === 'makan_minum'
+                      ? 'DAFTAR MAKAN MINUM PESERTA PENERIMA BANTUAN PERALATAN KERJA DI'
+                      : 'DAFTAR HADIR PESERTA PENERIMA BANTUAN PERALATAN KERJA DI'}{' '}
+                    {absensiLokasiJudul || proposal.namaProposal.toUpperCase()}
+                  </p>
+                  <p className="mt-1 text-[10.5px] text-slate-500">
+                    Kolom: NO · NAMA · NIK · ALAMAT · TANDA TANGAN
+                    {absensiVariant === 'makan_minum'
+                      ? ' · + Blok YANG MENYERAHKAN & NIP di akhir'
+                      : ' · Tanpa tanda tangan Yang Menyerahkan'}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+                  <div className="sm:col-span-2">
+                    <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                      Lokasi pada Judul
+                    </label>
+                    <input
+                      type="text"
+                      value={absensiLokasiJudul}
+                      onChange={(e) => setAbsensiLokasiJudul(e.target.value)}
+                      placeholder="cth: KECAMATAN PONTIANAK BARAT KOTA PONTIANAK"
+                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs uppercase text-slate-800 focus:border-indigo-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                      Baris Kosong Tambahan
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={30}
+                      value={absensiExtraBlankRows}
+                      onChange={(e) => setAbsensiExtraBlankRows(e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs text-slate-800 focus:border-indigo-500 focus:outline-none tabular-nums"
+                    />
+                  </div>
+                </div>
+
+                {absensiVariant === 'makan_minum' && (
+                  <div className="space-y-2.5 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[11px] font-bold text-slate-800">
+                        Penandatangan "YANG MENYERAHKAN" (Opsional)
+                      </p>
+                      {pejabatList.length > 0 && (
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            const found = pejabatList.find((p) => p.id === e.target.value);
+                            if (found) {
+                              setAbsensiHandoverName(found.nama);
+                              setAbsensiHandoverNip(found.nip || '');
+                            }
+                          }}
+                          className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 focus:border-indigo-500 focus:outline-none"
+                        >
+                          <option value="">Ambil dari Data Pejabat...</option>
+                          {pejabatList.map((pj) => (
+                            <option key={pj.id} value={pj.id}>
+                              {pj.nama}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <div>
+                        <label className="mb-1 block text-[10.5px] font-semibold text-slate-600">
+                          Nama (Kosongkan agar cetak "( ..... )")
+                        </label>
+                        <input
+                          type="text"
+                          value={absensiHandoverName}
+                          onChange={(e) => setAbsensiHandoverName(e.target.value)}
+                          placeholder="Kosongkan bila diisi tulisan tangan"
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-800 focus:border-indigo-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-[10.5px] font-semibold text-slate-600">
+                          NIP (Kosongkan agar cetak "NIP.")
+                        </label>
+                        <input
+                          type="text"
+                          value={absensiHandoverNip}
+                          onChange={(e) => setAbsensiHandoverNip(e.target.value)}
+                          placeholder="cth: 19750101 200501 1 001"
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-800 focus:border-indigo-500 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div>
+                  <label className="mb-1.5 block text-xs font-semibold text-slate-700">
+                    Pilih Buku Jadwal (Sumber Tanggal, Hari &amp; Pukul)
+                  </label>
+                  <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                    {effectiveScheduleBooks.map((book) => {
+                      const hasMatch = Boolean(
+                        resolveScheduleForProposalInBook(
+                          proposal.namaProposal,
+                          proposal.tahun,
+                          schedules,
+                          book.id
+                        )
+                      );
+                      const active = absensiBookId === book.id;
+                      return (
+                        <button
+                          key={book.id}
+                          type="button"
+                          onClick={() => applyAbsensiBookSchedule(book.id)}
+                          className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-left text-xs transition-all ${
+                            active
+                              ? 'border-indigo-600 bg-indigo-50 font-semibold text-indigo-900 ring-1 ring-indigo-600/20'
+                              : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
+                          }`}
+                        >
+                          <span className="truncate">{book.title}</span>
+                          <span
+                            className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                              hasMatch
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-slate-100 text-slate-500'
+                            }`}
+                          >
+                            {hasMatch ? 'Ada' : 'Kosong'}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p
+                    className={`mt-1.5 text-[11px] font-medium ${
+                      selectedAbsensiBookSchedule ? 'text-emerald-700' : 'text-amber-700'
+                    }`}
+                  >
+                    {selectedAbsensiBookSchedule
+                      ? `Terisi otomatis dari jadwal proposal di buku "${
+                          effectiveScheduleBooks.find((b) => b.id === absensiBookId)?.title ||
+                          'Terpilih'
+                        }".`
+                      : 'Belum ada agenda proposal ini di buku terpilih — bisa diisi manual atau dikosongkan.'}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                      Tanggal
+                    </label>
+                    <input
+                      type="text"
+                      value={absensiTanggal}
+                      onChange={(e) => setAbsensiTanggal(e.target.value)}
+                      placeholder="cth: 23 November 2026"
+                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs text-slate-800 focus:border-indigo-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                      Hari
+                    </label>
+                    <input
+                      type="text"
+                      value={absensiHari}
+                      onChange={(e) => setAbsensiHari(e.target.value)}
+                      placeholder="cth: Senin"
+                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs text-slate-800 focus:border-indigo-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                      Pukul
+                    </label>
+                    <input
+                      type="text"
+                      value={absensiPukul}
+                      onChange={(e) => setAbsensiPukul(e.target.value)}
+                      placeholder="cth: 09:00 WIB"
+                      className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs text-slate-800 focus:border-indigo-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                      Lokasi Kegiatan (Nama Proposal)
+                    </label>
+                    <input
+                      type="text"
+                      value={absensiLokasiKegiatan}
+                      onChange={(e) => setAbsensiLokasiKegiatan(e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-800 focus:border-indigo-500 focus:bg-white focus:outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="flex items-center gap-2.5 pt-1">
               <button
@@ -3851,14 +5333,22 @@ export function ProposalDetailView({
                 type="button"
                 disabled={absensiBusy}
                 onClick={() => void handleExportProposalAbsensi()}
-                className="inline-flex min-h-[42px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-indigo-600 px-4 text-xs font-bold text-white hover:bg-indigo-700 disabled:opacity-60"
+                className="inline-flex min-h-[42px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-indigo-600 px-4 text-xs font-bold text-white hover:bg-indigo-700 disabled:opacity-60 whitespace-nowrap"
               >
                 {absensiBusy ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : (
                   <Download className="h-3.5 w-3.5" />
                 )}
-                <span>{absensiBusy ? 'Menyiapkan PDF...' : 'Download PDF Absensi'}</span>
+                <span>
+                  {absensiBusy
+                    ? 'Menyiapkan PDF...'
+                    : absensiVariant === 'makan_minum'
+                      ? 'Download Makan & Minum'
+                      : absensiVariant === 'daftar_hadir'
+                        ? 'Download Daftar Hadir'
+                        : 'Download PDF Absensi'}
+                </span>
               </button>
             </div>
           </div>

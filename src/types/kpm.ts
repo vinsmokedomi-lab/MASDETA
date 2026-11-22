@@ -673,3 +673,33 @@ export interface ProposalStyleUsageRecord {
   createdAt: string;
   createdBy?: string;
 }
+
+export type ProposalChangeKind =
+  | 'kpm_replaced'
+  | 'item_changed'
+  | 'kpm_vacated'
+  | 'kpm_added';
+
+export interface ProposalChangeLogEntry {
+  id: string;
+  proposalId: string;
+  proposalName: string;
+  tahun: string;
+  slotNumber: number | null;
+  kind: ProposalChangeKind;
+  oldKpmId?: string;
+  oldKpmName?: string;
+  oldNik?: string;
+  oldItem?: string;
+  oldKelurahan?: string;
+  newKpmId?: string;
+  newKpmName?: string;
+  newNik?: string;
+  newItem?: string;
+  newKelurahan?: string;
+  reason?: string;
+  source?: 'auto' | 'manual' | 'reconcile';
+  actorName: string;
+  timestamp: string;
+}
+

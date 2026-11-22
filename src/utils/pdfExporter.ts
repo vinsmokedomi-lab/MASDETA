@@ -16,6 +16,7 @@ import {
   KpmDocumentFile,
   KpmRecord,
   ProposalBastMap,
+  ProposalChangeLogEntry,
   ProposalRecord,
   ProposalSlotMap,
   ProposalTipe,
@@ -8225,6 +8226,804 @@ export async function exportAbsensiDinsosToPdf(
     totalRows: totalRowsRendered,
   };
 }
+
+export interface ExportProposalChangeRecapPdfOptions {
+  proposal: ProposalRecord;
+  changes: ProposalChangeLogEntry[];
+  items?: ItemBantuan[];
+  wilayahList?: WilayahKabKota[];
+  bastConfig?: BastTemplateConfig;
+  reportTemplate?: ReportTemplateConfig;
+  totalActiveKpm?: number;
+  emptySlotsCount?: number;
+  filterLabel?: string;
+  fileName?: string;
+}
+
+function formatChangeTimestampId(iso: string): string {
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) return iso || '-';
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'Mei',
+    'Jun',
+    'Jul',
+    'Agu',
+    'Sep',
+    'Okt',
+    'Nov',
+    'Des',
+  ];
+  const dd = String(dt.getDate()).padStart(2, '0');
+  const mm = months[dt.getMonth()] || 'Jan';
+  const yy = dt.getFullYear();
+  const hh = String(dt.getHours()).padStart(2, '0');
+  const mi = String(dt.getMinutes()).padStart(2, '0');
+  return `${dd} ${mm} ${yy}, ${hh}:${mi}`;
+}
+
+export async function exportProposalChangeRecapToPdf(
+  options: ExportProposalChangeRecapPdfOptions
+): Promise<{ savedFileName: string; openedNative: boolean; totalChanges: number }> {
+  const {
+    proposal,
+    changes,
+    items = [],
+    wilayahList = INITIAL_WILAYAH_LIST,
+    bastConfig = DEFAULT_BAST_TEMPLATE,
+    reportTemplate,
+    totalActiveKpm = 0,
+    emptySlotsCount = 0,
+    filterLabel,
+    fileName,
+  } = options;
+
+  const pageW = F4_PAPER_WIDTH_MM; // 216 mm
+  const pageH = 330; // F4 Folio 216 x 330 mm
+  const marginX = 15;
+  const contentW = pageW - marginX * 2; // 186 mm
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: [pageW, pageH],
+    compress: true,
+  }) as AutoTableDoc;
+
+  const kopConfig = resolveEffectiveBastConfig(bastConfig, undefined, undefined, reportTemplate);
+  const logoUrl = (kopConfig.kopLogoDataUrl || '').trim() || DEFAULT_KOP_LOGO_URL;
+  const loadedLogo = logoUrl ? await loadSingleImageForPdf(logoUrl) : null;
+
+  // --- Kop Surat Dinas Sosial ---
+  let y = 12;
+  const logoBoxW = 16;
+  if (loadedLogo) {
+    const ratio =
+      loadedLogo.width > 0 && loadedLogo.height > 0 ? loadedLogo.width / loadedLogo.height : 0.85;
+    let drawW = 14;
+    let drawH = drawW / ratio;
+    if (drawH > 18) {
+      drawH = 18;
+      drawW = drawH * ratio;
+    }
+    try {
+      doc.addImage(loadedLogo.dataUrl, loadedLogo.format, marginX + (logoBoxW - drawW) / 2, y, drawW, drawH);
+    } catch {
+      // Abaikan bila gagal render gambar
+    }
+  }
+
+  const textCenterX = loadedLogo ? marginX + logoBoxW + (contentW - logoBoxW) / 2 : pageW / 2;
+  doc.setTextColor(15, 23, 42);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text((kopConfig.orgHeaderLine1 || 'PEMERINTAH PROVINSI KALIMANTAN BARAT').toUpperCase(), textCenterX, y + 4.5, {
+    align: 'center',
+  });
+  doc.setFontSize(13.5);
+  doc.text((kopConfig.orgHeaderLine2 || 'DINAS SOSIAL').toUpperCase(), textCenterX, y + 10, {
+    align: 'center',
+  });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.2);
+  doc.setTextColor(71, 85, 105);
+  const addrParts = [kopConfig.orgAddress1, kopConfig.orgAddress2].filter(Boolean).join(' · ');
+  if (addrParts) {
+    doc.text(addrParts, textCenterX, y + 14.5, { align: 'center' });
+  }
+
+  y += 19;
+  doc.setDrawColor(15, 23, 42);
+  doc.setLineWidth(0.6);
+  doc.line(marginX, y, pageW - marginX, y);
+  doc.setLineWidth(0.2);
+  doc.line(marginX, y + 0.9, pageW - marginX, y + 0.9);
+  y += 7;
+
+  // --- Judul Laporan ---
+  doc.setTextColor(15, 23, 42);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12);
+  doc.text('REKAPITULASI PERUBAHAN DATA PROPOSAL', pageW / 2, y, { align: 'center' });
+  y += 4.8;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(71, 85, 105);
+  doc.text(
+    'Laporan Spesifik Pergantian Penerima Manfaat (KPM) & Perubahan Item Bantuan',
+    pageW / 2,
+    y,
+    { align: 'center' }
+  );
+  y += 6;
+
+  // --- Ringkasan Statistik & Metadata Proposal ---
+  const dom = resolveProposalDomicile(proposal.namaProposal, [proposal], proposal.tahun, wilayahList);
+  const wilayahLabel = [dom.kelurahan, dom.kecamatan, dom.kabKota].filter(Boolean).join(', ') || '-';
+  const quotaTarget = proposal.jumlahKpm ?? 66;
+  const countReplaced = changes.filter((c) => c.kind === 'kpm_replaced').length;
+  const countItemChanged = changes.filter((c) => c.kind === 'item_changed').length;
+  const countVacated = changes.filter((c) => c.kind === 'kpm_vacated').length;
+  const countAdded = changes.filter((c) => c.kind === 'kpm_added').length;
+
+  const summaryParts = [
+    countReplaced > 0 ? `${countReplaced} Pergantian KPM` : '',
+    countItemChanged > 0 ? `${countItemChanged} Pergantian Item` : '',
+    countVacated > 0 ? `${countVacated} KPM Keluar / Kosong` : '',
+    countAdded > 0 ? `${countAdded} KPM Masuk` : '',
+  ].filter(Boolean);
+
+  const metaBoxStartY = y;
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(0.25);
+  doc.roundedRect(marginX, metaBoxStartY, contentW, 24, 1.5, 1.5, 'FD');
+
+  doc.setFontSize(8.5);
+  const leftColX = marginX + 3;
+  const leftValX = marginX + 30;
+  const rightColX = marginX + 98;
+  const rightValX = marginX + 126;
+
+  const drawMetaPair = (lx: number, vx: number, rowY: number, label: string, val: string, maxW: number) => {
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(100, 116, 139);
+    doc.text(label, lx, rowY);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(15, 23, 42);
+    const clipped = doc.splitTextToSize(val || '-', maxW)[0] || '-';
+    doc.text(clipped, vx, rowY);
+  };
+
+  drawMetaPair(leftColX, leftValX, metaBoxStartY + 5.5, 'Nama Proposal', `: ${proposal.namaProposal}`, 64);
+  drawMetaPair(
+    leftColX,
+    leftValX,
+    metaBoxStartY + 11.2,
+    'Tahun / Tipe',
+    `: ${proposal.tahun || '-'} (${proposal.tipe || 'Murni'})`,
+    64
+  );
+  drawMetaPair(leftColX, leftValX, metaBoxStartY + 16.9, 'Wilayah', `: ${wilayahLabel}`, 64);
+
+  drawMetaPair(
+    rightColX,
+    rightValX,
+    metaBoxStartY + 5.5,
+    'KPM / Kuota',
+    `: ${totalActiveKpm} / ${quotaTarget} KPM${emptySlotsCount > 0 ? ` (${emptySlotsCount} Kosong)` : ''}`,
+    57
+  );
+  drawMetaPair(rightColX, rightValX, metaBoxStartY + 11.2, 'No. BAST', `: ${kopConfig.nomorBast || '-'}`, 57);
+  drawMetaPair(
+    rightColX,
+    rightValX,
+    metaBoxStartY + 16.9,
+    'Total Catatan',
+    `: ${changes.length} Perubahan${filterLabel ? ` (${filterLabel})` : ''}`,
+    57
+  );
+
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(71, 85, 105);
+  doc.setFontSize(7.8);
+  const ringkasanText =
+    summaryParts.length > 0 ? `Rincian: ${summaryParts.join(' · ')}` : 'Rincian: Belum ada catatan perubahan';
+  doc.text(ringkasanText, leftColX, metaBoxStartY + 21.8);
+
+  y = metaBoxStartY + 28.5;
+
+  const getItemDisplay = (code?: string) => {
+    const clean = (code || '').trim();
+    if (!clean) return '-';
+    const found = items.find(
+      (it) => it.code.trim().toUpperCase() === clean.toUpperCase() && (!proposal.tahun || it.tahun === proposal.tahun)
+    ) ?? items.find((it) => it.code.trim().toUpperCase() === clean.toUpperCase());
+    return found && found.name !== found.code ? `${found.code} (${found.name})` : clean;
+  };
+
+  const kindLabelMap: Record<ProposalChangeLogEntry['kind'], string> = {
+    kpm_replaced: 'Pergantian\nKPM',
+    item_changed: 'Pergantian\nItem',
+    kpm_vacated: 'KPM Keluar\n(Kosong)',
+    kpm_added: 'KPM Masuk\n(Baru)',
+  };
+
+  const bodyRows = changes.map((entry, idx) => {
+    const slotText =
+      entry.slotNumber && entry.slotNumber > 0
+        ? `#${String(entry.slotNumber).padStart(2, '0')}`
+        : '-';
+    const jenisText = kindLabelMap[entry.kind] || entry.kind;
+
+    let beforeLines: string[] = [];
+    let afterLines: string[] = [];
+
+    if (entry.kind === 'kpm_replaced') {
+      beforeLines = [
+        (entry.oldKpmName || '-').toUpperCase(),
+        entry.oldNik ? `NIK: ${entry.oldNik}` : '',
+        `Item: ${getItemDisplay(entry.oldItem)}`,
+        entry.oldKelurahan ? `Kel. ${entry.oldKelurahan}` : '',
+      ].filter(Boolean);
+      afterLines = [
+        (entry.newKpmName || '-').toUpperCase(),
+        entry.newNik ? `NIK: ${entry.newNik}` : '',
+        `Item: ${getItemDisplay(entry.newItem)}`,
+        entry.newKelurahan ? `Kel. ${entry.newKelurahan}` : '',
+      ].filter(Boolean);
+    } else if (entry.kind === 'item_changed') {
+      const kpmTitle = (entry.oldKpmName || entry.newKpmName || '-').toUpperCase();
+      beforeLines = [
+        kpmTitle,
+        entry.oldNik ? `NIK: ${entry.oldNik}` : '',
+        `Item Lama: ${getItemDisplay(entry.oldItem)}`,
+      ].filter(Boolean);
+      afterLines = [
+        kpmTitle,
+        `Item Baru: ${getItemDisplay(entry.newItem)}`,
+      ].filter(Boolean);
+    } else if (entry.kind === 'kpm_vacated') {
+      beforeLines = [
+        (entry.oldKpmName || '-').toUpperCase(),
+        entry.oldNik ? `NIK: ${entry.oldNik}` : '',
+        `Item: ${getItemDisplay(entry.oldItem)}`,
+        entry.oldKelurahan ? `Kel. ${entry.oldKelurahan}` : '',
+      ].filter(Boolean);
+      afterLines = ['(Baris Kosong — Menunggu Pengganti)'];
+    } else {
+      beforeLines = ['(Slot / Pendaftaran Baru)'];
+      afterLines = [
+        (entry.newKpmName || '-').toUpperCase(),
+        entry.newNik ? `NIK: ${entry.newNik}` : '',
+        `Item: ${getItemDisplay(entry.newItem)}`,
+        entry.newKelurahan ? `Kel. ${entry.newKelurahan}` : '',
+      ].filter(Boolean);
+    }
+
+    const noteLines = [
+      formatChangeTimestampId(entry.timestamp),
+      entry.actorName ? `Oleh: ${entry.actorName}` : '',
+      entry.reason ? `Ket: ${entry.reason}` : '',
+    ].filter(Boolean);
+
+    return [
+      String(idx + 1),
+      slotText,
+      jenisText,
+      beforeLines.join('\n'),
+      afterLines.join('\n'),
+      noteLines.join('\n'),
+    ];
+  });
+
+  if (bodyRows.length === 0) {
+    bodyRows.push([
+      '-',
+      '-',
+      '-',
+      'Belum ada catatan pergantian KPM atau perubahan item pada proposal ini.',
+      '-',
+      '-',
+    ]);
+  }
+
+  autoTable(doc, {
+    startY: y,
+    margin: { top: 16, right: marginX, bottom: 20, left: marginX },
+    head: [
+      [
+        'NO',
+        'NO.\nURUT',
+        'JENIS\nPERUBAHAN',
+        'DATA LAMA (SEBELUM)',
+        'DATA BARU (PENGGANTI / SESUDAH)',
+        'WAKTU & KETERANGAN',
+      ],
+    ],
+    body: bodyRows,
+    theme: 'grid',
+    showHead: 'everyPage',
+    styles: {
+      font: 'helvetica',
+      fontSize: 8.2,
+      textColor: [15, 23, 42],
+      lineColor: [148, 163, 184],
+      lineWidth: 0.2,
+      valign: 'top',
+      cellPadding: { top: 2.2, right: 2.2, bottom: 2.2, left: 2.2 },
+    },
+    headStyles: {
+      fillColor: [15, 118, 110], // teal-700 resmi
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      fontSize: 8,
+      halign: 'center',
+      valign: 'middle',
+      minCellHeight: 9,
+    },
+    alternateRowStyles: {
+      fillColor: [248, 250, 252],
+    },
+    columnStyles: {
+      0: { cellWidth: 9, halign: 'center' },
+      1: { cellWidth: 14, halign: 'center', fontStyle: 'bold' },
+      2: { cellWidth: 25, halign: 'center', fontStyle: 'bold' },
+      3: { cellWidth: 51, halign: 'left' },
+      4: { cellWidth: 51, halign: 'left' },
+      5: { cellWidth: contentW - 9 - 14 - 25 - 51 - 51, halign: 'left', fontSize: 7.7 },
+    },
+    didParseCell: (data) => {
+      if (data.section === 'body' && data.column.index === 2 && changes[data.row.index]) {
+        const kind = changes[data.row.index].kind;
+        if (kind === 'kpm_replaced') {
+          data.cell.styles.textColor = [15, 118, 110];
+        } else if (kind === 'item_changed') {
+          data.cell.styles.textColor = [29, 78, 216];
+        } else if (kind === 'kpm_vacated') {
+          data.cell.styles.textColor = [180, 83, 9];
+        } else {
+          data.cell.styles.textColor = [4, 120, 87];
+        }
+      }
+    },
+  });
+
+  // --- Blok Tanda Tangan di Akhir ---
+  const finalY = doc.lastAutoTable?.finalY ?? y + 30;
+  const sigHeight = 36;
+  let sigY = finalY + 10;
+  if (sigY + sigHeight > pageH - 18) {
+    doc.addPage();
+    sigY = 20;
+  }
+
+  const cityName = (reportTemplate?.city || 'Pontianak').trim() || 'Pontianak';
+  const nowDate = new Date();
+  const monthsLong = [
+    'Januari',
+    'Februari',
+    'Maret',
+    'April',
+    'Mei',
+    'Juni',
+    'Juli',
+    'Agustus',
+    'September',
+    'Oktober',
+    'November',
+    'Desember',
+  ];
+  const datePrintedStr = `${nowDate.getDate()} ${monthsLong[nowDate.getMonth()] || ''} ${nowDate.getFullYear()}`;
+  const sigX = pageW - marginX - 66;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.8);
+  doc.setTextColor(15, 23, 42);
+  doc.text(`${cityName}, ${datePrintedStr}`, sigX, sigY);
+  doc.text(
+    (reportTemplate?.signatoryTitle || 'Koordinator / Penanggung Jawab').trim(),
+    sigX,
+    sigY + 4.8
+  );
+
+  const sigName = (reportTemplate?.signatoryName || '').trim();
+  const sigNip = formatOfficialNipLine(reportTemplate?.signatoryNip);
+  if (sigName) {
+    doc.setFont('helvetica', 'bold');
+    doc.text(sigName, sigX, sigY + 23);
+    doc.setFont('helvetica', 'normal');
+    if (sigNip) {
+      doc.setFontSize(8.2);
+      doc.text(sigNip, sigX, sigY + 27.5);
+    }
+  } else {
+    doc.setDrawColor(100, 116, 139);
+    doc.setLineWidth(0.25);
+    doc.line(sigX, sigY + 23, sigX + 58, sigY + 23);
+  }
+
+  // Footer nomor halaman pada setiap halaman
+  const totalPages = doc.getNumberOfPages();
+  for (let p = 1; p <= totalPages; p += 1) {
+    doc.setPage(p);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      `Rekap Perubahan Proposal · ${proposal.namaProposal} (${proposal.tahun || '-'})`,
+      marginX,
+      pageH - 9
+    );
+    doc.text(`Halaman ${p} dari ${totalPages}`, pageW - marginX, pageH - 9, { align: 'right' });
+  }
+
+  const defaultName = `Rekap_Perubahan_${proposal.tahun || 'Proposal'}_${proposal.namaProposal}`;
+  const saved = await saveOrOpenPdfDocument(doc, fileName || defaultName);
+
+  return {
+    ...saved,
+    totalChanges: changes.length,
+  };
+}
+
+export type AbsenDinasVariant = 'daftar_hadir' | 'makan_minum';
+
+export interface ExportAbsenDinasPesertaPdfOptions {
+  variant: AbsenDinasVariant;
+  records: KpmRecord[];
+  allRecords?: KpmRecord[];
+  proposals: ProposalRecord[];
+  items: ItemBantuan[];
+  wilayahList?: WilayahKabKota[];
+  proposalSlotMap?: ProposalSlotMap;
+  singleProposal?: Pick<ProposalRecord, 'id' | 'namaProposal' | 'tahun'>;
+  extraBlankRows?: number;
+  locationOverride?: string;
+  handoverName?: string;
+  handoverNip?: string;
+  fileName?: string;
+}
+
+export function formatAbsenDinasLocationText(
+  proposalName: string,
+  proposals: ProposalRecord[],
+  tahun?: string,
+  wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST
+): string {
+  const cleanProp = (proposalName || '').trim();
+  const dom = resolveProposalDomicile(cleanProp, proposals, tahun, wilayahList);
+  const kel = (dom.kelurahan || '').trim();
+  const kec = (dom.kecamatan || '').trim();
+  const kota = (dom.kabKota || '').trim();
+
+  const cleanUpper = cleanProp.toUpperCase();
+  const parts: string[] = [];
+
+  if (kel) {
+    parts.push(`KELURAHAN ${kel.toUpperCase()}`);
+  } else if (cleanUpper && !kec) {
+    parts.push(cleanUpper);
+  } else if (cleanUpper && kec && !cleanUpper.includes(kec.toUpperCase())) {
+    parts.push(cleanUpper);
+  }
+
+  if (kec) {
+    parts.push(`KECAMATAN ${kec.toUpperCase()}`);
+  }
+  if (kota) {
+    parts.push(kota.toUpperCase());
+  }
+
+  return parts.join(' ') || cleanUpper || '-';
+}
+
+function formatAbsenDinasAddress(
+  rec: KpmRecord,
+  proposals: ProposalRecord[],
+  wilayahList: WilayahKabKota[]
+): string {
+  const dom = resolveKpmDomicile(rec, proposals, wilayahList);
+  const rawAddr = (rec.alamat || '').trim().toUpperCase();
+
+  const pad3 = (v?: string) => {
+    const t = (v || '').trim();
+    if (!t || t === '-') return '';
+    return /^\d+$/.test(t) ? t.padStart(3, '0') : t.toUpperCase();
+  };
+  const rtStr = pad3(rec.rt);
+  const rwStr = pad3(rec.rw);
+  const rtRwPart =
+    rtStr && rwStr
+      ? `RT ${rtStr} RW ${rwStr}`
+      : rtStr
+        ? `RT ${rtStr}`
+        : rwStr
+          ? `RW ${rwStr}`
+          : '';
+
+  const hasRt = /\bRT\s*\d/i.test(rawAddr);
+  const kelName = (dom.kelurahan || rec.kelurahan || '').trim().toUpperCase();
+  const kecName = (dom.kecamatan || rec.kecamatan || '').trim().toUpperCase();
+  const kotaName = (dom.kabKota || rec.kabKota || '').trim().toUpperCase();
+
+  const tokens: string[] = [];
+  if (rawAddr) tokens.push(rawAddr);
+  if (rtRwPart && !hasRt) tokens.push(rtRwPart);
+  if (kelName && !rawAddr.includes(kelName)) {
+    tokens.push(kelName.startsWith('KELURAHAN') ? kelName : `KELURAHAN ${kelName}`);
+  }
+  if (kecName && !rawAddr.includes(kecName)) {
+    tokens.push(kecName.startsWith('KECAMATAN') ? kecName : `KECAMATAN ${kecName}`);
+  }
+  if (kotaName && !rawAddr.includes(kotaName)) {
+    tokens.push(kotaName);
+  }
+
+  return tokens.join(' ') || '-';
+}
+
+export async function exportAbsenDinasPesertaToPdf(
+  options: ExportAbsenDinasPesertaPdfOptions
+): Promise<{ savedFileName: string; openedNative: boolean; proposalCount: number; totalRows: number }> {
+  const {
+    variant,
+    records,
+    allRecords,
+    proposals,
+    items,
+    wilayahList = INITIAL_WILAYAH_LIST,
+    proposalSlotMap = {},
+    singleProposal,
+    extraBlankRows = 0,
+    locationOverride,
+    handoverName,
+    handoverNip,
+    fileName,
+  } = options;
+
+  const acceptedSource = (allRecords && allRecords.length > 0 ? allRecords : records).filter(
+    (r) => r.validasi === 'accepted'
+  );
+
+  interface TargetProp {
+    id: string;
+    namaProposal: string;
+    tahun: string;
+  }
+
+  let targetProposals: TargetProp[] = [];
+  if (singleProposal) {
+    targetProposals = [
+      {
+        id: singleProposal.id,
+        namaProposal: singleProposal.namaProposal,
+        tahun: singleProposal.tahun,
+      },
+    ];
+  } else {
+    const proposalById = new Map<string, ProposalRecord>();
+    proposals.forEach((p) => proposalById.set(p.id, p));
+    const matchedIds = new Set<string>();
+    const syntheticMap = new Map<string, TargetProp>();
+
+    records.forEach((rec) => {
+      if (rec.validasi !== 'accepted') return;
+      const matched =
+        (rec.proposalId ? proposalById.get(rec.proposalId) : undefined) ??
+        proposals.find((p) => p.namaProposal === rec.proposal && p.tahun === rec.tahun) ??
+        proposals.find((p) => p.namaProposal === rec.proposal);
+      if (matched) {
+        matchedIds.add(matched.id);
+      } else if ((rec.proposal || '').trim()) {
+        const synKey = `${rec.tahun || ''}::${rec.proposal.trim().toLowerCase()}`;
+        if (!syntheticMap.has(synKey)) {
+          syntheticMap.set(synKey, {
+            id: `syn-${synKey}`,
+            tahun: rec.tahun || '',
+            namaProposal: rec.proposal.trim(),
+          });
+        }
+      }
+    });
+
+    const listFromDb: TargetProp[] = proposals
+      .filter((p) => matchedIds.has(p.id))
+      .map((p) => ({ id: p.id, namaProposal: p.namaProposal, tahun: p.tahun }));
+    const combined: TargetProp[] = [...listFromDb, ...Array.from(syntheticMap.values())];
+
+    const byKec = new Map<string, TargetProp[]>();
+    combined.forEach((prop) => {
+      const kec =
+        resolveProposalKecamatanCategory(prop.namaProposal, proposals, prop.tahun, wilayahList) ||
+        'Lainnya';
+      const arr = byKec.get(kec) || [];
+      arr.push(prop);
+      byKec.set(kec, arr);
+    });
+    const sortedKecNames = Array.from(byKec.keys()).sort(sortKecamatanCategoryNames);
+    targetProposals = sortedKecNames.flatMap((kec) =>
+      sortProposalsWithinKecamatan(byKec.get(kec) || [], (p) => p.namaProposal)
+    );
+  }
+
+  if (targetProposals.length === 0) {
+    throw new Error('Tidak ada data proposal/KPM aktif untuk dibuatkan absen dinas.');
+  }
+
+  const pageW = F4_PAPER_WIDTH_MM; // 216 mm
+  const pageH = 330; // F4 Folio 216 x 330 mm
+  const marginX = 13;
+  const contentW = pageW - marginX * 2; // 190 mm
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: [pageW, pageH],
+    compress: true,
+  }) as AutoTableDoc;
+
+  const extraCount = Math.max(0, Math.min(30, Math.floor(extraBlankRows || 0)));
+  let totalRowsRendered = 0;
+
+  targetProposals.forEach((prop, propIdx) => {
+    if (propIdx > 0) {
+      doc.addPage();
+    }
+
+    const propRecords = acceptedSource.filter((r) =>
+      r.proposalId
+        ? r.proposalId === prop.id
+        : r.proposal === prop.namaProposal && (!prop.tahun || r.tahun === prop.tahun)
+    );
+    const slotResolution = resolveProposalSlotStateForGroup(
+      proposalSlotMap,
+      prop.id,
+      prop.namaProposal,
+      prop.tahun
+    );
+    const mergedSlots = buildMergedProposalSlots({
+      groupRecords: propRecords,
+      slotState: slotResolution.state,
+      proposals,
+      catalog: items,
+      wilayahList,
+    });
+
+    const rows: string[][] = mergedSlots.map((slot) => {
+      const noStr = String(slot.slotNumber);
+      if (slot.kind !== 'kpm') {
+        return [noStr, '', '', '', ''];
+      }
+      const rec = slot.record;
+      const namaStr = (rec.nama || '').trim().toUpperCase();
+      const nikStr = (rec.nikKtp || '').replace(/\D/g, '') || (rec.nikKtp || '').trim();
+      const addrStr = formatAbsenDinasAddress(rec, proposals, wilayahList);
+      return [noStr, namaStr, nikStr, addrStr, ''];
+    });
+
+    const lastNum =
+      mergedSlots.length > 0 ? mergedSlots[mergedSlots.length - 1].slotNumber : 0;
+    for (let e = 1; e <= extraCount; e += 1) {
+      rows.push([String(lastNum + e), '', '', '', '']);
+    }
+    if (rows.length === 0) {
+      rows.push(['1', '', '', '', '']);
+    }
+    totalRowsRendered += rows.length;
+
+    const locationText =
+      (singleProposal && locationOverride?.trim()
+        ? locationOverride.trim().toUpperCase()
+        : formatAbsenDinasLocationText(prop.namaProposal, proposals, prop.tahun, wilayahList)
+      ).trim();
+
+    const titlePrefix =
+      variant === 'makan_minum'
+        ? 'DAFTAR MAKAN MINUM PESERTA PENERIMA BANTUAN PERALATAN KERJA DI'
+        : 'DAFTAR HADIR PESERTA PENERIMA BANTUAN PERALATAN KERJA DI';
+    const fullTitle = `${titlePrefix} ${locationText}`.trim();
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10.5);
+    doc.setTextColor(0, 0, 0);
+    const titleLines = doc.splitTextToSize(fullTitle, contentW - 8) as string[];
+    const titleStartY = 17;
+    titleLines.forEach((line, idx) => {
+      doc.text(line, pageW / 2, titleStartY + idx * 4.8, { align: 'center' });
+    });
+
+    const tableStartY = titleStartY + titleLines.length * 4.8 + 2.5;
+
+    autoTable(doc, {
+      startY: tableStartY,
+      margin: { top: 14, right: marginX, bottom: 14, left: marginX },
+      head: [['NO', 'NAMA', 'NIK', 'ALAMAT', 'TANDA TANGAN']],
+      body: rows,
+      theme: 'grid',
+      showHead: 'firstPage',
+      styles: {
+        font: 'times',
+        fontSize: 8.5,
+        textColor: [0, 0, 0],
+        lineColor: [0, 0, 0],
+        lineWidth: 0.25,
+        valign: 'middle',
+        cellPadding: { top: 2, right: 2, bottom: 2, left: 2 },
+        minCellHeight: 13.6,
+      },
+      headStyles: {
+        font: 'helvetica',
+        fillColor: [255, 255, 255],
+        textColor: [0, 0, 0],
+        fontStyle: 'bold',
+        fontSize: 9,
+        halign: 'center',
+        valign: 'middle',
+        minCellHeight: 7.5,
+        lineWidth: 0.3,
+        lineColor: [0, 0, 0],
+      },
+      columnStyles: {
+        0: { cellWidth: 10, halign: 'center' },
+        1: { cellWidth: 42, halign: 'left' },
+        2: { cellWidth: 33, halign: 'center' },
+        3: { cellWidth: 68, halign: 'left', fontSize: 8 },
+        4: { cellWidth: contentW - 10 - 42 - 33 - 68, halign: 'center' },
+      },
+    });
+
+    // Untuk Daftar Makan & Minum, tambahkan blok YANG MENYERAHKAN + NIP di akhir tabel
+    if (variant === 'makan_minum') {
+      const finalY = doc.lastAutoTable?.finalY ?? tableStartY + 20;
+      const sigBlockH = 34;
+      let sigY = finalY + 5.5;
+      if (sigY + sigBlockH > pageH - 10) {
+        doc.addPage();
+        sigY = 20;
+      }
+
+      const sigX = pageW - marginX - 54;
+      doc.setFont('times', 'normal');
+      doc.setFontSize(9.5);
+      doc.setTextColor(0, 0, 0);
+      doc.text('YANG MENYERAHKAN,', sigX, sigY);
+
+      const cleanHandoverName = (handoverName || '').trim();
+      const cleanHandoverNip = normalizePejabatNipNumber(handoverNip).trim();
+      const nameY = sigY + 22;
+
+      if (cleanHandoverName) {
+        doc.setFont('times', 'bold');
+        doc.text(`( ${cleanHandoverName} )`, sigX, nameY);
+      } else {
+        doc.setFont('times', 'normal');
+        doc.text('(                                   )', sigX, nameY);
+      }
+
+      doc.setFont('times', 'normal');
+      doc.text(cleanHandoverNip ? `NIP. ${cleanHandoverNip}` : 'NIP.', sigX, nameY + 4.5);
+    }
+  });
+
+  const prefixName = variant === 'makan_minum' ? 'Daftar_Makan_Minum' : 'Daftar_Hadir';
+  const defaultFileName = singleProposal
+    ? `${prefixName}_${singleProposal.tahun || 'DINSOS'}_${singleProposal.namaProposal}`
+    : `${prefixName}_DINSOS_${targetProposals.length}_Proposal`;
+
+  const saved = await saveOrOpenPdfDocument(doc, fileName || defaultFileName);
+
+  return {
+    ...saved,
+    proposalCount: targetProposals.length,
+    totalRows: totalRowsRendered,
+  };
+}
+
+
 
 
 

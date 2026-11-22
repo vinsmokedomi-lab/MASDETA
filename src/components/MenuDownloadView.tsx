@@ -56,6 +56,7 @@ import {
   sortKecamatanCategoryNames,
 } from '../utils/imageProcessor';
 import {
+  AbsenDinasVariant,
   ADDON_PDF_COLUMN_DEFINITIONS,
   CatNomorOrientation,
   CatNomorPaperSize,
@@ -68,6 +69,7 @@ import {
   SPTJM_DAY_OPTIONS,
   buildCatNomorBarangMatrix,
   doesKpmRecordMatchCheckedColumns,
+  exportAbsenDinasPesertaToPdf,
   exportAbsensiDinsosToPdf,
   exportCatNomorBarangToPdf,
   exportKpmBastBulkToPdf,
@@ -76,6 +78,7 @@ import {
   exportKpmTableToPdf,
   exportKuponPdf,
   exportNomorDinsosToPdf,
+  formatAbsenDinasLocationText,
   formatAbsensiScheduleFields,
   formatIndonesianDDMonthYYYY,
   formatIndonesianDateWords,
@@ -1497,11 +1500,17 @@ export function MenuDownloadView({
     }
   };
 
-  // --- Mode 8: Absensi Dinas Sosial (F4 Portrait · Logo Provinsi + Pilih Buku Jadwal) ---
+  // --- Mode 8: Absensi Dinas Sosial (Absen Dinas Daftar Hadir / Makan Minum + Absensi Kegiatan) ---
   const effectiveScheduleBooks = useMemo(
     () => (scheduleBooks && scheduleBooks.length > 0 ? scheduleBooks : DEFAULT_SCHEDULE_BOOKS),
     [scheduleBooks]
   );
+  const [absensiVariant, setAbsensiVariant] = useState<'daftar_hadir' | 'makan_minum' | 'kegiatan'>(
+    'daftar_hadir'
+  );
+  const [absensiExtraBlankRows, setAbsensiExtraBlankRows] = useState('0');
+  const [absensiHandoverName, setAbsensiHandoverName] = useState('');
+  const [absensiHandoverNip, setAbsensiHandoverNip] = useState('');
   const [absensiBookId, setAbsensiBookId] = useState<string>(
     () => (scheduleBooks && scheduleBooks[0]?.id) || DEFAULT_SCHEDULE_BOOKS[0].id
   );
@@ -1563,6 +1572,12 @@ export function MenuDownloadView({
     const firstPreview = firstProp
       ? {
           proposalName: firstProp.namaProposal,
+          dinasLocation: formatAbsenDinasLocationText(
+            firstProp.namaProposal,
+            proposals,
+            firstProp.tahun,
+            wilayahList
+          ),
           tanggal: firstFields.tanggal || absensiFallbackTanggal.trim(),
           hari: firstFields.hari || absensiFallbackHari.trim(),
           pukul: firstFields.pukul || absensiFallbackPukul.trim(),
@@ -1577,6 +1592,8 @@ export function MenuDownloadView({
     };
   }, [
     absensiTargetProposals,
+    proposals,
+    wilayahList,
     schedules,
     absensiBookId,
     absensiFallbackTanggal,
@@ -1589,31 +1606,58 @@ export function MenuDownloadView({
     setAbsensiFeedback(null);
     setIsGeneratingAbsensi(true);
     try {
-      const { fileName } = buildScopeTitleAndFileName('Absensi_DINSOS');
-      const res = await exportAbsensiDinsosToPdf({
-        records: eligibleKuponRecords,
-        allRecords: records,
-        proposals,
-        items,
-        wilayahList,
-        proposalSlotMap,
-        schedules,
-        scheduleBookId: absensiBookId,
-        bastConfig: bastTemplate,
-        reportTemplate,
-        fallbackFields: {
-          tanggal: absensiFallbackTanggal.trim(),
-          hari: absensiFallbackHari.trim(),
-          pukul: absensiFallbackPukul.trim(),
-        },
-        fileName,
-      });
-      setAbsensiFeedback({
-        type: 'success',
-        message: res.openedNative
-          ? `Absensi "${res.savedFileName}" (${res.proposalCount} proposal · ${res.totalRows} baris) berhasil dibuat dan dibuka.`
-          : `Absensi "${res.savedFileName}" (${res.proposalCount} proposal · ${res.totalRows} baris) berhasil diunduh.`,
-      });
+      if (absensiVariant === 'daftar_hadir' || absensiVariant === 'makan_minum') {
+        const parsedExtra = Math.max(0, Math.min(30, Math.floor(Number(absensiExtraBlankRows) || 0)));
+        const prefix = absensiVariant === 'makan_minum' ? 'Daftar_Makan_Minum' : 'Daftar_Hadir';
+        const { fileName } = buildScopeTitleAndFileName(prefix);
+        const res = await exportAbsenDinasPesertaToPdf({
+          variant: absensiVariant as AbsenDinasVariant,
+          records: eligibleKuponRecords,
+          allRecords: records,
+          proposals,
+          items,
+          wilayahList,
+          proposalSlotMap,
+          extraBlankRows: parsedExtra,
+          handoverName: absensiVariant === 'makan_minum' ? absensiHandoverName : undefined,
+          handoverNip: absensiVariant === 'makan_minum' ? absensiHandoverNip : undefined,
+          fileName,
+        });
+        const labelType =
+          absensiVariant === 'makan_minum' ? 'Daftar Makan & Minum' : 'Daftar Hadir';
+        setAbsensiFeedback({
+          type: 'success',
+          message: res.openedNative
+            ? `${labelType} "${res.savedFileName}" (${res.proposalCount} proposal · ${res.totalRows} baris) berhasil dibuat dan dibuka.`
+            : `${labelType} "${res.savedFileName}" (${res.proposalCount} proposal · ${res.totalRows} baris) berhasil diunduh.`,
+        });
+      } else {
+        const { fileName } = buildScopeTitleAndFileName('Absensi_DINSOS');
+        const res = await exportAbsensiDinsosToPdf({
+          records: eligibleKuponRecords,
+          allRecords: records,
+          proposals,
+          items,
+          wilayahList,
+          proposalSlotMap,
+          schedules,
+          scheduleBookId: absensiBookId,
+          bastConfig: bastTemplate,
+          reportTemplate,
+          fallbackFields: {
+            tanggal: absensiFallbackTanggal.trim(),
+            hari: absensiFallbackHari.trim(),
+            pukul: absensiFallbackPukul.trim(),
+          },
+          fileName,
+        });
+        setAbsensiFeedback({
+          type: 'success',
+          message: res.openedNative
+            ? `Absensi "${res.savedFileName}" (${res.proposalCount} proposal · ${res.totalRows} baris) berhasil dibuat dan dibuka.`
+            : `Absensi "${res.savedFileName}" (${res.proposalCount} proposal · ${res.totalRows} baris) berhasil diunduh.`,
+        });
+      }
     } catch (err) {
       setAbsensiFeedback({
         type: 'error',
@@ -1987,7 +2031,7 @@ export function MenuDownloadView({
                   {
                     id: 'absensi',
                     label: 'Absensi DINSOS',
-                    subtitle: 'Daftar hadir & jadwal',
+                    subtitle: 'Daftar hadir & makan minum',
                     Icon: ClipboardCheck,
                   },
                 ] as const
@@ -4750,19 +4794,19 @@ export function MenuDownloadView({
             </section>
           )}
 
-          {/* Mode 8: Absensi Dinas Sosial (F4 Portrait · Logo Provinsi + Pilih Buku Jadwal) */}
+          {/* Mode 8: Absensi Dinas Sosial (Daftar Hadir / Daftar Makan Minum + Absensi Kegiatan) */}
           {printMode === 'absensi' && (
             <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-3.5 md:p-4">
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <h2 className="text-sm font-bold text-slate-900">
-                    Daftar Absensi Dinas Sosial (PDF F4)
+                    Absen Dinas &amp; Daftar Hadir (PDF F4)
                   </h2>
                   <p className="mt-0.5 text-[11px] text-slate-500">
-                    Tanggal, Hari &amp; Pukul terisi otomatis dari Buku Jadwal yang dipilih · Lokasi Kegiatan = Judul Proposal · Logo Provinsi Kalbar
+                    Pilih format Daftar Hadir, Daftar Makan &amp; Minum (dengan Yang Menyerahkan &amp; NIP), atau Absensi Kegiatan berlogo
                   </p>
                 </div>
-                <span className="shrink-0 rounded-lg bg-indigo-50 px-2 py-1 text-[10px] font-bold text-indigo-800 border border-indigo-200/70">
+                <span className="shrink-0 rounded-lg bg-indigo-50 px-2 py-1 text-[10px] font-bold text-indigo-800 border border-indigo-200/70 tabular-nums">
                   {absensiMatchStats.totalProposals} Proposal
                 </span>
               </div>
@@ -4776,177 +4820,355 @@ export function MenuDownloadView({
                 </div>
               )}
 
-              {/* Pilihan Buku Jadwal */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <label className="text-xs font-bold text-slate-800">
-                    1. Pilih Buku Jadwal (Sumber Tanggal, Hari &amp; Pukul)
-                  </label>
-                  <span className="text-[11px] font-semibold text-teal-700 tabular-nums">
-                    {absensiMatchStats.matchedCount}/{absensiMatchStats.totalProposals} proposal cocok jadwal
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  {effectiveScheduleBooks.map((book) => {
-                    const active = absensiBookId === book.id;
-                    const countInBook = absensiTargetProposals.filter((prop) =>
-                      Boolean(
-                        resolveScheduleForProposalInBook(
-                          prop.namaProposal,
-                          prop.tahun,
-                          schedules,
-                          book.id
-                        )
-                      )
-                    ).length;
+              {/* 1. Pilih Tipe Format Absensi */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-slate-800">
+                  1. Pilih Jenis Format PDF Absensi
+                </label>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  {(
+                    [
+                      {
+                        id: 'daftar_hadir',
+                        title: 'Absen Dinas · Daftar Hadir',
+                        desc: 'Judul DAFTAR HADIR PESERTA · Tanpa blok Yang Menyerahkan',
+                      },
+                      {
+                        id: 'makan_minum',
+                        title: 'Absen Dinas · Makan & Minum',
+                        desc: 'Judul DAFTAR MAKAN MINUM · Ada YANG MENYERAHKAN & NIP di akhir',
+                      },
+                      {
+                        id: 'kegiatan',
+                        title: 'Absensi Kegiatan (Jadwal)',
+                        desc: 'Kop logo Prov. Kalbar + Tanggal, Hari & Pukul dari Jadwal',
+                      },
+                    ] as const
+                  ).map((opt) => {
+                    const active = absensiVariant === opt.id;
                     return (
                       <button
-                        key={book.id}
+                        key={opt.id}
                         type="button"
                         onClick={() => {
-                          setAbsensiBookId(book.id);
+                          setAbsensiVariant(opt.id);
                           setAbsensiFeedback(null);
                         }}
-                        className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2.5 text-left transition-all ${
+                        className={`rounded-xl border px-3 py-2.5 text-left transition-all ${
                           active
                             ? 'border-teal-700 bg-teal-50/90 text-teal-950 ring-1 ring-teal-700/20'
                             : 'border-slate-200 bg-slate-50/50 text-slate-700 hover:border-slate-300 hover:bg-slate-50'
                         }`}
                       >
-                        <div className="min-w-0">
-                          <p className="truncate text-xs font-bold">{book.title}</p>
-                          {book.subtitle && (
-                            <p className="truncate text-[10px] text-slate-500">{book.subtitle}</p>
-                          )}
-                        </div>
-                        <span
-                          className={`shrink-0 rounded-md px-2 py-0.5 text-[10px] font-bold tabular-nums ${
-                            countInBook > 0
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-slate-200/80 text-slate-600'
-                          }`}
-                        >
-                          {countInBook} cocok
-                        </span>
+                        <p className="text-xs font-bold leading-snug">{opt.title}</p>
+                        <p className="mt-0.5 text-[10px] leading-snug text-slate-500">
+                          {opt.desc}
+                        </p>
                       </button>
                     );
                   })}
                 </div>
               </div>
 
-              {/* Preview Mini Kop & Metadata Absensi */}
-              {absensiMatchStats.firstPreview && (
-                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-bold text-slate-700">
-                      Pratinjau Kepala Dokumen (Proposal Pertama)
-                    </span>
-                    <span
-                      className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
-                        absensiMatchStats.firstPreview.hasSchedule
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : 'bg-amber-100 text-amber-800'
-                      }`}
-                    >
-                      {absensiMatchStats.firstPreview.hasSchedule
-                        ? 'Jadwal Terisi Otomatis'
-                        : 'Belum Ada Jadwal di Buku Ini'}
-                    </span>
-                  </div>
-                  <div className="rounded-lg border border-slate-200 bg-white p-3 text-slate-900">
-                    <div className="text-center leading-tight pb-2">
-                      <p className="text-[10px] tracking-wide">
-                        PEMERINTAH PROVINSI KALIMANTAN BARAT
-                      </p>
-                      <p className="text-xs font-extrabold tracking-wide">DINAS SOSIAL</p>
+              {absensiVariant === 'daftar_hadir' || absensiVariant === 'makan_minum' ? (
+                <div className="space-y-3">
+                  {/* Pratinjau Struktur Absen Dinas */}
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-bold text-slate-700">
+                        Pratinjau Format ({absensiVariant === 'makan_minum' ? 'Daftar Makan & Minum' : 'Daftar Hadir'})
+                      </span>
+                      <span className="rounded bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-600 border border-slate-200">
+                        F4 Portrait · 216 × 330 mm
+                      </span>
                     </div>
-                    <div className="flex items-center gap-3 pt-1">
-                      <div className="flex h-14 w-12 shrink-0 items-center justify-center rounded border border-slate-100 bg-slate-50 p-1">
-                        <img
-                          src={(bastTemplate?.kopLogoDataUrl || '').trim() || DEFAULT_KOP_LOGO_URL}
-                          alt="Logo Provinsi Kalimantan Barat"
-                          className="max-h-full max-w-full object-contain"
+
+                    <div className="rounded-lg border border-slate-200 bg-white p-3 text-slate-900 space-y-2.5">
+                      <p className="text-center text-[10.5px] font-bold leading-snug uppercase">
+                        {absensiVariant === 'makan_minum'
+                          ? 'DAFTAR MAKAN MINUM PESERTA PENERIMA BANTUAN PERALATAN KERJA DI'
+                          : 'DAFTAR HADIR PESERTA PENERIMA BANTUAN PERALATAN KERJA DI'}{' '}
+                        {absensiMatchStats.firstPreview?.dinasLocation || 'LOKASI PROPOSAL'}
+                      </p>
+
+                      <div className="overflow-hidden rounded border border-slate-800 text-[9.5px]">
+                        <div className="grid grid-cols-[26px_1fr_76px_1fr_74px] divide-x divide-slate-800 border-b border-slate-800 bg-slate-50 font-bold text-center py-1">
+                          <span>NO</span>
+                          <span>NAMA</span>
+                          <span>NIK</span>
+                          <span>ALAMAT</span>
+                          <span>TANDA TANGAN</span>
+                        </div>
+                        <div className="grid grid-cols-[26px_1fr_76px_1fr_74px] divide-x divide-slate-800 text-slate-500 py-1.5">
+                          <span className="text-center tabular-nums">1</span>
+                          <span className="px-1.5 truncate">NAMA PENERIMA</span>
+                          <span className="px-1 text-center tabular-nums">617103...</span>
+                          <span className="px-1.5 truncate">JL. / RT RW / KEL / KEC</span>
+                          <span className="text-center">&nbsp;</span>
+                        </div>
+                      </div>
+
+                      {absensiVariant === 'makan_minum' && (
+                        <div className="flex justify-end pt-1 pr-3">
+                          <div className="text-left text-[10px] leading-snug">
+                            <p>YANG MENYERAHKAN,</p>
+                            <p className="mt-5 font-bold">
+                              {absensiHandoverName.trim()
+                                ? `( ${absensiHandoverName.trim()} )`
+                                : '( .............................. )'}
+                            </p>
+                            <p>
+                              {absensiHandoverNip.trim()
+                                ? `NIP. ${normalizePejabatNipNumber(absensiHandoverNip.trim())}`
+                                : 'NIP.'}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Pengaturan Baris Kosong Tambahan & Yang Menyerahkan (khusus Makan & Minum) */}
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold text-slate-700">
+                        Baris Kosong Tambahan
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={30}
+                        value={absensiExtraBlankRows}
+                        onChange={(e) => setAbsensiExtraBlankRows(e.target.value)}
+                        className="min-h-[38px] w-full rounded-xl border border-slate-200 bg-white px-3 text-xs text-slate-800 focus:border-teal-600 focus:outline-none tabular-nums"
+                      />
+                      <p className="mt-1 text-[10px] text-slate-500">
+                        Tambah nomor urut kosong di akhir tabel (cth: 4 baris ekstra = 67–70)
+                      </p>
+                    </div>
+
+                    {absensiVariant === 'makan_minum' && (
+                      <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-slate-50/50 p-3 space-y-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <label className="text-[11px] font-bold text-slate-800">
+                            Penandatangan YANG MENYERAHKAN (Opsional)
+                          </label>
+                          {pejabatList.length > 0 && (
+                            <select
+                              value=""
+                              onChange={(e) => {
+                                const found = pejabatList.find((p) => p.id === e.target.value);
+                                if (found) {
+                                  setAbsensiHandoverName(found.nama);
+                                  setAbsensiHandoverNip(found.nip || '');
+                                }
+                              }}
+                              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 focus:border-teal-600 focus:outline-none"
+                            >
+                              <option value="">Isi dari Data Pejabat...</option>
+                              {pejabatList.map((pj) => (
+                                <option key={pj.id} value={pj.id}>
+                                  {pj.nama}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          <input
+                            type="text"
+                            value={absensiHandoverName}
+                            onChange={(e) => setAbsensiHandoverName(e.target.value)}
+                            placeholder="Nama (kosongkan agar garis kosong)"
+                            className="min-h-[36px] w-full rounded-lg border border-slate-200 bg-white px-2.5 text-xs text-slate-800 focus:border-teal-600 focus:outline-none"
+                          />
+                          <input
+                            type="text"
+                            value={absensiHandoverNip}
+                            onChange={(e) => setAbsensiHandoverNip(e.target.value)}
+                            placeholder="NIP (kosongkan agar cetak NIP.)"
+                            className="min-h-[36px] w-full rounded-lg border border-slate-200 bg-white px-2.5 text-xs text-slate-800 focus:border-teal-600 focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {/* Pilihan Buku Jadwal */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="text-xs font-bold text-slate-800">
+                        2. Pilih Buku Jadwal (Sumber Tanggal, Hari &amp; Pukul)
+                      </label>
+                      <span className="text-[11px] font-semibold text-teal-700 tabular-nums">
+                        {absensiMatchStats.matchedCount}/{absensiMatchStats.totalProposals} proposal cocok jadwal
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {effectiveScheduleBooks.map((book) => {
+                        const active = absensiBookId === book.id;
+                        const countInBook = absensiTargetProposals.filter((prop) =>
+                          Boolean(
+                            resolveScheduleForProposalInBook(
+                              prop.namaProposal,
+                              prop.tahun,
+                              schedules,
+                              book.id
+                            )
+                          )
+                        ).length;
+                        return (
+                          <button
+                            key={book.id}
+                            type="button"
+                            onClick={() => {
+                              setAbsensiBookId(book.id);
+                              setAbsensiFeedback(null);
+                            }}
+                            className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2.5 text-left transition-all ${
+                              active
+                                ? 'border-teal-700 bg-teal-50/90 text-teal-950 ring-1 ring-teal-700/20'
+                                : 'border-slate-200 bg-slate-50/50 text-slate-700 hover:border-slate-300 hover:bg-slate-50'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate text-xs font-bold">{book.title}</p>
+                              {book.subtitle && (
+                                <p className="truncate text-[10px] text-slate-500">{book.subtitle}</p>
+                              )}
+                            </div>
+                            <span
+                              className={`shrink-0 rounded-md px-2 py-0.5 text-[10px] font-bold tabular-nums ${
+                                countInBook > 0
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-slate-200/80 text-slate-600'
+                              }`}
+                            >
+                              {countInBook} cocok
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Preview Mini Kop & Metadata Absensi */}
+                  {absensiMatchStats.firstPreview && (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold text-slate-700">
+                          Pratinjau Kepala Dokumen (Proposal Pertama)
+                        </span>
+                        <span
+                          className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                            absensiMatchStats.firstPreview.hasSchedule
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-amber-100 text-amber-800'
+                          }`}
+                        >
+                          {absensiMatchStats.firstPreview.hasSchedule
+                            ? 'Jadwal Terisi Otomatis'
+                            : 'Belum Ada Jadwal di Buku Ini'}
+                        </span>
+                      </div>
+                      <div className="rounded-lg border border-slate-200 bg-white p-3 text-slate-900">
+                        <div className="text-center leading-tight pb-2">
+                          <p className="text-[10px] tracking-wide">
+                            PEMERINTAH PROVINSI KALIMANTAN BARAT
+                          </p>
+                          <p className="text-xs font-extrabold tracking-wide">DINAS SOSIAL</p>
+                        </div>
+                        <div className="flex items-center gap-3 pt-1">
+                          <div className="flex h-14 w-12 shrink-0 items-center justify-center rounded border border-slate-100 bg-slate-50 p-1">
+                            <img
+                              src={(bastTemplate?.kopLogoDataUrl || '').trim() || DEFAULT_KOP_LOGO_URL}
+                              alt="Logo Provinsi Kalimantan Barat"
+                              className="max-h-full max-w-full object-contain"
+                            />
+                          </div>
+                          <div className="min-w-0 flex-1 border-t border-b border-slate-800 divide-y divide-slate-800 text-[10.5px]">
+                            <div className="grid grid-cols-[88px_10px_1fr] py-0.5">
+                              <span>Tanggal</span>
+                              <span>:</span>
+                              <span className="truncate font-medium">
+                                {absensiMatchStats.firstPreview.tanggal || '—'}
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-[88px_10px_1fr] py-0.5">
+                              <span>Hari</span>
+                              <span>:</span>
+                              <span className="truncate font-medium">
+                                {absensiMatchStats.firstPreview.hari || '—'}
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-[88px_10px_1fr] py-0.5">
+                              <span>Pukul</span>
+                              <span>:</span>
+                              <span className="truncate font-medium">
+                                {absensiMatchStats.firstPreview.pukul || '—'}
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-[88px_10px_1fr] py-0.5">
+                              <span>Lokasi Kegiatan</span>
+                              <span>:</span>
+                              <span className="truncate font-semibold">
+                                {absensiMatchStats.firstPreview.proposalName}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Isian Cadangan Opsional bila Proposal Belum Punya Jadwal */}
+                  <div className="rounded-xl border border-slate-200/80 bg-slate-50/40 p-3 space-y-2">
+                    <p className="text-[11px] font-bold text-slate-700">
+                      Isian Cadangan Opsional (Dipakai hanya jika proposal belum punya jadwal di buku terpilih)
+                    </p>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                      <div>
+                        <label className="mb-1 block text-[10.5px] font-semibold text-slate-600">
+                          Tanggal Cadangan
+                        </label>
+                        <input
+                          type="text"
+                          value={absensiFallbackTanggal}
+                          onChange={(e) => setAbsensiFallbackTanggal(e.target.value)}
+                          placeholder="Kosongkan agar garis kosong"
+                          className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 focus:border-teal-600 focus:outline-none"
                         />
                       </div>
-                      <div className="min-w-0 flex-1 border-t border-b border-slate-800 divide-y divide-slate-800 text-[10.5px]">
-                        <div className="grid grid-cols-[88px_10px_1fr] py-0.5">
-                          <span>Tanggal</span>
-                          <span>:</span>
-                          <span className="truncate font-medium">
-                            {absensiMatchStats.firstPreview.tanggal || '—'}
-                          </span>
-                        </div>
-                        <div className="grid grid-cols-[88px_10px_1fr] py-0.5">
-                          <span>Hari</span>
-                          <span>:</span>
-                          <span className="truncate font-medium">
-                            {absensiMatchStats.firstPreview.hari || '—'}
-                          </span>
-                        </div>
-                        <div className="grid grid-cols-[88px_10px_1fr] py-0.5">
-                          <span>Pukul</span>
-                          <span>:</span>
-                          <span className="truncate font-medium">
-                            {absensiMatchStats.firstPreview.pukul || '—'}
-                          </span>
-                        </div>
-                        <div className="grid grid-cols-[88px_10px_1fr] py-0.5">
-                          <span>Lokasi Kegiatan</span>
-                          <span>:</span>
-                          <span className="truncate font-semibold">
-                            {absensiMatchStats.firstPreview.proposalName}
-                          </span>
-                        </div>
+                      <div>
+                        <label className="mb-1 block text-[10.5px] font-semibold text-slate-600">
+                          Hari Cadangan
+                        </label>
+                        <input
+                          type="text"
+                          value={absensiFallbackHari}
+                          onChange={(e) => setAbsensiFallbackHari(e.target.value)}
+                          placeholder="cth: Senin"
+                          className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 focus:border-teal-600 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-[10.5px] font-semibold text-slate-600">
+                          Pukul Cadangan
+                        </label>
+                        <input
+                          type="text"
+                          value={absensiFallbackPukul}
+                          onChange={(e) => setAbsensiFallbackPukul(e.target.value)}
+                          placeholder="cth: 09:00 WIB"
+                          className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 focus:border-teal-600 focus:outline-none"
+                        />
                       </div>
                     </div>
                   </div>
-                </div>
+                </>
               )}
-
-              {/* Isian Cadangan Opsional bila Proposal Belum Punya Jadwal */}
-              <div className="rounded-xl border border-slate-200/80 bg-slate-50/40 p-3 space-y-2">
-                <p className="text-[11px] font-bold text-slate-700">
-                  Isian Cadangan Opsional (Dipakai hanya jika proposal belum punya jadwal di buku terpilih)
-                </p>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                  <div>
-                    <label className="mb-1 block text-[10.5px] font-semibold text-slate-600">
-                      Tanggal Cadangan
-                    </label>
-                    <input
-                      type="text"
-                      value={absensiFallbackTanggal}
-                      onChange={(e) => setAbsensiFallbackTanggal(e.target.value)}
-                      placeholder="Kosongkan agar garis kosong"
-                      className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 focus:border-teal-600 focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-[10.5px] font-semibold text-slate-600">
-                      Hari Cadangan
-                    </label>
-                    <input
-                      type="text"
-                      value={absensiFallbackHari}
-                      onChange={(e) => setAbsensiFallbackHari(e.target.value)}
-                      placeholder="cth: Senin"
-                      className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 focus:border-teal-600 focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-[10.5px] font-semibold text-slate-600">
-                      Pukul Cadangan
-                    </label>
-                    <input
-                      type="text"
-                      value={absensiFallbackPukul}
-                      onChange={(e) => setAbsensiFallbackPukul(e.target.value)}
-                      placeholder="cth: 09:00 WIB"
-                      className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 focus:border-teal-600 focus:outline-none"
-                    />
-                  </div>
-                </div>
-              </div>
 
               {absensiFeedback && (
                 <div
@@ -4975,20 +5197,24 @@ export function MenuDownloadView({
                 {isGeneratingAbsensi ? (
                   <>
                     <Loader2 className="h-4.5 w-4.5 animate-spin" />
-                    <span>Menyiapkan PDF Absensi DINSOS...</span>
+                    <span>Menyiapkan PDF Absensi...</span>
                   </>
                 ) : (
                   <>
                     <ClipboardCheck className="h-4.5 w-4.5" />
                     <span>
-                      Download Absensi PDF ({absensiMatchStats.totalProposals} Proposal · F4)
+                      {absensiVariant === 'daftar_hadir'
+                        ? `Download Daftar Hadir (${absensiMatchStats.totalProposals} Proposal · F4)`
+                        : absensiVariant === 'makan_minum'
+                          ? `Download Daftar Makan & Minum (${absensiMatchStats.totalProposals} Proposal · F4)`
+                          : `Download Absensi Kegiatan (${absensiMatchStats.totalProposals} Proposal · F4)`}
                     </span>
                   </>
                 )}
               </button>
 
               <p className="text-center text-[11px] leading-relaxed text-slate-500">
-                Tiap proposal mulai di halaman baru · Nomor urut mengikuti slot proposal &amp; baris kosong · Header &amp; Footer resmi Dinas Sosial Prov. Kalbar
+                Tiap proposal mulai di halaman baru · Nomor urut mengikuti slot proposal &amp; baris kosong · Ukuran kertas F4 Portrait
               </p>
             </section>
           )}

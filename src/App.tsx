@@ -97,6 +97,7 @@ import {
   PejabatProfile,
   PengelolaProfile,
   ProposalBastMap,
+  ProposalChangeLogEntry,
   ProposalChecklist,
   ProposalDestinationType,
   ProposalDocuments,
@@ -137,6 +138,7 @@ import {
   diffKpmRecordChanges,
   formatValidationLabel,
   generateRegisterCode,
+  getKpmSlotNumberInProposal,
   getProposalSlotKey,
   isLegacyDummyProposal,
   loadCustomYears,
@@ -155,6 +157,7 @@ import {
   recalculateProposalRegisterCodes,
   removeDocumentFromDrive,
   removeEmptySlotFromMap,
+  replaceKpmInProposalSlotMap,
   resolveKpmDomicile,
   resolvePackageForKpm,
   resolveProposalDomicile,
@@ -689,6 +692,22 @@ export default function App() {
     reconcileSnapshots
   );
   reconcileSnapshotsRef.current = reconcileSnapshots;
+  const [proposalChangeLogs, setProposalChangeLogs] = useState<ProposalChangeLogEntry[]>(() => {
+    try {
+      const raw = localStorage.getItem('masdeta_slice_masdeta_proposal_changes_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw) as unknown;
+        if (Array.isArray(parsed)) {
+          return parsed as ProposalChangeLogEntry[];
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  });
+  const proposalChangeLogsRef = useRef<ProposalChangeLogEntry[]>(proposalChangeLogs);
+  proposalChangeLogsRef.current = proposalChangeLogs;
   const [highlightEmptySlotsProposalId, setHighlightEmptySlotsProposalId] = useState<string | null>(
     null
   );
@@ -1639,6 +1658,7 @@ export default function App() {
         fetchedPejabatList,
         fetchedProposalRabRes,
         fetchedProposalStyleRes,
+        fetchedProposalChanges,
       ] = await Promise.all([
         fetchSchedulesFromSupabase(),
         fetchAppStateSlice<ScheduleBooksState>('masdeta_schedule_books_v1', {
@@ -1687,6 +1707,7 @@ export default function App() {
         ),
         fetchProposalRabConfigsFromSupabase(),
         fetchProposalStyleHistoryFromSupabase(),
+        fetchAppStateSlice<ProposalChangeLogEntry[]>('masdeta_proposal_changes_v1', []),
       ]);
 
       const nowMs = Date.now();
@@ -1835,6 +1856,10 @@ export default function App() {
       }
       if (Array.isArray(fetchedProposalStyleRes?.items)) {
         setProposalStyleHistory(fetchedProposalStyleRes.items);
+      }
+      if (Array.isArray(fetchedProposalChanges)) {
+        proposalChangeLogsRef.current = fetchedProposalChanges;
+        setProposalChangeLogs(fetchedProposalChanges);
       }
       setProposalSchemaMissingNotice(
         Boolean(fetchedProposalRabRes?.schemaMissing || fetchedProposalStyleRes?.schemaMissing)
@@ -4612,6 +4637,134 @@ export default function App() {
         nextSlotMap
       );
 
+      const editChangeLogs: ProposalChangeLogEntry[] = [];
+      if (leftPreviousProposal && previousRecord && oldSlotHandling !== 'collapse') {
+        const oldSlotNum = getKpmSlotNumberInProposal(
+          previousRecord,
+          records,
+          proposals,
+          items,
+          wilayahList,
+          proposalSlotMapRef.current
+        );
+        const oldPropObj =
+          (previousRecord.proposalId
+            ? proposals.find((p) => p.id === previousRecord.proposalId)
+            : undefined) ??
+          proposals.find(
+            (p) =>
+              p.namaProposal === previousRecord.proposal && p.tahun === previousRecord.tahun
+          ) ??
+          proposals.find((p) => p.namaProposal === previousRecord.proposal);
+        editChangeLogs.push({
+          id: `pchg-edit-vac-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          proposalId: oldPropObj?.id || previousRecord.proposalId || '',
+          proposalName: previousRecord.proposal,
+          tahun: previousRecord.tahun || '',
+          slotNumber: oldSlotNum ?? null,
+          kind: 'kpm_vacated',
+          oldKpmId: previousRecord.id,
+          oldKpmName: previousRecord.nama,
+          oldNik: previousRecord.nikKtp,
+          oldItem: previousRecord.item,
+          oldKelurahan: previousRecord.kelurahan,
+          reason:
+            normalizedValues.validasi === 'rejected'
+              ? 'Dipindahkan ke Arsip Berkas Ditolak'
+              : normalizedValues.proposal
+                ? `Dipindahkan ke proposal ${normalizedValues.proposal}`
+                : 'Dikembalikan ke Database KPM',
+          source: 'auto',
+          actorName: currentActor.nama,
+          timestamp: now,
+        });
+      }
+
+      if (
+        !leftPreviousProposal &&
+        previousRecord &&
+        previousRecord.validasi === 'accepted' &&
+        normalizedValues.validasi === 'accepted' &&
+        Boolean(previousRecord.proposal?.trim()) &&
+        (previousRecord.item || '').trim().toUpperCase() !==
+          (normalizedValues.item || '').trim().toUpperCase()
+      ) {
+        const currentRecUpdated = nextRecords.find((r) => r.id === editingId) ?? {
+          ...previousRecord,
+          ...normalizedValues,
+        };
+        const currentSlotNum = getKpmSlotNumberInProposal(
+          currentRecUpdated,
+          nextRecords,
+          proposals,
+          items,
+          wilayahList,
+          nextSlotMap
+        );
+        editChangeLogs.push({
+          id: `pchg-edit-itm-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          proposalId: matchingProposal?.id || previousRecord.proposalId || '',
+          proposalName: normalizedValues.proposal || previousRecord.proposal,
+          tahun: normalizedValues.tahun || previousRecord.tahun || '',
+          slotNumber: currentSlotNum ?? null,
+          kind: 'item_changed',
+          oldKpmId: previousRecord.id,
+          oldKpmName: previousRecord.nama,
+          oldNik: previousRecord.nikKtp,
+          oldItem: previousRecord.item,
+          oldKelurahan: previousRecord.kelurahan,
+          newKpmId: editingId,
+          newKpmName: normalizedValues.nama,
+          newNik: normalizedValues.nikKtp,
+          newItem: normalizedValues.item,
+          newKelurahan: normalizedValues.kelurahan,
+          reason: 'Perubahan item bantuan pada edit data KPM',
+          source: 'auto',
+          actorName: currentActor.nama,
+          timestamp: now,
+        });
+      }
+
+      if (enteredOrTargetedProposal && targetSlotNumber && matchingProposal) {
+        const { state: prevTargetSlotState } = resolveProposalSlotStateForGroup(
+          proposalSlotMapRef.current,
+          matchingProposal.id,
+          matchingProposal.namaProposal,
+          matchingProposal.tahun,
+          proposals
+        );
+        const replacedEmpty = prevTargetSlotState?.emptySlots.find(
+          (es) => es.slotNumber === targetSlotNumber
+        );
+        if (replacedEmpty?.previousKpmName) {
+          const oldRecObj = replacedEmpty.previousKpmId
+            ? records.find((r) => r.id === replacedEmpty.previousKpmId)
+            : undefined;
+          editChangeLogs.push({
+            id: `pchg-edit-rep-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            proposalId: matchingProposal.id,
+            proposalName: matchingProposal.namaProposal,
+            tahun: matchingProposal.tahun,
+            slotNumber: targetSlotNumber,
+            kind: 'kpm_replaced',
+            oldKpmId: replacedEmpty.previousKpmId,
+            oldKpmName: replacedEmpty.previousKpmName,
+            oldNik: oldRecObj?.nikKtp,
+            oldItem: replacedEmpty.item || oldRecObj?.item,
+            oldKelurahan: oldRecObj?.kelurahan,
+            newKpmId: editingId,
+            newKpmName: normalizedValues.nama,
+            newNik: normalizedValues.nikKtp,
+            newItem: normalizedValues.item,
+            newKelurahan: normalizedValues.kelurahan,
+            reason: `Mengisi baris kosong #${String(targetSlotNumber).padStart(2, '0')} dari edit KPM`,
+            source: 'auto',
+            actorName: currentActor.nama,
+            timestamp: now,
+          });
+        }
+      }
+
       if (!isOnlineRef.current || (typeof navigator !== 'undefined' && !navigator.onLine)) {
         await enqueueOfflineAction({
           id: `off-save-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -4625,6 +4778,9 @@ export default function App() {
         setOfflineQueueCount(queue.length);
         if (nextSlotMap !== proposalSlotMapRef.current) {
           persistProposalSlotMap(nextSlotMap, nextRecords);
+        }
+        if (editChangeLogs.length > 0) {
+          appendProposalChangeLogs(editChangeLogs);
         }
         setKpmAuditLogs(nextAuditLogs);
         setProposalHistory(nextProposalHistory);
@@ -4688,6 +4844,9 @@ export default function App() {
 
       if (nextSlotMap !== proposalSlotMapRef.current) {
         persistProposalSlotMap(nextSlotMap, nextRecords);
+      }
+      if (editChangeLogs.length > 0) {
+        appendProposalChangeLogs(editChangeLogs);
       }
       setKpmAuditLogs(nextAuditLogs);
       setProposalHistory(nextProposalHistory);
@@ -4888,6 +5047,47 @@ export default function App() {
     if (nextSlotMap !== proposalSlotMapRef.current) {
       persistProposalSlotMap(nextSlotMap);
     }
+    if (effectiveTargetSlot && matchingProposal) {
+      const { state: prevTargetSlotState } = resolveProposalSlotStateForGroup(
+        proposalSlotMapRef.current,
+        matchingProposal.id,
+        matchingProposal.namaProposal,
+        matchingProposal.tahun,
+        proposals
+      );
+      const replacedEmpty = prevTargetSlotState?.emptySlots.find(
+        (es) => es.slotNumber === effectiveTargetSlot
+      );
+      if (replacedEmpty?.previousKpmName) {
+        const oldRecObj = replacedEmpty.previousKpmId
+          ? records.find((r) => r.id === replacedEmpty.previousKpmId)
+          : undefined;
+        appendProposalChangeLogs([
+          {
+            id: `pchg-rep-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            proposalId: matchingProposal.id,
+            proposalName: matchingProposal.namaProposal,
+            tahun: matchingProposal.tahun,
+            slotNumber: effectiveTargetSlot,
+            kind: 'kpm_replaced',
+            oldKpmId: replacedEmpty.previousKpmId,
+            oldKpmName: replacedEmpty.previousKpmName,
+            oldNik: oldRecObj?.nikKtp,
+            oldItem: replacedEmpty.item || oldRecObj?.item,
+            oldKelurahan: oldRecObj?.kelurahan,
+            newKpmId: savedNewRecord.id,
+            newKpmName: savedNewRecord.nama,
+            newNik: savedNewRecord.nikKtp,
+            newItem: savedNewRecord.item,
+            newKelurahan: savedNewRecord.kelurahan,
+            reason: `Mengisi baris kosong #${String(effectiveTargetSlot).padStart(2, '0')} dengan KPM baru`,
+            source: 'auto',
+            actorName: currentActor.nama,
+            timestamp: now,
+          },
+        ]);
+      }
+    }
     setRecords(nextRecordsList);
     setKpmAuditLogs(nextAuditLogs);
     setProposalHistory(nextProposalHistory);
@@ -5028,8 +5228,40 @@ export default function App() {
       kpmBastMapRef.current
     );
 
+    const vacatedSlotNumber = wasInAcceptedProposal
+      ? getKpmSlotNumberInProposal(
+          target,
+          records,
+          proposals,
+          items,
+          wilayahList,
+          proposalSlotMapRef.current
+        )
+      : null;
+
     if (nextSlotMap !== proposalSlotMapRef.current) {
       persistProposalSlotMap(nextSlotMap, nextRecords);
+    }
+    if (wasInAcceptedProposal && slotHandling === 'vacate') {
+      appendProposalChangeLogs([
+        {
+          id: `pchg-del-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          proposalId: prop?.id || target.proposalId || '',
+          proposalName: target.proposal,
+          tahun: target.tahun || prop?.tahun || '',
+          slotNumber: vacatedSlotNumber,
+          kind: 'kpm_vacated',
+          oldKpmId: target.id,
+          oldKpmName: target.nama,
+          oldNik: target.nikKtp,
+          oldItem: target.item,
+          oldKelurahan: target.kelurahan,
+          reason: 'Dihapus permanen dari daftar proposal',
+          source: 'auto',
+          actorName: currentActor.nama,
+          timestamp: now,
+        },
+      ]);
     }
     setKpmAuditLogs(nextLogs);
     setProposalHistory(nextHistory);
@@ -5390,8 +5622,45 @@ export default function App() {
     const nextLogs = [statusAudit, ...kpmAuditLogs];
     const nextHistory = addedHist.length > 0 ? [...addedHist, ...proposalHistory] : proposalHistory;
 
+    const prevSlotNum = isLeavingPrevProp
+      ? getKpmSlotNumberInProposal(
+          target,
+          records,
+          proposals,
+          items,
+          wilayahList,
+          proposalSlotMapRef.current
+        )
+      : null;
+
     if (nextSlotMap !== proposalSlotMapRef.current) {
       persistProposalSlotMap(nextSlotMap, nextRecords);
+    }
+    if (isLeavingPrevProp && slotHandling === 'vacate') {
+      appendProposalChangeLogs([
+        {
+          id: `pchg-st-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          proposalId: currentProp?.id || target.proposalId || '',
+          proposalName: target.proposal,
+          tahun: target.tahun || currentProp?.tahun || '',
+          slotNumber: prevSlotNum,
+          kind: 'kpm_vacated',
+          oldKpmId: target.id,
+          oldKpmName: target.nama,
+          oldNik: target.nikKtp,
+          oldItem: target.item,
+          oldKelurahan: target.kelurahan,
+          reason:
+            status === 'rejected'
+              ? 'Dipindahkan ke Arsip Berkas Ditolak'
+              : nextProposalName
+                ? `Dipindahkan ke ${nextProposalName}`
+                : 'Dikembalikan ke Database KPM',
+          source: 'auto',
+          actorName: currentActor.nama,
+          timestamp: now,
+        },
+      ]);
     }
     setKpmAuditLogs(nextLogs);
     setProposalHistory(nextHistory);
@@ -9147,6 +9416,40 @@ export default function App() {
     if (nextSlotMap !== proposalSlotMapRef.current) {
       persistProposalSlotMap(nextSlotMap);
     }
+    const transferVacatedLogs: ProposalChangeLogEntry[] = eligibleTargets.map((prev, idx) => {
+      const prevPropObj =
+        (prev.proposalId ? proposals.find((p) => p.id === prev.proposalId) : undefined) ??
+        proposals.find((p) => p.namaProposal === prev.proposal && p.tahun === prev.tahun) ??
+        proposals.find((p) => p.namaProposal === prev.proposal);
+      const slotNum = getKpmSlotNumberInProposal(
+        prev,
+        records,
+        proposals,
+        items,
+        wilayahList,
+        proposalSlotMapRef.current
+      );
+      return {
+        id: `pchg-tr-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+        proposalId: prevPropObj?.id || prev.proposalId || '',
+        proposalName: prev.proposal,
+        tahun: prev.tahun || prevPropObj?.tahun || '',
+        slotNumber: slotNum,
+        kind: 'kpm_vacated' as const,
+        oldKpmId: prev.id,
+        oldKpmName: prev.nama,
+        oldNik: prev.nikKtp,
+        oldItem: prev.item,
+        oldKelurahan: prev.kelurahan,
+        reason: `Ditransfer ke ${targetProposal.namaProposal} (${targetProposal.tahun})`,
+        source: 'auto' as const,
+        actorName: currentActor.nama,
+        timestamp: now,
+      };
+    });
+    if (transferVacatedLogs.length > 0) {
+      appendProposalChangeLogs(transferVacatedLogs);
+    }
     setKpmAuditLogs(nextAuditLogs);
     setProposalHistory(nextProposalHistory);
     setRecords(nextRecords);
@@ -9450,6 +9753,37 @@ export default function App() {
     if (!ok) return;
 
     persistProposalSlotMap(nextSlotMap, nextRecords);
+    const oldKpmRef = matchedEmptySlot?.previousKpmId
+      ? records.find((r) => r.id === matchedEmptySlot.previousKpmId)
+      : undefined;
+    if (matchedEmptySlot?.previousKpmName || existingSlotState?.emptySlots.some((e) => e.slotNumber === slotNumber)) {
+      appendProposalChangeLogs([
+        {
+          id: `pchg-fill-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          proposalId: prop.id,
+          proposalName: prop.namaProposal,
+          tahun: prop.tahun,
+          slotNumber,
+          kind: matchedEmptySlot?.previousKpmName ? 'kpm_replaced' : 'kpm_added',
+          oldKpmId: matchedEmptySlot?.previousKpmId,
+          oldKpmName: matchedEmptySlot?.previousKpmName || '(Baris Kosong BAST)',
+          oldNik: oldKpmRef?.nikKtp,
+          oldItem: matchedEmptySlot?.item || oldKpmRef?.item,
+          oldKelurahan: oldKpmRef?.kelurahan,
+          newKpmId: target.id,
+          newKpmName: target.nama,
+          newNik: target.nikKtp,
+          newItem: nextItem,
+          newKelurahan: dom.kelurahan || target.kelurahan,
+          reason: itemChanged
+            ? `Mengisi baris kosong #${String(slotNumber).padStart(2, '0')} (item ${target.item || '-'} → ${nextItem})`
+            : `Mengisi baris kosong #${String(slotNumber).padStart(2, '0')}`,
+          source: 'auto',
+          actorName: currentActor.nama,
+          timestamp: now,
+        },
+      ]);
+    }
     setKpmAuditLogs([auditEntry, ...kpmAuditLogs]);
     setProposalHistory([histEntry, ...proposalHistory]);
     setRecords(nextRecords);
@@ -9483,6 +9817,328 @@ export default function App() {
         ? `"${target.nama}" ditempatkan ke nomor urut #${String(slotNumber).padStart(2, '0')} di ${prop.namaProposal} (item otomatis disesuaikan dari ${target.item || '-'} ke ${nextItem}).`
         : `"${target.nama}" ditempatkan ke nomor urut #${String(slotNumber).padStart(2, '0')} di ${prop.namaProposal}.`,
     });
+  };
+
+  const persistProposalChangeLogs = useCallback(
+    (nextLogs: ProposalChangeLogEntry[]) => {
+      proposalChangeLogsRef.current = nextLogs;
+      setProposalChangeLogs(nextLogs);
+      void saveAppStateSlice('masdeta_proposal_changes_v1', nextLogs);
+    },
+    []
+  );
+
+  const appendProposalChangeLogs = useCallback(
+    (incoming: ProposalChangeLogEntry[]) => {
+      if (incoming.length === 0) return;
+      let nextLogs = [...proposalChangeLogsRef.current];
+      for (const item of incoming) {
+        if (item.kind === 'kpm_replaced' && item.slotNumber && item.slotNumber > 0) {
+          // Pasangkan dengan entri kpm_vacated yang terbuka di slot & proposal yang sama jika ada
+          const openVacatedIdx = nextLogs.findIndex(
+            (existing) =>
+              existing.kind === 'kpm_vacated' &&
+              existing.slotNumber === item.slotNumber &&
+              ((existing.proposalId && item.proposalId && existing.proposalId === item.proposalId) ||
+                (existing.proposalName === item.proposalName &&
+                  (!existing.tahun || !item.tahun || existing.tahun === item.tahun)))
+          );
+          if (openVacatedIdx >= 0) {
+            const openVac = nextLogs[openVacatedIdx];
+            const mergedItem: ProposalChangeLogEntry = {
+              ...item,
+              oldKpmId: item.oldKpmId || openVac.oldKpmId,
+              oldKpmName: item.oldKpmName || openVac.oldKpmName,
+              oldNik: item.oldNik || openVac.oldNik,
+              oldItem: item.oldItem || openVac.oldItem,
+              oldKelurahan: item.oldKelurahan || openVac.oldKelurahan,
+              reason: item.reason || openVac.reason,
+            };
+            nextLogs.splice(openVacatedIdx, 1);
+            nextLogs = [mergedItem, ...nextLogs];
+            continue;
+          }
+        }
+        nextLogs = [item, ...nextLogs];
+      }
+      persistProposalChangeLogs(nextLogs);
+    },
+    [persistProposalChangeLogs]
+  );
+
+  const handleReplaceKpmInProposal = async (params: {
+    proposalId: string;
+    slotNumber: number;
+    oldKpmId: string;
+    newKpmId: string;
+    oldKpmDestination: 'database' | 'rejected';
+    followSlotItem: boolean;
+    reason?: string;
+  }): Promise<boolean> => {
+    if (!requirePermission('update', 'mengganti KPM pada proposal')) return false;
+    const prop = proposals.find((p) => p.id === params.proposalId);
+    if (!prop) {
+      setFeedback({ type: 'error', message: 'Proposal tidak ditemukan.' });
+      return false;
+    }
+    if (prop.status === 'locked') {
+      setFeedback({
+        type: 'error',
+        message: `Proposal "${prop.namaProposal}" berstatus Terkunci.`,
+      });
+      return false;
+    }
+
+    const oldRec = records.find((r) => r.id === params.oldKpmId);
+    const newRec = records.find((r) => r.id === params.newKpmId);
+    if (!oldRec || !newRec) {
+      setFeedback({ type: 'error', message: 'Data KPM lama atau KPM pengganti tidak ditemukan.' });
+      return false;
+    }
+    if (oldRec.id === newRec.id) {
+      setFeedback({ type: 'error', message: 'KPM pengganti harus berbeda dengan KPM lama.' });
+      return false;
+    }
+
+    const now = new Date().toISOString();
+    const domNew = resolveKpmDomicile(
+      { ...newRec, proposalId: prop.id, proposal: prop.namaProposal },
+      proposals,
+      wilayahList
+    );
+    const resolvedItem = params.followSlotItem
+      ? (oldRec.item || newRec.item || '').trim()
+      : (newRec.item || oldRec.item || '').trim();
+    const itemChanged =
+      Boolean(resolvedItem) &&
+      resolvedItem.toUpperCase() !== (newRec.item || '').trim().toUpperCase();
+
+    const mapped = records.map((r) => {
+      if (r.id === oldRec.id) {
+        return {
+          ...r,
+          validasi: (params.oldKpmDestination === 'rejected'
+            ? 'rejected'
+            : 'pending') as ValidationStatus,
+          proposalId: null,
+          proposal: '',
+          tahun: '',
+          registerCode: '',
+          updatedAt: now,
+        };
+      }
+      if (r.id === newRec.id) {
+        return {
+          ...r,
+          validasi: 'accepted' as ValidationStatus,
+          proposalId: prop.id,
+          proposal: prop.namaProposal,
+          tahun: prop.tahun,
+          item: resolvedItem,
+          subItemDeliveries: itemChanged ? {} : r.subItemDeliveries,
+          kabKota: domNew.kabKota,
+          kecamatan: domNew.kecamatan,
+          kelurahan: domNew.kelurahan,
+          updatedAt: now,
+        };
+      }
+      return r;
+    });
+
+    const { slotMap: nextSlotMap, slotNumber: resolvedSlotNum } = replaceKpmInProposalSlotMap(
+      proposalSlotMapRef.current,
+      prop.id,
+      prop.namaProposal,
+      prop.tahun,
+      oldRec.id,
+      newRec.id,
+      records,
+      proposals,
+      items,
+      wilayahList
+    );
+    const finalSlotNumber = resolvedSlotNum ?? params.slotNumber;
+
+    const nextRecords = mergeBastIntoRecords(
+      recalculateProposalRegisterCodes(mapped, proposals, items, wilayahList, nextSlotMap),
+      kpmBastMapRef.current
+    );
+
+    const cleanReason = (params.reason || '').trim();
+    const slotLabel = `#${String(finalSlotNumber).padStart(2, '0')}`;
+    const destLabel =
+      params.oldKpmDestination === 'rejected' ? 'Arsip Berkas Ditolak' : 'Database KPM';
+
+    const auditOld: KpmAuditLogEntry = {
+      id: `audit-rep-old-${Date.now()}`,
+      kpmId: oldRec.id,
+      action: 'status_changed',
+      actorName: currentActor.nama,
+      actorEmail: currentActor.email,
+      timestamp: now,
+      proposal: destLabel,
+      tahun: '',
+      changes: [
+        {
+          field: `Pergantian KPM Slot ${slotLabel}`,
+          before: `${prop.namaProposal} (${oldRec.nama})`,
+          after: `Diganti oleh ${newRec.nama} · KPM lama dipindah ke ${destLabel}`,
+        },
+      ],
+    };
+    const auditNew: KpmAuditLogEntry = {
+      id: `audit-rep-new-${Date.now() + 1}`,
+      kpmId: newRec.id,
+      action: 'status_changed',
+      actorName: currentActor.nama,
+      actorEmail: currentActor.email,
+      timestamp: now,
+      proposal: prop.namaProposal,
+      tahun: prop.tahun,
+      changes: [
+        {
+          field: `Pergantian KPM Slot ${slotLabel}`,
+          before: newRec.proposal || 'Database KPM',
+          after: `${prop.namaProposal} · Menggantikan ${oldRec.nama}`,
+        },
+        ...(itemChanged
+          ? [
+              {
+                field: 'Item Bantuan',
+                before: newRec.item || '-',
+                after: `${resolvedItem} (mengikuti slot ${slotLabel})`,
+              },
+            ]
+          : []),
+      ],
+    };
+
+    const updatedNewRec = nextRecords.find((r) => r.id === newRec.id);
+    const histOut: ProposalKpmHistoryEntry = {
+      id: `hist-rep-out-${Date.now()}`,
+      tahun: prop.tahun,
+      proposalName: prop.namaProposal,
+      kpmId: oldRec.id,
+      kpmName: oldRec.nama,
+      registerCode: oldRec.registerCode,
+      action: 'moved_out',
+      fromProposal: prop.namaProposal,
+      toProposal: `${destLabel} (Diganti ${newRec.nama})`,
+      actorName: currentActor.nama,
+      timestamp: now,
+    };
+    const histIn: ProposalKpmHistoryEntry = {
+      id: `hist-rep-in-${Date.now() + 1}`,
+      tahun: prop.tahun,
+      proposalName: prop.namaProposal,
+      kpmId: newRec.id,
+      kpmName: newRec.nama,
+      registerCode: updatedNewRec?.registerCode || newRec.registerCode,
+      action: 'moved_in',
+      fromProposal: newRec.proposal || 'Database KPM',
+      toProposal: `${prop.namaProposal} (Slot ${slotLabel})`,
+      actorName: currentActor.nama,
+      timestamp: now,
+    };
+
+    const changeEntry: ProposalChangeLogEntry = {
+      id: `pchg-swap-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      proposalId: prop.id,
+      proposalName: prop.namaProposal,
+      tahun: prop.tahun,
+      slotNumber: finalSlotNumber,
+      kind: 'kpm_replaced',
+      oldKpmId: oldRec.id,
+      oldKpmName: oldRec.nama,
+      oldNik: oldRec.nikKtp,
+      oldItem: oldRec.item,
+      oldKelurahan: oldRec.kelurahan,
+      newKpmId: newRec.id,
+      newKpmName: newRec.nama,
+      newNik: newRec.nikKtp,
+      newItem: resolvedItem,
+      newKelurahan: domNew.kelurahan || newRec.kelurahan,
+      reason:
+        cleanReason ||
+        `Pergantian langsung KPM slot ${slotLabel} (KPM lama dipindah ke ${destLabel})`,
+      source: 'auto',
+      actorName: currentActor.nama,
+      timestamp: now,
+    };
+
+    const prevById = new Map(records.map((r) => [r.id, r]));
+    const changedRecords = nextRecords.filter(
+      (r) =>
+        r.id === oldRec.id ||
+        r.id === newRec.id ||
+        prevById.get(r.id)?.registerCode !== r.registerCode
+    );
+
+    const nextAuditLogs = [auditNew, auditOld, ...kpmAuditLogs];
+    const nextHistory = [histIn, histOut, ...proposalHistory];
+
+    const ok = supabaseReadyRef.current
+      ? await runSupabaseMutation(
+          () =>
+            upsertKpmRecordsBatchInSupabase({
+              records: changedRecords,
+              proposals,
+              pengelolaList,
+              auditLogs: [auditNew, auditOld],
+              historyEntries: [histIn, histOut],
+              includeDeliveries: false,
+            }),
+          'Gagal mengganti KPM pada proposal ke Supabase'
+        )
+      : await syncOperationalData(
+          {
+            records: nextRecords,
+            kpmAuditLogs: nextAuditLogs,
+            proposalHistory: nextHistory,
+          },
+          'update'
+        );
+    if (!ok) return false;
+
+    persistProposalSlotMap(nextSlotMap, nextRecords);
+    appendProposalChangeLogs([changeEntry]);
+    setKpmAuditLogs(nextAuditLogs);
+    setProposalHistory(nextHistory);
+    setRecords(nextRecords);
+
+    setFeedback({
+      type: 'success',
+      message: `Slot ${slotLabel} berhasil diganti: "${oldRec.nama}" → "${newRec.nama}".`,
+    });
+    return true;
+  };
+
+  const handleAddManualProposalChange = (
+    draft: Omit<ProposalChangeLogEntry, 'id' | 'actorName' | 'timestamp'>
+  ) => {
+    if (!requirePermission('update', 'mencatat rekap perubahan proposal')) return;
+    const entry: ProposalChangeLogEntry = {
+      ...draft,
+      id: `pchg-man-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      source: 'manual',
+      actorName: currentActor.nama,
+      timestamp: new Date().toISOString(),
+    };
+    persistProposalChangeLogs([entry, ...proposalChangeLogsRef.current]);
+  };
+
+  const handleUpdateProposalChangeReason = (entryId: string, reason: string) => {
+    if (!requirePermission('update', 'mengubah keterangan rekap perubahan')) return;
+    const nextLogs = proposalChangeLogsRef.current.map((item) =>
+      item.id === entryId ? { ...item, reason: reason.trim() } : item
+    );
+    persistProposalChangeLogs(nextLogs);
+  };
+
+  const handleDeleteProposalChange = (entryId: string) => {
+    if (!requirePermission('update', 'menghapus catatan rekap perubahan')) return;
+    const nextLogs = proposalChangeLogsRef.current.filter((item) => item.id !== entryId);
+    persistProposalChangeLogs(nextLogs);
   };
 
   const persistReconcileSnapshots = (
@@ -11003,6 +11659,17 @@ export default function App() {
               onOpenProposalBuilder={(proposalId) =>
                 openProposalBuilder(proposalId, 'proposal-detail')
               }
+              proposalChangeLogs={proposalChangeLogs.filter(
+                (entry) =>
+                  (entry.proposalId && entry.proposalId === activeProposal.id) ||
+                  (entry.proposalName === activeProposal.namaProposal &&
+                    (!entry.tahun || entry.tahun === activeProposal.tahun))
+              )}
+              kpmAuditLogs={kpmAuditLogs}
+              onReplaceKpmInProposal={handleReplaceKpmInProposal}
+              onAddManualProposalChange={handleAddManualProposalChange}
+              onUpdateProposalChangeReason={handleUpdateProposalChangeReason}
+              onDeleteProposalChange={handleDeleteProposalChange}
             />
           </div>
         )}
