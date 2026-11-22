@@ -7226,6 +7226,7 @@ export interface CatNomorItemColumn {
 }
 
 export interface CatNomorProposalRow {
+  key: string;
   proposalId?: string;
   proposalName: string;
   tahun: string;
@@ -7293,6 +7294,7 @@ export function buildCatNomorBarangMatrix(options: {
   selectedYear: string;
   proposalNameFilter?: string;
   proposalTipeFilter?: 'all' | ProposalTipe;
+  proposalKeysFilter?: string[];
 }): CatNomorMatrixData {
   const {
     records,
@@ -7303,6 +7305,7 @@ export function buildCatNomorBarangMatrix(options: {
     selectedYear,
     proposalNameFilter = 'all',
     proposalTipeFilter = 'all',
+    proposalKeysFilter,
   } = options;
 
   const isSpecificYear = Boolean(
@@ -7399,7 +7402,12 @@ export function buildCatNomorBarangMatrix(options: {
   const itemTotals = new Map<string, number>();
   const rawRows: CatNomorProposalRow[] = [];
 
+  const allowedKeysSet = Array.isArray(proposalKeysFilter)
+    ? new Set(proposalKeysFilter)
+    : null;
+
   for (const cand of candidateMap.values()) {
+    if (allowedKeysSet && !allowedKeysSet.has(cand.key)) continue;
     const slotResolution = resolveProposalSlotStateForGroup(
       proposalSlotMap,
       cand.proposalId,
@@ -7438,6 +7446,7 @@ export function buildCatNomorBarangMatrix(options: {
     }
 
     rawRows.push({
+      key: cand.key,
       proposalId: cand.proposalId,
       proposalName: cand.proposalName,
       tahun: cand.tahun,
@@ -7532,6 +7541,7 @@ export interface ExportCatNomorBarangPdfOptions {
   selectedYear: string;
   proposalNameFilter?: string;
   proposalTipeFilter?: 'all' | ProposalTipe;
+  proposalKeysFilter?: string[];
   orientation: CatNomorOrientation;
   paperSize?: CatNomorPaperSize;
   fileName?: string;
@@ -7569,6 +7579,250 @@ export async function exportCatNomorBarangToPdf(
   });
 
   const isLandscape = orientation === 'landscape';
+  const tipeBadgeText =
+    options.proposalTipeFilter && options.proposalTipeFilter !== 'all'
+      ? ` · Proposal ${options.proposalTipeFilter}`
+      : '';
+  const yearHeadingText =
+    matrix.yearLabel === 'Semua Tahun'
+      ? `Semua Tahun${tipeBadgeText}`
+      : `Tahun ${matrix.yearLabel}${tipeBadgeText}`;
+
+  // MODE 1 PROPOSAL (SATUAN): Cetak full 1 lembar ukuran besar dalam format grid kartu multi-baris
+  if (matrix.rows.length === 1) {
+    const singleRow = matrix.rows[0];
+    const sMargin = isLandscape
+      ? { top: 9, right: 9, bottom: 10, left: 9 }
+      : { top: 9, right: 8, bottom: 10, left: 8 };
+    const sPrintableW = pageW - sMargin.left - sMargin.right;
+
+    // Header besar 1 proposal
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(isLandscape ? 11.5 : 10);
+    doc.setTextColor(30, 58, 95);
+    doc.text('CAT NOMOR BARANG', sMargin.left, sMargin.top + 4);
+
+    const rightHeaderTop = [
+      singleRow.tahun ? `Tahun ${singleRow.tahun}` : matrix.yearLabel,
+      singleRow.tipe ? `Proposal ${singleRow.tipe}` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    doc.setFontSize(isLandscape ? 11 : 9.5);
+    doc.setTextColor(30, 58, 95);
+    doc.text(rightHeaderTop, pageW - sMargin.right, sMargin.top + 4, { align: 'right' });
+
+    // Judul Lokasi / Proposal sangat besar
+    let propTitleSize = isLandscape ? 22 : 17;
+    const maxTitleW = sPrintableW * 0.7;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(propTitleSize);
+    while (propTitleSize > 12 && doc.getTextWidth(singleRow.proposalName) > maxTitleW) {
+      propTitleSize -= 0.8;
+      doc.setFontSize(propTitleSize);
+    }
+    doc.setTextColor(15, 23, 42);
+    doc.text(singleRow.proposalName, sMargin.left, sMargin.top + 13);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(isLandscape ? 10.5 : 9);
+    doc.setTextColor(71, 85, 105);
+    doc.text(
+      `Total ${singleRow.totalSlots} Nomor Slot · ${matrix.columns.length} Item`,
+      pageW - sMargin.right,
+      sMargin.top + 13,
+      { align: 'right' }
+    );
+
+    doc.setDrawColor(30, 58, 95);
+    doc.setLineWidth(0.75);
+    doc.line(sMargin.left, sMargin.top + 17.5, pageW - sMargin.right, sMargin.top + 17.5);
+
+    const gridStartY = sMargin.top + 21;
+    const footerReserve = 7;
+    const gridAvailH = pageH - sMargin.bottom - footerReserve - gridStartY;
+
+    const totalCols = Math.max(1, matrix.columns.length);
+    let cols = 5;
+    if (isLandscape) {
+      if (totalCols <= 4) cols = totalCols;
+      else if (totalCols <= 8) cols = Math.ceil(totalCols / 2);
+      else if (totalCols <= 10) cols = 5;
+      else if (totalCols <= 12) cols = 4;
+      else if (totalCols <= 15) cols = 5;
+      else cols = 6;
+    } else {
+      if (totalCols <= 3) cols = totalCols;
+      else if (totalCols <= 6) cols = 2;
+      else if (totalCols <= 12) cols = 3;
+      else cols = 4;
+    }
+    const gridRows = Math.max(1, Math.ceil(totalCols / cols));
+    const gapX = isLandscape ? 4.5 : 3.8;
+    const gapY = isLandscape ? 4.5 : 3.8;
+    const cardW = (sPrintableW - gapX * (cols - 1)) / cols;
+    const cardH = (gridAvailH - gapY * (gridRows - 1)) / gridRows;
+
+    matrix.columns.forEach((col, idx) => {
+      const rIdx = Math.floor(idx / cols);
+      const cIdx = idx % cols;
+      const x = sMargin.left + cIdx * (cardW + gapX);
+      const y = gridStartY + rIdx * (cardH + gapY);
+
+      const rangeText = singleRow.rangesByItem[col.code] || '—';
+      const unitCount = singleRow.countsByItem[col.code] || 0;
+      const hasItems = rangeText !== '—' && unitCount > 0;
+
+      // Latar belakang kartu
+      if (hasItems) {
+        doc.setFillColor(255, 255, 255);
+      } else {
+        doc.setFillColor(248, 250, 252);
+      }
+      doc.roundedRect(x, y, cardW, cardH, 2.2, 2.2, 'F');
+
+      // Pita header item di atas kartu
+      const headerH = Math.min(22, Math.max(13, cardH * 0.28));
+      if (hasItems) {
+        doc.setFillColor(30, 58, 95);
+      } else {
+        doc.setFillColor(226, 232, 240);
+      }
+      doc.roundedRect(x, y, cardW, headerH, 2.2, 2.2, 'F');
+      doc.rect(x, y + headerH * 0.45, cardW, headerH * 0.55, 'F');
+
+      // Kode item besar & jumlah unit
+      const codeFontSize = Math.min(18, Math.max(12.5, cardH * 0.24));
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(codeFontSize);
+      if (hasItems) {
+        doc.setTextColor(255, 255, 255);
+      } else {
+        doc.setTextColor(71, 85, 105);
+      }
+      doc.text(col.code, x + 3.2, y + headerH * 0.4, { baseline: 'middle' });
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(Math.min(10, Math.max(7.8, cardW * 0.145)));
+      if (hasItems) {
+        doc.setTextColor(191, 219, 254);
+      } else {
+        doc.setTextColor(100, 116, 139);
+      }
+      doc.text(hasItems ? `${unitCount} KPM` : 'Kosong', x + cardW - 3.2, y + headerH * 0.38, {
+        align: 'right',
+        baseline: 'middle',
+      });
+
+      // Nama item di bawah kode
+      const subNameFont = Math.min(9.5, Math.max(7.2, cardH * 0.125));
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(subNameFont);
+      if (hasItems) {
+        doc.setTextColor(226, 232, 240);
+      } else {
+        doc.setTextColor(100, 116, 139);
+      }
+      const displaySubName = col.name && col.name.length <= 30 ? col.name : col.shortLabel;
+      const wrappedSub = (
+        doc.splitTextToSize(displaySubName, Math.max(14, cardW - 6.4)) as string[]
+      ).slice(0, 1);
+      doc.text(wrappedSub, x + 3.2, y + headerH * 0.77, { baseline: 'middle' });
+
+      // Border luar kartu
+      if (hasItems) {
+        doc.setDrawColor(30, 58, 95);
+        doc.setLineWidth(0.6);
+      } else {
+        doc.setDrawColor(203, 213, 225);
+        doc.setLineWidth(0.35);
+      }
+      doc.roundedRect(x, y, cardW, cardH, 2.2, 2.2, 'S');
+
+      // Area isi rentang nomor barang sangat besar
+      const bodyY = y + headerH;
+      const bodyH = cardH - headerH;
+      const cx = x + cardW / 2;
+      const cy = bodyY + bodyH / 2;
+
+      if (!hasItems) {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(Math.min(28, bodyH * 0.45));
+        doc.setTextColor(148, 163, 184);
+        doc.text('—', cx, cy - 1.5, { align: 'center', baseline: 'middle' });
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8.2);
+        doc.text('Tidak ada penerima', cx, cy + 7, { align: 'center', baseline: 'middle' });
+      } else {
+        const lines = rangeText.split('\n').filter(Boolean);
+        const maxWidthAllowed = Math.max(14, cardW - 6);
+        const ptToMm = 25.4 / 72;
+        const maxByHeight =
+          lines.length === 1
+            ? Math.min(36, ((bodyH - 8) * 0.56) / ptToMm)
+            : lines.length === 2
+              ? Math.min(26, ((bodyH - 8) / (2 * 1.28)) / ptToMm)
+              : Math.min(20, ((bodyH - 6) / (lines.length * 1.24)) / ptToMm);
+
+        let rangeFont = Math.max(12, maxByHeight);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(rangeFont);
+        const longestLine = lines.reduce((a, b) => (a.length >= b.length ? a : b), '');
+        while (rangeFont > 11 && doc.getTextWidth(longestLine) > maxWidthAllowed) {
+          rangeFont -= 0.6;
+          doc.setFontSize(rangeFont);
+        }
+
+        const lineHeightMm = rangeFont * ptToMm * 1.24;
+        const blockH = lineHeightMm * lines.length;
+        const firstLineY = cy - blockH / 2 + lineHeightMm / 2;
+
+        doc.setTextColor(15, 23, 42);
+        lines.forEach((line, lIdx) => {
+          doc.text(line, cx, firstLineY + lIdx * lineHeightMm, {
+            align: 'center',
+            baseline: 'middle',
+          });
+        });
+      }
+    });
+
+    // Footer halaman tunggal
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(isLandscape ? 8.2 : 7.5);
+    doc.setTextColor(100, 116, 139);
+    const footerY = pageH - 5;
+    doc.text(
+      `CAT NOMOR BARANG — ${singleRow.proposalName} (${rightHeaderTop})`,
+      sMargin.left,
+      footerY
+    );
+    doc.text(
+      `Format Full 1 Lembar · ${singleRow.totalSlots} Nomor`,
+      pageW - sMargin.right,
+      footerY,
+      { align: 'right' }
+    );
+
+    const orientationLabel = isLandscape ? 'Landscape' : 'Portrait';
+    const paperLabel = paperSize.toUpperCase();
+    const safeProp = singleRow.proposalName
+      .replace(/[^a-zA-Z0-9\s-]/g, '')
+      .trim()
+      .replace(/\s+/g, '_')
+      .slice(0, 40);
+    const safeYear = (singleRow.tahun || matrix.yearLabel).replace(/\s+/g, '_');
+    const safeTipe = singleRow.tipe ? `_${singleRow.tipe}` : '';
+    const defaultFileName = `CAT_NOMOR_BARANG_${safeProp}_${safeYear}${safeTipe}_${orientationLabel}_${paperLabel}`;
+    const saved = await saveOrOpenPdfDocument(doc, options.fileName || defaultFileName);
+
+    return {
+      ...saved,
+      proposalCount: matrix.totalProposals,
+      totalSlots: matrix.totalSlots,
+    };
+  }
+
   const margin = isLandscape
     ? { top: 11, right: 10, bottom: 13, left: 10 }
     : { top: 10, right: 7.5, bottom: 12, left: 7.5 };
@@ -7584,14 +7838,6 @@ export async function exportCatNomorBarangToPdf(
   const itemPoolW = Math.max(60, printableW - noColW - lokasiColW);
   const itemColW = itemPoolW / colCount;
 
-  const tipeBadgeText =
-    options.proposalTipeFilter && options.proposalTipeFilter !== 'all'
-      ? ` · Proposal ${options.proposalTipeFilter}`
-      : '';
-  const yearHeadingText =
-    matrix.yearLabel === 'Semua Tahun'
-      ? `Semua Tahun${tipeBadgeText}`
-      : `Tahun ${matrix.yearLabel}${tipeBadgeText}`;
   const locationYearSub =
     matrix.yearLabel === 'Semua Tahun' ? 'Semua Tahun' : `Tahun ${matrix.yearLabel}`;
 

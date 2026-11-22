@@ -140,6 +140,13 @@ interface ProposalDetailViewProps {
     documents: ProposalDocuments,
     checklist: ProposalChecklist
   ) => Promise<void> | void;
+  onCreateForEmptySlot?: (
+    proposalId: string,
+    proposalName: string,
+    tahun: string,
+    slotNumber: number,
+    item?: string
+  ) => void;
   onFillEmptySlotFromDatabase?: (
     kpmId: string,
     proposalName: string,
@@ -200,6 +207,7 @@ export function ProposalDetailView({
   onOpenProposalBuilder,
   onPreviewDocument,
   onUpdateProposalDocuments,
+  onCreateForEmptySlot,
   onFillEmptySlotFromDatabase,
   activeReconcileSnapshot = null,
   onUndoReconcileSnapshot,
@@ -3247,6 +3255,12 @@ export function ProposalDetailView({
                 canUpdate &&
                 !isOffline;
 
+              const canCreateEmpty =
+                Boolean(onCreateForEmptySlot) &&
+                proposal.status !== 'locked' &&
+                canAdd &&
+                !isOffline;
+
               return (
                 <div
                   key={`empty-slot-${entry.slotNumber}`}
@@ -3275,34 +3289,64 @@ export function ProposalDetailView({
                       <p className="mt-0.5 truncate text-xs text-amber-900/80">
                         {entry.emptySlot.previousKpmName
                           ? `Slot bekas ${entry.emptySlot.previousKpmName}`
-                          : 'Slot kuota BAST belum terisi · siap diisi dari Database KPM'}
+                          : 'Slot kuota BAST belum terisi · siap diisi KPM baru atau dari Database KPM'}
                       </p>
                     </div>
                   </div>
 
-                  {onFillEmptySlotFromDatabase && (
-                    <button
-                      type="button"
-                      disabled={!canFillEmpty}
-                      onClick={() => {
-                        setDbPickerQuery('');
-                        setDbPickerTargetSlot({
-                          slotNumber: entry.slotNumber,
-                          item: entry.emptySlot.item,
-                        });
-                      }}
-                      title={
-                        isOffline
-                          ? 'Mode Offline (Hanya Baca)'
-                          : proposal.status === 'locked'
-                            ? 'Proposal Terkunci'
-                            : 'Isi slot kosong dari Database KPM'
-                      }
-                      className="inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-bold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
-                    >
-                      <Database className="h-3.5 w-3.5" />
-                      <span>+ Isi dari Database</span>
-                    </button>
+                  {(onCreateForEmptySlot || onFillEmptySlotFromDatabase) && (
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      {onCreateForEmptySlot && (
+                        <button
+                          type="button"
+                          disabled={!canCreateEmpty}
+                          onClick={() =>
+                            onCreateForEmptySlot(
+                              proposal.id,
+                              proposal.namaProposal,
+                              proposal.tahun,
+                              entry.slotNumber,
+                              entry.emptySlot.item
+                            )
+                          }
+                          title={
+                            isOffline
+                              ? 'Mode Offline (Hanya Baca)'
+                              : proposal.status === 'locked'
+                                ? 'Proposal Terkunci'
+                                : 'Input KPM baru langsung pada slot ini'
+                          }
+                          className="inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-xl border border-amber-300 bg-white px-3 text-xs font-bold text-amber-900 transition-colors hover:bg-amber-100/70 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          <span>Daftar Baru</span>
+                        </button>
+                      )}
+                      {onFillEmptySlotFromDatabase && (
+                        <button
+                          type="button"
+                          disabled={!canFillEmpty}
+                          onClick={() => {
+                            setDbPickerQuery('');
+                            setDbPickerTargetSlot({
+                              slotNumber: entry.slotNumber,
+                              item: entry.emptySlot.item,
+                            });
+                          }}
+                          title={
+                            isOffline
+                              ? 'Mode Offline (Hanya Baca)'
+                              : proposal.status === 'locked'
+                                ? 'Proposal Terkunci'
+                                : 'Isi slot kosong dari Database KPM'
+                          }
+                          className="inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-bold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+                        >
+                          <Database className="h-3.5 w-3.5" />
+                          <span>Dari Database</span>
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               );

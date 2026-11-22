@@ -762,6 +762,7 @@ export default function App() {
   const kpmBastMapRef = useRef<Record<string, KpmBastInfo>>(kpmBastMap);
   const kpmAttendanceMapRef = useRef<Record<string, KpmAttendanceInfo>>(kpmAttendanceMap);
   const proposalSlotMapRef = useRef<ProposalSlotMap>(proposalSlotMap);
+  const rawProposalSlotMapRef = useRef<ProposalSlotMap>(proposalSlotMap);
   const loadAppStateSlicesRef = useRef<() => Promise<void>>(async () => {});
   const currentUserAliasesRef = useRef<Record<string, string>>({});
   const isFlushingQueueRef = useRef<boolean>(false);
@@ -1626,12 +1627,19 @@ export default function App() {
   );
 
   const persistProposalSlotMap = useCallback(
-    (nextSlotMap: ProposalSlotMap, recordsOverride?: KpmRecord[]) => {
+    (
+      nextSlotMap: ProposalSlotMap,
+      recordsOverride?: KpmRecord[],
+      proposalsOverride?: ProposalRecord[]
+    ) => {
       const refRecords = recordsOverride ?? latestDataRef.current.records;
+      const refProposals = proposalsOverride ?? proposalsRef.current;
       const cleanSlotMap =
         refRecords.length > 0
-          ? sanitizeProposalSlotMap(nextSlotMap, refRecords, proposalsRef.current)
+          ? sanitizeProposalSlotMap(nextSlotMap, refRecords, refProposals)
           : nextSlotMap;
+      lastLocalSyncAtRef.current = Date.now();
+      rawProposalSlotMapRef.current = cleanSlotMap;
       proposalSlotMapRef.current = cleanSlotMap;
       setProposalSlotMap(cleanSlotMap);
       void saveAppStateSlice('masdeta_proposal_slots_v1', cleanSlotMap);
@@ -1755,7 +1763,10 @@ export default function App() {
         fetchedSlotMap && typeof fetchedSlotMap === 'object' && !Array.isArray(fetchedSlotMap)
           ? fetchedSlotMap
           : {};
+      rawProposalSlotMapRef.current = rawSlotMap;
       const safeSlotMap: ProposalSlotMap =
+        hasAppliedRemoteRef.current &&
+        !isManualRefreshingRef.current &&
         latestDataRef.current.records.length > 0
           ? sanitizeProposalSlotMap(rawSlotMap, latestDataRef.current.records, proposalsRef.current)
           : rawSlotMap;
@@ -1871,19 +1882,21 @@ export default function App() {
       if (fetchedAliases && typeof fetchedAliases === 'object' && !Array.isArray(fetchedAliases)) {
         setUserAliasesByOwner(fetchedAliases);
       }
-      setRecords((prev) =>
-        mergeBastIntoRecords(
-          recalculateProposalRegisterCodes(
-            prev,
-            proposalsRef.current,
-            latestDataRef.current.items,
-            latestDataRef.current.wilayahList,
-            safeSlotMap
-          ),
-          safeBastMap,
-          safeAttendanceMap
-        )
-      );
+      if (!isManualRefreshingRef.current) {
+        setRecords((prev) =>
+          mergeBastIntoRecords(
+            recalculateProposalRegisterCodes(
+              prev,
+              proposalsRef.current,
+              latestDataRef.current.items,
+              latestDataRef.current.wilayahList,
+              safeSlotMap
+            ),
+            safeBastMap,
+            safeAttendanceMap
+          )
+        );
+      }
     } catch {
       // Abaikan gangguan sementara saat memuat slice tambahan
     }
@@ -1909,6 +1922,20 @@ export default function App() {
         : latestDataRef.current.records
       ).map((r) => normalizeKpmRouting(r, nextProposals, nextWilayah));
 
+      const sourceSlotMap =
+        Object.keys(rawProposalSlotMapRef.current).length > 0
+          ? rawProposalSlotMapRef.current
+          : proposalSlotMapRef.current;
+      const effectiveSlotMap =
+        rawRecords.length > 0
+          ? sanitizeProposalSlotMap(sourceSlotMap, rawRecords, nextProposals)
+          : sourceSlotMap;
+      if (effectiveSlotMap !== proposalSlotMapRef.current) {
+        proposalSlotMapRef.current = effectiveSlotMap;
+        setProposalSlotMap(effectiveSlotMap);
+      }
+
+      proposalsRef.current = nextProposals;
       setProposals(nextProposals);
       setItems(nextItems);
       setWilayahList(nextWilayah);
@@ -1917,7 +1944,7 @@ export default function App() {
         nextProposals,
         nextItems,
         nextWilayah,
-        proposalSlotMapRef.current
+        effectiveSlotMap
       );
       setRecords(mergeBastIntoRecords(recalculated, kpmBastMapRef.current));
       if (Array.isArray(state.pengelolaList)) setPengelolaList(state.pengelolaList);
@@ -2811,6 +2838,9 @@ export default function App() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'masdeta_app_state' },
         () => {
+          if (activeLocalSyncCountRef.current > 0 || Date.now() - lastLocalSyncAtRef.current < 4000) {
+            return;
+          }
           void loadAppStateSlicesRef.current();
         }
       )
@@ -5094,7 +5124,7 @@ export default function App() {
       const queue = await getOfflineQueue();
       setOfflineQueueCount(queue.length);
       if (nextSlotMap !== proposalSlotMapRef.current) {
-        persistProposalSlotMap(nextSlotMap);
+        persistProposalSlotMap(nextSlotMap, nextRecordsList, proposals);
       }
       setRecords(nextRecordsList);
       setKpmAuditLogs(nextAuditLogs);
@@ -5152,12 +5182,13 @@ export default function App() {
         );
     if (!ok) return false;
 
-    if (nextSlotMap !== proposalSlotMapRef.current) {
-      persistProposalSlotMap(nextSlotMap);
+    const slotMapBeforePersist = proposalSlotMapRef.current;
+    if (nextSlotMap !== slotMapBeforePersist) {
+      persistProposalSlotMap(nextSlotMap, nextRecordsList, proposals);
     }
     if (effectiveTargetSlot && matchingProposal) {
       const { state: prevTargetSlotState } = resolveProposalSlotStateForGroup(
-        proposalSlotMapRef.current,
+        slotMapBeforePersist,
         matchingProposal.id,
         matchingProposal.namaProposal,
         matchingProposal.tahun,
@@ -6647,7 +6678,7 @@ export default function App() {
     );
 
     if (nextSlotMap !== proposalSlotMapRef.current) {
-      persistProposalSlotMap(nextSlotMap);
+      persistProposalSlotMap(nextSlotMap, nextRecords, proposals);
     }
     setRecords(nextRecords);
     setKpmAuditLogs(nextLogs);
@@ -6803,7 +6834,7 @@ export default function App() {
     }
 
     if (nextSlotMap !== proposalSlotMapRef.current) {
-      persistProposalSlotMap(nextSlotMap);
+      persistProposalSlotMap(nextSlotMap, nextRecords, proposals);
     }
     setRecords(nextRecords);
     setKpmAuditLogs(nextLogs);
@@ -6954,7 +6985,7 @@ export default function App() {
       );
 
       if (nextSlotMap !== proposalSlotMapRef.current) {
-        persistProposalSlotMap(nextSlotMap);
+        persistProposalSlotMap(nextSlotMap, nextRecords, proposals);
       }
       setTrashBin(nextTrash);
       setRecords(nextRecords);
@@ -7993,12 +8024,13 @@ export default function App() {
         nextProposals
       );
       let nextSlotMap = proposalSlotMapRef.current;
+      let slotMapChanged = false;
       if (oldSlotKey !== newSlotKey && nextSlotMap[oldSlotKey]) {
         const cloned = { ...nextSlotMap };
         cloned[newSlotKey] = cloned[oldSlotKey];
         delete cloned[oldSlotKey];
         nextSlotMap = cloned;
-        persistProposalSlotMap(nextSlotMap);
+        slotMapChanged = true;
       }
 
       const updatedRecords = records.map((rec) =>
@@ -8013,6 +8045,9 @@ export default function App() {
         wilayahList,
         nextSlotMap
       );
+      if (slotMapChanged) {
+        persistProposalSlotMap(nextSlotMap, nextRecords, nextProposals);
+      }
       nextProposalHistory = proposalHistory.map((h) =>
         h.proposalName === existing.namaProposal && h.tahun === existing.tahun
           ? { ...h, tahun: values.tahun }
@@ -8412,7 +8447,7 @@ export default function App() {
     if (proposalSlotMapRef.current[deletedSlotKey]) {
       const nextSlotMap = { ...proposalSlotMapRef.current };
       delete nextSlotMap[deletedSlotKey];
-      persistProposalSlotMap(nextSlotMap);
+      persistProposalSlotMap(nextSlotMap, nextRecords, nextProposals);
     }
     if (proposalRabMap[proposalId]) {
       const prevRabMap = proposalRabMap;
@@ -9521,8 +9556,9 @@ export default function App() {
         );
     if (!ok) return false;
 
-    if (nextSlotMap !== proposalSlotMapRef.current) {
-      persistProposalSlotMap(nextSlotMap);
+    const slotMapBeforePersist = proposalSlotMapRef.current;
+    if (nextSlotMap !== slotMapBeforePersist) {
+      persistProposalSlotMap(nextSlotMap, nextRecords, proposals);
     }
     const transferVacatedLogs: ProposalChangeLogEntry[] = eligibleTargets.map((prev, idx) => {
       const prevPropObj =
@@ -9535,7 +9571,7 @@ export default function App() {
         proposals,
         items,
         wilayahList,
-        proposalSlotMapRef.current
+        slotMapBeforePersist
       );
       return {
         id: `pchg-tr-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
@@ -9609,7 +9645,7 @@ export default function App() {
       (r) => prevById.get(r.id)?.registerCode !== r.registerCode
     );
 
-    persistProposalSlotMap(nextSlotMap);
+    persistProposalSlotMap(nextSlotMap, nextRecords, proposals);
     setRecords(nextRecords);
 
     if (changedRecords.length > 0) {
@@ -9667,7 +9703,7 @@ export default function App() {
       (r) => prevById.get(r.id)?.registerCode !== r.registerCode
     );
 
-    persistProposalSlotMap(nextSlotMap);
+    persistProposalSlotMap(nextSlotMap, nextRecords, proposals);
     setRecords(nextRecords);
 
     if (changedRecords.length > 0) {
@@ -11751,6 +11787,17 @@ export default function App() {
               onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
               onUpdateProposalDocuments={handleQuickSyncProposalDocuments}
               onSelectKpm={(rec) => openKpmDetail(rec, returnToTab, false, null, true)}
+              onCreateForEmptySlot={(proposalId, proposalName, tahun, slotNumber, item) =>
+                openKpmForm(
+                  null,
+                  returnToTab,
+                  false,
+                  true,
+                  { namaProposal: proposalName, tahun },
+                  null,
+                  { proposalId, proposalName, tahun, slotNumber, item }
+                )
+              }
               onFillEmptySlotFromDatabase={(kpmId, proposalName, tahun, slotNumber, slotItem) =>
                 void handleFillEmptySlotFromDatabase(
                   kpmId,

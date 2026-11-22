@@ -252,6 +252,13 @@ export function MenuDownloadView({
   const [dinsosPrefix, setDinsosPrefix] = useState('DINSOS');
   const [catNomorOrientation, setCatNomorOrientation] = useState<CatNomorOrientation>('landscape');
   const [catNomorPaperSize, setCatNomorPaperSize] = useState<CatNomorPaperSize>('a4');
+  const [catNomorSelectedKeys, setCatNomorSelectedKeys] = useState<string[] | null>(null);
+  const [catNomorSearchQuery, setCatNomorSearchQuery] = useState('');
+
+  useEffect(() => {
+    setCatNomorSelectedKeys(null);
+    setCatNomorSearchQuery('');
+  }, [selectedTahun, selectedProposalTipe, selectedProposal]);
 
   const [subItemStatusFilter, setSubItemStatusFilter] = useState<KpmSubItemStatusFilter>('all');
   const [subItemSelectedCode, setSubItemSelectedCode] = useState<string>('all');
@@ -1703,7 +1710,7 @@ export function MenuDownloadView({
     }
   };
 
-  const catNomorMatrix = useMemo(
+  const availableCatNomorMatrix = useMemo(
     () =>
       buildCatNomorBarangMatrix({
         records,
@@ -1728,6 +1735,70 @@ export function MenuDownloadView({
     ]
   );
 
+  const allAvailableCatNomorKeys = useMemo(
+    () => availableCatNomorMatrix.rows.map((r) => r.key),
+    [availableCatNomorMatrix]
+  );
+
+  const effectiveCatNomorSelectedKeys = useMemo(() => {
+    if (catNomorSelectedKeys === null) return allAvailableCatNomorKeys;
+    const availableSet = new Set(allAvailableCatNomorKeys);
+    return catNomorSelectedKeys.filter((k) => availableSet.has(k));
+  }, [catNomorSelectedKeys, allAvailableCatNomorKeys]);
+
+  const catNomorSelectedKeySet = useMemo(
+    () => new Set(effectiveCatNomorSelectedKeys),
+    [effectiveCatNomorSelectedKeys]
+  );
+
+  const filteredCatNomorChecklistRows = useMemo(() => {
+    const q = catNomorSearchQuery.trim().toLowerCase();
+    if (!q) return availableCatNomorMatrix.rows;
+    return availableCatNomorMatrix.rows.filter(
+      (r) =>
+        r.proposalName.toLowerCase().includes(q) ||
+        (r.kecamatanCategory || '').toLowerCase().includes(q) ||
+        (r.tahun || '').toLowerCase().includes(q)
+    );
+  }, [availableCatNomorMatrix.rows, catNomorSearchQuery]);
+
+  const toggleCatNomorProposalKey = (key: string) => {
+    const nextSet = new Set(effectiveCatNomorSelectedKeys);
+    if (nextSet.has(key)) {
+      nextSet.delete(key);
+    } else {
+      nextSet.add(key);
+    }
+    setCatNomorSelectedKeys(Array.from(nextSet));
+  };
+
+  const catNomorMatrix = useMemo(
+    () =>
+      buildCatNomorBarangMatrix({
+        records,
+        proposals,
+        items,
+        wilayahList,
+        proposalSlotMap,
+        selectedYear: isStandaloneSource ? 'all' : selectedTahun,
+        proposalNameFilter: selectedProposal,
+        proposalTipeFilter: selectedProposalTipe,
+        proposalKeysFilter: effectiveCatNomorSelectedKeys,
+      }),
+    [
+      records,
+      proposals,
+      items,
+      wilayahList,
+      proposalSlotMap,
+      isStandaloneSource,
+      selectedTahun,
+      selectedProposal,
+      selectedProposalTipe,
+      effectiveCatNomorSelectedKeys,
+    ]
+  );
+
   const handleDownloadCatNomorPdf = async () => {
     if (catNomorMatrix.rows.length === 0 || isGeneratingCatNomor) return;
     setCatNomorFeedback(null);
@@ -1744,14 +1815,19 @@ export function MenuDownloadView({
         selectedYear: isStandaloneSource ? 'all' : selectedTahun,
         proposalNameFilter: selectedProposal,
         proposalTipeFilter: selectedProposalTipe,
+        proposalKeysFilter: effectiveCatNomorSelectedKeys,
         orientation: catNomorOrientation,
         paperSize: catNomorPaperSize,
       });
+      const modeLabel =
+        res.proposalCount === 1
+          ? `1 proposal · Format Full 1 Lembar ${orientText} ${paperText}`
+          : `${res.proposalCount} lokasi · Matriks ${orientText} ${paperText}`;
       setCatNomorFeedback({
         type: 'success',
         message: res.openedNative
-          ? `PDF "${res.savedFileName}" (${res.proposalCount} lokasi · ${orientText} ${paperText}) berhasil dibuat dan dibuka.`
-          : `PDF "${res.savedFileName}" (${res.proposalCount} lokasi · ${orientText} ${paperText}) berhasil diunduh.`,
+          ? `PDF "${res.savedFileName}" (${modeLabel}) berhasil dibuat dan dibuka.`
+          : `PDF "${res.savedFileName}" (${modeLabel}) berhasil diunduh.`,
       });
     } catch (err) {
       setCatNomorFeedback({
@@ -4583,7 +4659,7 @@ export function MenuDownloadView({
             );
           })()}
 
-          {/* MODE 7: CAT NOMOR BARANG (MATRIKS RENTANG NOMOR ITEM PER LOKASI — PORTRAIT / LANDSCAPE) */}
+          {/* MODE 7: CAT NOMOR BARANG (1 PROPOSAL FULL 1 LEMBAR BESAR / MULTI-PROPOSAL MATRIKS) */}
           {printMode === 'cat_nomor' && (
             <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-4 md:p-5">
               <div className="flex items-start justify-between gap-2">
@@ -4592,11 +4668,11 @@ export function MenuDownloadView({
                     Cetak PDF Cat Nomor Barang
                   </h2>
                   <p className="mt-0.5 text-[11px] text-slate-500">
-                    Matriks rentang nomor barang per lokasi/proposal untuk panduan pengecatan nomor item (mengikuti urutan slot &amp; baris kosong proposal).
+                    Centang <strong>1 proposal</strong> untuk hasil ukuran besar memenuhi 1 lembar penuh, atau centang <strong>beberapa proposal</strong> untuk format tabel matriks multi-lokasi.
                   </p>
                 </div>
                 <span className="shrink-0 rounded-lg bg-teal-50 px-2.5 py-1 text-xs font-bold text-teal-700 tabular-nums border border-teal-200/70">
-                  {catNomorMatrix.totalProposals} Lokasi
+                  {effectiveCatNomorSelectedKeys.length}/{availableCatNomorMatrix.rows.length} Lokasi
                 </span>
               </div>
 
@@ -4685,8 +4761,109 @@ export function MenuDownloadView({
                 </div>
               </div>
 
-              {/* Pratinjau Langsung Matriks Cat Nomor Barang */}
-              {catNomorMatrix.rows.length === 0 ? (
+              {/* Checklist Pemilihan Proposal (Bisa Pilih 1 Satuan atau Banyak Sekaligus) */}
+              {availableCatNomorMatrix.rows.length > 0 && (
+                <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50/60">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-3 py-2.5">
+                    <div>
+                      <p className="text-xs font-bold text-slate-800">
+                        Pilih Lokasi / Proposal ({effectiveCatNomorSelectedKeys.length} dari {availableCatNomorMatrix.rows.length} dicentang)
+                      </p>
+                      <p className="text-[10.5px] text-slate-500">
+                        {effectiveCatNomorSelectedKeys.length === 1
+                          ? 'Mode 1 Proposal: dicetak besar memenuhi 1 lembar penuh (grid kartu multi-baris).'
+                          : effectiveCatNomorSelectedKeys.length > 1
+                            ? `Mode Multi-Lokasi (${effectiveCatNomorSelectedKeys.length} proposal): dicetak sebagai tabel matriks.`
+                            : 'Centang minimal 1 proposal untuk melihat pratinjau & mencetak PDF.'}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setCatNomorSelectedKeys(null)}
+                        disabled={
+                          effectiveCatNomorSelectedKeys.length === availableCatNomorMatrix.rows.length
+                        }
+                        className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        Pilih Semua
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCatNomorSelectedKeys([])}
+                        disabled={effectiveCatNomorSelectedKeys.length === 0}
+                        className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        Kosongkan
+                      </button>
+                    </div>
+                  </div>
+
+                  {availableCatNomorMatrix.rows.length > 5 && (
+                    <div className="border-b border-slate-200 bg-white px-3 py-2">
+                      <div className="relative">
+                        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                        <input
+                          type="text"
+                          value={catNomorSearchQuery}
+                          onChange={(e) => setCatNomorSearchQuery(e.target.value)}
+                          placeholder="Cari nama kelurahan atau proposal..."
+                          className="min-h-[34px] w-full rounded-lg border border-slate-200 bg-slate-50 pl-8 pr-3 text-xs text-slate-900 placeholder:text-slate-400 focus:border-teal-600 focus:bg-white focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="max-h-[200px] divide-y divide-slate-200/70 overflow-y-auto bg-white">
+                    {filteredCatNomorChecklistRows.length === 0 ? (
+                      <p className="px-3 py-4 text-center text-xs text-slate-500">
+                        Tidak ada proposal yang cocok dengan pencarian.
+                      </p>
+                    ) : (
+                      filteredCatNomorChecklistRows.map((row) => {
+                        const checked = catNomorSelectedKeySet.has(row.key);
+                        return (
+                          <label
+                            key={row.key}
+                            className={`flex cursor-pointer items-center justify-between gap-2.5 px-3 py-2 text-xs transition-colors ${
+                              checked ? 'bg-teal-50/60 hover:bg-teal-50' : 'hover:bg-slate-50'
+                            }`}
+                          >
+                            <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleCatNomorProposalKey(row.key)}
+                                className="h-4 w-4 shrink-0 rounded border-slate-300 text-teal-700 focus:ring-teal-600"
+                              />
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate font-semibold text-slate-900">
+                                  {row.proposalName}
+                                </p>
+                                <p className="truncate text-[10px] text-slate-500">
+                                  {[
+                                    row.tahun ? `Tahun ${row.tahun}` : '',
+                                    row.tipe ? `Proposal ${row.tipe}` : '',
+                                    row.kecamatanCategory,
+                                  ]
+                                    .filter(Boolean)
+                                    .join(' · ')}
+                                </p>
+                              </div>
+                            </div>
+                            <span className="shrink-0 rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10.5px] font-bold text-slate-700 tabular-nums">
+                              {row.totalSlots} No.
+                            </span>
+                          </label>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Pratinjau Langsung: Mode 1 Proposal (Grid Kartu Besar) vs Multi-Proposal (Matriks) */}
+              {availableCatNomorMatrix.rows.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
                   <p className="text-xs font-semibold text-slate-700">
                     Belum ada data proposal pada filter terpilih
@@ -4695,11 +4872,101 @@ export function MenuDownloadView({
                     Pilih tahun anggaran yang memiliki proposal &amp; KPM berstatus Diterima.
                   </p>
                 </div>
+              ) : catNomorMatrix.rows.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-amber-300 bg-amber-50/70 px-4 py-7 text-center">
+                  <p className="text-xs font-semibold text-amber-900">
+                    Belum ada proposal yang dicentang
+                  </p>
+                  <p className="mt-1 text-[11px] text-amber-700">
+                    Centang minimal 1 lokasi/proposal di daftar atas untuk melihat pratinjau dan mencetak PDF.
+                  </p>
+                </div>
+              ) : catNomorMatrix.rows.length === 1 ? (
+                (() => {
+                  const singleRow = catNomorMatrix.rows[0];
+                  return (
+                    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-[#1E3A5F] px-3.5 py-2.5 text-white">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded bg-white/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-blue-100">
+                              Format Full 1 Lembar (Besar)
+                            </span>
+                            <span className="text-[11px] text-blue-100">
+                              {singleRow.tahun ? `Tahun ${singleRow.tahun}` : catNomorMatrix.yearLabel}
+                              {singleRow.tipe ? ` · Proposal ${singleRow.tipe}` : ''}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-base font-bold tracking-tight text-white">
+                            {singleRow.proposalName}
+                          </p>
+                        </div>
+                        <span className="shrink-0 rounded-lg bg-white/15 px-2.5 py-1 text-xs font-bold text-white tabular-nums">
+                          {singleRow.totalSlots} Nomor · {catNomorMatrix.columns.length} Item
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2.5 p-3 sm:grid-cols-3 md:grid-cols-5 bg-slate-50/60">
+                        {catNomorMatrix.columns.map((col) => {
+                          const rangeText = singleRow.rangesByItem[col.code] || '—';
+                          const unitCount = singleRow.countsByItem[col.code] || 0;
+                          const hasItems = rangeText !== '—' && unitCount > 0;
+                          return (
+                            <div
+                              key={col.code}
+                              className={`flex flex-col overflow-hidden rounded-xl border ${
+                                hasItems
+                                  ? 'border-[#1E3A5F] bg-white shadow-xs'
+                                  : 'border-slate-200 bg-slate-50/80'
+                              }`}
+                            >
+                              <div
+                                className={`px-2.5 py-1.5 ${
+                                  hasItems
+                                    ? 'bg-[#1E3A5F] text-white'
+                                    : 'bg-slate-200/80 text-slate-600'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-1">
+                                  <span className="text-xs font-extrabold tracking-wide">
+                                    {col.code}
+                                  </span>
+                                  <span
+                                    className={`text-[10px] font-bold tabular-nums ${
+                                      hasItems ? 'text-blue-200' : 'text-slate-500'
+                                    }`}
+                                  >
+                                    {hasItems ? `${unitCount} KPM` : 'Kosong'}
+                                  </span>
+                                </div>
+                                <p
+                                  className={`truncate text-[10px] ${
+                                    hasItems ? 'text-blue-100' : 'text-slate-500'
+                                  }`}
+                                >
+                                  {col.name || col.shortLabel}
+                                </p>
+                              </div>
+                              <div className="flex min-h-[58px] flex-1 items-center justify-center px-2 py-2.5 text-center">
+                                {hasItems ? (
+                                  <span className="whitespace-pre-line text-lg font-extrabold leading-tight tracking-tight text-slate-900 tabular-nums">
+                                    {rangeText}
+                                  </span>
+                                ) : (
+                                  <span className="text-sm font-medium text-slate-400">—</span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()
               ) : (
                 <div className="overflow-hidden rounded-xl border border-slate-200">
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 text-[11px]">
                     <span className="font-bold text-slate-800">
-                      Pratinjau CAT NOMOR BARANG · {catNomorMatrix.yearLabel}
+                      Pratinjau Matriks Multi-Lokasi · {catNomorMatrix.yearLabel}
                     </span>
                     <span className="text-slate-500 tabular-nums">
                       {catNomorMatrix.totalProposals} Lokasi · {catNomorMatrix.columns.length} Item · {catNomorMatrix.totalSlots} Nomor
@@ -4746,7 +5013,7 @@ export function MenuDownloadView({
                       <tbody className="divide-y divide-slate-200 bg-white">
                         {catNomorMatrix.rows.map((row, idx) => (
                           <tr
-                            key={`${row.proposalName}-${row.tahun}-${idx}`}
+                            key={row.key || `${row.proposalName}-${row.tahun}-${idx}`}
                             className={idx % 2 === 1 ? 'bg-slate-50/70' : 'bg-white'}
                           >
                             <td className="border-r border-slate-200 px-1.5 py-2 text-center font-mono font-bold text-slate-600 tabular-nums">
@@ -4813,18 +5080,25 @@ export function MenuDownloadView({
                     <Loader2 className="h-4.5 w-4.5 animate-spin" />
                     <span>Menyiapkan PDF Cat Nomor Barang...</span>
                   </>
+                ) : catNomorMatrix.rows.length === 0 ? (
+                  <>
+                    <Paintbrush className="h-4.5 w-4.5" />
+                    <span>Centang Minimal 1 Proposal untuk Download</span>
+                  </>
                 ) : (
                   <>
                     <Paintbrush className="h-4.5 w-4.5" />
                     <span>
-                      Download Cat Nomor Barang ({catNomorOrientation === 'landscape' ? 'Landscape' : 'Portrait'} · {catNomorPaperSize.toUpperCase()})
+                      {catNomorMatrix.rows.length === 1
+                        ? `Download Cat Nomor Barang (1 Proposal · Full Page ${catNomorOrientation === 'landscape' ? 'Landscape' : 'Portrait'} · ${catNomorPaperSize.toUpperCase()})`
+                        : `Download Cat Nomor Barang (${catNomorMatrix.rows.length} Lokasi · ${catNomorOrientation === 'landscape' ? 'Landscape' : 'Portrait'} · ${catNomorPaperSize.toUpperCase()})`}
                     </span>
                   </>
                 )}
               </button>
 
               <p className="text-center text-[11px] leading-relaxed text-slate-500">
-                Header berulang tiap halaman · Kolom lokasi anti potong kata · Rentang nomor otomatis dari urutan slot proposal
+                1 proposal = grid kartu besar 1 lembar penuh · 2+ proposal = tabel matriks multi-lokasi · Rentang nomor otomatis dari urutan slot proposal
               </p>
             </section>
           )}

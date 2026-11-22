@@ -1102,6 +1102,15 @@ export type ProposalMergedSlotItem =
       emptySlot: ProposalEmptySlot;
     };
 
+function getLegacyProposalSlotKey(
+  proposalName: string | undefined,
+  tahun: string | undefined
+): string {
+  const cleanName = (proposalName || '').trim();
+  if (!cleanName) return '';
+  return `prop::${cleanName}__${(tahun || '').trim() || 'NON'}`;
+}
+
 export function resolveProposalSlotStateForGroup(
   slotMap: ProposalSlotMap,
   proposalId: string | null | undefined,
@@ -1113,13 +1122,9 @@ export function resolveProposalSlotStateForGroup(
   if (slotMap[key]) {
     return { key, state: slotMap[key] };
   }
-  const cleanName = (proposalName || '').trim();
-  const cleanYear = (tahun || '').trim();
-  if (cleanName) {
-    const legacyKey = `prop::${cleanName}__${cleanYear || 'NON'}`;
-    if (slotMap[legacyKey]) {
-      return { key, state: slotMap[legacyKey] };
-    }
+  const legacyKey = getLegacyProposalSlotKey(proposalName, tahun);
+  if (legacyKey && slotMap[legacyKey]) {
+    return { key, state: slotMap[legacyKey] };
   }
   return { key, state: undefined };
 }
@@ -1314,6 +1319,10 @@ export function vacateKpmSlotsInMap(
     }
 
     nextEmptySlots.sort((a, b) => a.slotNumber - b.slotNumber);
+    const legacyKey = getLegacyProposalSlotKey(sample.proposal, sample.tahun);
+    if (legacyKey && legacyKey !== key) {
+      delete nextMap[legacyKey];
+    }
     nextMap[key] = {
       pinnedOrder: nextPinnedOrder,
       emptySlots: nextEmptySlots,
@@ -1538,6 +1547,13 @@ export function assignKpmToProposalSlot(
   const cleanName = (proposalName || '').trim();
   if (!cleanName) return slotMap;
 
+  const existingResolved = resolveProposalSlotStateForGroup(
+    slotMap,
+    proposalId,
+    cleanName,
+    tahun,
+    proposals
+  );
   const { key, state } = ensureProposalPinnedOrder(
     slotMap,
     proposalId,
@@ -1550,7 +1566,8 @@ export function assignKpmToProposalSlot(
   );
 
   const hasCustomOrderOrEmpty =
-    Boolean(slotMap[key]) && (state.pinnedOrder.length > 0 || state.emptySlots.length > 0);
+    Boolean(existingResolved.state) &&
+    (state.pinnedOrder.length > 0 || state.emptySlots.length > 0);
   if (!targetSlotNumber && !hasCustomOrderOrEmpty) {
     // Proposal standar tanpa urutan tetap / baris kosong tetap memakai hierarki otomatis
     return slotMap;
@@ -1569,7 +1586,7 @@ export function assignKpmToProposalSlot(
     cleanPinned.push(kpmId);
   }
 
-  return {
+  const nextMap: ProposalSlotMap = {
     ...slotMap,
     [key]: {
       pinnedOrder: cleanPinned,
@@ -1577,6 +1594,11 @@ export function assignKpmToProposalSlot(
       updatedAt: now,
     },
   };
+  const legacyKey = getLegacyProposalSlotKey(cleanName, tahun);
+  if (legacyKey && legacyKey !== key) {
+    delete nextMap[legacyKey];
+  }
+  return nextMap;
 }
 
 export function replaceKpmInProposalSlotMap(
@@ -1616,15 +1638,20 @@ export function replaceKpmInProposalSlotMap(
     nextPinned.push(newKpmId);
   }
 
-  return {
-    slotMap: {
-      ...slotMap,
-      [key]: {
-        pinnedOrder: nextPinned,
-        emptySlots: state.emptySlots,
-        updatedAt: new Date().toISOString(),
-      },
+  const nextMap: ProposalSlotMap = {
+    ...slotMap,
+    [key]: {
+      pinnedOrder: nextPinned,
+      emptySlots: state.emptySlots,
+      updatedAt: new Date().toISOString(),
     },
+  };
+  const legacyKey = getLegacyProposalSlotKey(cleanName, tahun);
+  if (legacyKey && legacyKey !== key) {
+    delete nextMap[legacyKey];
+  }
+  return {
+    slotMap: nextMap,
     slotNumber,
   };
 }
@@ -1705,15 +1732,21 @@ export function swapKpmToEmptyProposalSlot(
   );
   cleanPinned.splice(insertIdx, 0, previousRecord.id);
 
-  return {
-    slotMap: {
-      ...slotMap,
-      [key]: {
-        pinnedOrder: cleanPinned,
-        emptySlots: cleanEmpty,
-        updatedAt: now,
-      },
+  const nextMap: ProposalSlotMap = {
+    ...slotMap,
+    [key]: {
+      pinnedOrder: cleanPinned,
+      emptySlots: cleanEmpty,
+      updatedAt: now,
     },
+  };
+  const legacyKey = getLegacyProposalSlotKey(cleanName, tahun);
+  if (legacyKey && legacyKey !== key) {
+    delete nextMap[legacyKey];
+  }
+
+  return {
+    slotMap: nextMap,
     oldSlotNumber,
     newSlotNumber: targetSlotNumber,
     replacedEmptySlot,
@@ -1771,7 +1804,7 @@ export function moveProposalSlotDirection(
     }
   });
 
-  return {
+  const nextMap: ProposalSlotMap = {
     ...slotMap,
     [key]: {
       pinnedOrder: nextPinnedOrder,
@@ -1779,6 +1812,11 @@ export function moveProposalSlotDirection(
       updatedAt: new Date().toISOString(),
     },
   };
+  const legacyKey = getLegacyProposalSlotKey(proposalName, tahun);
+  if (legacyKey && legacyKey !== key) {
+    delete nextMap[legacyKey];
+  }
+  return nextMap;
 }
 
 export function removeEmptySlotFromMap(
@@ -1806,7 +1844,7 @@ export function removeEmptySlotFromMap(
     .filter((es) => es.slotNumber !== slotNumber)
     .map((es) => (es.slotNumber > slotNumber ? { ...es, slotNumber: es.slotNumber - 1 } : es));
 
-  return {
+  const nextMap: ProposalSlotMap = {
     ...slotMap,
     [key]: {
       pinnedOrder: state.pinnedOrder,
@@ -1814,6 +1852,11 @@ export function removeEmptySlotFromMap(
       updatedAt: new Date().toISOString(),
     },
   };
+  const legacyKey = getLegacyProposalSlotKey(proposalName, tahun);
+  if (legacyKey && legacyKey !== key) {
+    delete nextMap[legacyKey];
+  }
+  return nextMap;
 }
 
 export function recalculateProposalRegisterCodes(
