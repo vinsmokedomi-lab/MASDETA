@@ -526,6 +526,143 @@ export function formatBastProposalLocation(
   return parts.join(', ');
 }
 
+export function formatNomorDinsosLocationLines(
+  proposalName: string | undefined,
+  tahun: string | undefined,
+  proposals: ProposalRecord[],
+  wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST,
+  fallbackRecord?: Pick<KpmRecord, 'kabKota' | 'kecamatan' | 'kelurahan'>
+): string[] {
+  const propTitle = (proposalName || '').trim();
+  const matchedProp =
+    (tahun
+      ? proposals.find((p) => p.namaProposal === propTitle && p.tahun === tahun)
+      : undefined) ?? proposals.find((p) => p.namaProposal === propTitle);
+
+  const dom = propTitle
+    ? resolveProposalDomicile(propTitle, proposals, tahun, wilayahList)
+    : {
+        kabKota: fallbackRecord?.kabKota || '',
+        kecamatan: fallbackRecord?.kecamatan || '',
+        kelurahan: fallbackRecord?.kelurahan || '',
+      };
+
+  const rawKel = (matchedProp?.kelurahan || dom.kelurahan || fallbackRecord?.kelurahan || '').trim();
+  const kelLabel = rawKel
+    ? /^(kelurahan|kel\.?|desa|ds\.?)\s+/i.test(rawKel)
+      ? rawKel.replace(/^kel\.?\s+/i, 'Kelurahan ')
+      : `Kelurahan ${rawKel}`
+    : '';
+
+  const rawKec = (matchedProp?.kecamatan || dom.kecamatan || fallbackRecord?.kecamatan || '')
+    .replace(/^(?:kecamatan|kec\.?)\s+/i, '')
+    .trim();
+  const kecLabel = rawKec ? `Kecamatan ${rawKec}` : '';
+
+  let kabKota = (matchedProp?.kabKota || dom.kabKota || fallbackRecord?.kabKota || '').trim();
+  if (!kabKota && rawKec) {
+    const matchedKab = wilayahList.find((w) =>
+      w.kecamatanList.some((k) => k.nama.toLowerCase() === rawKec.toLowerCase())
+    );
+    if (matchedKab) kabKota = matchedKab.nama;
+  }
+
+  if (!propTitle) {
+    return [kelLabel, kecLabel, kabKota].filter(Boolean);
+  }
+
+  const startsWithKel = /^(?:kelurahan|kel\.?|desa|ds\.?)\s+/i.test(propTitle);
+  const startsWithKec = /^(?:kecamatan|kec\.?)\s+/i.test(propTitle);
+  const hasKelInTitle = /\b(?:kelurahan|kel\.?|desa|ds\.?)\s+/i.test(propTitle);
+  const hasKecInTitle = /\b(?:kecamatan|kec\.?)\s+/i.test(propTitle);
+  const propLower = propTitle.toLowerCase();
+
+  const lines: string[] = [];
+  const pushUnique = (val: string) => {
+    const clean = val.trim();
+    if (!clean) return;
+    const cleanLower = clean.toLowerCase();
+    if (lines.some((existing) => existing.toLowerCase() === cleanLower)) return;
+    lines.push(clean);
+  };
+
+  // Kasus 1: Judul proposal adalah Kelurahan (contoh: "Kelurahan Sungai Beliung")
+  // -> Tampilkan Kelurahan (judul), Kecamatan, dan Kota
+  if (startsWithKel) {
+    pushUnique(propTitle);
+    if (!hasKecInTitle && kecLabel) pushUnique(kecLabel);
+    if (kabKota && !propLower.includes(kabKota.toLowerCase())) pushUnique(kabKota);
+    return lines;
+  }
+
+  // Kasus 2: Judul proposal adalah Kecamatan (contoh: "Kecamatan Pontianak Barat")
+  // -> JANGAN tampilkan nama kelurahan
+  if (startsWithKec) {
+    pushUnique(propTitle);
+    if (kabKota && !propLower.includes(kabKota.toLowerCase())) pushUnique(kabKota);
+    return lines;
+  }
+
+  // Kasus 3: Judul proposal adalah Nama Jalan + Kelurahan (contoh: "Jalan Tanjung Pura Kelurahan Benua Melayu Laut")
+  // -> Tampilkan Nama Jalan, Kelurahan, Kecamatan, dan Kota
+  if (hasKelInTitle) {
+    const splitKel = propTitle.match(/^(.+?)[,\s\-–]+\b((?:kelurahan|kel\.?|desa|ds\.?)\s+.+)$/i);
+    if (splitKel) {
+      const streetPart = splitKel[1].replace(/[,\s\-–]+$/, '').trim();
+      const restPart = splitKel[2].trim();
+      const splitKecInRest = restPart.match(/^(.+?)[,\s\-–]+\b((?:kecamatan|kec\.?)\s+.+)$/i);
+      if (streetPart) pushUnique(streetPart);
+      if (splitKecInRest) {
+        pushUnique(splitKecInRest[1].replace(/[,\s\-–]+$/, '').trim());
+        pushUnique(splitKecInRest[2].trim());
+      } else {
+        pushUnique(restPart);
+        if (kecLabel) pushUnique(kecLabel);
+      }
+    } else {
+      pushUnique(propTitle);
+      if (!hasKecInTitle && kecLabel) pushUnique(kecLabel);
+    }
+    if (kabKota && !propLower.includes(kabKota.toLowerCase())) pushUnique(kabKota);
+    return lines;
+  }
+
+  // Kasus 4: Judul proposal adalah Nama Jalan + Kecamatan (contoh: "Jalan H. Rais A. Rahman Kecamatan Pontianak Barat")
+  // -> HANYA tampilkan Nama Jalan dan Kecamatan (jangan kelurahan, jangan kota)
+  if (hasKecInTitle) {
+    const splitKec = propTitle.match(/^(.+?)[,\s\-–]+\b((?:kecamatan|kec\.?)\s+.+)$/i);
+    if (splitKec) {
+      const streetPart = splitKec[1].replace(/[,\s\-–]+$/, '').trim();
+      const kecPart = splitKec[2].trim();
+      if (streetPart) pushUnique(streetPart);
+      if (kecPart) pushUnique(kecPart);
+    } else {
+      pushUnique(propTitle);
+    }
+    return lines;
+  }
+
+  // Kasus judul custom tanpa kata "Kelurahan"/"Kecamatan": cek metadata proposal
+  const hasMetaKel = Boolean((matchedProp?.kelurahan || '').trim());
+  if (hasMetaKel && kelLabel) {
+    pushUnique(propTitle);
+    pushUnique(kelLabel);
+    if (kecLabel) pushUnique(kecLabel);
+    if (kabKota && !propLower.includes(kabKota.toLowerCase())) pushUnique(kabKota);
+    return lines;
+  }
+  if (kecLabel) {
+    // Jalan/Wilayah di bawah lingkup Kecamatan tanpa Kelurahan -> hanya judul + Kecamatan
+    pushUnique(propTitle);
+    pushUnique(kecLabel);
+    return lines;
+  }
+
+  pushUnique(propTitle);
+  if (kabKota && !propLower.includes(kabKota.toLowerCase())) pushUnique(kabKota);
+  return lines;
+}
+
 export function isKecamatanScopedProposalForCoupon(
   record: Pick<KpmRecord, 'proposal' | 'proposalId' | 'tahun'>,
   proposals: ProposalRecord[] = []
@@ -976,6 +1113,7 @@ async function saveOrOpenPdfDocument(
 
 export interface ExportKpmTablePdfOptions {
   records: KpmRecord[];
+  allRecords?: KpmRecord[];
   proposals: ProposalRecord[];
   items: ItemBantuan[];
   wilayahList?: WilayahKabKota[];
@@ -996,6 +1134,7 @@ export interface ExportKpmTablePdfOptions {
 
 export async function exportKpmTableToPdf({
   records,
+  allRecords,
   proposals,
   items,
   wilayahList = INITIAL_WILAYAH_LIST,
@@ -1013,13 +1152,27 @@ export async function exportKpmTableToPdf({
   includeEmptySlots = true,
   proposalMeta,
 }: ExportKpmTablePdfOptions): Promise<{ savedFileName: string; openedNative: boolean; count: number }> {
-  // Urutkan data KPM berdasarkan tahun, proposal, nomor absen, & hierarki item
+  const sourcePool = allRecords && allRecords.length > 0 ? allRecords : records;
+  const resolveRecordSlotOrder = (rec: KpmRecord): number => {
+    const slotNo = getKpmSlotNumberInProposal(
+      rec,
+      sourcePool,
+      proposals,
+      items,
+      wilayahList,
+      proposalSlotMap
+    );
+    if (slotNo && slotNo > 0) return slotNo;
+    return getAbsenSeq(rec.registerCode);
+  };
+
+  // Urutkan data KPM berdasarkan tahun, proposal, nomor slot proposal / absen, & hierarki item
   const sortedRecords = [...records].sort((a, b) => {
     const yearCmp = (a.tahun || '').localeCompare(b.tahun || '');
     if (yearCmp !== 0) return yearCmp;
     const propCmp = (a.proposal || '').localeCompare(b.proposal || '', 'id');
     if (propCmp !== 0) return propCmp;
-    const seqCmp = getAbsenSeq(a.registerCode) - getAbsenSeq(b.registerCode);
+    const seqCmp = resolveRecordSlotOrder(a) - resolveRecordSlotOrder(b);
     if (seqCmp !== 0) return seqCmp;
     const rankCmp =
       getItemHierarchyRank(a.item, a.tahun, items) - getItemHierarchyRank(b.item, b.tahun, items);
@@ -1190,23 +1343,35 @@ export async function exportKpmTableToPdf({
         >
       | null = null;
 
+    const resolveRowNumber = (rec: KpmRecord, rowIdx: number): number => {
+      if (useSequentialRowNumber) return rowIdx + 1;
+      const slotNo = getKpmSlotNumberInProposal(
+        rec,
+        sourcePool,
+        proposals,
+        items,
+        wilayahList,
+        proposalSlotMap
+      );
+      if (slotNo && slotNo > 0) return slotNo;
+      const seq = getAbsenSeq(rec.registerCode);
+      return seq < 999999 ? seq : rowIdx + 1;
+    };
+
     if (customEmptySlots && customEmptySlots.length > 0) {
       slotEntries = [
-        ...sectionRecords.map((rec, rowIdx) => {
-          const seq = getAbsenSeq(rec.registerCode);
-          return {
-            kind: 'kpm' as const,
-            slotNumber: useSequentialRowNumber ? rowIdx + 1 : seq < 999999 ? seq : rowIdx + 1,
-            record: rec,
-          };
-        }),
+        ...sectionRecords.map((rec, rowIdx) => ({
+          kind: 'kpm' as const,
+          slotNumber: resolveRowNumber(rec, rowIdx),
+          record: rec,
+        })),
         ...customEmptySlots.map((es) => ({
           kind: 'empty' as const,
           slotNumber: es.slotNumber,
           item: (es.item || '').trim().toUpperCase(),
           proposalName: es.proposalName,
         })),
-      ];
+      ].sort((a, b) => a.slotNumber - b.slotNumber);
     } else if (includeEmptySlots && proposalInfo && proposalInfo.namaProposal?.trim()) {
       const propObj =
         (proposalInfo.id ? proposals.find((p) => p.id === proposalInfo.id) : undefined) ??
@@ -1248,14 +1413,11 @@ export async function exportKpmTableToPdf({
 
     const renderRows = slotEntries
       ? slotEntries
-      : sectionRecords.map((rec, rowIdx) => {
-          const seq = getAbsenSeq(rec.registerCode);
-          return {
-            kind: 'kpm' as const,
-            slotNumber: useSequentialRowNumber ? rowIdx + 1 : seq < 999999 ? seq : rowIdx + 1,
-            record: rec,
-          };
-        });
+      : sectionRecords.map((rec, rowIdx) => ({
+          kind: 'kpm' as const,
+          slotNumber: resolveRowNumber(rec, rowIdx),
+          record: rec,
+        }));
 
     const headRow = activeCols.map((c) => c.pdfHeader);
     const bodyRows = renderRows.map((entry) => {
@@ -1637,11 +1799,12 @@ export async function exportKpmTableToPdf({
           proposals
         );
         if (!slotState || slotState.emptySlots.length === 0) continue;
-        const propRecords = sortedRecords.filter((r) =>
-          target.id && r.proposalId
+        const propRecords = sourcePool.filter((r) =>
+          r.validasi === 'accepted' &&
+          (target.id && r.proposalId
             ? r.proposalId === target.id
             : (r.proposal || '').trim() === target.namaProposal &&
-              (!target.tahun || (r.tahun || '').trim() === target.tahun)
+              (!target.tahun || (r.tahun || '').trim() === target.tahun))
         );
         const merged = buildMergedProposalSlots({
           groupRecords: propRecords,
@@ -1713,14 +1876,24 @@ export async function exportKpmTableToPdf({
         .filter(Boolean)
         .join('  ·  ');
 
+      const sortedGroupRecords = [...group.records].sort((a, b) => {
+        const yearCmp = (a.tahun || '').localeCompare(b.tahun || '');
+        if (yearCmp !== 0) return yearCmp;
+        const propCmp = (a.proposal || '').localeCompare(b.proposal || '', 'id');
+        if (propCmp !== 0) return propCmp;
+        const slotCmp = resolveRecordSlotOrder(a) - resolveRecordSlotOrder(b);
+        if (slotCmp !== 0) return slotCmp;
+        return (a.nama || '').localeCompare(b.nama || '', 'id');
+      });
+
       renderSection({
-        sectionRecords: group.records,
+        sectionRecords: sortedGroupRecords,
         sectionTitle,
         sectionSubtitle,
         proposalTitleForAutoKel: proposalMeta?.namaProposal,
         grandTotalMoney: idx === groups.length - 1 ? grandTotalMoney : undefined,
         customEmptySlots: group.isEmpty && collectedEmptySlots.length > 0 ? collectedEmptySlots : undefined,
-        useSequentialRowNumber: true,
+        useSequentialRowNumber: false,
       });
     });
   } else if (splitByProposal && sortedRecords.length > 0) {
@@ -5892,9 +6065,11 @@ export interface ExportNomorDinsosOptions {
   records: KpmRecord[];
   allRecords?: KpmRecord[];
   proposals: ProposalRecord[];
+  targetProposals?: ProposalRecord[];
   items: ItemBantuan[];
   wilayahList?: WilayahKabKota[];
   proposalSlotMap?: ProposalSlotMap;
+  includeEmptySlots?: boolean;
   provinsiLabel?: string;
   prefixLabel?: string;
   fileName?: string;
@@ -5904,9 +6079,11 @@ export async function exportNomorDinsosToPdf({
   records,
   allRecords,
   proposals,
+  targetProposals,
   items,
   wilayahList = INITIAL_WILAYAH_LIST,
   proposalSlotMap = {},
+  includeEmptySlots = true,
   provinsiLabel = 'PROVINSI KALIMANTAN BARAT',
   prefixLabel = 'DINSOS',
   fileName,
@@ -5921,11 +6098,76 @@ export async function exportNomorDinsosToPdf({
     (r) => r.validasi === 'accepted' && Boolean((r.proposal || '').trim())
   );
 
-  if (targetRecords.length === 0) {
-    throw new Error('Tidak ada KPM berstatus Diterima pada proposal aktif untuk dicetak Nomor DINSOS.');
+  const matchProposalForRecord = (rec: Pick<KpmRecord, 'proposalId' | 'proposal' | 'tahun'>) =>
+    (rec.proposalId ? proposals.find((p) => p.id === rec.proposalId) : undefined) ??
+    proposals.find(
+      (p) => p.namaProposal === (rec.proposal || '').trim() && p.tahun === (rec.tahun || '').trim()
+    ) ??
+    proposals.find((p) => p.namaProposal === (rec.proposal || '').trim());
+
+  interface DinsosProposalGroup {
+    key: string;
+    tahun: string;
+    proposalName: string;
+    proposalObj?: ProposalRecord;
+    records: KpmRecord[];
   }
 
-  const getDinsosNumber = (rec: KpmRecord, fallbackIdx: number): { num: number; label: string } => {
+  const groupsMap = new Map<string, DinsosProposalGroup>();
+  for (const rec of targetRecords) {
+    const pName = (rec.proposal || '').trim();
+    const yr = (rec.tahun || '').trim();
+    const matchedProp = matchProposalForRecord(rec);
+    const key = matchedProp ? `id::${matchedProp.id}` : `${yr}::${pName}`;
+    const existing = groupsMap.get(key);
+    if (existing) {
+      existing.records.push(rec);
+    } else {
+      groupsMap.set(key, {
+        key,
+        tahun: matchedProp?.tahun || yr,
+        proposalName: matchedProp?.namaProposal || pName,
+        proposalObj: matchedProp,
+        records: [rec],
+      });
+    }
+  }
+
+  if (targetProposals && targetProposals.length > 0) {
+    for (const prop of targetProposals) {
+      const key = `id::${prop.id}`;
+      if (!groupsMap.has(key)) {
+        const propRecs = targetRecords.filter((r) =>
+          r.proposalId
+            ? r.proposalId === prop.id
+            : (r.proposal || '').trim() === prop.namaProposal &&
+              (r.tahun || '').trim() === prop.tahun
+        );
+        groupsMap.set(key, {
+          key,
+          tahun: prop.tahun,
+          proposalName: prop.namaProposal,
+          proposalObj: prop,
+          records: propRecs,
+        });
+      }
+    }
+  }
+
+  const sortedGroups = Array.from(groupsMap.values()).sort((a, b) => {
+    const yCmp = a.tahun.localeCompare(b.tahun);
+    if (yCmp !== 0) return yCmp;
+    const isKecA = isKecamatanProposal(a.proposalName);
+    const isKecB = isKecamatanProposal(b.proposalName);
+    if (isKecA !== isKecB) return isKecA ? -1 : 1;
+    return a.proposalName.localeCompare(b.proposalName, 'id');
+  });
+
+  if (sortedGroups.length === 0) {
+    throw new Error('Tidak ada KPM atau proposal aktif untuk dicetak Nomor DINSOS.');
+  }
+
+  const getDinsosNumber = (rec: KpmRecord, fallbackIdx: number): number => {
     const slotNo = getKpmSlotNumberInProposal(
       rec,
       sourcePool,
@@ -5935,24 +6177,83 @@ export async function exportNomorDinsosToPdf({
       proposalSlotMap
     );
     const absenNo = getAbsenSeq(rec.registerCode);
-    const num =
-      slotNo && slotNo > 0
-        ? slotNo
-        : absenNo < 999999
-          ? absenNo
-          : fallbackIdx + 1;
-    return { num, label: String(num).padStart(2, '0') };
+    return slotNo && slotNo > 0 ? slotNo : absenNo < 999999 ? absenNo : fallbackIdx + 1;
   };
 
-  // Kelompokkan per proposal (tahun + nama proposal) agar nomor & halaman tetap terpisah rapi
-  const groups = new Map<string, KpmRecord[]>();
-  for (const rec of targetRecords) {
-    const key = `${(rec.tahun || '').trim()}::${(rec.proposal || '').trim()}`;
-    const list = groups.get(key) ?? [];
-    list.push(rec);
-    groups.set(key, list);
+  const labelTasks: Array<{ tahun: string; locationLines: string[]; numLabel: string }> = [];
+
+  for (const group of sortedGroups) {
+    const allAcceptedInProp = sourcePool.filter(
+      (r) =>
+        r.validasi === 'accepted' &&
+        Boolean((r.proposal || '').trim()) &&
+        (group.proposalObj
+          ? r.proposalId
+            ? r.proposalId === group.proposalObj.id
+            : (r.proposal || '').trim() === group.proposalObj.namaProposal &&
+              (r.tahun || '').trim() === group.proposalObj.tahun
+          : (r.proposal || '').trim() === group.proposalName &&
+            (!group.tahun || (r.tahun || '').trim() === group.tahun))
+    );
+
+    const { state: slotState } = resolveProposalSlotStateForGroup(
+      proposalSlotMap,
+      group.proposalObj?.id,
+      group.proposalName,
+      group.tahun,
+      proposals
+    );
+    const mergedAll = buildMergedProposalSlots({
+      groupRecords: allAcceptedInProp,
+      slotState,
+      proposals,
+      catalog: items,
+      wilayahList,
+    });
+    const maxMergedSlot = mergedAll.reduce((mx, entry) => Math.max(mx, entry.slotNumber), 0);
+    const quota =
+      group.proposalObj?.jumlahKpm && group.proposalObj.jumlahKpm > 0
+        ? group.proposalObj.jumlahKpm
+        : 0;
+
+    const isFullProposalScope =
+      includeEmptySlots &&
+      (group.records.length === 0 || group.records.length >= allAcceptedInProp.length);
+
+    const locationLines = formatNomorDinsosLocationLines(
+      group.proposalName,
+      group.tahun,
+      proposals,
+      wilayahList,
+      group.records[0] || allAcceptedInProp[0]
+    );
+
+    if (isFullProposalScope) {
+      const totalFixed = Math.max(maxMergedSlot, quota, group.records.length);
+      for (let num = 1; num <= totalFixed; num += 1) {
+        labelTasks.push({
+          tahun: group.tahun,
+          locationLines,
+          numLabel: String(num).padStart(2, '0'),
+        });
+      }
+    } else {
+      const nums = Array.from(
+        new Set(group.records.map((rec, i) => getDinsosNumber(rec, i)))
+      ).sort((a, b) => a - b);
+      for (const num of nums) {
+        labelTasks.push({
+          tahun: group.tahun,
+          locationLines,
+          numLabel: String(num).padStart(2, '0'),
+        });
+      }
+    }
   }
-  const sortedGroups = Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0], 'id'));
+
+  if (labelTasks.length === 0) {
+    throw new Error('Tidak ada label Nomor DINSOS yang dapat dicetak untuk filter aktif.');
+  }
 
   const doc = new jsPDF({
     orientation: 'portrait',
@@ -5974,20 +6275,14 @@ export async function exportNomorDinsosToPdf({
     doc.setLineDashPattern([], 0);
   };
 
-  const drawHalfLabel = (halfStartY: number, rec: KpmRecord, numLabel: string) => {
-    const tahunText = `TAHUN ${(rec.tahun || '').trim() || new Date().getFullYear()}`;
+  const drawHalfLabel = (
+    halfStartY: number,
+    tahunValue: string,
+    rawDomLines: string[],
+    numLabel: string
+  ) => {
+    const tahunText = `TAHUN ${(tahunValue || '').trim() || new Date().getFullYear()}`;
     const heroText = `${cleanPrefix} ${numLabel}`;
-
-    const dom = resolveKpmDomicile(rec, proposals, wilayahList);
-    const rawKel = (rec.kelurahan || dom.kelurahan || '').trim();
-    const kelText = rawKel
-      ? /^(kelurahan|desa)\s+/i.test(rawKel)
-        ? rawKel
-        : `Kelurahan ${rawKel}`
-      : '';
-    const rawKec = (rec.kecamatan || dom.kecamatan || '').replace(/^kecamatan\s+/i, '').trim();
-    const kecText = rawKec ? `Kecamatan ${rawKec}` : '';
-    const kabText = (rec.kabKota || dom.kabKota || '').trim();
 
     // 1. Header Provinsi & Tahun (skala otomatis hingga 27pt, muat 1 baris lebar penuh)
     doc.setFont('helvetica', 'bold');
@@ -6001,13 +6296,12 @@ export async function exportNomorDinsosToPdf({
       doc.setFontSize(headerFontSize);
     }
 
-    // 2. Domisili: upayakan setiap baris muat dalam 1 baris di ukuran besar (hingga 26pt)
-    const rawDomLines = [kelText, kecText, kabText].filter(Boolean);
-    let domFontSize = 26;
+    // 2. Lokasi/Judul Proposal: muat rapi hingga 4 baris (contoh: Jalan + Kelurahan + Kecamatan + Kota)
+    let domFontSize = rawDomLines.length >= 4 ? 22 : 26;
     doc.setFontSize(domFontSize);
     while (
       rawDomLines.some((line) => doc.getTextWidth(line) > maxTextW) &&
-      domFontSize > 17
+      domFontSize > 14
     ) {
       domFontSize -= 1;
       doc.setFontSize(domFontSize);
@@ -6035,13 +6329,13 @@ export async function exportNomorDinsosToPdf({
     const heroCapH = heroFontSize * 0.255;
 
     const domCapH = domFontSize * 0.255;
-    const domLineStep = domFontSize * 0.435;
+    const domLineStep = domFontSize * 0.42;
     const bottomBlockH =
       domLines.length > 0 ? (domLines.length - 1) * domLineStep + domCapH : 0;
 
-    let gapAfterHeader = 22;
-    let gapBeforeDom = 22;
-    const maxAllowedStackH = HALF_H - 26; // Sisakan minimal ~1.3 cm margin atas & bawah
+    let gapAfterHeader = domLines.length >= 4 ? 17 : 22;
+    let gapBeforeDom = domLines.length >= 4 ? 16 : 22;
+    const maxAllowedStackH = HALF_H - 22; // Sisakan minimal ~1.1 cm margin atas & bawah
     const fixedContentH = topBlockH + heroCapH + (domLines.length > 0 ? bottomBlockH : 0);
     if (domLines.length > 0 && fixedContentH + gapAfterHeader + gapBeforeDom > maxAllowedStackH) {
       const availableGap = Math.max(18, maxAllowedStackH - fixedContentH);
@@ -6079,7 +6373,7 @@ export async function exportNomorDinsosToPdf({
     });
     doc.setLineWidth(0.25);
 
-    // Cetak 3. Domisili (Kelurahan / Kecamatan / Kab-Kota)
+    // Cetak 3. Judul Proposal & Wilayah
     if (domLines.length > 0) {
       doc.setFontSize(domFontSize);
       const domStartBaselineY = heroBaselineY + gapBeforeDom + domCapH;
@@ -6089,29 +6383,21 @@ export async function exportNomorDinsosToPdf({
     }
   };
 
-  let isFirstPageOverall = true;
-  for (const [, groupRecs] of sortedGroups) {
-    const withNum = groupRecs
-      .map((rec, i) => ({ rec, ...getDinsosNumber(rec, i) }))
-      .sort((a, b) => a.num - b.num || a.rec.nama.localeCompare(b.rec.nama, 'id'));
-
-    withNum.forEach((entry, idx) => {
-      const slotOnPage = idx % 2;
-      if (slotOnPage === 0) {
-        if (!isFirstPageOverall) {
-          doc.addPage([PAPER_W, PAPER_H], 'portrait');
-        }
-        isFirstPageOverall = false;
-        drawCutGuideLine();
+  labelTasks.forEach((task, idx) => {
+    const slotOnPage = idx % 2;
+    if (slotOnPage === 0) {
+      if (idx > 0) {
+        doc.addPage([PAPER_W, PAPER_H], 'portrait');
       }
-      const halfStartY = slotOnPage === 0 ? 0 : HALF_H;
-      drawHalfLabel(halfStartY, entry.rec, entry.label);
-    });
-  }
+      drawCutGuideLine();
+    }
+    const halfStartY = slotOnPage === 0 ? 0 : HALF_H;
+    drawHalfLabel(halfStartY, task.tahun, task.locationLines, task.numLabel);
+  });
 
-  const defaultName = `Nomor_DINSOS_${targetRecords.length}_Label`;
+  const defaultName = `Nomor_DINSOS_${labelTasks.length}_Label`;
   const res = await saveOrOpenPdfDocument(doc, fileName || defaultName);
-  return { ...res, count: targetRecords.length };
+  return { ...res, count: labelTasks.length };
 }
 
 export async function exportTroubleshootingToPdf(

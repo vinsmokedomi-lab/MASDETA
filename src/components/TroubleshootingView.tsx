@@ -1,4 +1,4 @@
-import { ChangeEvent, DragEvent, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
@@ -94,6 +94,108 @@ interface TroubleshootingViewProps {
 
 type ProposalSourceMode = 'pdf' | 'database';
 
+interface TroubleshootingRawSourceState {
+  proposalRows: ProposalExtractedRow[];
+  bastRows: BastExtractedRow[];
+  proposalTitle: string;
+  bastTitle: string;
+  proposalSourceType: 'pdf' | 'database';
+}
+
+interface TroubleshootingWorkspaceCache {
+  proposalMode: ProposalSourceMode;
+  proposalPdfFile: File | null;
+  selectedProposalId: string;
+  bastPdfFile: File | null;
+  rawSource: TroubleshootingRawSourceState | null;
+  overrides: TroubleshootingManualOverrides;
+  analyzedProposalId: string | null;
+  summaryPengelolaPdf: { name: string; count: number }[];
+  applySuccessInfo: {
+    proposalId: string;
+    proposalName: string;
+    message: string;
+  } | null;
+  searchQuery: string;
+  itemFilter: string;
+  statusFilter: 'all' | ReconciledRowStatus;
+  auditPanelOpen: boolean;
+  auditTab: 'unmatched_bast' | 'pengelola';
+}
+
+const DEFAULT_TROUBLESHOOTING_OVERRIDES: TroubleshootingManualOverrides = {
+  excludedRowKeysByItem: {},
+  orderedIncludedKeysByItem: {},
+  manualBastLinkByRowKey: {},
+  placementStrategy: 'proposal_order',
+};
+
+const TROUBLESHOOTING_SESSION_KEY = 'masdeta_troubleshooting_workspace_v1';
+
+let moduleTroubleshootingWorkspace: TroubleshootingWorkspaceCache | null = null;
+
+function createInitialTroubleshootingWorkspace(): TroubleshootingWorkspaceCache {
+  if (moduleTroubleshootingWorkspace) {
+    return moduleTroubleshootingWorkspace;
+  }
+  try {
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      const raw = window.sessionStorage.getItem(TROUBLESHOOTING_SESSION_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<TroubleshootingWorkspaceCache>;
+        const hydrated: TroubleshootingWorkspaceCache = {
+          proposalMode: parsed.proposalMode === 'database' ? 'database' : 'pdf',
+          proposalPdfFile: null,
+          selectedProposalId: typeof parsed.selectedProposalId === 'string' ? parsed.selectedProposalId : '',
+          bastPdfFile: null,
+          rawSource: parsed.rawSource ?? null,
+          overrides: parsed.overrides
+            ? {
+                excludedRowKeysByItem: parsed.overrides.excludedRowKeysByItem || {},
+                orderedIncludedKeysByItem: parsed.overrides.orderedIncludedKeysByItem || {},
+                manualBastLinkByRowKey: parsed.overrides.manualBastLinkByRowKey || {},
+                placementStrategy: parsed.overrides.placementStrategy || 'proposal_order',
+              }
+            : { ...DEFAULT_TROUBLESHOOTING_OVERRIDES },
+          analyzedProposalId:
+            typeof parsed.analyzedProposalId === 'string' ? parsed.analyzedProposalId : null,
+          summaryPengelolaPdf: Array.isArray(parsed.summaryPengelolaPdf)
+            ? parsed.summaryPengelolaPdf
+            : [],
+          applySuccessInfo: parsed.applySuccessInfo ?? null,
+          searchQuery: typeof parsed.searchQuery === 'string' ? parsed.searchQuery : '',
+          itemFilter: typeof parsed.itemFilter === 'string' ? parsed.itemFilter : 'all',
+          statusFilter: parsed.statusFilter ?? 'all',
+          auditPanelOpen: Boolean(parsed.auditPanelOpen),
+          auditTab: parsed.auditTab === 'pengelola' ? 'pengelola' : 'unmatched_bast',
+        };
+        moduleTroubleshootingWorkspace = hydrated;
+        return hydrated;
+      }
+    }
+  } catch {
+    // Abaikan jika sessionStorage tidak tersedia atau korup
+  }
+  const fresh: TroubleshootingWorkspaceCache = {
+    proposalMode: 'pdf',
+    proposalPdfFile: null,
+    selectedProposalId: '',
+    bastPdfFile: null,
+    rawSource: null,
+    overrides: { ...DEFAULT_TROUBLESHOOTING_OVERRIDES },
+    analyzedProposalId: null,
+    summaryPengelolaPdf: [],
+    applySuccessInfo: null,
+    searchQuery: '',
+    itemFilter: 'all',
+    statusFilter: 'all',
+    auditPanelOpen: false,
+    auditTab: 'unmatched_bast',
+  };
+  moduleTroubleshootingWorkspace = fresh;
+  return fresh;
+}
+
 function formatFileSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB';
   if (bytes < 1024 * 1024) {
@@ -128,46 +230,51 @@ export function TroubleshootingView({
   const proposalInputRef = useRef<HTMLInputElement | null>(null);
   const bastInputRef = useRef<HTMLInputElement | null>(null);
 
-  const [proposalMode, setProposalMode] = useState<ProposalSourceMode>('pdf');
-  const [proposalPdfFile, setProposalPdfFile] = useState<File | null>(null);
-  const [selectedProposalId, setSelectedProposalId] = useState<string>('');
-  const [bastPdfFile, setBastPdfFile] = useState<File | null>(null);
+  const initialCacheRef = useRef<TroubleshootingWorkspaceCache | null>(null);
+  if (!initialCacheRef.current) {
+    initialCacheRef.current = createInitialTroubleshootingWorkspace();
+  }
+  const initialCache = initialCacheRef.current;
+
+  const [proposalMode, setProposalMode] = useState<ProposalSourceMode>(initialCache.proposalMode);
+  const [proposalPdfFile, setProposalPdfFile] = useState<File | null>(initialCache.proposalPdfFile);
+  const [selectedProposalId, setSelectedProposalId] = useState<string>(
+    initialCache.selectedProposalId
+  );
+  const [bastPdfFile, setBastPdfFile] = useState<File | null>(initialCache.bastPdfFile);
 
   const [dragTarget, setDragTarget] = useState<'proposal' | 'bast' | null>(null);
   const [processing, setProcessing] = useState(false);
   const [processingStep, setProcessingStep] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const [rawSource, setRawSource] = useState<{
-    proposalRows: ProposalExtractedRow[];
-    bastRows: BastExtractedRow[];
-    proposalTitle: string;
-    bastTitle: string;
-    proposalSourceType: 'pdf' | 'database';
-  } | null>(null);
-  const [overrides, setOverrides] = useState<TroubleshootingManualOverrides>({
-    excludedRowKeysByItem: {},
-    orderedIncludedKeysByItem: {},
-    manualBastLinkByRowKey: {},
-    placementStrategy: 'proposal_order',
-  });
-  const [analyzedProposalId, setAnalyzedProposalId] = useState<string | null>(null);
+  const [rawSource, setRawSource] = useState<TroubleshootingRawSourceState | null>(
+    initialCache.rawSource
+  );
+  const [overrides, setOverrides] = useState<TroubleshootingManualOverrides>(
+    initialCache.overrides
+  );
+  const [analyzedProposalId, setAnalyzedProposalId] = useState<string | null>(
+    initialCache.analyzedProposalId
+  );
   const [summaryPengelolaPdf, setSummaryPengelolaPdf] = useState<{ name: string; count: number }[]>(
-    []
+    initialCache.summaryPengelolaPdf
   );
 
   // Filter untuk preview Tabel Utama (Bagian 1)
-  const [searchQuery, setSearchQuery] = useState('');
-  const [itemFilter, setItemFilter] = useState<string>('all');
-  const [statusFilter, setStatusFilter] = useState<'all' | ReconciledRowStatus>('all');
+  const [searchQuery, setSearchQuery] = useState(initialCache.searchQuery);
+  const [itemFilter, setItemFilter] = useState<string>(initialCache.itemFilter);
+  const [statusFilter, setStatusFilter] = useState<'all' | ReconciledRowStatus>(
+    initialCache.statusFilter
+  );
 
   // Modal pemilihan KPM over-kuota yang dikeluarkan
   const [overQuotaModalItem, setOverQuotaModalItem] = useState<string | null>(null);
   const [overQuotaSearch, setOverQuotaSearch] = useState('');
 
   // Panel Audit & Dampak Pengelola
-  const [auditPanelOpen, setAuditPanelOpen] = useState(false);
-  const [auditTab, setAuditTab] = useState<'unmatched_bast' | 'pengelola'>('unmatched_bast');
+  const [auditPanelOpen, setAuditPanelOpen] = useState(initialCache.auditPanelOpen);
+  const [auditTab, setAuditTab] = useState<'unmatched_bast' | 'pengelola'>(initialCache.auditTab);
   const [copiedWaSummary, setCopiedWaSummary] = useState(false);
 
   const [exportingPdf, setExportingPdf] = useState(false);
@@ -178,10 +285,101 @@ export function TroubleshootingView({
     proposalId: string;
     proposalName: string;
     message: string;
-  } | null>(null);
+  } | null>(initialCache.applySuccessInfo);
   const [pendingUndoSnapshot, setPendingUndoSnapshot] =
     useState<TroubleshootingReconcileSnapshot | null>(null);
   const [undoBusy, setUndoBusy] = useState(false);
+
+  useEffect(() => {
+    const nextCache: TroubleshootingWorkspaceCache = {
+      proposalMode,
+      proposalPdfFile,
+      selectedProposalId,
+      bastPdfFile,
+      rawSource,
+      overrides,
+      analyzedProposalId,
+      summaryPengelolaPdf,
+      applySuccessInfo,
+      searchQuery,
+      itemFilter,
+      statusFilter,
+      auditPanelOpen,
+      auditTab,
+    };
+    moduleTroubleshootingWorkspace = nextCache;
+    try {
+      if (typeof window !== 'undefined' && window.sessionStorage) {
+        const serializable = {
+          proposalMode,
+          selectedProposalId,
+          rawSource,
+          overrides,
+          analyzedProposalId,
+          summaryPengelolaPdf,
+          applySuccessInfo,
+          searchQuery,
+          itemFilter,
+          statusFilter,
+          auditPanelOpen,
+          auditTab,
+        };
+        window.sessionStorage.setItem(TROUBLESHOOTING_SESSION_KEY, JSON.stringify(serializable));
+      }
+    } catch {
+      // Abaikan error kuota storage
+    }
+  }, [
+    proposalMode,
+    proposalPdfFile,
+    selectedProposalId,
+    bastPdfFile,
+    rawSource,
+    overrides,
+    analyzedProposalId,
+    summaryPengelolaPdf,
+    applySuccessInfo,
+    searchQuery,
+    itemFilter,
+    statusFilter,
+    auditPanelOpen,
+    auditTab,
+  ]);
+
+  const hasWorkspaceData = Boolean(
+    rawSource ||
+      proposalPdfFile ||
+      bastPdfFile ||
+      selectedProposalId ||
+      applySuccessInfo
+  );
+
+  const handleResetWorkspace = () => {
+    setProposalMode('pdf');
+    setProposalPdfFile(null);
+    setSelectedProposalId('');
+    setBastPdfFile(null);
+    setRawSource(null);
+    setOverrides({ ...DEFAULT_TROUBLESHOOTING_OVERRIDES });
+    setAnalyzedProposalId(null);
+    setSummaryPengelolaPdf([]);
+    setApplySuccessInfo(null);
+    setSearchQuery('');
+    setItemFilter('all');
+    setStatusFilter('all');
+    setAuditPanelOpen(false);
+    setAuditTab('unmatched_bast');
+    setErrorMessage(null);
+    setExportSuccessNotice(null);
+    moduleTroubleshootingWorkspace = null;
+    try {
+      if (typeof window !== 'undefined' && window.sessionStorage) {
+        window.sessionStorage.removeItem(TROUBLESHOOTING_SESSION_KEY);
+      }
+    } catch {
+      // Abaikan
+    }
+  };
 
   const result: TroubleshootingReconcileResult | null = useMemo(() => {
     if (!rawSource) return null;
@@ -942,6 +1140,17 @@ export function TroubleshootingView({
                 </p>
               </div>
             </div>
+
+            {hasWorkspaceData && (
+              <button
+                type="button"
+                onClick={handleResetWorkspace}
+                className="inline-flex min-h-[34px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                <span>Reset Analisis</span>
+              </button>
+            )}
           </div>
 
           <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">

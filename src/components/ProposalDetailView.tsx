@@ -39,6 +39,7 @@ import {
   BastTemplateConfig,
   DEFAULT_PEJABAT_LIST,
   DEFAULT_SCHEDULE_BOOKS,
+  DEFAULT_SPTJM_TEMPLATE,
   ItemBantuan,
   KpmDocumentFile,
   KpmRecord,
@@ -52,6 +53,7 @@ import {
   ReportTemplateConfig,
   ScheduleBook,
   ScheduleEventItem,
+  SptjmTemplateConfig,
   TroubleshootingReconcileSnapshot,
   WilayahKabKota,
 } from '../types/kpm';
@@ -76,6 +78,7 @@ import {
   DEFAULT_PDF_COLUMN_KEYS,
   exportAbsensiDinsosToPdf,
   exportKpmBastBulkToPdf,
+  exportKpmSptjmBulkToPdf,
   exportKpmTableToPdf,
   exportNomorDinsosToPdf,
   formatAbsensiScheduleFields,
@@ -104,6 +107,7 @@ interface ProposalDetailViewProps {
   scheduleBooks?: ScheduleBook[];
   reportTemplate?: ReportTemplateConfig;
   bastTemplate?: BastTemplateConfig;
+  sptjmTemplate?: SptjmTemplateConfig;
   pejabatList?: PejabatProfile[];
   proposalBastMap?: ProposalBastMap;
   onSaveProposalBastConfig?: (
@@ -154,6 +158,7 @@ export function ProposalDetailView({
   scheduleBooks = DEFAULT_SCHEDULE_BOOKS,
   reportTemplate,
   bastTemplate,
+  sptjmTemplate = DEFAULT_SPTJM_TEMPLATE,
   pejabatList = DEFAULT_PEJABAT_LIST,
   proposalBastMap = {},
   onSaveProposalBastConfig,
@@ -222,10 +227,12 @@ export function ProposalDetailView({
   const [kpmListQuery, setKpmListQuery] = useState('');
   const [kpmListItemFilter, setKpmListItemFilter] = useState<string>('all');
   const [expandedSections, setExpandedSections] = useState({
-    item: true,
-    subItem: true,
-    pengelola: true,
-    pekerjaan: true,
+    kelurahan: false,
+    item: false,
+    subItem: false,
+    pengelola: false,
+    pekerjaan: false,
+    rekamJejak: false,
   });
   const toggleBreakdownSection = (key: keyof typeof expandedSections) => {
     setExpandedSections((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -266,6 +273,7 @@ export function ProposalDetailView({
   const [isBastModalOpen, setIsBastModalOpen] = useState(false);
   const [bastDraft, setBastDraft] = useState<BastTemplateConfig>(effectiveBastConfig);
   const [bastBusy, setBastBusy] = useState(false);
+  const [sptjmBusy, setSptjmBusy] = useState(false);
   const [dinsosBusy, setDinsosBusy] = useState(false);
   const [kpmPdfBusy, setKpmPdfBusy] = useState(false);
   const [kpmXlsxBusy, setKpmXlsxBusy] = useState(false);
@@ -337,8 +345,39 @@ export function ProposalDetailView({
     }
   };
 
+  const handleExportProposalSptjm = async () => {
+    if (proposalRecords.length === 0 || sptjmBusy) return;
+    setSptjmBusy(true);
+    setBastFeedback(null);
+    try {
+      const result = await exportKpmSptjmBulkToPdf({
+        records: proposalRecords,
+        allRecords: records,
+        proposals: allProposals,
+        items,
+        wilayahList,
+        proposalSlotMap,
+        reportTemplate,
+        bastConfig: effectiveBastConfig,
+        sptjmConfig: sptjmTemplate ?? DEFAULT_SPTJM_TEMPLATE,
+        fileName: `SPTJM_${proposal.tahun}_${proposal.namaProposal}`,
+      });
+      setBastFeedback({
+        type: 'success',
+        text: `PDF SPTJM proposal (${result.count} KPM) disimpan: ${result.savedFileName}`,
+      });
+    } catch (err) {
+      setBastFeedback({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Gagal membuat PDF SPTJM proposal.',
+      });
+    } finally {
+      setSptjmBusy(false);
+    }
+  };
+
   const handleExportProposalDinsos = async () => {
-    if (proposalRecords.length === 0 || dinsosBusy) return;
+    if (dinsosFixedCount === 0 || dinsosBusy) return;
     setDinsosBusy(true);
     setBastFeedback(null);
     try {
@@ -346,8 +385,11 @@ export function ProposalDetailView({
         records: proposalRecords,
         allRecords: records,
         proposals: allProposals,
+        targetProposals: [proposal],
         items,
+        wilayahList,
         proposalSlotMap,
+        includeEmptySlots: true,
         fileName: `Nomor_DINSOS_${proposal.tahun}_${proposal.namaProposal}`,
       });
       setBastFeedback({
@@ -379,6 +421,7 @@ export function ProposalDetailView({
       ].filter(Boolean);
       const result = await exportKpmTableToPdf({
         records: proposalRecords,
+        allRecords: records,
         proposals: allProposals,
         items,
         wilayahList,
@@ -425,6 +468,7 @@ export function ProposalDetailView({
       ].filter(Boolean);
       const result = await exportKpmTableToXlsx({
         records: proposalRecords,
+        allRecords: records,
         proposals: allProposals,
         items,
         wilayahList,
@@ -612,6 +656,35 @@ export function ProposalDetailView({
     );
     return state?.emptySlots?.length ?? 0;
   }, [proposalSlotMap, proposal.id, proposal.namaProposal, proposal.tahun, allProposals]);
+
+  const dinsosFixedCount = useMemo(() => {
+    const { state } = resolveProposalSlotStateForGroup(
+      proposalSlotMap,
+      proposal.id,
+      proposal.namaProposal,
+      proposal.tahun,
+      allProposals
+    );
+    const merged = buildMergedProposalSlots({
+      groupRecords: proposalRecords,
+      slotState: state,
+      proposals: allProposals,
+      catalog: items,
+      wilayahList,
+    });
+    const maxMerged = merged.reduce((mx, m) => Math.max(mx, m.slotNumber), 0);
+    return Math.max(maxMerged, proposal.jumlahKpm || 0, proposalRecords.length);
+  }, [
+    proposalSlotMap,
+    proposal.id,
+    proposal.namaProposal,
+    proposal.tahun,
+    proposal.jumlahKpm,
+    allProposals,
+    proposalRecords,
+    items,
+    wilayahList,
+  ]);
 
   // DTSEN Breakdown (Desil 1-4, Desil 5, Desil 6-10, Belum Ada Desil, Data Tidak Ditemukan)
   const dtsenBreakdown = useMemo(() => {
@@ -1506,189 +1579,192 @@ export function ProposalDetailView({
         </section>
 
         {/* Pengaturan BAST & Jadwal Penyaluran Proposal */}
-        <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
-          <div className="flex items-start justify-between gap-2">
-            <div>
-              <div className="flex flex-wrap items-center gap-1.5">
-                <h2 className="text-sm font-bold text-slate-900">Info Surat BAST &amp; Jadwal</h2>
-                <span
-                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                    hasCustomProposalBast
-                      ? 'bg-teal-50 text-teal-700 border border-teal-200'
-                      : 'bg-slate-100 text-slate-600'
-                  }`}
-                >
-                  {hasCustomProposalBast ? 'Khusus Proposal Ini' : 'Default Global'}
-                </span>
-              </div>
-              <p className="mt-0.5 text-xs text-slate-500">
-                Penomoran BAST, SK, SP &amp; pejabat penandatangan khusus untuk proposal ini.
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+          <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3.5">
+            <div className="min-w-0">
+              <h2 className="text-sm font-bold text-slate-900">Info Surat BAST &amp; Jadwal</h2>
+              <p className="mt-0.5 text-[11px] font-medium text-slate-500">
+                {hasCustomProposalBast ? 'Pengaturan khusus proposal ini' : 'Menggunakan pengaturan default'}
               </p>
             </div>
+            {onSaveProposalBastConfig && canUpdate && (
+              <button
+                type="button"
+                disabled={isOffline}
+                onClick={openProposalBastModal}
+                title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Setting BAST Proposal'}
+                className="inline-flex min-h-[34px] shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                <SlidersHorizontal className={`h-3.5 w-3.5 ${isOffline ? 'text-slate-400' : 'text-teal-700'}`} />
+                <span>Setting</span>
+              </button>
+            )}
           </div>
 
-          <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 space-y-1.5 text-xs">
-            <div className="flex items-start justify-between gap-2">
-              <span className="text-slate-500 shrink-0">Nomor BAST</span>
-              <span className="text-right font-semibold text-slate-800 break-all">
+          <dl className="divide-y divide-slate-100 px-4 text-xs">
+            <div className="flex items-baseline gap-3 py-2.5">
+              <dt className="w-24 shrink-0 text-[11px] font-medium text-slate-400">No. BAST</dt>
+              <dd className="min-w-0 flex-1 font-semibold text-slate-900 break-words tabular-nums">
                 {effectiveBastConfig.nomorBast || '-'}
-              </span>
+              </dd>
             </div>
-            <div className="flex items-start justify-between gap-2">
-              <span className="text-slate-500 shrink-0">Nomor SK</span>
-              <span className="text-right font-medium text-slate-700 break-words">
+            <div className="flex items-baseline gap-3 py-2.5">
+              <dt className="w-24 shrink-0 text-[11px] font-medium text-slate-400">No. SK</dt>
+              <dd className="min-w-0 flex-1 font-medium text-slate-700 break-words">
                 {effectiveBastConfig.nomorSk || '-'}
-              </span>
+              </dd>
             </div>
-            <div className="flex items-start justify-between gap-2">
-              <span className="text-slate-500 shrink-0">Nomor SP</span>
-              <span className="text-right font-medium text-slate-700 break-all">
+            <div className="flex items-baseline gap-3 py-2.5">
+              <dt className="w-24 shrink-0 text-[11px] font-medium text-slate-400">No. SP</dt>
+              <dd className="min-w-0 flex-1 font-mono text-[11px] font-medium text-slate-700 break-all">
                 {effectiveBastConfig.nomorPesanan || '-'}
-              </span>
+              </dd>
             </div>
-            <div className="flex items-start justify-between gap-2">
-              <span className="text-slate-500 shrink-0">Tgl Serah Terima</span>
-              <span className="text-right font-medium text-slate-700">
+            <div className="flex items-baseline gap-3 py-2.5">
+              <dt className="w-24 shrink-0 text-[11px] font-medium text-slate-400">Serah Terima</dt>
+              <dd className="min-w-0 flex-1 font-medium leading-relaxed text-slate-700">
                 {(effectiveBastConfig.tanggalSerahTerimaCustomText || '').trim() ||
                   formatIndonesianDateWords(effectiveBastConfig.tanggalSerahTerimaIso)}
-              </span>
+              </dd>
             </div>
-            <div className="flex items-start justify-between gap-2">
-              <span className="text-slate-500 shrink-0">Lokasi Teks BAST</span>
-              <span className="text-right font-medium text-slate-700">
+            <div className="flex items-baseline gap-3 py-2.5">
+              <dt className="w-24 shrink-0 text-[11px] font-medium text-slate-400">Lokasi BAST</dt>
+              <dd className="min-w-0 flex-1 font-medium text-slate-700">
                 {proposalBastLocationLabel}
-              </span>
+              </dd>
             </div>
-          </div>
+          </dl>
 
           {matchedSchedule && (
-            <div className="rounded-xl border border-teal-200 bg-teal-50/70 p-3 space-y-1 text-xs">
-              <div className="flex items-center gap-1.5 font-semibold text-teal-800">
-                <CalendarClock className="h-3.5 w-3.5 shrink-0" />
-                <span>Jadwal Penyaluran Kupon Terhubung</span>
+            <div className="border-t border-slate-100 bg-slate-50/70 px-4 py-3 text-xs">
+              <div className="flex items-start gap-2.5">
+                <CalendarClock className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+                <div className="min-w-0 flex-1 space-y-0.5">
+                  <p className="font-semibold text-slate-900">
+                    {formatScheduleDateTimeForCoupon(
+                      matchedSchedule.targetDate,
+                      matchedSchedule.targetTime,
+                      matchedSchedule.targetDay
+                    )}
+                  </p>
+                  {matchedSchedule.location && (
+                    <p className="flex items-center gap-1 text-slate-600">
+                      <MapPin className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                      <span className="truncate">{matchedSchedule.location}</span>
+                    </p>
+                  )}
+                  {matchedSchedule.notes && (
+                    <p className="text-[11px] text-slate-500">
+                      {matchedSchedule.notes}
+                    </p>
+                  )}
+                </div>
               </div>
-              <p className="text-teal-900 font-medium">
-                {formatScheduleDateTimeForCoupon(
-                  matchedSchedule.targetDate,
-                  matchedSchedule.targetTime,
-                  matchedSchedule.targetDay
-                )}
-              </p>
-              {matchedSchedule.location && (
-                <p className="flex items-center gap-1 text-teal-800">
-                  <MapPin className="h-3.5 w-3.5 shrink-0" />
-                  <span>{matchedSchedule.location}</span>
-                </p>
-              )}
-              {matchedSchedule.notes && (
-                <p className="text-[11px] text-teal-700">
-                  Catatan: {matchedSchedule.notes}
-                </p>
-              )}
             </div>
           )}
 
           {bastFeedback && (
-            <p
-              className={`rounded-xl px-3 py-2 text-xs font-medium ${
-                bastFeedback.type === 'success'
-                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                  : 'bg-rose-50 text-rose-700 border border-rose-200'
-              }`}
-            >
-              {bastFeedback.text}
-            </p>
+            <div className="border-t border-slate-100 px-4 pt-3">
+              <p
+                className={`rounded-xl px-3 py-2 text-xs font-medium ${
+                  bastFeedback.type === 'success'
+                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                    : 'bg-rose-50 text-rose-700 border border-rose-200'
+                }`}
+              >
+                {bastFeedback.text}
+              </p>
+            </div>
           )}
 
-          <div className="space-y-2">
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div className="space-y-2 border-t border-slate-100 px-4 py-3.5">
+            {/* Aksi Utama: Surat BAST & SPTJM */}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                disabled={proposalRecords.length === 0 || bastBusy}
+                onClick={() => void handleExportProposalBast()}
+                className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-xl bg-teal-700 px-2.5 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:opacity-50"
+              >
+                {bastBusy ? (
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                ) : (
+                  <FileCheck2 className="h-3.5 w-3.5 shrink-0" />
+                )}
+                <span>Cetak BAST</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={proposalRecords.length === 0 || sptjmBusy}
+                onClick={() => void handleExportProposalSptjm()}
+                className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-800 transition-colors hover:bg-slate-50 disabled:opacity-50"
+              >
+                {sptjmBusy ? (
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                ) : (
+                  <FileText className="h-3.5 w-3.5 shrink-0 text-teal-700" />
+                )}
+                <span>Download SPTJM</span>
+              </button>
+            </div>
+
+            {/* Aksi Pendukung: Data Tabel & Label */}
+            <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
                 disabled={(proposalRecords.length === 0 && emptySlotsCount === 0) || kpmPdfBusy}
                 onClick={() => void handleExportProposalKpmPdf()}
-                className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-teal-700 bg-white px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex min-h-[38px] w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-slate-50/70 px-2.5 text-xs font-medium text-slate-700 transition-colors hover:border-slate-300 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {kpmPdfBusy ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
                 ) : (
-                  <Download className="h-3.5 w-3.5" />
+                  <Download className="h-3.5 w-3.5 shrink-0 text-slate-500" />
                 )}
-                <span>
-                  Download PDF ({kpmCounts.accepted} KPM
-                  {emptySlotsCount > 0 ? ` + ${emptySlotsCount}` : ''})
-                </span>
+                <span>Data KPM (PDF)</span>
               </button>
 
               <button
                 type="button"
                 disabled={(proposalRecords.length === 0 && emptySlotsCount === 0) || kpmXlsxBusy}
                 onClick={() => void handleExportProposalKpmXlsx()}
-                className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-emerald-700 bg-emerald-50/70 px-3 text-xs font-semibold text-emerald-800 transition-colors hover:bg-emerald-100/80 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex min-h-[38px] w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-slate-50/70 px-2.5 text-xs font-medium text-slate-700 transition-colors hover:border-slate-300 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {kpmXlsxBusy ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
                 ) : (
-                  <FileSpreadsheet className="h-3.5 w-3.5" />
+                  <FileSpreadsheet className="h-3.5 w-3.5 shrink-0 text-slate-500" />
                 )}
-                <span>Download Excel (.xlsx)</span>
+                <span>Data KPM (Excel)</span>
               </button>
-            </div>
 
-            <div className="flex flex-wrap gap-2">
-              {onSaveProposalBastConfig && canUpdate && (
-                <button
-                  type="button"
-                  disabled={isOffline}
-                  onClick={openProposalBastModal}
-                  title={isOffline ? 'Mode Offline (Hanya Baca)' : 'Setting BAST Proposal'}
-                  className="inline-flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-                >
-                  <SlidersHorizontal className={`h-3.5 w-3.5 ${isOffline ? 'text-slate-400' : 'text-teal-700'}`} />
-                  <span>Setting BAST Proposal</span>
-                </button>
-              )}
               <button
                 type="button"
-                disabled={proposalRecords.length === 0 || bastBusy}
-                onClick={() => void handleExportProposalBast()}
-                className="inline-flex min-h-[40px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
-              >
-                {bastBusy ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <FileCheck2 className="h-3.5 w-3.5" />
-                )}
-                <span>Cetak BAST ({kpmCounts.accepted} KPM)</span>
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <button
-                type="button"
-                disabled={proposalRecords.length === 0 || dinsosBusy}
+                disabled={dinsosFixedCount === 0 || dinsosBusy}
                 onClick={() => void handleExportProposalDinsos()}
-                className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50/70 px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100 disabled:opacity-50"
+                className="inline-flex min-h-[38px] w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-slate-50/70 px-2.5 text-xs font-medium text-slate-700 transition-colors hover:border-slate-300 hover:bg-white disabled:opacity-50"
               >
                 {dinsosBusy ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
                 ) : (
-                  <Tag className="h-3.5 w-3.5" />
+                  <Tag className="h-3.5 w-3.5 shrink-0 text-slate-500" />
                 )}
-                <span>Nomor DINSOS ({kpmCounts.accepted})</span>
+                <span className="tabular-nums">Nomor DINSOS ({dinsosFixedCount})</span>
               </button>
 
               <button
                 type="button"
                 disabled={(proposalRecords.length === 0 && emptySlotsCount === 0) || absensiBusy}
                 onClick={openAbsensiModal}
-                className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-indigo-200 bg-indigo-50/80 px-3 text-xs font-semibold text-indigo-800 transition-colors hover:bg-indigo-100 disabled:opacity-50"
+                className="inline-flex min-h-[38px] w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-slate-50/70 px-2.5 text-xs font-medium text-slate-700 transition-colors hover:border-slate-300 hover:bg-white disabled:opacity-50"
               >
                 {absensiBusy ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
                 ) : (
-                  <ClipboardCheck className="h-3.5 w-3.5" />
+                  <ClipboardCheck className="h-3.5 w-3.5 shrink-0 text-slate-500" />
                 )}
-                <span>Download Absensi (PDF)</span>
+                <span>Absensi (PDF)</span>
               </button>
             </div>
 
@@ -1696,10 +1772,13 @@ export function ProposalDetailView({
               <button
                 type="button"
                 onClick={() => onOpenProposalBuilder(proposal.id)}
-                className="inline-flex min-h-[42px] w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-3 text-xs font-semibold text-white transition-colors hover:bg-slate-800"
+                className="flex min-h-[40px] w-full items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3.5 text-xs font-semibold text-slate-800 transition-colors hover:border-slate-300 hover:bg-slate-50"
               >
-                <FileText className="h-4 w-4" />
-                <span>Buat Proposal (F4 · OPD / Wilayah)</span>
+                <span className="inline-flex items-center gap-2">
+                  <FileText className="h-3.5 w-3.5 shrink-0 text-teal-700" />
+                  <span>Buat Proposal (F4 · OPD / Wilayah)</span>
+                </span>
+                <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
               </button>
             )}
           </div>
@@ -1709,50 +1788,66 @@ export function ProposalDetailView({
 
   const breakdownsBlock = (
     <>
-        {/* Conditional Listing: Kelurahan (Tampil selain proposal dengan judul kelurahan) */}
+        {/* Conditional Listing: Kelurahan (Collapsible, default collapsed) */}
         {showKelurahanCard && (
           <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-            <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
-              <h2 className="text-sm font-bold text-slate-900">Kelurahan</h2>
-              <span className="shrink-0 whitespace-nowrap text-xs font-medium text-slate-500 tabular-nums">
-                {kelurahanBreakdown.length} Kelurahan
-              </span>
-            </div>
-
-            {kelurahanBreakdown.length === 0 ? (
-              <p className="px-4 py-6 text-center text-xs text-slate-400">
-                Belum ada KPM pada proposal ini.
-              </p>
-            ) : (
-              <div className="divide-y divide-slate-100">
-                {kelurahanBreakdown.map((kel) => {
-                  const widthPct =
-                    kpmCounts.total > 0 ? Math.round((kel.total / kpmCounts.total) * 100) : 0;
-                  return (
-                    <div key={kel.name} className="px-4 py-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="truncate text-sm font-normal text-slate-800">
-                          {kel.name}
-                        </span>
-                        <span className="shrink-0 text-xs font-medium text-slate-700 tabular-nums">
-                          {kel.total}
-                        </span>
-                      </div>
-                      <div className="mt-1.5 flex items-center gap-2.5">
-                        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100">
-                          <div
-                            className="h-full rounded-full bg-teal-700"
-                            style={{ width: `${widthPct}%` }}
-                          />
-                        </div>
-                        <span className="text-[11px] text-slate-500 tabular-nums shrink-0">
-                          {kel.accepted} Diterima
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
+            <button
+              type="button"
+              aria-expanded={expandedSections.kelurahan}
+              onClick={() => toggleBreakdownSection('kelurahan')}
+              className={`flex w-full items-center justify-between gap-2 px-4 py-3 text-left transition-colors hover:bg-slate-50/80 ${
+                expandedSections.kelurahan ? 'border-b border-slate-100' : ''
+              }`}
+            >
+              <div className="flex min-w-0 items-center gap-2">
+                <h2 className="text-sm font-bold text-slate-900">Kelurahan</h2>
+                <span className="text-xs font-medium text-slate-500 tabular-nums">
+                  · {kelurahanBreakdown.length} Kelurahan
+                </span>
               </div>
+              <ChevronDown
+                className={`h-4 w-4 shrink-0 text-slate-500 transition-transform duration-200 ${
+                  expandedSections.kelurahan ? 'rotate-180' : ''
+                }`}
+              />
+            </button>
+
+            {expandedSections.kelurahan && (
+              kelurahanBreakdown.length === 0 ? (
+                <p className="px-4 py-6 text-center text-xs text-slate-400">
+                  Belum ada KPM pada proposal ini.
+                </p>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {kelurahanBreakdown.map((kel) => {
+                    const widthPct =
+                      kpmCounts.total > 0 ? Math.round((kel.total / kpmCounts.total) * 100) : 0;
+                    return (
+                      <div key={kel.name} className="px-4 py-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate text-sm font-normal text-slate-800">
+                            {kel.name}
+                          </span>
+                          <span className="shrink-0 text-xs font-medium text-slate-700 tabular-nums">
+                            {kel.total}
+                          </span>
+                        </div>
+                        <div className="mt-1.5 flex items-center gap-2.5">
+                          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100">
+                            <div
+                              className="h-full rounded-full bg-teal-700"
+                              style={{ width: `${widthPct}%` }}
+                            />
+                          </div>
+                          <span className="text-[11px] text-slate-500 tabular-nums shrink-0">
+                            {kel.accepted} Diterima
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )
             )}
           </section>
         )}
@@ -1769,8 +1864,8 @@ export function ProposalDetailView({
           >
             <div className="flex min-w-0 items-center gap-2">
               <h2 className="text-sm font-bold text-slate-900">Item</h2>
-              <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 tabular-nums">
-                {itemBreakdown.length} Item
+              <span className="text-xs font-medium text-slate-500 tabular-nums">
+                · {itemBreakdown.length} Item
               </span>
             </div>
             <ChevronDown
@@ -1825,7 +1920,7 @@ export function ProposalDetailView({
           )}
         </section>
 
-        {/* Akumulasi Sub-Item dalam Proposal (Collapsible) */}
+        {/* Sub-Item dalam Proposal (Collapsible) */}
         {subItemRecap.aggregates.length > 0 && (
           <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
             <button
@@ -1836,16 +1931,11 @@ export function ProposalDetailView({
                 expandedSections.subItem ? 'border-b border-slate-100' : ''
               }`}
             >
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <h2 className="text-sm font-bold text-slate-900">Akumulasi Sub-Item</h2>
-                  <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 tabular-nums">
-                    {subItemRecap.aggregates.length} Sub-Item
-                  </span>
-                </div>
-                <p className="mt-0.5 text-[11px] text-slate-500">
-                  Total gabungan barang lintas paket pada proposal ini
-                </p>
+              <div className="flex min-w-0 items-center gap-2">
+                <h2 className="text-sm font-bold text-slate-900">Sub-Item</h2>
+                <span className="text-xs font-medium text-slate-500 tabular-nums">
+                  · {subItemRecap.aggregates.length} Sub-Item
+                </span>
               </div>
               <ChevronDown
                 className={`h-4 w-4 shrink-0 text-slate-500 transition-transform duration-200 ${
@@ -1894,8 +1984,8 @@ export function ProposalDetailView({
           >
             <div className="flex min-w-0 items-center gap-2">
               <h2 className="text-sm font-bold text-slate-900">Pengelola</h2>
-              <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 tabular-nums">
-                {pengelolaBreakdown.length} Pengelola
+              <span className="text-xs font-medium text-slate-500 tabular-nums">
+                · {pengelolaBreakdown.length} Pengelola
               </span>
             </div>
             <ChevronDown
@@ -1952,8 +2042,8 @@ export function ProposalDetailView({
           >
             <div className="flex min-w-0 items-center gap-2">
               <h2 className="text-sm font-bold text-slate-900">Pekerjaan</h2>
-              <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 tabular-nums">
-                {pekerjaanBreakdown.length} Jenis
+              <span className="text-xs font-medium text-slate-500 tabular-nums">
+                · {pekerjaanBreakdown.length} Jenis
               </span>
             </div>
             <ChevronDown
@@ -2169,91 +2259,100 @@ export function ProposalDetailView({
 
   const historyBlock = (
     <>
-        {/* Paling Bawah: Rekam Jejak (Ringkas + Lihat selengkapnya) */}
+        {/* Paling Bawah: Rekam Jejak (Collapsible, default collapsed + Lihat selengkapnya) */}
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-            <div className="flex items-center gap-2">
-              <History className="h-4 w-4 text-slate-700" />
+          <button
+            type="button"
+            aria-expanded={expandedSections.rekamJejak}
+            onClick={() => toggleBreakdownSection('rekamJejak')}
+            className={`flex w-full items-center justify-between gap-2 px-4 py-3 text-left transition-colors hover:bg-slate-50/80 ${
+              expandedSections.rekamJejak ? 'border-b border-slate-100' : ''
+            }`}
+          >
+            <div className="flex min-w-0 items-center gap-2">
+              <History className="h-4 w-4 shrink-0 text-slate-700" />
               <h2 className="text-sm font-bold text-slate-900">Rekam Jejak</h2>
+              {proposalHistory.length > 0 && (
+                <span className="text-xs font-medium text-slate-500 tabular-nums">
+                  · {proposalHistory.length} Aktivitas
+                </span>
+              )}
             </div>
-            {proposalHistory.length > 0 && (
-              <button
-                type="button"
-                onClick={onOpenFullHistory}
-                className="inline-flex items-center gap-0.5 text-xs font-semibold text-teal-700 hover:underline"
-              >
-                <span>Lihat selengkapnya</span>
-                <ChevronRight className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
+            <ChevronDown
+              className={`h-4 w-4 shrink-0 text-slate-500 transition-transform duration-200 ${
+                expandedSections.rekamJejak ? 'rotate-180' : ''
+              }`}
+            />
+          </button>
 
-          {proposalHistory.length === 0 ? (
-            <p className="px-4 py-6 text-center text-xs text-slate-400">
-              Belum ada riwayat perpindahan KPM pada proposal ini.
-            </p>
-          ) : (
-            <>
-              <div className="divide-y divide-slate-100">
-                {proposalHistory.slice(0, 3).map((entry) => {
-                  const isIncoming = entry.action === 'entered' || entry.action === 'moved_in';
-                  const actionSummary =
-                    entry.action === 'moved_in'
-                      ? `Pindah masuk dari ${entry.fromProposal || 'proposal lain'}`
-                      : entry.action === 'moved_out'
-                        ? `Pindah keluar ke ${entry.toProposal || 'proposal lain'}`
-                        : entry.action === 'removed'
-                          ? 'Dihapus dari daftar proposal'
-                          : 'Didaftarkan masuk ke proposal';
+          {expandedSections.rekamJejak && (
+            proposalHistory.length === 0 ? (
+              <p className="px-4 py-6 text-center text-xs text-slate-400">
+                Belum ada riwayat perpindahan KPM pada proposal ini.
+              </p>
+            ) : (
+              <>
+                <div className="divide-y divide-slate-100">
+                  {proposalHistory.slice(0, 3).map((entry) => {
+                    const isIncoming = entry.action === 'entered' || entry.action === 'moved_in';
+                    const actionSummary =
+                      entry.action === 'moved_in'
+                        ? `Pindah masuk dari ${entry.fromProposal || 'proposal lain'}`
+                        : entry.action === 'moved_out'
+                          ? `Pindah keluar ke ${entry.toProposal || 'proposal lain'}`
+                          : entry.action === 'removed'
+                            ? 'Dihapus dari daftar proposal'
+                            : 'Didaftarkan masuk ke proposal';
 
-                  return (
-                    <div key={entry.id} className="flex items-start gap-3 px-4 py-3">
-                      <div
-                        className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${
-                          isIncoming
-                            ? 'bg-teal-50 text-teal-700'
-                            : 'bg-amber-50 text-amber-700'
-                        }`}
-                      >
-                        {isIncoming ? (
-                          <ArrowDownLeft className="h-4 w-4" />
-                        ) : (
-                          <ArrowUpRight className="h-4 w-4" />
-                        )}
-                      </div>
-
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="truncate text-sm font-medium text-slate-900">
-                            {entry.kpmName}
-                          </p>
-                          <span
-                            className={`shrink-0 text-xs font-semibold ${
-                              isIncoming ? 'text-teal-700' : 'text-amber-700'
-                            }`}
-                          >
-                            {isIncoming ? 'Masuk' : 'Keluar'}
-                          </span>
+                    return (
+                      <div key={entry.id} className="flex items-start gap-3 px-4 py-3">
+                        <div
+                          className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${
+                            isIncoming
+                              ? 'bg-teal-50 text-teal-700'
+                              : 'bg-amber-50 text-amber-700'
+                          }`}
+                        >
+                          {isIncoming ? (
+                            <ArrowDownLeft className="h-4 w-4" />
+                          ) : (
+                            <ArrowUpRight className="h-4 w-4" />
+                          )}
                         </div>
-                        <p className="mt-0.5 text-xs text-slate-600">{actionSummary}</p>
-                        <p className="mt-1 text-xs text-slate-500 tabular-nums">
-                          {formatUploadDateTime(entry.timestamp)} · Oleh {entry.actorName}
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
 
-              <button
-                type="button"
-                onClick={onOpenFullHistory}
-                className="flex min-h-[42px] w-full items-center justify-center gap-1 border-t border-slate-100 bg-slate-50/70 px-4 text-xs font-semibold text-teal-700 transition-colors hover:bg-slate-100"
-              >
-                <span>Lihat selengkapnya ({proposalHistory.length})</span>
-                <ChevronRight className="h-3.5 w-3.5" />
-              </button>
-            </>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="truncate text-sm font-medium text-slate-900">
+                              {entry.kpmName}
+                            </p>
+                            <span
+                              className={`shrink-0 text-xs font-semibold ${
+                                isIncoming ? 'text-teal-700' : 'text-amber-700'
+                              }`}
+                            >
+                              {isIncoming ? 'Masuk' : 'Keluar'}
+                            </span>
+                          </div>
+                          <p className="mt-0.5 text-xs text-slate-600">{actionSummary}</p>
+                          <p className="mt-1 text-xs text-slate-500 tabular-nums">
+                            {formatUploadDateTime(entry.timestamp)} · Oleh {entry.actorName}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={onOpenFullHistory}
+                  className="flex min-h-[42px] w-full items-center justify-center gap-1 border-t border-slate-100 bg-slate-50/70 px-4 text-xs font-semibold text-teal-700 transition-colors hover:bg-slate-100"
+                >
+                  <span>Lihat selengkapnya ({proposalHistory.length})</span>
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+              </>
+            )
           )}
         </section>
     </>

@@ -14,6 +14,7 @@ import {
   buildMergedProposalSlots,
   getAbsenSeq,
   getItemHierarchyRank,
+  getKpmSlotNumberInProposal,
   resolveKpmDomicile,
   resolvePackageForKpm,
   resolveProposalKecamatanCategory,
@@ -24,6 +25,7 @@ import {
 
 export interface ExportKpmXlsxOptions {
   records: KpmRecord[];
+  allRecords?: KpmRecord[];
   proposals: ProposalRecord[];
   items: ItemBantuan[];
   wilayahList?: WilayahKabKota[];
@@ -171,6 +173,7 @@ interface BuiltSheetRow {
 
 function buildRowsForSingleGroup(params: {
   groupRecords: KpmRecord[];
+  allRecords?: KpmRecord[];
   proposals: ProposalRecord[];
   items: ItemBantuan[];
   wilayahList: WilayahKabKota[];
@@ -185,6 +188,7 @@ function buildRowsForSingleGroup(params: {
 } {
   const {
     groupRecords,
+    allRecords,
     proposals,
     items,
     wilayahList,
@@ -192,6 +196,7 @@ function buildRowsForSingleGroup(params: {
     includeEmptySlots,
     proposalMeta,
   } = params;
+  const sourcePool = allRecords && allRecords.length > 0 ? allRecords : groupRecords;
 
   const itemSummary = new Map<string, { name: string; filled: number; empty: number }>();
   const addSummary = (codeRaw: string, tahunRef: string, isEmpty: boolean) => {
@@ -219,15 +224,30 @@ function buildRowsForSingleGroup(params: {
       proposalMeta.namaProposal,
       proposalMeta.tahun
     );
+    const groupIds = new Set(groupRecords.map((r) => r.id));
+    const poolForProposal =
+      allRecords && allRecords.length > 0 && !includeEmptySlots
+        ? sourcePool.filter(
+            (r) =>
+              r.validasi === 'accepted' &&
+              (proposalMeta.id && r.proposalId
+                ? r.proposalId === proposalMeta.id
+                : (r.proposal || '').trim() === proposalMeta.namaProposal &&
+                  (!proposalMeta.tahun || (r.tahun || '').trim() === proposalMeta.tahun))
+          )
+        : groupRecords;
     const mergedSlots = buildMergedProposalSlots({
-      groupRecords,
-      slotState: includeEmptySlots ? slotRes.state : undefined,
+      groupRecords: poolForProposal.length > 0 ? poolForProposal : groupRecords,
+      slotState: slotRes.state,
       proposals,
       catalog: items,
       wilayahList,
     });
 
     for (const slot of mergedSlots) {
+      if (slot.kind === 'kpm' && !includeEmptySlots && !groupIds.has(slot.record.id)) {
+        continue;
+      }
       const noStr = String(slot.slotNumber).padStart(2, '0');
       if (slot.kind === 'empty') {
         if (!includeEmptySlots) continue;
@@ -297,9 +317,27 @@ function buildRowsForSingleGroup(params: {
   }
 
   // Fallback untuk daftar tanpa meta proposal tunggal (mis. Database KPM / Arsip / filter pengelola)
+  const resolveSlotOrAbsen = (rec: KpmRecord): number | null => {
+    const slotNo = getKpmSlotNumberInProposal(
+      rec,
+      sourcePool,
+      proposals,
+      items,
+      wilayahList,
+      proposalSlotMap
+    );
+    if (slotNo && slotNo > 0) return slotNo;
+    const seq = getAbsenSeq(rec.registerCode);
+    return seq < 999999 ? seq : null;
+  };
+
   const sorted = [...groupRecords].sort((a, b) => {
-    const seqA = getAbsenSeq(a.registerCode);
-    const seqB = getAbsenSeq(b.registerCode);
+    const yearCmp = (a.tahun || '').localeCompare(b.tahun || '');
+    if (yearCmp !== 0) return yearCmp;
+    const propCmp = (a.proposal || '').localeCompare(b.proposal || '', 'id');
+    if (propCmp !== 0) return propCmp;
+    const seqA = resolveSlotOrAbsen(a) ?? 999999;
+    const seqB = resolveSlotOrAbsen(b) ?? 999999;
     if (seqA !== seqB) return seqA - seqB;
     return (a.nama || '').localeCompare(b.nama || '', 'id');
   });
@@ -311,8 +349,9 @@ function buildRowsForSingleGroup(params: {
     const dom = resolveKpmDomicile(rec, proposals, wilayahList);
     addSummary(itemCode, rec.tahun, false);
     filledCount += 1;
+    const resolvedNo = resolveSlotOrAbsen(rec) ?? idx + 1;
     rows.push({
-      no: String(idx + 1).padStart(2, '0'),
+      no: String(resolvedNo).padStart(2, '0'),
       item: itemCode,
       namaItem: itemName,
       nama: (rec.nama || '').trim(),
@@ -581,6 +620,7 @@ export async function exportKpmTableToXlsx(
 }> {
   const {
     records,
+    allRecords,
     proposals,
     items,
     wilayahList = INITIAL_WILAYAH_LIST,
@@ -593,6 +633,7 @@ export async function exportKpmTableToXlsx(
     splitByPengelola = false,
     proposalMeta,
   } = options;
+  const sourcePool = allRecords && allRecords.length > 0 ? allRecords : records;
 
   const XLSX = await import('xlsx');
   const wb = XLSX.utils.book_new();
@@ -677,14 +718,16 @@ export async function exportKpmTableToXlsx(
           target.tahun
         );
         if (!slotRes.state || slotRes.state.emptySlots.length === 0) continue;
-        const propRecs = records.filter((r) =>
-          target.id && r.proposalId
+        const propRecs = sourcePool.filter((r) =>
+          r.validasi === 'accepted' &&
+          (target.id && r.proposalId
             ? r.proposalId === target.id
             : (r.proposal || '').trim() === target.namaProposal &&
-              (!target.tahun || (r.tahun || '').trim() === target.tahun)
+              (!target.tahun || (r.tahun || '').trim() === target.tahun))
         );
         const builtProp = buildRowsForSingleGroup({
           groupRecords: propRecs,
+          allRecords: sourcePool,
           proposals,
           items,
           wilayahList,
@@ -727,6 +770,7 @@ export async function exportKpmTableToXlsx(
     for (const grp of orderedGroups) {
       const built = buildRowsForSingleGroup({
         groupRecords: grp.records,
+        allRecords: sourcePool,
         proposals,
         items,
         wilayahList,
@@ -822,6 +866,7 @@ export async function exportKpmTableToXlsx(
   if (proposalMeta || !splitByProposal) {
     const built = buildRowsForSingleGroup({
       groupRecords: records,
+      allRecords: sourcePool,
       proposals,
       items,
       wilayahList,
@@ -941,6 +986,7 @@ export async function exportKpmTableToXlsx(
     const hasProposal = grp.proposalName !== 'Tanpa Proposal';
     const built = buildRowsForSingleGroup({
       groupRecords: grp.groupRecords,
+      allRecords: sourcePool,
       proposals,
       items,
       wilayahList,

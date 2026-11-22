@@ -662,6 +662,8 @@ export default function App() {
   const [proposalBuilderReturnTarget, setProposalBuilderReturnTarget] = useState<
     'menu' | 'proposal-detail'
   >('menu');
+  const [proposalBuilderPrevMenuSection, setProposalBuilderPrevMenuSection] =
+    useState<MenuSection>('root');
   const [rabInitialProposalId, setRabInitialProposalId] = useState<string | null>(null);
   const [rabReturnToProposalBuilder, setRabReturnToProposalBuilder] = useState<boolean>(false);
   const [kpmBastMap, setKpmBastMap] = useState<Record<string, KpmBastInfo>>({});
@@ -3968,6 +3970,13 @@ export default function App() {
         setActiveTab('dashboard');
         return;
       }
+      if (menuSection === 'buat-proposal' && proposalBuilderReturnTarget === 'proposal-detail' && activeProposal) {
+        navigateRestoreScroll();
+        setProposalBuilderReturnTarget('menu');
+        setMenuSection(proposalBuilderPrevMenuSection);
+        setSubView('proposal-detail');
+        return;
+      }
       navigateRestoreScroll();
       setSelectedPengelolaDrill(null);
       setSelectedPekerjaanDrill(null);
@@ -7140,6 +7149,7 @@ export default function App() {
     navigateForwardScroll();
     setProposalBuilderInitialId(proposalId);
     setProposalBuilderReturnTarget(source);
+    setProposalBuilderPrevMenuSection(source === 'proposal-detail' ? menuSection : 'root');
     setRabReturnToProposalBuilder(false);
     setSubView('none');
     setActiveTab('menu');
@@ -10940,6 +10950,7 @@ export default function App() {
               scheduleBooks={scheduleBooksState.books}
               reportTemplate={reportTemplate}
               bastTemplate={bastTemplate}
+              sptjmTemplate={sptjmTemplate}
               pejabatList={pejabatList}
               proposalBastMap={proposalBastMap}
               onSaveProposalBastConfig={handleSaveProposalBastConfig}
@@ -11246,6 +11257,7 @@ export default function App() {
               if (section === 'buat-proposal') {
                 setProposalBuilderInitialId(null);
                 setProposalBuilderReturnTarget('menu');
+                setProposalBuilderPrevMenuSection('root');
               }
               if (section === 'rab') {
                 setRabInitialProposalId(null);
@@ -11429,6 +11441,7 @@ export default function App() {
               navigateRestoreScroll();
               if (proposalBuilderReturnTarget === 'proposal-detail' && activeProposal) {
                 setProposalBuilderReturnTarget('menu');
+                setMenuSection(proposalBuilderPrevMenuSection);
                 setSubView('proposal-detail');
               } else {
                 setMenuSection('root');

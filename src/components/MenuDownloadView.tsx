@@ -44,6 +44,7 @@ import {
   WilayahKabKota,
 } from '../types/kpm';
 import {
+  buildMergedProposalSlots,
   formatRupiah,
   getItemHierarchyRank,
   getKpmSubItemStatusList,
@@ -51,6 +52,7 @@ import {
   resolveKpmDomicile,
   resolvePackageForKpm,
   resolveProposalKecamatanCategory,
+  resolveProposalSlotStateForGroup,
   sortKecamatanCategoryNames,
 } from '../utils/imageProcessor';
 import {
@@ -77,6 +79,7 @@ import {
   formatAbsensiScheduleFields,
   formatIndonesianDDMonthYYYY,
   formatIndonesianDateWords,
+  formatNomorDinsosLocationLines,
   formatScheduleDateTimeForCoupon,
   formatSptjmFullDate,
   getSptjmAutoDayFromIso,
@@ -575,6 +578,107 @@ export function MenuDownloadView({
       ),
     [filteredRecords]
   );
+
+  // Hitung jumlah label Nomor DINSOS (fixed 1..jumlahKpm per proposal termasuk baris kosong jika tidak difilter pengelola)
+  const dinsosIncludeEmptySlots = !isStandaloneSource && selectedPengelola === 'all';
+  const dinsosTargetProposals = useMemo(
+    () =>
+      !isStandaloneSource && selectedProposal !== 'all' && selectedProposalObj
+        ? [selectedProposalObj]
+        : undefined,
+    [isStandaloneSource, selectedProposal, selectedProposalObj]
+  );
+
+  const dinsosFixedLabelCount = useMemo(() => {
+    const groups = new Map<
+      string,
+      { proposalObj?: ProposalRecord; namaProposal: string; tahun: string; recs: KpmRecord[] }
+    >();
+    for (const rec of eligibleKuponRecords) {
+      const pName = (rec.proposal || '').trim();
+      const yr = (rec.tahun || '').trim();
+      const matched =
+        (rec.proposalId ? proposalLookup.byId.get(rec.proposalId) : undefined) ??
+        proposalLookup.byNameYear.get(`${pName}__${yr}`) ??
+        proposalLookup.byName.get(pName);
+      const key = matched ? `id::${matched.id}` : `${yr}::${pName}`;
+      const existing = groups.get(key);
+      if (existing) {
+        existing.recs.push(rec);
+      } else {
+        groups.set(key, {
+          proposalObj: matched,
+          namaProposal: matched?.namaProposal || pName,
+          tahun: matched?.tahun || yr,
+          recs: [rec],
+        });
+      }
+    }
+    if (dinsosTargetProposals) {
+      for (const prop of dinsosTargetProposals) {
+        const key = `id::${prop.id}`;
+        if (!groups.has(key)) {
+          groups.set(key, {
+            proposalObj: prop,
+            namaProposal: prop.namaProposal,
+            tahun: prop.tahun,
+            recs: [],
+          });
+        }
+      }
+    }
+
+    let total = 0;
+    for (const grp of groups.values()) {
+      if (!dinsosIncludeEmptySlots) {
+        total += grp.recs.length;
+        continue;
+      }
+      const allAcceptedInProp = records.filter(
+        (r) =>
+          r.validasi === 'accepted' &&
+          Boolean((r.proposal || '').trim()) &&
+          (grp.proposalObj
+            ? r.proposalId
+              ? r.proposalId === grp.proposalObj.id
+              : (r.proposal || '').trim() === grp.proposalObj.namaProposal &&
+                (r.tahun || '').trim() === grp.proposalObj.tahun
+            : (r.proposal || '').trim() === grp.namaProposal &&
+              (!grp.tahun || (r.tahun || '').trim() === grp.tahun))
+      );
+      const { state: slotState } = resolveProposalSlotStateForGroup(
+        proposalSlotMap,
+        grp.proposalObj?.id,
+        grp.namaProposal,
+        grp.tahun,
+        proposals
+      );
+      const merged = buildMergedProposalSlots({
+        groupRecords: allAcceptedInProp,
+        slotState,
+        proposals,
+        catalog: items,
+        wilayahList,
+      });
+      const maxSlot = merged.reduce((mx, m) => Math.max(mx, m.slotNumber), 0);
+      const quota =
+        grp.proposalObj?.jumlahKpm && grp.proposalObj.jumlahKpm > 0
+          ? grp.proposalObj.jumlahKpm
+          : 0;
+      total += Math.max(maxSlot, quota, grp.recs.length);
+    }
+    return total;
+  }, [
+    eligibleKuponRecords,
+    dinsosTargetProposals,
+    dinsosIncludeEmptySlots,
+    proposalLookup,
+    records,
+    proposalSlotMap,
+    proposals,
+    items,
+    wilayahList,
+  ]);
 
   // BAST wajib hanya mencetak KPM berstatus Diterima agar KPM Ditolak/Menunggu tidak pernah tercetak
   const eligibleBastRecords = useMemo(
@@ -1144,6 +1248,7 @@ export function MenuDownloadView({
       const effectiveFileName = splitByPengelola ? `${fileName}_Per_Pengelola` : fileName;
       const res = await exportKpmTableToPdf({
         records: pdfPrintRecords,
+        allRecords: records,
         proposals,
         items,
         wilayahList,
@@ -1216,6 +1321,7 @@ export function MenuDownloadView({
 
       const res = await exportKpmTableToXlsx({
         records: pdfPrintRecords,
+        allRecords: records,
         proposals,
         items,
         wilayahList,
@@ -1357,7 +1463,7 @@ export function MenuDownloadView({
   };
 
   const handleDownloadDinsosPdf = async () => {
-    if (eligibleKuponRecords.length === 0 || isGeneratingDinsos) return;
+    if (dinsosFixedLabelCount === 0 || isGeneratingDinsos) return;
     setDinsosFeedback(null);
     setIsGeneratingDinsos(true);
     try {
@@ -1366,9 +1472,11 @@ export function MenuDownloadView({
         records: eligibleKuponRecords,
         allRecords: records,
         proposals,
+        targetProposals: dinsosTargetProposals,
         items,
         wilayahList,
         proposalSlotMap,
+        includeEmptySlots: dinsosIncludeEmptySlots,
         provinsiLabel: dinsosProvinsi,
         prefixLabel: dinsosPrefix,
         fileName,
@@ -4218,22 +4326,25 @@ export function MenuDownloadView({
           {/* MODE 6: CETAK PDF NOMOR DINSOS (F4 216x330MM LIPAT 2 + GARIS POTONG TENGAH) */}
           {printMode === 'dinsos' && (() => {
             const sampleRec = previewKuponSample;
-            const sampleDom = sampleRec
-              ? resolveKpmDomicile(sampleRec, proposals, wilayahList)
-              : { kabKota: 'Kota Pontianak', kecamatan: 'Pontianak Selatan', kelurahan: 'Benua Melayu Laut' };
-            const rawKel = (sampleRec?.kelurahan || sampleDom.kelurahan || '').trim();
-            const sampleKel = rawKel
-              ? /^(kelurahan|desa)\s+/i.test(rawKel)
-                ? rawKel
-                : `Kelurahan ${rawKel}`
-              : 'Kelurahan Benua Melayu Laut';
-            const rawKec = (sampleRec?.kecamatan || sampleDom.kecamatan || '')
-              .replace(/^kecamatan\s+/i, '')
-              .trim();
-            const sampleKec = rawKec ? `Kecamatan ${rawKec}` : 'Kecamatan Pontianak Selatan';
-            const sampleKab = (sampleRec?.kabKota || sampleDom.kabKota || '').trim() || 'Kota Pontianak';
-            const sampleTahun =
-              (sampleRec?.tahun || (selectedTahun !== 'all' ? selectedTahun : '') || '2026').trim();
+            const sampleTahun = (
+              sampleRec?.tahun ||
+              selectedProposalObj?.tahun ||
+              (selectedTahun !== 'all' ? selectedTahun : '') ||
+              '2026'
+            ).trim();
+            const previewProposalName =
+              !isStandaloneSource && selectedProposal !== 'all'
+                ? selectedProposal
+                : sampleRec?.proposal ||
+                  selectedProposalObj?.namaProposal ||
+                  'Kelurahan Benua Melayu Laut';
+            const sampleLocationLines = formatNomorDinsosLocationLines(
+              previewProposalName,
+              sampleTahun,
+              proposals,
+              wilayahList,
+              sampleRec || undefined
+            );
             const cleanPrefixText = (dinsosPrefix || 'DINSOS').trim().toUpperCase();
             const cleanProvText = (dinsosProvinsi || 'PROVINSI KALIMANTAN BARAT')
               .trim()
@@ -4247,11 +4358,11 @@ export function MenuDownloadView({
                       Cetak PDF Nomor DINSOS
                     </h2>
                     <p className="mt-0.5 text-[11px] text-slate-500">
-                      Kertas F4 (216 × 330 mm), format lipat dua (2 label per lembar · 216 × 165 mm/label) dengan posisi center-middle alignment dan garis potong tipis di tengah lipatan.
+                      Kertas F4 (216 × 330 mm), format lipat dua (2 label per lembar · 216 × 165 mm/label). Nomor urut dicetak fixed mulai 01 sesuai jumlah KPM proposal termasuk baris kosong.
                     </p>
                   </div>
                   <span className="shrink-0 text-xs font-bold text-teal-700 tabular-nums">
-                    {eligibleKuponRecords.length} Label
+                    {dinsosFixedLabelCount} Label
                   </span>
                 </div>
 
@@ -4260,7 +4371,7 @@ export function MenuDownloadView({
                   <div className="mb-2 flex items-center justify-between text-[10px] font-semibold text-slate-500">
                     <span>Pratinjau 1 Lembar F4 (216 × 330 mm)</span>
                     <span className="tabular-nums">
-                      ~{Math.ceil(eligibleKuponRecords.length / 2)} Lembar
+                      ~{Math.ceil(dinsosFixedLabelCount / 2)} Lembar
                     </span>
                   </div>
 
@@ -4277,9 +4388,9 @@ export function MenuDownloadView({
                         {cleanPrefixText} 01
                       </p>
                       <div className="space-y-0.5 text-[11.5px] font-extrabold text-black leading-tight">
-                        <p>{sampleKel}</p>
-                        <p>{sampleKec}</p>
-                        <p>{sampleKab}</p>
+                        {sampleLocationLines.map((line, i) => (
+                          <p key={`prev-top-${i}`}>{line}</p>
+                        ))}
                       </div>
                     </div>
 
@@ -4303,9 +4414,9 @@ export function MenuDownloadView({
                         {cleanPrefixText} 02
                       </p>
                       <div className="space-y-0.5 text-[11.5px] font-extrabold text-black leading-tight">
-                        <p>{sampleKel}</p>
-                        <p>{sampleKec}</p>
-                        <p>{sampleKab}</p>
+                        {sampleLocationLines.map((line, i) => (
+                          <p key={`prev-bot-${i}`}>{line}</p>
+                        ))}
                       </div>
                     </div>
                   </div>
@@ -4367,7 +4478,7 @@ export function MenuDownloadView({
 
                 <button
                   type="button"
-                  disabled={eligibleKuponRecords.length === 0 || isGeneratingDinsos}
+                  disabled={dinsosFixedLabelCount === 0 || isGeneratingDinsos}
                   onClick={() => void handleDownloadDinsosPdf()}
                   className="inline-flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-teal-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
                 >
@@ -4380,7 +4491,7 @@ export function MenuDownloadView({
                     <>
                       <Tag className="h-4.5 w-4.5" />
                       <span>
-                        Download Nomor DINSOS F4 ({eligibleKuponRecords.length} Label)
+                        Download Nomor DINSOS F4 ({dinsosFixedLabelCount} Label)
                       </span>
                     </>
                   )}
