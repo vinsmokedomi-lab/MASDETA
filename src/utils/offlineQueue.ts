@@ -1,4 +1,9 @@
-import { KpmFormValues, ValidationStatus } from '../types/kpm';
+import {
+  KpmAuditLogEntry,
+  KpmDocuments,
+  KpmFormValues,
+  ValidationStatus,
+} from '../types/kpm';
 
 export type OfflineQueuedAction =
   | {
@@ -40,6 +45,15 @@ export type OfflineQueuedAction =
       fileBlob: Blob;
       fileName: string;
       mimeType: string;
+    }
+  | {
+      id: string;
+      createdAt: string;
+      kind: 'sync_kpm_docs';
+      label: string;
+      kpmId: string;
+      documents: KpmDocuments;
+      auditEntry?: KpmAuditLogEntry;
     };
 
 const DB_NAME = 'masdeta_offline_queue_v1';

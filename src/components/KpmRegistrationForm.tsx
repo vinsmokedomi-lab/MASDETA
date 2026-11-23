@@ -72,6 +72,10 @@ import { SlotHandlingConfirmModal } from './SlotHandlingConfirmModal';
 import { PlaceholderSelect } from './FormControls';
 import { useIsDesktopWeb } from '../utils/platform';
 import { useOfflineStatus } from '../contexts/OfflineContext';
+import {
+  extractPendingJobId,
+  subscribePhotoUploadCompleted,
+} from '../utils/photoUploadManager';
 
 interface KpmRegistrationFormProps {
   editingRecord: KpmRecord | null;
@@ -105,7 +109,8 @@ interface KpmRegistrationFormProps {
     values: KpmFormValues,
     editingId?: string,
     targetSlotNumber?: number | null,
-    oldSlotHandling?: SlotRemovalMode
+    oldSlotHandling?: SlotRemovalMode,
+    formDraftId?: string
   ) => Promise<boolean> | boolean | void;
   onQuickSyncKpmDocuments?: (kpmId: string, nextDocuments: KpmDocuments) => Promise<void> | void;
   onCancelEdit: () => void;
@@ -188,6 +193,9 @@ export function KpmRegistrationForm({
   };
 
   const [values, setValues] = useState<KpmFormValues>(buildInitialFormValues);
+  const [formDraftId, setFormDraftId] = useState<string>(
+    () => `fdraft-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+  );
   const [selectedEmptySlotNo, setSelectedEmptySlotNo] = useState<number | null>(
     targetSlot?.slotNumber ?? null
   );
@@ -373,7 +381,65 @@ export function KpmRegistrationForm({
       setScanError(null);
       setScanReport(null);
     }
+    if (!editingRecord) {
+      setFormDraftId(`fdraft-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
+    }
   }, [editingRecord, lockedProposalScope, initialStandaloneStatus, targetSlot]);
+
+  useEffect(() => {
+    const ownerKpmId = editingRecord?.id;
+    return subscribePhotoUploadCompleted(({ job, uploadedDoc }) => {
+      const matchesOwner =
+        (ownerKpmId && job.kpmId === ownerKpmId) ||
+        (!ownerKpmId && job.formDraftId === formDraftId);
+      if (!matchesOwner) return;
+
+      setValues((prev) => {
+        const docs = prev.documents;
+        if (
+          job.category === 'ktp' ||
+          job.category === 'kk' ||
+          job.category === 'penerima' ||
+          job.category === 'survey'
+        ) {
+          const cur = docs[job.category];
+          if (cur && extractPendingJobId(cur) === job.id) {
+            return {
+              ...prev,
+              documents: {
+                ...docs,
+                [job.category]: uploadedDoc,
+              },
+            };
+          }
+          return prev;
+        }
+        if (job.category === 'rumah') {
+          const hasMatch = docs.rumah.some((d) => extractPendingJobId(d) === job.id);
+          if (!hasMatch) return prev;
+          return {
+            ...prev,
+            documents: {
+              ...docs,
+              rumah: docs.rumah.map((d) => (extractPendingJobId(d) === job.id ? uploadedDoc : d)),
+            },
+          };
+        }
+        if (job.category === 'lainnya') {
+          const hasMatch = docs.lainnya.some((d) => extractPendingJobId(d) === job.id);
+          if (!hasMatch) return prev;
+          return {
+            ...prev,
+            documents: {
+              ...docs,
+              lainnya: docs.lainnya.map((d) => (extractPendingJobId(d) === job.id ? uploadedDoc : d)),
+            },
+          };
+        }
+        return prev;
+      });
+    });
+  }, [editingRecord?.id, formDraftId]);
 
   useEffect(() => {
     if (preselectedProposal && !editingRecord && !lockedProposalScope) {
@@ -484,19 +550,7 @@ export function KpmRegistrationForm({
     return recProp?.status === 'locked';
   }, [editingRecord, proposals]);
 
-  const isFormReadOnly = editingProposalLocked || isOffline;
-
-  useEffect(() => {
-    if (isOffline) {
-      setIsTahunModalOpen(false);
-      setIsProposalModalOpen(false);
-      setIsPekerjaanModalOpen(false);
-      setIsItemModalOpen(false);
-      setIsPengelolaModalOpen(false);
-      setIsDtsenModalOpen(false);
-      setPendingEditMovePayload(null);
-    }
-  }, [isOffline]);
+  const isFormReadOnly = editingProposalLocked;
 
   const isStandaloneMode = values.validasi === 'pending' || values.validasi === 'rejected';
 
@@ -885,11 +939,13 @@ export function KpmRegistrationForm({
         normalizedValues,
         editingRecord?.id,
         resolvedTargetSlot,
-        oldSlotHandling
+        oldSlotHandling,
+        editingRecord ? undefined : formDraftId
       );
 
       if (saveResult !== false && !editingRecord) {
         setValues(buildInitialFormValues());
+        setFormDraftId(`fdraft-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
         setSelectedEmptySlotNo(null);
         setErrors({});
         setKtpOcrImage(undefined);
@@ -986,6 +1042,7 @@ export function KpmRegistrationForm({
       onCancelEdit();
     } else {
       setValues(buildInitialFormValues());
+      setFormDraftId(`fdraft-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
       setErrors({});
       setKtpOcrImage(undefined);
       setKkOcrImage(undefined);
@@ -1183,14 +1240,14 @@ export function KpmRegistrationForm({
 
           {isOffline && (
             <div
-              role="alert"
+              role="status"
               className="flex items-start gap-2.5 rounded-2xl border border-amber-300 bg-amber-50 px-3.5 py-3 text-xs text-amber-950"
             >
-              <Lock className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
               <div>
-                <p className="font-semibold">Mode Read-Only (Offline)</p>
+                <p className="font-semibold">Mode Offline — Simpan Lokal &amp; Antrean Foto Aktif</p>
                 <p className="mt-0.5 text-amber-800 leading-relaxed">
-                  Koneksi internet terputus. Formulir hanya dapat dilihat dalam mode baca dan tidak dapat disimpan.
+                  Anda tetap dapat memfoto dokumen dan menekan Simpan KPM. Foto &amp; data diamankan di perangkat dan otomatis diunggah ke Google Drive &amp; Supabase begitu sinyal kembali.
                 </p>
               </div>
             </div>
@@ -2219,6 +2276,10 @@ export function KpmRegistrationForm({
                 label="Foto KTP"
                 helperText="Foto e-KTP asli dengan NIK terlihat jelas (opsional)"
                 variant="ktp"
+                kpmId={editingRecord?.id}
+                formDraftId={editingRecord ? undefined : formDraftId}
+                kpmName={values.nama || editingRecord?.nama || 'KPM'}
+                category="ktp"
                 disabled={isFormReadOnly}
                 value={values.documents.ktp}
                 error={errors.docKtp}
@@ -2233,6 +2294,10 @@ export function KpmRegistrationForm({
                   label="Foto Kartu Keluarga (KK)"
                   helperText="Foto seluruh halaman Kartu Keluarga (opsional)"
                   variant="kk"
+                  kpmId={editingRecord?.id}
+                  formDraftId={editingRecord ? undefined : formDraftId}
+                  kpmName={values.nama || editingRecord?.nama || 'KPM'}
+                  category="kk"
                   disabled={isFormReadOnly}
                   value={values.documents.kk}
                   error={errors.docKk}
@@ -2247,7 +2312,7 @@ export function KpmRegistrationForm({
                   <button
                     type="button"
                     onClick={handleScanKtpKk}
-                    disabled={isScanningDocs || isFormReadOnly}
+                    disabled={isScanningDocs || isFormReadOnly || isOffline}
                     className="flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-slate-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
                   >
                     {isScanningDocs ? (
@@ -2361,6 +2426,10 @@ export function KpmRegistrationForm({
                 label="Foto Penerima"
                 helperText="Foto diri calon penerima bantuan"
                 variant="penerima"
+                kpmId={editingRecord?.id}
+                formDraftId={editingRecord ? undefined : formDraftId}
+                kpmName={values.nama || editingRecord?.nama || 'KPM'}
+                category="penerima"
                 disabled={isFormReadOnly}
                 value={values.documents.penerima}
                 onChange={(file) => updateSingleDocument('penerima', file)}
@@ -2373,6 +2442,10 @@ export function KpmRegistrationForm({
                   label="Foto Survey"
                   helperText="Foto kegiatan wawancara / survei lapangan"
                   variant="survey"
+                  kpmId={editingRecord?.id}
+                  formDraftId={editingRecord ? undefined : formDraftId}
+                  kpmName={values.nama || editingRecord?.nama || 'KPM'}
+                  category="survey"
                   disabled={isFormReadOnly}
                   value={values.documents.survey}
                   onChange={(file) => updateSingleDocument('survey', file)}
@@ -2386,6 +2459,10 @@ export function KpmRegistrationForm({
                   label="Foto Rumah"
                   helperText="Tambahkan foto tampak depan atau kondisi rumah (maks. 3 foto)"
                   maxFiles={3}
+                  kpmId={editingRecord?.id}
+                  formDraftId={editingRecord ? undefined : formDraftId}
+                  kpmName={values.nama || editingRecord?.nama || 'KPM'}
+                  category="rumah"
                   disabled={isFormReadOnly}
                   values={values.documents.rumah}
                   onChange={updateRumahDocuments}
@@ -2410,6 +2487,10 @@ export function KpmRegistrationForm({
                 label="Foto Lainnya"
                 helperText="Tambahkan satu atau beberapa foto pendukung (maks. 5 foto)"
                 maxFiles={5}
+                kpmId={editingRecord?.id}
+                formDraftId={editingRecord ? undefined : formDraftId}
+                kpmName={values.nama || editingRecord?.nama || 'KPM'}
+                category="lainnya"
                 disabled={isFormReadOnly}
                 values={values.documents.lainnya}
                 onChange={updateLainnyaDocuments}
@@ -2457,8 +2538,8 @@ export function KpmRegistrationForm({
                 </>
               ) : isOffline ? (
                 <>
-                  <Lock className="h-4 w-4" />
-                  <span>Mode Read-Only</span>
+                  <Save className="h-4 w-4" />
+                  <span>{editingRecord ? 'Simpan Lokal' : 'Simpan Offline'}</span>
                 </>
               ) : editingRecord ? (
                 <>

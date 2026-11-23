@@ -1,11 +1,13 @@
-import { useRef, useState, DragEvent, ChangeEvent } from 'react';
+import { useEffect, useRef, useState, DragEvent, ChangeEvent } from 'react';
 import {
   AlertCircle,
   Camera,
+  Clock,
   Eye,
   Images,
   Loader2,
   Plus,
+  RefreshCw,
   Trash2,
   Upload,
 } from 'lucide-react';
@@ -15,8 +17,18 @@ import {
   formatBytes,
   formatUploadDateTime,
   removeDocumentFromDrive,
-  uploadImageDocumentToDrive,
 } from '../utils/imageProcessor';
+import {
+  cancelPendingPhotoUploadJob,
+  enqueuePhotoUploadJob,
+  extractPendingJobId,
+  isLocalPendingDocument,
+  PhotoCaptureSource,
+  PhotoDocCategory,
+  PhotoUploadJobSummary,
+  retryPhotoUploadJob,
+  subscribePhotoUploadJobs,
+} from '../utils/photoUploadManager';
 import { useOfflineStatus } from '../contexts/OfflineContext';
 
 interface MultiDocumentUploadCardProps {
@@ -25,6 +37,10 @@ interface MultiDocumentUploadCardProps {
   helperText: string;
   maxFiles?: number;
   disabled?: boolean;
+  kpmId?: string;
+  formDraftId?: string;
+  kpmName?: string;
+  category?: PhotoDocCategory;
   values: KpmDocumentFile[];
   onChange: (files: KpmDocumentFile[]) => void;
   onPreview: (file: KpmDocumentFile, title: string) => void;
@@ -36,12 +52,16 @@ export function MultiDocumentUploadCard({
   helperText,
   maxFiles = 5,
   disabled = false,
+  kpmId,
+  formDraftId,
+  kpmName,
+  category = 'lainnya',
   values,
   onChange,
   onPreview,
 }: MultiDocumentUploadCardProps) {
   const { isOffline } = useOfflineStatus();
-  const effectiveDisabled = disabled || isOffline;
+  const effectiveDisabled = disabled;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -49,11 +69,18 @@ export function MultiDocumentUploadCard({
   const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
   const [confirmDeleteDoc, setConfirmDeleteDoc] = useState<KpmDocumentFile | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [vaultJobs, setVaultJobs] = useState<PhotoUploadJobSummary[]>([]);
+
+  useEffect(() => {
+    return subscribePhotoUploadJobs((jobs) => {
+      setVaultJobs(jobs);
+    });
+  }, []);
 
   const remainingSlots = Math.max(0, maxFiles - values.length);
   const isAtLimit = remainingSlots === 0;
 
-  const handleFiles = async (fileList: FileList | null) => {
+  const handleFiles = async (fileList: FileList | null, source: PhotoCaptureSource = 'file') => {
     if (!fileList || fileList.length === 0 || isProcessing || effectiveDisabled) return;
 
     if (values.length >= maxFiles) {
@@ -77,8 +104,16 @@ export function MultiDocumentUploadCard({
 
       for (const file of filesToProcess) {
         try {
-          const processed = await uploadImageDocumentToDrive(file);
-          processedList.push(processed);
+          const { pendingDoc } = await enqueuePhotoUploadJob({
+            file,
+            kpmId,
+            formDraftId: kpmId ? undefined : formDraftId || `multi-${id}`,
+            kpmName: kpmName?.trim() || 'KPM',
+            category,
+            slotLabel: label,
+            source,
+          });
+          processedList.push(pendingDoc);
         } catch {
           failedNames.push(file.name);
         }
@@ -90,7 +125,7 @@ export function MultiDocumentUploadCard({
 
       if (failedNames.length > 0) {
         setLocalError(
-          `Sebagian file gagal diunggah ke Drive (${failedNames.join(', ')}). Pastikan format JPG/PNG/WebP dan ukuran maks 15 MB.`
+          `Sebagian file gagal diproses (${failedNames.join(', ')}). Pastikan format JPG/PNG/WebP dan ukuran maks 15 MB.`
         );
       } else if (skippedDueToLimit) {
         setLocalError(
@@ -102,8 +137,13 @@ export function MultiDocumentUploadCard({
     }
   };
 
-  const handleInputChange = (e: ChangeEvent<HTMLInputElement>) => {
-    void handleFiles(e.target.files);
+  const handleFileInputChange = (e: ChangeEvent<HTMLInputElement>) => {
+    void handleFiles(e.target.files, 'file');
+    e.target.value = '';
+  };
+
+  const handleCameraInputChange = (e: ChangeEvent<HTMLInputElement>) => {
+    void handleFiles(e.target.files, 'camera');
     e.target.value = '';
   };
 
@@ -121,7 +161,7 @@ export function MultiDocumentUploadCard({
     e.preventDefault();
     setIsDragging(false);
     if (effectiveDisabled) return;
-    void handleFiles(e.dataTransfer.files);
+    void handleFiles(e.dataTransfer.files, 'file');
   };
 
   const handleConfirmRemove = async () => {
@@ -129,6 +169,21 @@ export function MultiDocumentUploadCard({
     setLocalError(null);
     setDeletingDocId(confirmDeleteDoc.id);
     try {
+      if (isLocalPendingDocument(confirmDeleteDoc)) {
+        const jobId = extractPendingJobId(confirmDeleteDoc);
+        if (jobId) {
+          await cancelPendingPhotoUploadJob(jobId);
+        }
+        onChange(values.filter((item) => item.id !== confirmDeleteDoc.id));
+        setConfirmDeleteDoc(null);
+        return;
+      }
+
+      if (isOffline) {
+        setLocalError('Hapus foto yang sudah di Google Drive memerlukan koneksi internet.');
+        return;
+      }
+
       await removeDocumentFromDrive(confirmDeleteDoc);
       onChange(values.filter((item) => item.id !== confirmDeleteDoc.id));
       setConfirmDeleteDoc(null);
@@ -141,6 +196,8 @@ export function MultiDocumentUploadCard({
     }
   };
 
+  const pendingCount = values.filter((v) => isLocalPendingDocument(v)).length;
+
   return (
     <div id={id} className="space-y-2.5">
       <div className="flex items-baseline justify-between gap-2">
@@ -148,7 +205,8 @@ export function MultiDocumentUploadCard({
         <span className="text-xs text-slate-500 tabular-nums">
           {values.length > 0 ? (
             <span className="font-medium text-teal-700">
-              {values.length}/{maxFiles} foto di Drive
+              {values.length}/{maxFiles} foto
+              {pendingCount > 0 ? ` (${pendingCount} antre)` : ' di Drive'}
             </span>
           ) : (
             `Maks. ${maxFiles} foto · Opsional`
@@ -161,7 +219,7 @@ export function MultiDocumentUploadCard({
         type="file"
         accept="image/*"
         multiple
-        onChange={handleInputChange}
+        onChange={handleFileInputChange}
         className="sr-only"
         aria-label={`Pilih beberapa file ${label}`}
       />
@@ -170,7 +228,7 @@ export function MultiDocumentUploadCard({
         type="file"
         accept="image/*"
         capture="environment"
-        onChange={handleInputChange}
+        onChange={handleCameraInputChange}
         className="sr-only"
         aria-label={`Ambil foto kamera ${label}`}
       />
@@ -180,10 +238,15 @@ export function MultiDocumentUploadCard({
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           {values.map((doc, idx) => {
             const isDeletingThis = deletingDocId === doc.id;
+            const isPendingDoc = isLocalPendingDocument(doc);
+            const pJobId = isPendingDoc ? extractPendingJobId(doc) : '';
+            const pJob = pJobId ? vaultJobs.find((j) => j.id === pJobId) : undefined;
             return (
               <div
                 key={doc.id}
-                className="overflow-hidden rounded-xl border border-slate-200 bg-white"
+                className={`overflow-hidden rounded-xl border bg-white ${
+                  isPendingDoc ? 'border-amber-300' : 'border-slate-200'
+                }`}
               >
                 <div className="relative aspect-[4/3] w-full overflow-hidden bg-slate-100">
                   <DriveImage
@@ -191,6 +254,22 @@ export function MultiDocumentUploadCard({
                     alt={`${label} ${idx + 1}`}
                     className="h-full w-full object-cover"
                   />
+                  {isPendingDoc && !isDeletingThis && (
+                    <span className="pointer-events-none absolute top-1.5 left-1.5 inline-flex items-center gap-1 rounded-md bg-slate-900/80 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                      {pJob?.status === 'uploading' ? (
+                        <Loader2 className="h-2.5 w-2.5 animate-spin text-teal-300" />
+                      ) : (
+                        <Clock className="h-2.5 w-2.5 text-amber-300" />
+                      )}
+                      <span>
+                        {pJob?.status === 'uploading'
+                          ? 'Mengunggah...'
+                          : isOffline
+                            ? 'Lokal'
+                            : 'Antrean'}
+                      </span>
+                    </span>
+                  )}
                   {isDeletingThis && (
                     <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-1 bg-slate-950/65 text-white">
                       <Loader2 className="h-5 w-5 animate-spin" />
@@ -217,15 +296,30 @@ export function MultiDocumentUploadCard({
                     </p>
                     <p className="truncate text-[10px] text-slate-500 tabular-nums">
                       {doc.compressedSize > 0 ? formatBytes(doc.compressedSize) : 'Google Drive'}
-                      {doc.uploadedAt ? ` · ${formatUploadDateTime(doc.uploadedAt)}` : ''}
+                      {isPendingDoc
+                        ? ' · Tersimpan aman'
+                        : doc.uploadedAt
+                          ? ` · ${formatUploadDateTime(doc.uploadedAt)}`
+                          : ''}
                     </p>
                   </div>
+                  {isPendingDoc && pJob && pJob.status !== 'uploading' && !isOffline && (
+                    <button
+                      type="button"
+                      onClick={() => void retryPhotoUploadJob(pJob.id)}
+                      className="inline-flex min-h-[32px] min-w-[32px] items-center justify-center rounded-lg text-teal-700 hover:bg-teal-50 shrink-0"
+                      aria-label={`Kirim ulang ${label} ${idx + 1}`}
+                      title="Kirim ulang ke Drive"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                   <button
                     type="button"
-                    disabled={Boolean(deletingDocId) || effectiveDisabled}
+                    disabled={Boolean(deletingDocId) || effectiveDisabled || (isOffline && !isPendingDoc)}
                     onClick={() => setConfirmDeleteDoc(doc)}
                     className="inline-flex min-h-[36px] min-w-[36px] items-center justify-center rounded-lg text-rose-600 transition-colors hover:bg-rose-50 shrink-0 disabled:cursor-not-allowed disabled:opacity-40"
-                    aria-label={`Hapus ${label} ${idx + 1}`}
+                    aria-label={isPendingDoc ? `Batalkan ${label} ${idx + 1}` : `Hapus ${label} ${idx + 1}`}
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
@@ -240,7 +334,15 @@ export function MultiDocumentUploadCard({
       {confirmDeleteDoc && (
         <div className="rounded-xl border border-rose-200 bg-rose-50 p-3">
           <p className="text-xs font-semibold text-rose-900">
-            Hapus foto <strong>{confirmDeleteDoc.fileName}</strong> dari Google Drive?
+            {isLocalPendingDocument(confirmDeleteDoc) ? (
+              <>
+                Batalkan antrean unggahan <strong>{confirmDeleteDoc.fileName}</strong>?
+              </>
+            ) : (
+              <>
+                Hapus foto <strong>{confirmDeleteDoc.fileName}</strong> dari Google Drive?
+              </>
+            )}
           </p>
           <div className="mt-2 flex items-center gap-2">
             <button
@@ -262,7 +364,9 @@ export function MultiDocumentUploadCard({
               ) : (
                 <Trash2 className="h-3.5 w-3.5" />
               )}
-              <span>Ya, Hapus Foto</span>
+              <span>
+                {isLocalPendingDocument(confirmDeleteDoc) ? 'Ya, Batalkan' : 'Ya, Hapus Foto'}
+              </span>
             </button>
           </div>
         </div>
@@ -294,13 +398,15 @@ export function MultiDocumentUploadCard({
             )}
 
             <p className="text-xs font-medium text-slate-700">
-              {isOffline
-                ? 'Mode Read-Only (Offline) — unggahan dinonaktifkan'
+              {disabled
+                ? 'Proposal terkunci — unggahan dinonaktifkan'
                 : isProcessing
-                  ? 'Mengunggah foto ke Google Drive...'
-                  : values.length > 0
-                    ? `Tambah foto lagi (sisa kuota ${remainingSlots} dari ${maxFiles} foto)`
-                    : helperText}
+                  ? 'Mengamankan foto di perangkat...'
+                  : isOffline
+                    ? 'Mode Offline — foto disimpan aman di perangkat & antre ke Drive'
+                    : values.length > 0
+                      ? `Tambah foto lagi (sisa kuota ${remainingSlots} dari ${maxFiles} foto)`
+                      : helperText}
             </p>
             <p className="mt-0.5 text-[11px] text-slate-500">
               Maksimal {maxFiles} foto · JPG, PNG, WebP · Maks 15 MB/file

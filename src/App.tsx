@@ -118,6 +118,7 @@ import {
   ScheduleCategory,
   ScheduleEventItem,
   SharedKpmCard,
+  SingleDocumentKey,
   SlotRemovalMode,
   SptjmTemplateConfig,
   TrashRecordItem,
@@ -194,6 +195,22 @@ import { ProposalForm } from './components/ProposalForm';
 import { ProposalDetailView } from './components/ProposalDetailView';
 import { DocumentLightbox } from './components/DocumentLightbox';
 import { OfflineIndicator } from './components/PWAInstallButton';
+import { PhotoUploadQueueBar } from './components/PhotoUploadQueueBar';
+import {
+  bindFormDraftJobsToKpm,
+  buildLocalPendingDocumentFile,
+  cancelPendingPhotoUploadJob,
+  enqueuePhotoUploadJob,
+  extractPendingJobId,
+  getExistingDriveFallbackDoc,
+  getPendingPhotoUploadJobs,
+  initPhotoUploadManager,
+  isLocalPendingDocument,
+  PhotoCaptureSource,
+  PhotoDocCategory,
+  PhotoUploadJobSummary,
+  subscribePhotoUploadCompleted,
+} from './utils/photoUploadManager';
 import { useOnlineStatus } from './hooks/usePWAInstall';
 import { OfflineProvider } from './contexts/OfflineContext';
 import { BottomNavBar, MainTab, QuickAddSheet } from './components/BottomNavBar';
@@ -238,6 +255,157 @@ import {
   ensureBrowserPushSubscription,
   listenSwOpenChat,
 } from './utils/pwaPush';
+
+const SINGLE_DOC_KEYS: SingleDocumentKey[] = ['ktp', 'kk', 'penerima', 'survey'];
+
+function isSinglePhotoDocCategory(cat: PhotoDocCategory): cat is SingleDocumentKey {
+  return cat === 'ktp' || cat === 'kk' || cat === 'penerima' || cat === 'survey';
+}
+
+function attachPendingJobToDocuments(
+  docs: KpmDocuments,
+  category: PhotoDocCategory,
+  pendingDoc: KpmDocumentFile
+): KpmDocuments {
+  const next: KpmDocuments = { ...docs };
+  if (isSinglePhotoDocCategory(category)) {
+    next[category] = pendingDoc;
+    return next;
+  }
+  const existingArr = next[category] || [];
+  if (existingArr.some((item) => item.id === pendingDoc.id)) {
+    return next;
+  }
+  next[category] = [...existingArr, pendingDoc];
+  return next;
+}
+
+function replacePendingJobWithUploadedDoc(
+  docs: KpmDocuments,
+  job: PhotoUploadJobSummary,
+  uploadedDoc: KpmDocumentFile
+): KpmDocuments {
+  const next: KpmDocuments = { ...docs };
+  if (isSinglePhotoDocCategory(job.category)) {
+    const current = next[job.category];
+    if (
+      !current ||
+      !isLocalPendingDocument(current) ||
+      extractPendingJobId(current) === job.id
+    ) {
+      next[job.category] = uploadedDoc;
+    }
+    return next;
+  }
+  const currentArr = next[job.category] || [];
+  let replaced = false;
+  const updatedArr = currentArr.map((item) => {
+    if (isLocalPendingDocument(item) && extractPendingJobId(item) === job.id) {
+      replaced = true;
+      return uploadedDoc;
+    }
+    return item;
+  });
+  if (!replaced && !updatedArr.some((item) => item.id === uploadedDoc.id)) {
+    updatedArr.push(uploadedDoc);
+  }
+  next[job.category] = updatedArr;
+  return next;
+}
+
+function removePendingJobFromDocuments(
+  docs: KpmDocuments,
+  jobId: string,
+  category: PhotoDocCategory,
+  restoreDoc?: KpmDocumentFile
+): KpmDocuments {
+  const next: KpmDocuments = { ...docs };
+  if (isSinglePhotoDocCategory(category)) {
+    const current = next[category];
+    if (current && isLocalPendingDocument(current) && extractPendingJobId(current) === jobId) {
+      if (restoreDoc && !isLocalPendingDocument(restoreDoc)) {
+        next[category] = restoreDoc;
+      } else {
+        delete next[category];
+      }
+    }
+    return next;
+  }
+  const currentArr = next[category] || [];
+  next[category] = currentArr.filter(
+    (item) => !(isLocalPendingDocument(item) && extractPendingJobId(item) === jobId)
+  );
+  return next;
+}
+
+function sanitizeDocumentsForRemoteSync(
+  kpmId: string | undefined,
+  docs: KpmDocuments
+): KpmDocuments {
+  const next: KpmDocuments = {
+    rumah: Array.isArray(docs.rumah)
+      ? docs.rumah.filter((d) => !isLocalPendingDocument(d))
+      : [],
+    lainnya: Array.isArray(docs.lainnya)
+      ? docs.lainnya.filter((d) => !isLocalPendingDocument(d))
+      : [],
+  };
+  for (const key of SINGLE_DOC_KEYS) {
+    const doc = docs[key];
+    if (!doc) continue;
+    if (isLocalPendingDocument(doc)) {
+      const fallback = getExistingDriveFallbackDoc(kpmId, key);
+      if (fallback && !isLocalPendingDocument(fallback)) {
+        next[key] = fallback;
+      }
+    } else {
+      next[key] = doc;
+    }
+  }
+  return next;
+}
+
+function mergePendingVaultDocsIntoRecords(
+  records: KpmRecord[],
+  vaultJobs: PhotoUploadJobSummary[]
+): KpmRecord[] {
+  if (!vaultJobs || vaultJobs.length === 0) return records;
+  const jobsByKpm = new Map<string, PhotoUploadJobSummary[]>();
+  for (const job of vaultJobs) {
+    if (!job.kpmId) continue;
+    const arr = jobsByKpm.get(job.kpmId) ?? [];
+    arr.push(job);
+    jobsByKpm.set(job.kpmId, arr);
+  }
+  if (jobsByKpm.size === 0) return records;
+  let anyChanged = false;
+  const mapped = records.map((rec) => {
+    const kpmJobs = jobsByKpm.get(rec.id);
+    if (!kpmJobs || kpmJobs.length === 0) return rec;
+    let nextDocs = rec.documents;
+    let changed = false;
+    for (const job of kpmJobs) {
+      const pendingDoc = buildLocalPendingDocumentFile(job);
+      if (isSinglePhotoDocCategory(job.category)) {
+        const cur = nextDocs[job.category];
+        if (!cur || !isLocalPendingDocument(cur) || extractPendingJobId(cur) !== job.id) {
+          nextDocs = attachPendingJobToDocuments(nextDocs, job.category, pendingDoc);
+          changed = true;
+        }
+      } else {
+        const curArr = nextDocs[job.category] || [];
+        if (!curArr.some((item) => extractPendingJobId(item) === job.id)) {
+          nextDocs = attachPendingJobToDocuments(nextDocs, job.category, pendingDoc);
+          changed = true;
+        }
+      }
+    }
+    if (!changed) return rec;
+    anyChanged = true;
+    return { ...rec, documents: nextDocs };
+  });
+  return anyChanged ? mapped : records;
+}
 
 type SubView =
   | 'none'
@@ -1060,6 +1228,25 @@ export default function App() {
     [activeKpmId, records]
   );
 
+  const photoSyncMutexRef = useRef<Map<string, Promise<void>>>(new Map());
+
+  const enqueueKpmPhotoSyncTask = useCallback(
+    (kpmId: string, task: () => Promise<void>): Promise<void> => {
+      const prev = photoSyncMutexRef.current.get(kpmId) ?? Promise.resolve();
+      const next = prev
+        .catch(() => undefined)
+        .then(task)
+        .finally(() => {
+          if (photoSyncMutexRef.current.get(kpmId) === next) {
+            photoSyncMutexRef.current.delete(kpmId);
+          }
+        });
+      photoSyncMutexRef.current.set(kpmId, next);
+      return next;
+    },
+    []
+  );
+
   const currentActor = useMemo(() => {
     return {
       nama: currentUser?.nama ?? 'Petugas Internal',
@@ -1274,8 +1461,15 @@ export default function App() {
   );
 
   const requirePermission = useCallback(
-    (perm: keyof UserPermissions, actionLabel: string): boolean => {
-      if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
+    (
+      perm: keyof UserPermissions,
+      actionLabel: string,
+      options?: { allowOffline?: boolean }
+    ): boolean => {
+      if (
+        !options?.allowOffline &&
+        ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current)
+      ) {
         setFeedback({
           type: 'error',
           message: 'Mode Offline (Read-Only): Perubahan data dinonaktifkan sampai koneksi kembali aktif.',
@@ -1371,18 +1565,17 @@ export default function App() {
           setKpmAuditLogs(snapshot.kpmAuditLogs);
         }
         if (snapshot.records && (snapshot.records.length > 0 || latestDataRef.current.records.length === 0)) {
-          setRecords(
-            snapshot.records.map((r) => {
-              const bast = kpmBastMapRef.current[r.id];
-              const attendance = kpmAttendanceMapRef.current[r.id];
-              if (!bast && !attendance) return r;
-              return {
-                ...r,
-                ...(bast ? { bast } : {}),
-                ...(attendance ? { attendance } : {}),
-              };
-            })
-          );
+          const hydratedWithBast = snapshot.records.map((r) => {
+            const bast = kpmBastMapRef.current[r.id];
+            const attendance = kpmAttendanceMapRef.current[r.id];
+            if (!bast && !attendance) return r;
+            return {
+              ...r,
+              ...(bast ? { bast } : {}),
+              ...(attendance ? { attendance } : {}),
+            };
+          });
+          setRecords(mergePendingVaultDocsIntoRecords(hydratedWithBast, getPendingPhotoUploadJobs()));
         }
         if (snapshot.internalUsers && snapshot.internalUsers.length > 0) {
           setInternalUsers(mergeFetchedInternalUsers(snapshot.internalUsers));
@@ -1946,7 +2139,8 @@ export default function App() {
         nextWilayah,
         effectiveSlotMap
       );
-      setRecords(mergeBastIntoRecords(recalculated, kpmBastMapRef.current));
+      const mergedWithBast = mergeBastIntoRecords(recalculated, kpmBastMapRef.current);
+      setRecords(mergePendingVaultDocsIntoRecords(mergedWithBast, getPendingPhotoUploadJobs()));
       if (Array.isArray(state.pengelolaList)) setPengelolaList(state.pengelolaList);
       if (Array.isArray(state.pekerjaanList)) setPekerjaanList(state.pekerjaanList);
       if (Array.isArray(state.proposalHistory)) setProposalHistory(state.proposalHistory);
@@ -4185,9 +4379,9 @@ export default function App() {
     } | null = null
   ) => {
     if (record) {
-      if (!requirePermission('update', 'mengubah data KPM')) return;
+      if (!requirePermission('update', 'mengubah data KPM', { allowOffline: true })) return;
     } else {
-      if (!requirePermission('add', 'mendaftarkan KPM baru')) return;
+      if (!requirePermission('add', 'mendaftarkan KPM baru', { allowOffline: true })) return;
     }
     navigateForwardScroll();
     setFeedback(null);
@@ -4439,12 +4633,13 @@ export default function App() {
     values: KpmFormValues,
     editingId?: string,
     targetSlotNumber?: number | null,
-    oldSlotHandling: SlotRemovalMode = 'vacate'
+    oldSlotHandling: SlotRemovalMode = 'vacate',
+    formDraftId?: string
   ): Promise<boolean> => {
     if (editingId) {
-      if (!requirePermission('update', 'memperbarui data KPM')) return false;
+      if (!requirePermission('update', 'memperbarui data KPM', { allowOffline: true })) return false;
     } else {
-      if (!requirePermission('add', 'menyimpan KPM baru')) return false;
+      if (!requirePermission('add', 'menyimpan KPM baru', { allowOffline: true })) return false;
     }
 
     const targetStatus: ValidationStatus = values.validasi || 'pending';
@@ -4904,14 +5099,21 @@ export default function App() {
       }
 
       if (!isOnlineRef.current || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+        const offlineSafeValues: KpmFormValues & { validasi: ValidationStatus } = {
+          ...normalizedValues,
+          documents: sanitizeDocumentsForRemoteSync(editingId, normalizedValues.documents),
+        };
         await enqueueOfflineAction({
           id: `off-save-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           createdAt: now,
           kind: 'save_kpm',
           label: `Edit KPM: ${normalizedValues.nama}`,
           editingRecordId: editingId,
-          values: normalizedValues,
+          values: offlineSafeValues,
         });
+        if (formDraftId) {
+          await bindFormDraftJobsToKpm(formDraftId, editingId, normalizedValues.nama);
+        }
         const queue = await getOfflineQueue();
         setOfflineQueueCount(queue.length);
         if (nextSlotMap !== proposalSlotMapRef.current) {
@@ -4950,6 +5152,16 @@ export default function App() {
       const affectedRecords = nextRecords.filter(
         (r) => r.id === editingId || prevById.get(r.id)?.registerCode !== r.registerCode
       );
+      const affectedRecordsForRemote = affectedRecords.map((r) =>
+        r.id === editingId
+          ? { ...r, documents: sanitizeDocumentsForRemoteSync(r.id, r.documents) }
+          : r
+      );
+      const nextRecordsForRemote = nextRecords.map((r) =>
+        r.id === editingId
+          ? { ...r, documents: sanitizeDocumentsForRemoteSync(r.id, r.documents) }
+          : r
+      );
       const addedLogs =
         nextAuditLogs.length > kpmAuditLogs.length ? [nextAuditLogs[0]] : [];
       const addedHistory = nextProposalHistory.slice(
@@ -4961,7 +5173,7 @@ export default function App() {
         ? await runSupabaseMutation(
             () =>
               upsertKpmRecordsBatchInSupabase({
-                records: affectedRecords,
+                records: affectedRecordsForRemote,
                 proposals,
                 pengelolaList,
                 auditLogs: addedLogs,
@@ -4972,13 +5184,16 @@ export default function App() {
           )
         : await syncOperationalData(
             {
-              records: nextRecords,
+              records: nextRecordsForRemote,
               kpmAuditLogs: nextAuditLogs,
               proposalHistory: nextProposalHistory,
             },
             'update'
           );
       if (!ok) return false;
+      if (formDraftId) {
+        await bindFormDraftJobsToKpm(formDraftId, editingId, normalizedValues.nama);
+      }
 
       if (nextSlotMap !== proposalSlotMapRef.current) {
         persistProposalSlotMap(nextSlotMap, nextRecords);
@@ -5113,14 +5328,21 @@ export default function App() {
       : proposalHistory;
 
     if (!isOnlineRef.current || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+      const offlineSafeValues: KpmFormValues & { validasi: ValidationStatus } = {
+        ...normalizedValues,
+        documents: sanitizeDocumentsForRemoteSync(rawNewRecord.id, normalizedValues.documents),
+      };
       await enqueueOfflineAction({
         id: `off-add-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         createdAt: now,
         kind: 'save_kpm',
         label: `Tambah KPM: ${normalizedValues.nama}`,
         clientRecordId: rawNewRecord.id,
-        values: normalizedValues,
+        values: offlineSafeValues,
       });
+      if (formDraftId) {
+        await bindFormDraftJobsToKpm(formDraftId, savedNewRecord.id, savedNewRecord.nama);
+      }
       const queue = await getOfflineQueue();
       setOfflineQueueCount(queue.length);
       if (nextSlotMap !== proposalSlotMapRef.current) {
@@ -5158,12 +5380,22 @@ export default function App() {
       (r) =>
         r.id === savedNewRecord.id || prevCreateById.get(r.id)?.registerCode !== r.registerCode
     );
+    const affectedCreatedForRemote = affectedCreatedRecords.map((r) =>
+      r.id === savedNewRecord.id
+        ? { ...r, documents: sanitizeDocumentsForRemoteSync(r.id, r.documents) }
+        : r
+    );
+    const nextCreatedForRemote = nextRecordsList.map((r) =>
+      r.id === savedNewRecord.id
+        ? { ...r, documents: sanitizeDocumentsForRemoteSync(r.id, r.documents) }
+        : r
+    );
 
     const ok = supabaseReadyRef.current
       ? await runSupabaseMutation(
           () =>
             upsertKpmRecordsBatchInSupabase({
-              records: affectedCreatedRecords,
+              records: affectedCreatedForRemote,
               proposals,
               pengelolaList,
               auditLogs: [createdAuditEntry],
@@ -5174,17 +5406,42 @@ export default function App() {
         )
       : await syncOperationalData(
           {
-            records: nextRecordsList,
+            records: nextCreatedForRemote,
             kpmAuditLogs: nextAuditLogs,
             proposalHistory: nextProposalHistory,
           },
           'add'
         );
     if (!ok) return false;
+    let finalNewRecordsList = nextRecordsList;
+    if (formDraftId) {
+      const earlyCompleted = await bindFormDraftJobsToKpm(
+        formDraftId,
+        savedNewRecord.id,
+        savedNewRecord.nama
+      );
+      if (earlyCompleted.length > 0) {
+        let patchedDocs = savedNewRecord.documents;
+        for (const ev of earlyCompleted) {
+          patchedDocs = replacePendingJobWithUploadedDoc(patchedDocs, ev.job, ev.uploadedDoc);
+        }
+        finalNewRecordsList = nextRecordsList.map((r) =>
+          r.id === savedNewRecord.id ? { ...r, documents: patchedDocs } : r
+        );
+        const safeEarlyDocs = sanitizeDocumentsForRemoteSync(savedNewRecord.id, patchedDocs);
+        if (supabaseReadyRef.current) {
+          void updateKpmDocumentsInSupabase(
+            { ...savedNewRecord, documents: safeEarlyDocs },
+            proposals,
+            pengelolaList
+          ).catch(() => undefined);
+        }
+      }
+    }
 
     const slotMapBeforePersist = proposalSlotMapRef.current;
     if (nextSlotMap !== slotMapBeforePersist) {
-      persistProposalSlotMap(nextSlotMap, nextRecordsList, proposals);
+      persistProposalSlotMap(nextSlotMap, finalNewRecordsList, proposals);
     }
     if (effectiveTargetSlot && matchingProposal) {
       const { state: prevTargetSlotState } = resolveProposalSlotStateForGroup(
@@ -5227,7 +5484,7 @@ export default function App() {
         ]);
       }
     }
-    setRecords(nextRecordsList);
+    setRecords(finalNewRecordsList);
     setKpmAuditLogs(nextAuditLogs);
     setProposalHistory(nextProposalHistory);
     setPendingSelectedProposal(null);
@@ -5446,8 +5703,8 @@ export default function App() {
     nextDocuments: KpmDocuments,
     auditChange: { field: string; before: string; after: string }
   ) => {
-    if (!requirePermission('update', 'mengubah foto/dokumen KPM')) return;
-    const target = records.find((r) => r.id === kpmId);
+    if (!requirePermission('update', 'mengubah foto/dokumen KPM', { allowOffline: true })) return;
+    const target = latestDataRef.current.records.find((r) => r.id === kpmId);
     if (!target) return;
 
     const now = new Date().toISOString();
@@ -5470,13 +5727,42 @@ export default function App() {
     };
 
     const nextLogs = [auditEntry, ...kpmAuditLogs];
-    const nextRecords = records.map((r) => (r.id === kpmId ? updatedRecord : r));
+    const nextRecords = latestDataRef.current.records.map((r) =>
+      r.id === kpmId ? updatedRecord : r
+    );
+    latestDataRef.current.records = nextRecords;
     setKpmAuditLogs(nextLogs);
     setRecords(nextRecords);
+    void saveIdbValue('records', nextRecords);
+
+    const safeDocsForSync = sanitizeDocumentsForRemoteSync(kpmId, nextDocuments);
+
+    if (!isOnlineRef.current || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+      await enqueueOfflineAction({
+        id: `off-doc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        createdAt: now,
+        kind: 'sync_kpm_docs',
+        label: `${auditChange.field} (${target.nama})`,
+        kpmId,
+        documents: safeDocsForSync,
+        auditEntry,
+      });
+      const q = await getOfflineQueue();
+      setOfflineQueueCount(q.length);
+      setFeedback({
+        type: 'success',
+        message: `Mode Offline: Perubahan ${auditChange.field} disimpan ke antrean lokal.`,
+      });
+      return;
+    }
 
     if (supabaseReadyRef.current) {
       const ok = await runSupabaseMutation(async () => {
-        await updateKpmDocumentsInSupabase(updatedRecord, proposals, pengelolaList);
+        await updateKpmDocumentsInSupabase(
+          { ...updatedRecord, documents: safeDocsForSync },
+          proposals,
+          pengelolaList
+        );
         await appendKpmAuditLogsInSupabase([auditEntry], new Set([kpmId]));
       }, 'Gagal memperbarui dokumen KPM di Supabase');
       if (ok) {
@@ -5488,7 +5774,10 @@ export default function App() {
       return;
     }
 
-    await syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
+    const nextRecordsSafe = nextRecords.map((r) =>
+      r.id === kpmId ? { ...r, documents: safeDocsForSync } : r
+    );
+    await syncOperationalData({ records: nextRecordsSafe, kpmAuditLogs: nextLogs }, 'update');
     setFeedback({
       type: 'success',
       message: `${auditChange.field} berhasil diperbarui.`,
@@ -5499,8 +5788,7 @@ export default function App() {
     kpmId: string,
     nextDocuments: KpmDocuments
   ) => {
-    if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) return;
-    const target = records.find((r) => r.id === kpmId);
+    const target = latestDataRef.current.records.find((r) => r.id === kpmId);
     if (!target) return;
     const now = new Date().toISOString();
     const updatedRecord: KpmRecord = {
@@ -5508,20 +5796,218 @@ export default function App() {
       documents: nextDocuments,
       updatedAt: now,
     };
-    const nextRecords = records.map((r) => (r.id === kpmId ? updatedRecord : r));
+    const nextRecords = latestDataRef.current.records.map((r) =>
+      r.id === kpmId ? updatedRecord : r
+    );
+    latestDataRef.current.records = nextRecords;
     setRecords(nextRecords);
+    void saveIdbValue('records', nextRecords);
+
+    const safeDocsForSync = sanitizeDocumentsForRemoteSync(kpmId, nextDocuments);
+    if (!isOnlineRef.current || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+      await enqueueOfflineAction({
+        id: `off-qdoc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        createdAt: now,
+        kind: 'sync_kpm_docs',
+        label: `Dokumen (${target.nama})`,
+        kpmId,
+        documents: safeDocsForSync,
+      });
+      const q = await getOfflineQueue();
+      setOfflineQueueCount(q.length);
+      return;
+    }
 
     if (supabaseReadyRef.current) {
       try {
         lastLocalSyncAtRef.current = Date.now();
-        await updateKpmDocumentsInSupabase(updatedRecord, proposals, pengelolaList);
+        await updateKpmDocumentsInSupabase(
+          { ...updatedRecord, documents: safeDocsForSync },
+          proposals,
+          pengelolaList
+        );
         return;
       } catch {
         // Fallback ke full sync
       }
     }
-    await syncOperationalData({ records: nextRecords }, 'update');
+    const nextRecordsSafe = nextRecords.map((r) =>
+      r.id === kpmId ? { ...r, documents: safeDocsForSync } : r
+    );
+    await syncOperationalData({ records: nextRecordsSafe }, 'update');
   };
+
+  const handleEnqueueKpmDetailPhoto = useCallback(
+    async (
+      kpmId: string,
+      params: {
+        file: File;
+        source: PhotoCaptureSource;
+        category: PhotoDocCategory;
+        label: string;
+        existingDoc?: KpmDocumentFile;
+      }
+    ) => {
+      if (!requirePermission('update', 'mengunggah foto KPM', { allowOffline: true })) {
+        return;
+      }
+      const target = latestDataRef.current.records.find((r) => r.id === kpmId);
+      const { job, pendingDoc } = await enqueuePhotoUploadJob({
+        file: params.file,
+        kpmId,
+        kpmName: target?.nama || 'KPM',
+        category: params.category,
+        slotLabel: params.label,
+        existingDoc: params.existingDoc,
+        source: params.source,
+      });
+
+      const now = new Date().toISOString();
+      const nextRecords = latestDataRef.current.records.map((r) =>
+        r.id === kpmId
+          ? {
+              ...r,
+              documents: attachPendingJobToDocuments(r.documents, params.category, pendingDoc),
+              updatedAt: now,
+            }
+          : r
+      );
+      latestDataRef.current.records = nextRecords;
+      setRecords(nextRecords);
+      void saveIdbValue('records', nextRecords);
+      setFeedback({
+        type: 'success',
+        message: `${params.label} diamankan di perangkat (${job.galleryStatusNote.toLowerCase()}). Anda bebas berpindah KPM tanpa menunggu unggahan selesai.`,
+      });
+    },
+    [requirePermission]
+  );
+
+  const handleCancelPendingKpmDetailPhoto = useCallback(
+    async (kpmId: string, jobId: string, category: PhotoDocCategory, label: string) => {
+      const fallbackDoc = getExistingDriveFallbackDoc(kpmId, category);
+      await cancelPendingPhotoUploadJob(jobId);
+      const nextRecords = latestDataRef.current.records.map((r) =>
+        r.id === kpmId
+          ? {
+              ...r,
+              documents: removePendingJobFromDocuments(r.documents, jobId, category, fallbackDoc),
+            }
+          : r
+      );
+      latestDataRef.current.records = nextRecords;
+      setRecords(nextRecords);
+      void saveIdbValue('records', nextRecords);
+      setFeedback({
+        type: 'success',
+        message: `Antrean unggahan ${label} dibatalkan.`,
+      });
+    },
+    []
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    void initPhotoUploadManager().then((jobs) => {
+      if (cancelled || jobs.length === 0) return;
+      setRecords((prev) => mergePendingVaultDocsIntoRecords(prev, jobs));
+    });
+
+    const unsubscribe = subscribePhotoUploadCompleted(async ({ job, uploadedDoc }) => {
+      if (!job.kpmId) return;
+      await enqueueKpmPhotoSyncTask(job.kpmId, async () => {
+        const target = latestDataRef.current.records.find((r) => r.id === job.kpmId);
+        if (!target) return;
+
+        const now = new Date().toISOString();
+        const nextDocs = replacePendingJobWithUploadedDoc(target.documents, job, uploadedDoc);
+        const updatedRecord: KpmRecord = {
+          ...target,
+          documents: nextDocs,
+          updatedAt: now,
+        };
+        const nextRecords = latestDataRef.current.records.map((r) =>
+          r.id === target.id ? updatedRecord : r
+        );
+        latestDataRef.current.records = nextRecords;
+        setRecords(nextRecords);
+        void saveIdbValue('records', nextRecords);
+
+        const auditEntry: KpmAuditLogEntry = {
+          id: `audit-pvault-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+          kpmId: target.id,
+          action: 'updated',
+          actorName: currentUser?.nama ?? 'Petugas Internal',
+          actorEmail: currentUser?.email,
+          timestamp: now,
+          proposal: target.proposal,
+          tahun: target.tahun,
+          changes: [
+            {
+              field: job.slotLabel,
+              before: job.existingDoc?.fileName || 'Belum ada',
+              after: uploadedDoc.fileName,
+            },
+          ],
+        };
+        setKpmAuditLogs((prev) => [auditEntry, ...prev]);
+
+        const safeDocsForSync = sanitizeDocumentsForRemoteSync(target.id, nextDocs);
+
+        if (!isOnlineRef.current || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+          await enqueueOfflineAction({
+            id: `off-pvault-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            createdAt: now,
+            kind: 'sync_kpm_docs',
+            label: `${job.slotLabel} (${target.nama})`,
+            kpmId: target.id,
+            documents: safeDocsForSync,
+            auditEntry,
+          });
+          const q = await getOfflineQueue();
+          setOfflineQueueCount(q.length);
+          return;
+        }
+
+        if (supabaseReadyRef.current) {
+          try {
+            lastLocalSyncAtRef.current = Date.now();
+            await updateKpmDocumentsInSupabase(
+              { ...updatedRecord, documents: safeDocsForSync },
+              proposalsRef.current,
+              latestDataRef.current.pengelolaList
+            );
+            await appendKpmAuditLogsInSupabase([auditEntry], new Set([target.id]));
+            return;
+          } catch {
+            // Simpan metadata Drive ke antrean offline agar pasti tersinkronisasi saat sinyal pulih
+            await enqueueOfflineAction({
+              id: `off-pvault-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              createdAt: now,
+              kind: 'sync_kpm_docs',
+              label: `${job.slotLabel} (${target.nama})`,
+              kpmId: target.id,
+              documents: safeDocsForSync,
+              auditEntry,
+            });
+            const q = await getOfflineQueue();
+            setOfflineQueueCount(q.length);
+            return;
+          }
+        }
+
+        const nextRecordsSafe = nextRecords.map((r) =>
+          r.id === target.id ? { ...r, documents: safeDocsForSync } : r
+        );
+        await syncOperationalData({ records: nextRecordsSafe }, 'update');
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [currentUser?.email, currentUser?.nama, enqueueKpmPhotoSyncTask, syncOperationalData]);
 
   const handleQuickSyncProposalDocuments = async (
     proposalId: string,
@@ -5561,7 +6047,7 @@ export default function App() {
   ) => {
     if (
       !options?.skipPermissionCheck &&
-      !requirePermission('update', 'mengubah status validasi KPM')
+      !requirePermission('update', 'mengubah status validasi KPM', { allowOffline: true })
     ) {
       return;
     }
@@ -5858,7 +6344,7 @@ export default function App() {
     subItemName: string,
     nextDelivered: boolean
   ) => {
-    if (!requirePermission('update', 'mengubah checklist sub-item KPM')) return;
+    if (!requirePermission('update', 'mengubah checklist sub-item KPM', { allowOffline: true })) return;
     const target = records.find((r) => r.id === kpmId);
     if (!target) return;
 
@@ -6295,6 +6781,26 @@ export default function App() {
               workRecords = workRecords.map((r) =>
                 r.id === act.kpmId ? { ...r, documents: docs, updatedAt: act.createdAt } : r
               );
+              touchedRecordIds.add(act.kpmId);
+            }
+            processedIds.push(act.id);
+            processedCount++;
+          } else if (act.kind === 'sync_kpm_docs') {
+            const target = workRecords.find((r) => r.id === act.kpmId);
+            if (target) {
+              workRecords = workRecords.map((r) =>
+                r.id === act.kpmId
+                  ? {
+                      ...r,
+                      documents: sanitizeDocumentsForRemoteSync(act.kpmId, act.documents),
+                      updatedAt: act.createdAt,
+                    }
+                  : r
+              );
+              if (act.auditEntry) {
+                workAuditLogs = [act.auditEntry, ...workAuditLogs];
+                addedAuditLogs.push(act.auditEntry);
+              }
               touchedRecordIds.add(act.kpmId);
             }
             processedIds.push(act.id);
@@ -11210,7 +11716,7 @@ export default function App() {
             setActiveTab('menu');
           }}
           onOpenQuickAdd={() => {
-            if (!requirePermission('add', 'menambah data KPM atau proposal baru')) return;
+            if (!requirePermission('add', 'menambah data KPM atau proposal baru', { allowOffline: true })) return;
             setIsQuickAddOpen(true);
           }}
           onOpenProfile={openProfileView}
@@ -11581,6 +12087,8 @@ export default function App() {
             }}
             onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
             onUpdateKpmDocuments={handleUpdateKpmDocuments}
+            onEnqueuePhoto={handleEnqueueKpmDetailPhoto}
+            onCancelPendingPhoto={handleCancelPendingKpmDetailPhoto}
             reportTemplate={reportTemplate}
             schedules={schedulesWithBooks}
             couponConfig={couponConfig}
@@ -12325,7 +12833,7 @@ export default function App() {
             setActiveTab(tab);
           }}
           onOpenQuickAdd={() => {
-            if (!requirePermission('add', 'menambah data KPM atau proposal baru')) return;
+            if (!requirePermission('add', 'menambah data KPM atau proposal baru', { allowOffline: true })) return;
             setIsQuickAddOpen(true);
           }}
         />
@@ -12337,6 +12845,35 @@ export default function App() {
         onClose={() => setIsQuickAddOpen(false)}
         onAddKpm={() => openKpmForm(null, activeTab)}
         onAddProposal={() => openAddProposalForm(activeTab)}
+      />
+
+      {/* Persistent Photo Vault Queue Indicator & Recovery Drawer */}
+      <PhotoUploadQueueBar
+        hasBottomNav={showBottomNav}
+        isNativeApp={isNativeApp}
+        onSelectKpm={(kpmId) => {
+          const rec = latestDataRef.current.records.find((r) => r.id === kpmId);
+          if (rec) openKpmDetail(rec, returnToTab);
+        }}
+        onJobRemoved={(job) => {
+          if (!job.kpmId) return;
+          const nextRecords = latestDataRef.current.records.map((r) =>
+            r.id === job.kpmId
+              ? {
+                  ...r,
+                  documents: removePendingJobFromDocuments(
+                    r.documents,
+                    job.id,
+                    job.category,
+                    job.existingDoc
+                  ),
+                }
+              : r
+          );
+          latestDataRef.current.records = nextRecords;
+          setRecords(nextRecords);
+          void saveIdbValue('records', nextRecords);
+        }}
       />
 
       {/* Fullscreen Document & PDF Lightbox */}

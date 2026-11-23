@@ -17,6 +17,12 @@ import {
   getDocumentDirectUrl,
   getDocumentDownloadHref,
 } from '../utils/imageProcessor';
+import {
+  ensurePendingPhotoObjectUrl,
+  extractPendingJobId,
+  getPendingPhotoObjectUrl,
+  isLocalPendingDocument,
+} from '../utils/photoUploadManager';
 
 interface DocumentLightboxProps {
   documentFile: KpmDocumentFile | null;
@@ -36,6 +42,7 @@ export function DocumentLightbox({ documentFile, title, onClose }: DocumentLight
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [rotation, setRotation] = useState(0);
   const [isInteracting, setIsInteracting] = useState(false);
+  const [pendingObjectUrl, setPendingObjectUrl] = useState<string>('');
 
   const stageRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -162,16 +169,40 @@ export function DocumentLightbox({ documentFile, title, onClose }: DocumentLight
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [documentFile, onClose]);
 
+  useEffect(() => {
+    if (!documentFile || !isLocalPendingDocument(documentFile)) {
+      setPendingObjectUrl('');
+      return;
+    }
+    const jobId = extractPendingJobId(documentFile);
+    if (!jobId) {
+      setPendingObjectUrl('');
+      return;
+    }
+    setPendingObjectUrl(getPendingPhotoObjectUrl(jobId));
+    let cancelled = false;
+    void ensurePendingPhotoObjectUrl(jobId).then((url) => {
+      if (!cancelled && url) setPendingObjectUrl(url);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [documentFile]);
+
   if (!documentFile) return null;
 
+  const isLocalPending = isLocalPendingDocument(documentFile);
   const isPdf =
     documentFile.mimeType === 'application/pdf' ||
     documentFile.fileName.toLowerCase().endsWith('.pdf');
   const isImage = documentFile.mimeType.startsWith('image/');
   const uploadTimeText = formatUploadDateTime(documentFile.uploadedAt);
   const directUrl = getDocumentDirectUrl(documentFile);
-  const downloadHref = getDocumentDownloadHref(documentFile);
-  const driveId = documentFile.fileId || extractDriveFileId(directUrl);
+  const downloadHref = isLocalPending
+    ? pendingObjectUrl ||
+      (documentFile.thumbnailUrl?.startsWith('data:') ? documentFile.thumbnailUrl : '')
+    : getDocumentDownloadHref(documentFile);
+  const driveId = isLocalPending ? undefined : documentFile.fileId || extractDriveFileId(directUrl);
   const pdfPreviewSrc = driveId
     ? `https://drive.google.com/file/d/${encodeURIComponent(driveId)}/preview`
     : directUrl;
@@ -468,8 +499,14 @@ export function DocumentLightbox({ documentFile, title, onClose }: DocumentLight
               : ''}
             {documentFile.compressedSize > 0
               ? formatBytes(documentFile.compressedSize)
-              : 'Google Drive'}
-            {uploadTimeText ? ` · Diunggah ${uploadTimeText}` : ''}
+              : isLocalPending
+                ? 'Cache Lokal'
+                : 'Google Drive'}
+            {isLocalPending
+              ? ' · Menunggu unggahan ke Google Drive (tersimpan aman di perangkat)'
+              : uploadTimeText
+                ? ` · Diunggah ${uploadTimeText}`
+                : ''}
           </p>
         </div>
 

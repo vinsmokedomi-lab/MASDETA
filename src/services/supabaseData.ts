@@ -152,11 +152,18 @@ export function isSchemaMissingError(error: unknown): boolean {
 }
 
 /**
- * Pastikan hanya URL valid (non-Base64) yang boleh disimpan ke Supabase PostgreSQL.
+ * Pastikan hanya URL valid (non-Base64 & non-placeholder lokal) yang boleh disimpan ke Supabase PostgreSQL.
  */
 export function sanitizeMediaUrl(url?: string | null): string | null {
   const clean = (url || '').trim();
-  if (!clean || clean.startsWith('data:')) return null;
+  if (
+    !clean ||
+    clean.startsWith('data:') ||
+    clean.startsWith('blob:') ||
+    clean.startsWith('local-pending:')
+  ) {
+    return null;
+  }
   return clean;
 }
 

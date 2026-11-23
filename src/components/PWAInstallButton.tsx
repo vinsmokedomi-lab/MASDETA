@@ -49,17 +49,17 @@ export function OfflineIndicator({
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-xs font-extrabold tracking-tight text-amber-950">
-                Mode Offline · Read-Only
+                Mode Offline · Antrean Lokal Aktif
               </span>
               <span className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-white/80 px-1.5 py-0.5 text-[10px] font-bold text-amber-900">
                 <Eye className="h-3 w-3" />
-                Hanya Baca
+                Simpan di Perangkat
               </span>
             </div>
             <p className="mt-0.5 text-[11px] leading-snug text-amber-900/90">
               {retryFailed && !isChecking
-                ? 'Koneksi internet belum terdeteksi. Tombol tambah, edit & hapus tetap dinonaktifkan.'
-                : 'Akses melihat data & cetak PDF tetap aktif. Semua tombol tambah, edit & hapus dinonaktifkan.'}
+                ? 'Koneksi belum kembali. Anda tetap bisa foto & simpan KPM; semuanya diamankan di perangkat dan otomatis diunggah saat sinyal pulih.'
+                : 'Pengambilan foto & input data tetap berjalan offline dan tersimpan aman di perangkat hingga sinyal kembali.'}
             </p>
           </div>
         </div>

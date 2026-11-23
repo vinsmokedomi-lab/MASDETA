@@ -28,8 +28,18 @@ import {
   formatBytes,
   formatUploadDateTime,
   removeDocumentFromDrive,
-  uploadImageDocumentToDrive,
 } from '../utils/imageProcessor';
+import {
+  cancelPendingPhotoUploadJob,
+  enqueuePhotoUploadJob,
+  extractPendingJobId,
+  isLocalPendingDocument,
+  PhotoCaptureSource,
+  PhotoDocCategory,
+  PhotoUploadJobSummary,
+  retryPhotoUploadJob,
+  subscribePhotoUploadJobs,
+} from '../utils/photoUploadManager';
 import {
   convertPdfFirstPageToImageFile,
   getRememberedScannerDirHandle,
@@ -50,6 +60,10 @@ interface DocumentUploadCardProps {
   disabled?: boolean;
   showUploadTime?: boolean;
   variant?: 'ktp' | 'kk' | 'penerima' | 'survey' | 'rumah' | 'photo';
+  kpmId?: string;
+  formDraftId?: string;
+  kpmName?: string;
+  category?: PhotoDocCategory;
   value?: KpmDocumentFile;
   error?: string;
   onChange: (file?: KpmDocumentFile) => void;
@@ -65,6 +79,10 @@ export function DocumentUploadCard({
   disabled = false,
   showUploadTime = false,
   variant = 'photo',
+  kpmId,
+  formDraftId,
+  kpmName,
+  category,
   value,
   error,
   onChange,
@@ -75,9 +93,10 @@ export function DocumentUploadCard({
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [statusLabel, setStatusLabel] = useState<string>('Memproses media...');
+  const [statusLabel, setStatusLabel] = useState<string>('Mengamankan foto...');
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [vaultJobs, setVaultJobs] = useState<PhotoUploadJobSummary[]>([]);
 
   // Desktop PC Scanner modal & folder watcher state (only for KTP & KK on Desktop Web)
   const isDesktopWeb = useIsDesktopWeb();
@@ -95,10 +114,24 @@ export function DocumentUploadCard({
   const watchSeenKeysRef = useRef<Set<string>>(new Set());
 
   const { isOffline } = useOfflineStatus();
-  const effectiveDisabled = disabled || isOffline;
+  const effectiveDisabled = disabled;
   const activeError = localError || error;
+  const resolvedCategory: PhotoDocCategory =
+    category || (variant === 'photo' ? 'lainnya' : variant);
 
-  const handleFile = async (rawFile?: File) => {
+  const isPendingValue = isLocalPendingDocument(value);
+  const pendingJobId = isPendingValue ? extractPendingJobId(value) : '';
+  const pendingJob = pendingJobId
+    ? vaultJobs.find((j) => j.id === pendingJobId)
+    : undefined;
+
+  useEffect(() => {
+    return subscribePhotoUploadJobs((jobs) => {
+      setVaultJobs(jobs);
+    });
+  }, []);
+
+  const handleFile = async (rawFile?: File, source: PhotoCaptureSource = 'file') => {
     if (!rawFile || effectiveDisabled || isProcessing) return;
     setLocalError(null);
     setConfirmDeleteOpen(false);
@@ -110,19 +143,26 @@ export function DocumentUploadCard({
         fileToUpload = await convertPdfFirstPageToImageFile(rawFile);
       }
 
-      setStatusLabel(
-        value ? 'Mengganti foto di Google Drive...' : 'Mengunggah foto ke Google Drive...'
-      );
-      const [processed, ocrPayload] = await Promise.all([
-        uploadImageDocumentToDrive(fileToUpload, value),
+      setStatusLabel('Mengamankan foto di perangkat...');
+      const [{ pendingDoc }, ocrPayload] = await Promise.all([
+        enqueuePhotoUploadJob({
+          file: fileToUpload,
+          kpmId,
+          formDraftId: kpmId ? undefined : formDraftId || `card-${id}`,
+          kpmName: kpmName?.trim() || 'KPM',
+          category: resolvedCategory,
+          slotLabel: label,
+          existingDoc: value,
+          source,
+        }),
         onImageForOcrReady
           ? compressImageFileForOcr(fileToUpload).catch(() => undefined)
           : Promise.resolve(undefined),
       ]);
       onImageForOcrReady?.(ocrPayload);
-      onChange(processed);
+      onChange(pendingDoc);
     } catch (err) {
-      setLocalError(err instanceof Error ? err.message : 'Gagal mengunggah foto ke Google Drive.');
+      setLocalError(err instanceof Error ? err.message : 'Gagal memproses foto.');
     } finally {
       setIsProcessing(false);
     }
@@ -265,6 +305,26 @@ export function DocumentUploadCard({
 
   const handleConfirmDelete = async () => {
     if (!value || effectiveDisabled || isProcessing) return;
+    if (isPendingValue && pendingJobId) {
+      setLocalError(null);
+      setIsProcessing(true);
+      try {
+        const restoreExisting = pendingJob?.existingDoc;
+        await cancelPendingPhotoUploadJob(pendingJobId);
+        setConfirmDeleteOpen(false);
+        if (!restoreExisting) onImageForOcrReady?.(undefined);
+        onChange(restoreExisting);
+      } finally {
+        setIsProcessing(false);
+      }
+      return;
+    }
+
+    if (isOffline) {
+      setLocalError('Hapus foto yang sudah di Google Drive memerlukan koneksi internet.');
+      return;
+    }
+
     setLocalError(null);
     setStatusLabel('Menghapus foto dari Google Drive...');
     setIsProcessing(true);
@@ -280,9 +340,15 @@ export function DocumentUploadCard({
     }
   };
 
-  const handleInputChange = (e: ChangeEvent<HTMLInputElement>) => {
+  const handleFileInputChange = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    void handleFile(file);
+    void handleFile(file, 'file');
+    e.target.value = '';
+  };
+
+  const handleCameraInputChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    void handleFile(file, 'camera');
     e.target.value = '';
   };
 
@@ -301,7 +367,7 @@ export function DocumentUploadCard({
     setIsDragging(false);
     if (effectiveDisabled) return;
     const file = e.dataTransfer.files?.[0];
-    void handleFile(file);
+    void handleFile(file, 'file');
   };
 
   const aspectClass =
@@ -337,10 +403,33 @@ export function DocumentUploadCard({
         </label>
         <span className="text-xs text-slate-500">
           {value ? (
-            <span className="inline-flex items-center gap-1 font-medium text-teal-700">
-              <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-              Tersimpan di Drive
-            </span>
+            isPendingValue ? (
+              <span
+                className={`inline-flex items-center gap-1 font-semibold ${
+                  pendingJob?.status === 'failed'
+                    ? 'text-rose-600'
+                    : 'text-amber-700'
+                }`}
+              >
+                {pendingJob?.status === 'uploading' ? (
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-teal-700" />
+                ) : (
+                  <Clock className="h-3.5 w-3.5 shrink-0" />
+                )}
+                {pendingJob?.status === 'uploading'
+                  ? 'Mengunggah ke Drive...'
+                  : pendingJob?.status === 'failed'
+                    ? 'Tertunda · Kirim Ulang'
+                    : isOffline
+                      ? 'Tersimpan Lokal'
+                      : 'Antrean Upload'}
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 font-medium text-teal-700">
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                Tersimpan di Drive
+              </span>
+            )
           ) : required ? (
             'Wajib diunggah'
           ) : (
@@ -354,7 +443,7 @@ export function DocumentUploadCard({
         ref={fileInputRef}
         type="file"
         accept={isScannerCapable ? 'image/*,application/pdf,.pdf' : 'image/*'}
-        onChange={handleInputChange}
+        onChange={handleFileInputChange}
         className="sr-only"
         aria-label={`Pilih file ${label}`}
       />
@@ -363,7 +452,7 @@ export function DocumentUploadCard({
         type="file"
         accept="image/*"
         capture="environment"
-        onChange={handleInputChange}
+        onChange={handleCameraInputChange}
         className="sr-only"
         aria-label={`Ambil foto kamera ${label}`}
       />
@@ -371,7 +460,7 @@ export function DocumentUploadCard({
       {value ? (
         <div
           className={`overflow-hidden rounded-2xl border bg-white transition-colors ${
-            activeError ? 'border-rose-300' : 'border-slate-200'
+            activeError ? 'border-rose-300' : isPendingValue ? 'border-amber-300' : 'border-slate-200'
           }`}
         >
           <div className={`relative w-full overflow-hidden bg-slate-100 ${aspectClass}`}>
@@ -380,6 +469,27 @@ export function DocumentUploadCard({
               alt={`Pratinjau ${label}`}
               className="h-full w-full object-cover"
             />
+            {isPendingValue && !isProcessing && (
+              <div className="pointer-events-none absolute top-2.5 left-2.5 flex items-center gap-1.5 rounded-lg bg-slate-900/80 px-2.5 py-1 text-[11px] font-semibold text-white backdrop-blur-xs">
+                {pendingJob?.status === 'uploading' ? (
+                  <>
+                    <Loader2 className="h-3 w-3 animate-spin text-teal-300" />
+                    <span>Mengunggah di latar...</span>
+                  </>
+                ) : (
+                  <>
+                    <Clock className="h-3 w-3 text-amber-300" />
+                    <span>
+                      {isOffline
+                        ? 'Tersimpan aman di perangkat'
+                        : pendingJob?.status === 'failed'
+                          ? 'Menunggu coba ulang'
+                          : 'Dalam antrean Drive'}
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
             {isProcessing && (
               <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-slate-950/65 px-4 text-center text-white backdrop-blur-[1px]">
                 <Loader2 className="h-6 w-6 animate-spin" />
@@ -407,12 +517,26 @@ export function DocumentUploadCard({
                 {value.compressedSize > 0 ? formatBytes(value.compressedSize) : 'Google Drive'}
               </span>
               {(showUploadTime || value.uploadedAt) && (
-                <span className="inline-flex items-center gap-1 font-medium text-teal-700 whitespace-nowrap">
+                <span
+                  className={`inline-flex items-center gap-1 font-medium whitespace-nowrap ${
+                    isPendingValue ? 'text-amber-700' : 'text-teal-700'
+                  }`}
+                >
                   <Clock className="h-3 w-3 shrink-0" />
-                  <span>{formatUploadDateTime(value.uploadedAt)}</span>
+                  <span>
+                    {isPendingValue
+                      ? 'Diamankan lokal'
+                      : formatUploadDateTime(value.uploadedAt)}
+                  </span>
                 </span>
               )}
             </div>
+            {isPendingValue && pendingJob && (
+              <p className="text-[10px] leading-snug text-slate-500">
+                {pendingJob.galleryStatusNote}
+                {pendingJob.lastError ? ` · (${pendingJob.lastError})` : ''}
+              </p>
+            )}
           </div>
 
           {!effectiveDisabled && (
@@ -420,7 +544,9 @@ export function DocumentUploadCard({
               {confirmDeleteOpen ? (
                 <div className="flex flex-col gap-2 rounded-xl border border-rose-200 bg-rose-50 p-2.5">
                   <p className="text-xs font-semibold text-rose-900">
-                    Hapus foto {label} dari Google Drive?
+                    {isPendingValue
+                      ? `Batalkan antrean unggahan foto ${label} ini?`
+                      : `Hapus foto ${label} dari Google Drive?`}
                   </p>
                   <div className="flex items-center gap-2">
                     <button
@@ -442,12 +568,22 @@ export function DocumentUploadCard({
                       ) : (
                         <Trash2 className="h-3.5 w-3.5" />
                       )}
-                      <span>Ya, Hapus Foto</span>
+                      <span>{isPendingValue ? 'Ya, Batalkan' : 'Ya, Hapus Foto'}</span>
                     </button>
                   </div>
                 </div>
               ) : (
                 <div className="flex flex-wrap items-center gap-2">
+                  {isPendingValue && pendingJob && pendingJob.status !== 'uploading' && !isOffline && (
+                    <button
+                      type="button"
+                      onClick={() => void retryPhotoUploadJob(pendingJob.id)}
+                      className="inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100 whitespace-nowrap"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5 shrink-0" />
+                      <span>Kirim Ulang</span>
+                    </button>
+                  )}
                   {showDesktopScannerAction ? (
                     <button
                       type="button"
@@ -483,11 +619,11 @@ export function DocumentUploadCard({
                   </button>
                   <button
                     type="button"
-                    disabled={isProcessing}
+                    disabled={isProcessing || (isOffline && !isPendingValue)}
                     onClick={() => setConfirmDeleteOpen(true)}
-                    className="inline-flex min-h-[40px] min-w-[40px] items-center justify-center rounded-xl border border-rose-200 bg-rose-50/70 text-rose-600 transition-colors hover:bg-rose-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-600 shrink-0 disabled:opacity-50"
-                    aria-label={`Hapus Foto ${label}`}
-                    title="Hapus Foto"
+                    className="inline-flex min-h-[40px] min-w-[40px] items-center justify-center rounded-xl border border-rose-200 bg-rose-50/70 text-rose-600 transition-colors hover:bg-rose-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-600 shrink-0 disabled:cursor-not-allowed disabled:opacity-40"
+                    aria-label={isPendingValue ? `Batalkan antrean ${label}` : `Hapus Foto ${label}`}
+                    title={isPendingValue ? 'Batalkan antrean foto' : isOffline ? 'Hapus foto Drive butuh sinyal' : 'Hapus Foto'}
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
@@ -527,12 +663,12 @@ export function DocumentUploadCard({
             </div>
 
             <p className="text-xs font-medium text-slate-700">
-              {isOffline
-                ? 'Mode Read-Only (Offline) — unggahan dinonaktifkan'
-                : disabled
-                  ? 'Proposal terkunci — unggahan dinonaktifkan'
-                  : isProcessing
-                    ? statusLabel
+              {disabled
+                ? 'Proposal terkunci — unggahan dinonaktifkan'
+                : isProcessing
+                  ? statusLabel
+                  : isOffline
+                    ? 'Mode Offline — foto disimpan aman di perangkat & antre ke Drive'
                     : helperText}
             </p>
             <p className="mt-0.5 text-[11px] text-slate-500">

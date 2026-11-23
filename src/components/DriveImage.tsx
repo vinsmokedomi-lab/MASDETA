@@ -4,6 +4,13 @@ import {
   extractDriveFileId,
 } from '../services/driveManager';
 import { KpmDocumentFile } from '../types/kpm';
+import {
+  ensurePendingPhotoObjectUrl,
+  extractPendingJobId,
+  getPendingPhotoObjectUrl,
+  isLocalPendingDocument,
+  LOCAL_PENDING_URL_PREFIX,
+} from '../utils/photoUploadManager';
 
 interface DriveImageProps
   extends Omit<ImgHTMLAttributes<HTMLImageElement>, 'src' | 'onError'> {
@@ -15,8 +22,8 @@ interface DriveImageProps
 }
 
 /**
- * Render gambar dari Google Drive menggunakan directUrl terlebih dahulu.
- * Jika event onError terpicu, otomatis beralih ke thumbnailUrl Drive.
+ * Render gambar dari Google Drive menggunakan directUrl terlebih dahulu,
+ * serta mendukung preview lokal instan (local-pending://) dari brankas IndexedDB.
  */
 export function DriveImage({
   doc,
@@ -30,19 +37,51 @@ export function DriveImage({
 }: DriveImageProps) {
   const primarySrc = (doc?.directUrl || doc?.dataUrl || src || '').trim();
   const explicitThumb = (doc?.thumbnailUrl || thumbnailUrl || '').trim();
-  const computedThumb =
-    explicitThumb ||
-    buildDriveFallbackThumbnailUrl(doc?.fileId || primarySrc, fallbackWidth);
+  const isLocalPending =
+    isLocalPendingDocument(doc) || primarySrc.startsWith(LOCAL_PENDING_URL_PREFIX);
+  const pendingJobId = isLocalPending
+    ? extractPendingJobId(doc) ||
+      (primarySrc.startsWith(LOCAL_PENDING_URL_PREFIX)
+        ? primarySrc.slice(LOCAL_PENDING_URL_PREFIX.length)
+        : '')
+    : '';
 
-  const [currentSrc, setCurrentSrc] = useState(primarySrc);
+  const usableLocalThumb =
+    explicitThumb && !explicitThumb.startsWith(LOCAL_PENDING_URL_PREFIX) ? explicitThumb : '';
+
+  const initialSrc = isLocalPending
+    ? (pendingJobId ? getPendingPhotoObjectUrl(pendingJobId) : '') || usableLocalThumb
+    : primarySrc;
+
+  const computedThumb = isLocalPending
+    ? usableLocalThumb
+    : explicitThumb ||
+      buildDriveFallbackThumbnailUrl(doc?.fileId || primarySrc, fallbackWidth);
+
+  const [currentSrc, setCurrentSrc] = useState(initialSrc);
   const [usedFallback, setUsedFallback] = useState(false);
   const [hasFailed, setHasFailed] = useState(false);
 
   useEffect(() => {
-    setCurrentSrc(primarySrc);
     setUsedFallback(false);
     setHasFailed(false);
-  }, [primarySrc, computedThumb]);
+    if (isLocalPending && pendingJobId) {
+      const syncUrl = getPendingPhotoObjectUrl(pendingJobId) || usableLocalThumb;
+      setCurrentSrc(syncUrl);
+      let cancelled = false;
+      void ensurePendingPhotoObjectUrl(pendingJobId).then((resolved) => {
+        if (!cancelled && resolved) {
+          setCurrentSrc(resolved);
+          setHasFailed(false);
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+    setCurrentSrc(primarySrc);
+    return undefined;
+  }, [isLocalPending, pendingJobId, usableLocalThumb, primarySrc, computedThumb]);
 
   if (!currentSrc || hasFailed) {
     return null;
@@ -55,6 +94,23 @@ export function DriveImage({
       alt={alt}
       referrerPolicy={referrerPolicy}
       onError={() => {
+        if (isLocalPending) {
+          if (!usedFallback && usableLocalThumb && usableLocalThumb !== currentSrc) {
+            setUsedFallback(true);
+            setCurrentSrc(usableLocalThumb);
+            return;
+          }
+          setHasFailed(true);
+          onBothFailed?.();
+          return;
+        }
+
+        if (currentSrc.startsWith('blob:') || currentSrc.startsWith('data:')) {
+          setHasFailed(true);
+          onBothFailed?.();
+          return;
+        }
+
         if (!usedFallback && computedThumb && computedThumb !== currentSrc) {
           setUsedFallback(true);
           setCurrentSrc(computedThumb);

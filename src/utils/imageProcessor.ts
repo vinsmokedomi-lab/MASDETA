@@ -795,6 +795,16 @@ export function validateProposalDocumentFile(file: File): void {
   }
 }
 
+function isRemoteDriveTarget(target: string): boolean {
+  const clean = (target || '').trim();
+  if (!clean) return false;
+  return (
+    !clean.startsWith('data:') &&
+    !clean.startsWith('blob:') &&
+    !clean.startsWith('local-pending:')
+  );
+}
+
 export async function uploadImageDocumentToDrive(
   file: File,
   existingDoc?: KpmDocumentFile | null
@@ -802,10 +812,9 @@ export async function uploadImageDocumentToDrive(
   validateImageUploadFile(file);
   const dims = await measureImageFileDimensions(file);
   const existingTarget = existingDoc?.fileId || existingDoc?.directUrl || existingDoc?.dataUrl || '';
-  const driveResult =
-    existingTarget && !existingTarget.startsWith('data:')
-      ? await replaceMediaInDrive(file, existingTarget)
-      : await uploadMediaToDrive(file);
+  const driveResult = isRemoteDriveTarget(existingTarget)
+    ? await replaceMediaInDrive(file, existingTarget)
+    : await uploadMediaToDrive(file);
   return buildKpmDocumentFileFromDrive(file, driveResult, dims, 'doc');
 }
 
@@ -818,17 +827,16 @@ export async function uploadProposalDocumentToDrive(
     ? await measureImageFileDimensions(file)
     : { width: 0, height: 0 };
   const existingTarget = existingDoc?.fileId || existingDoc?.directUrl || existingDoc?.dataUrl || '';
-  const driveResult =
-    existingTarget && !existingTarget.startsWith('data:')
-      ? await replaceMediaInDrive(file, existingTarget)
-      : await uploadMediaToDrive(file);
+  const driveResult = isRemoteDriveTarget(existingTarget)
+    ? await replaceMediaInDrive(file, existingTarget)
+    : await uploadMediaToDrive(file);
   return buildKpmDocumentFileFromDrive(file, driveResult, dims, 'pdoc');
 }
 
 export async function removeDocumentFromDrive(doc?: KpmDocumentFile | null): Promise<void> {
   if (!doc) return;
-  const target = doc.fileId || doc.directUrl || doc.dataUrl;
-  if (!target || target.startsWith('data:')) return;
+  const target = doc.fileId || doc.directUrl || doc.dataUrl || '';
+  if (!isRemoteDriveTarget(target)) return;
   await deleteMediaFromDrive(target);
 }
 

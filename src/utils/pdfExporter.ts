@@ -7258,7 +7258,10 @@ function formatCatNomorItemShortLabel(code: string, rawName?: string): string {
   return shortened || cleanName;
 }
 
-function formatSlotNumberRanges(slotNumbers: number[]): string {
+function formatSlotNumberRanges(
+  slotNumbers: number[],
+  emptySlotNumbers?: Set<number>
+): string {
   if (slotNumbers.length === 0) return '—';
   const sorted = Array.from(
     new Set(slotNumbers.filter((n) => Number.isFinite(n) && n >= 1))
@@ -7272,7 +7275,13 @@ function formatSlotNumberRanges(slotNumbers: number[]): string {
 
   for (let i = 1; i < sorted.length; i += 1) {
     const cur = sorted[i];
-    if (cur === prev + 1) {
+    const isGapOnlyEmpty =
+      cur > prev + 1 &&
+      Boolean(emptySlotNumbers && emptySlotNumbers.size > 0) &&
+      Array.from({ length: cur - prev - 1 }, (_, idx) => prev + 1 + idx).every((n) =>
+        emptySlotNumbers!.has(n)
+      );
+    if (cur === prev + 1 || isGapOnlyEmpty) {
       prev = cur;
     } else {
       runs.push([start, prev]);
@@ -7425,11 +7434,13 @@ export function buildCatNomorBarangMatrix(options: {
     if (mergedSlots.length === 0) continue;
 
     const slotsByItem = new Map<string, number[]>();
+    const emptySlotNumbers = new Set<number>();
     for (const slot of mergedSlots) {
-      const rawCode =
-        slot.kind === 'kpm'
-          ? (slot.record.item || '').trim().toUpperCase()
-          : (slot.emptySlot.item || '').trim().toUpperCase();
+      if (slot.kind === 'empty') {
+        emptySlotNumbers.add(slot.slotNumber);
+        continue;
+      }
+      const rawCode = (slot.record.item || '').trim().toUpperCase();
       if (!rawCode) continue;
       presentItemCodes.add(rawCode);
       const bucket = slotsByItem.get(rawCode) ?? [];
@@ -7441,7 +7452,7 @@ export function buildCatNomorBarangMatrix(options: {
     const rangesByItem: Record<string, string> = {};
     const countsByItem: Record<string, number> = {};
     for (const [code, slotNums] of slotsByItem.entries()) {
-      rangesByItem[code] = formatSlotNumberRanges(slotNums);
+      rangesByItem[code] = formatSlotNumberRanges(slotNums, emptySlotNumbers);
       countsByItem[code] = slotNums.length;
     }
 

@@ -24,6 +24,7 @@ import {
   Pencil,
   PenTool,
   Plus,
+  RefreshCw,
   Send,
   Share2,
   ShieldCheck,
@@ -101,6 +102,15 @@ import {
 import { openCekBansosWithNik } from '../services/cekBansos';
 import { isNativeAppPlatform, useIsDesktopWeb } from '../utils/platform';
 import { useOfflineStatus } from '../contexts/OfflineContext';
+import {
+  extractPendingJobId,
+  isLocalPendingDocument,
+  PhotoCaptureSource,
+  PhotoDocCategory,
+  PhotoUploadJobSummary,
+  retryPhotoUploadJob,
+  subscribePhotoUploadJobs,
+} from '../utils/photoUploadManager';
 
 interface KpmDetailViewProps {
   record: KpmRecord;
@@ -149,6 +159,22 @@ interface KpmDetailViewProps {
     nextDocuments: KpmDocuments,
     auditChange: { field: string; before: string; after: string }
   ) => Promise<void> | void;
+  onEnqueuePhoto?: (
+    kpmId: string,
+    params: {
+      file: File;
+      source: PhotoCaptureSource;
+      category: PhotoDocCategory;
+      label: string;
+      existingDoc?: KpmDocumentFile;
+    }
+  ) => Promise<void>;
+  onCancelPendingPhoto?: (
+    kpmId: string,
+    jobId: string,
+    category: PhotoDocCategory,
+    label: string
+  ) => Promise<void>;
   reportTemplate?: ReportTemplateConfig;
   schedules?: ScheduleEventItem[];
   couponConfig?: CouponPrintConfig;
@@ -236,6 +262,8 @@ export function KpmDetailView({
   onOpenFullHistory,
   onPreviewDocument,
   onUpdateKpmDocuments,
+  onEnqueuePhoto,
+  onCancelPendingPhoto,
   reportTemplate,
   schedules = [],
   couponConfig,
@@ -291,20 +319,29 @@ export function KpmDetailView({
   );
   const [docBusySlot, setDocBusySlot] = useState<string | null>(null);
   const [docError, setDocError] = useState<string | null>(null);
+  const [vaultJobs, setVaultJobs] = useState<PhotoUploadJobSummary[]>([]);
   const [pendingUploadTarget, setPendingUploadTarget] = useState<{
-    category: 'ktp' | 'kk' | 'penerima' | 'survey' | 'rumah' | 'lainnya';
+    category: PhotoDocCategory;
     label: string;
+    source: PhotoCaptureSource;
     existingDoc?: KpmDocumentFile;
   } | null>(null);
   const [pendingDeleteDoc, setPendingDeleteDoc] = useState<{
-    category: 'ktp' | 'kk' | 'penerima' | 'survey' | 'rumah' | 'lainnya';
+    category: PhotoDocCategory;
     label: string;
     doc: KpmDocumentFile;
   } | null>(null);
   const detailFileInputRef = useRef<HTMLInputElement>(null);
+  const detailCameraInputRef = useRef<HTMLInputElement>(null);
   const heroCardRef = useRef<HTMLElement | null>(null);
   const [isHeroScrolledOut, setIsHeroScrolledOut] = useState(false);
   const [cekBansosStatus, setCekBansosStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    return subscribePhotoUploadJobs((jobs) => {
+      setVaultJobs(jobs.filter((j) => j.kpmId === record.id));
+    });
+  }, [record.id]);
 
   useEffect(() => {
     if (isDesktopWeb) {
@@ -599,14 +636,19 @@ export function KpmDetailView({
   };
 
   const handleTriggerSingleOrMultiUpload = (
-    category: 'ktp' | 'kk' | 'penerima' | 'survey' | 'rumah' | 'lainnya',
+    category: PhotoDocCategory,
     label: string,
+    source: PhotoCaptureSource,
     existingDoc?: KpmDocumentFile
   ) => {
-    if (isProposalLocked || !canUpdate || isOffline || docBusySlot) return;
+    if (isProposalLocked || !canUpdate) return;
     setDocError(null);
-    setPendingUploadTarget({ category, label, existingDoc });
-    detailFileInputRef.current?.click();
+    setPendingUploadTarget({ category, label, source, existingDoc });
+    if (source === 'camera') {
+      detailCameraInputRef.current?.click();
+    } else {
+      detailFileInputRef.current?.click();
+    }
   };
 
   const handleDetailDocFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -614,9 +656,27 @@ export function KpmDetailView({
     e.target.value = '';
     const target = pendingUploadTarget;
     setPendingUploadTarget(null);
-    if (!file || !target || !onUpdateKpmDocuments) return;
+    if (!file || !target) return;
 
     setDocError(null);
+    if (onEnqueuePhoto) {
+      try {
+        await onEnqueuePhoto(record.id, {
+          file,
+          source: target.source,
+          category: target.category,
+          label: target.label,
+          existingDoc: target.existingDoc,
+        });
+      } catch (err) {
+        setDocError(
+          err instanceof Error ? err.message : 'Gagal menyimpan foto ke perangkat.'
+        );
+      }
+      return;
+    }
+
+    if (!onUpdateKpmDocuments) return;
     setDocBusySlot(target.existingDoc ? `${target.category}:${target.existingDoc.id}` : target.category);
     try {
       const uploaded = await uploadImageDocumentToDrive(file, target.existingDoc);
@@ -654,11 +714,24 @@ export function KpmDetailView({
   };
 
   const handleConfirmDeleteDocument = async () => {
-    if (!pendingDeleteDoc || !onUpdateKpmDocuments || docBusySlot || isOffline) return;
+    if (!pendingDeleteDoc || docBusySlot) return;
     const { category, label, doc } = pendingDeleteDoc;
+    const isPendingDoc = isLocalPendingDocument(doc);
+    if (!isPendingDoc && isOffline) return;
+
     setDocError(null);
     setDocBusySlot(`${category}:${doc.id}`);
     try {
+      if (isPendingDoc && onCancelPendingPhoto) {
+        const jobId = extractPendingJobId(doc);
+        if (jobId) {
+          await onCancelPendingPhoto(record.id, jobId, category, label);
+        }
+        setPendingDeleteDoc(null);
+        return;
+      }
+
+      if (!onUpdateKpmDocuments) return;
       await removeDocumentFromDrive(doc);
       const nextDocs: KpmDocuments = {
         ...record.documents,
@@ -1746,17 +1819,29 @@ export function KpmDetailView({
     <>
         {/* Dokumentasi */}
         <section className="rounded-2xl border border-slate-200 bg-white p-4">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h3 className="text-sm font-bold text-slate-900">Dokumentasi</h3>
               <p className="text-[11px] text-slate-500">
-                Disimpan langsung di Google Drive · Klik foto untuk pratinjau
+                Foto diamankan di perangkat &amp; diunggah paralel · Bebas pindah KPM kapan saja
               </p>
             </div>
-            {docBusySlot && (
-              <span className="inline-flex items-center gap-1.5 rounded-lg bg-teal-50 px-2.5 py-1 text-[11px] font-semibold text-teal-800">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                <span>Memproses Drive...</span>
+            {(docBusySlot || vaultJobs.length > 0) && (
+              <span
+                className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-semibold ${
+                  isOffline
+                    ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                    : 'bg-teal-50 text-teal-800 border border-teal-200'
+                }`}
+              >
+                {!isOffline && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                <span>
+                  {docBusySlot
+                    ? 'Menghapus...'
+                    : isOffline
+                      ? `${vaultJobs.length} Foto Tersimpan Lokal`
+                      : `Mengunggah ${vaultJobs.length} Foto...`}
+                </span>
               </span>
             )}
           </div>
@@ -1765,6 +1850,14 @@ export function KpmDetailView({
             ref={detailFileInputRef}
             type="file"
             accept="image/*"
+            onChange={handleDetailDocFileChange}
+            className="sr-only"
+          />
+          <input
+            ref={detailCameraInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
             onChange={handleDetailDocFileChange}
             className="sr-only"
           />
@@ -1792,18 +1885,27 @@ export function KpmDetailView({
               const Icon = item.icon;
               const isSlotBusy =
                 docBusySlot === item.key || (doc && docBusySlot === `${item.key}:${doc.id}`);
-              const editableDocs = Boolean(!isProposalLocked && canUpdate && onUpdateKpmDocuments);
+              const isPendingDoc = isLocalPendingDocument(doc);
+              const pendingJobId = isPendingDoc ? extractPendingJobId(doc) : '';
+              const pendingJob = pendingJobId
+                ? vaultJobs.find((j) => j.id === pendingJobId)
+                : undefined;
+              const editableDocs = Boolean(
+                !isProposalLocked && canUpdate && (onEnqueuePhoto || onUpdateKpmDocuments)
+              );
 
               return (
                 <div
                   key={item.key}
-                  className="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-slate-50"
+                  className={`flex flex-col overflow-hidden rounded-xl border bg-slate-50 ${
+                    isPendingDoc ? 'border-amber-300' : 'border-slate-200'
+                  }`}
                 >
                   {doc ? (
                     <>
                       <button
                         type="button"
-                        disabled={Boolean(docBusySlot)}
+                        disabled={Boolean(isSlotBusy)}
                         onClick={() => onPreviewDocument(doc, item.label)}
                         className="relative block aspect-[1.45/1] w-full overflow-hidden bg-slate-200 text-left"
                       >
@@ -1812,6 +1914,24 @@ export function KpmDetailView({
                           alt={item.label}
                           className="h-full w-full object-cover"
                         />
+                        {isPendingDoc && !isSlotBusy && (
+                          <span className="pointer-events-none absolute top-1.5 left-1.5 inline-flex items-center gap-1 rounded-md bg-slate-900/85 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                            {pendingJob?.status === 'uploading' ? (
+                              <Loader2 className="h-2.5 w-2.5 animate-spin text-teal-300" />
+                            ) : (
+                              <Clock className="h-2.5 w-2.5 text-amber-300" />
+                            )}
+                            <span>
+                              {pendingJob?.status === 'uploading'
+                                ? 'Mengunggah...'
+                                : isOffline
+                                  ? 'Tersimpan Lokal'
+                                  : pendingJob?.status === 'failed'
+                                    ? 'Gagal · Ulangi'
+                                    : 'Antrean Drive'}
+                            </span>
+                          </span>
+                        )}
                         {isSlotBusy && (
                           <div className="absolute inset-0 flex items-center justify-center bg-slate-950/60 text-white">
                             <Loader2 className="h-5 w-5 animate-spin" />
@@ -1821,22 +1941,51 @@ export function KpmDetailView({
                           {item.label}
                         </span>
                       </button>
+                      {isPendingDoc && pendingJob && (
+                        <div className="border-t border-amber-100 bg-amber-50/70 px-2 py-1 text-[10px] leading-tight text-amber-900">
+                          {pendingJob.lastError || pendingJob.galleryStatusNote}
+                        </div>
+                      )}
                       {editableDocs && (
-                        <div className="mt-auto flex items-center gap-1 border-t border-slate-200 bg-white p-1.5">
+                        <div className="mt-auto flex flex-wrap items-center gap-1 border-t border-slate-200 bg-white p-1.5">
                           <button
                             type="button"
-                            disabled={Boolean(docBusySlot) || isOffline}
                             onClick={() =>
-                              handleTriggerSingleOrMultiUpload(item.key, item.label, doc)
+                              handleTriggerSingleOrMultiUpload(item.key, item.label, 'camera', doc)
                             }
-                            className="inline-flex min-h-[30px] flex-1 items-center justify-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            className="inline-flex min-h-[30px] flex-1 items-center justify-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2 text-[11px] font-semibold text-teal-800 hover:bg-teal-100"
+                            title="Ambil foto ulang pakai kamera"
                           >
-                            <Upload className="h-3 w-3" />
-                            <span>Ganti</span>
+                            <Camera className="h-3 w-3 shrink-0" />
+                            <span>Kamera</span>
                           </button>
                           <button
                             type="button"
-                            disabled={Boolean(docBusySlot) || isOffline}
+                            onClick={() =>
+                              handleTriggerSingleOrMultiUpload(item.key, item.label, 'file', doc)
+                            }
+                            className="inline-flex min-h-[30px] flex-1 items-center justify-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 text-[11px] font-semibold text-slate-700 hover:bg-slate-100"
+                            title="Pilih foto dari galeri/file"
+                          >
+                            <Upload className="h-3 w-3 shrink-0" />
+                            <span>Ganti</span>
+                          </button>
+                          {isPendingDoc &&
+                            pendingJob &&
+                            pendingJob.status !== 'uploading' &&
+                            !isOffline && (
+                              <button
+                                type="button"
+                                onClick={() => void retryPhotoUploadJob(pendingJob.id)}
+                                className="inline-flex min-h-[30px] items-center justify-center gap-1 rounded-lg border border-teal-200 bg-white px-2 text-[11px] font-semibold text-teal-800 hover:bg-teal-50"
+                                title="Kirim ulang ke Google Drive"
+                              >
+                                <RefreshCw className="h-3 w-3" />
+                              </button>
+                            )}
+                          <button
+                            type="button"
+                            disabled={Boolean(docBusySlot) || (!isPendingDoc && isOffline)}
                             onClick={() =>
                               setPendingDeleteDoc({
                                 category: item.key,
@@ -1844,12 +1993,17 @@ export function KpmDetailView({
                                 doc,
                               })
                             }
-                            aria-label={`Hapus Foto ${item.label}`}
-                            title="Hapus Foto"
-                            className="inline-flex min-h-[30px] items-center justify-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            aria-label={isPendingDoc ? `Batalkan ${item.label}` : `Hapus Foto ${item.label}`}
+                            title={
+                              isPendingDoc
+                                ? 'Batalkan antrean unggahan'
+                                : isOffline
+                                  ? 'Hapus foto Drive butuh sinyal'
+                                  : 'Hapus Foto'
+                            }
+                            className="inline-flex min-h-[30px] items-center justify-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             <Trash2 className="h-3 w-3" />
-                            <span>Hapus</span>
                           </button>
                         </div>
                       )}
@@ -1862,18 +2016,31 @@ export function KpmDetailView({
                         <Icon className="h-5 w-5" />
                       )}
                       <p className="mt-1.5 text-[11px] font-medium text-slate-500">
-                        {isSlotBusy ? 'Mengunggah...' : item.label}
+                        {isSlotBusy ? 'Memproses...' : item.label}
                       </p>
                       {editableDocs && !isSlotBusy && (
-                        <button
-                          type="button"
-                          disabled={Boolean(docBusySlot) || isOffline}
-                          onClick={() => handleTriggerSingleOrMultiUpload(item.key, item.label)}
-                          className="mt-2 inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-[11px] font-semibold text-teal-800 hover:bg-teal-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-                        >
-                          <Camera className="h-3 w-3" />
-                          <span>Unggah</span>
-                        </button>
+                        <div className="mt-2 flex w-full items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleTriggerSingleOrMultiUpload(item.key, item.label, 'camera')
+                            }
+                            className="inline-flex min-h-[32px] flex-1 items-center justify-center gap-1 rounded-lg bg-teal-700 px-2 py-1 text-[11px] font-semibold text-white hover:bg-teal-800"
+                          >
+                            <Camera className="h-3 w-3 shrink-0" />
+                            <span>Kamera</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleTriggerSingleOrMultiUpload(item.key, item.label, 'file')
+                            }
+                            className="inline-flex min-h-[32px] flex-1 items-center justify-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100"
+                          >
+                            <Upload className="h-3 w-3 shrink-0" />
+                            <span>Galeri</span>
+                          </button>
+                        </div>
                       )}
                     </div>
                   )}
@@ -1883,11 +2050,20 @@ export function KpmDetailView({
 
             {lainnyaDocs.map((doc, idx) => {
               const isBusy = docBusySlot === `lainnya:${doc.id}`;
-              const editableDocs = Boolean(!isProposalLocked && canUpdate && onUpdateKpmDocuments);
+              const isPendingDoc = isLocalPendingDocument(doc);
+              const pendingJobId = isPendingDoc ? extractPendingJobId(doc) : '';
+              const pendingJob = pendingJobId
+                ? vaultJobs.find((j) => j.id === pendingJobId)
+                : undefined;
+              const editableDocs = Boolean(
+                !isProposalLocked && canUpdate && (onEnqueuePhoto || onUpdateKpmDocuments)
+              );
               return (
                 <div
                   key={doc.id}
-                  className="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-slate-50"
+                  className={`flex flex-col overflow-hidden rounded-xl border bg-slate-50 ${
+                    isPendingDoc ? 'border-amber-300' : 'border-slate-200'
+                  }`}
                 >
                   <button
                     type="button"
@@ -1899,6 +2075,16 @@ export function KpmDetailView({
                       alt={`Foto Lainnya ${idx + 1}`}
                       className="h-full w-full object-cover"
                     />
+                    {isPendingDoc && !isBusy && (
+                      <span className="pointer-events-none absolute top-1.5 left-1.5 inline-flex items-center gap-1 rounded-md bg-slate-900/85 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                        {pendingJob?.status === 'uploading' ? (
+                          <Loader2 className="h-2.5 w-2.5 animate-spin text-teal-300" />
+                        ) : (
+                          <Clock className="h-2.5 w-2.5 text-amber-300" />
+                        )}
+                        <span>{isOffline ? 'Tersimpan Lokal' : 'Antrean'}</span>
+                      </span>
+                    )}
                     {isBusy && (
                       <div className="absolute inset-0 flex items-center justify-center bg-slate-950/60 text-white">
                         <Loader2 className="h-5 w-5 animate-spin" />
@@ -1909,10 +2095,20 @@ export function KpmDetailView({
                     </span>
                   </button>
                   {editableDocs && (
-                    <div className="mt-auto flex items-center justify-end border-t border-slate-200 bg-white p-1.5">
+                    <div className="mt-auto flex items-center gap-1 border-t border-slate-200 bg-white p-1.5">
+                      {isPendingDoc && pendingJob && pendingJob.status !== 'uploading' && !isOffline && (
+                        <button
+                          type="button"
+                          onClick={() => void retryPhotoUploadJob(pendingJob.id)}
+                          className="inline-flex min-h-[28px] items-center justify-center rounded-lg border border-teal-200 bg-teal-50 px-2 text-[11px] font-semibold text-teal-800 hover:bg-teal-100"
+                          title="Kirim ulang ke Drive"
+                        >
+                          <RefreshCw className="h-3 w-3" />
+                        </button>
+                      )}
                       <button
                         type="button"
-                        disabled={Boolean(docBusySlot) || isOffline}
+                        disabled={Boolean(docBusySlot) || (!isPendingDoc && isOffline)}
                         onClick={() =>
                           setPendingDeleteDoc({
                             category: 'lainnya',
@@ -1920,10 +2116,10 @@ export function KpmDetailView({
                             doc,
                           })
                         }
-                        className="inline-flex min-h-[28px] w-full items-center justify-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="inline-flex min-h-[28px] flex-1 items-center justify-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         <Trash2 className="h-3 w-3" />
-                        <span>Hapus Foto</span>
+                        <span>{isPendingDoc ? 'Batalkan' : 'Hapus Foto'}</span>
                       </button>
                     </div>
                   )}
@@ -1933,11 +2129,20 @@ export function KpmDetailView({
 
             {rumahDocs.map((doc, idx) => {
               const isBusy = docBusySlot === `rumah:${doc.id}`;
-              const editableDocs = Boolean(!isProposalLocked && canUpdate && onUpdateKpmDocuments);
+              const isPendingDoc = isLocalPendingDocument(doc);
+              const pendingJobId = isPendingDoc ? extractPendingJobId(doc) : '';
+              const pendingJob = pendingJobId
+                ? vaultJobs.find((j) => j.id === pendingJobId)
+                : undefined;
+              const editableDocs = Boolean(
+                !isProposalLocked && canUpdate && (onEnqueuePhoto || onUpdateKpmDocuments)
+              );
               return (
                 <div
                   key={doc.id}
-                  className="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-slate-50"
+                  className={`flex flex-col overflow-hidden rounded-xl border bg-slate-50 ${
+                    isPendingDoc ? 'border-amber-300' : 'border-slate-200'
+                  }`}
                 >
                   <button
                     type="button"
@@ -1949,6 +2154,16 @@ export function KpmDetailView({
                       alt={`Foto Rumah ${idx + 1}`}
                       className="h-full w-full object-cover"
                     />
+                    {isPendingDoc && !isBusy && (
+                      <span className="pointer-events-none absolute top-1.5 left-1.5 inline-flex items-center gap-1 rounded-md bg-slate-900/85 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                        {pendingJob?.status === 'uploading' ? (
+                          <Loader2 className="h-2.5 w-2.5 animate-spin text-teal-300" />
+                        ) : (
+                          <Clock className="h-2.5 w-2.5 text-amber-300" />
+                        )}
+                        <span>{isOffline ? 'Tersimpan Lokal' : 'Antrean'}</span>
+                      </span>
+                    )}
                     {isBusy && (
                       <div className="absolute inset-0 flex items-center justify-center bg-slate-950/60 text-white">
                         <Loader2 className="h-5 w-5 animate-spin" />
@@ -1959,10 +2174,20 @@ export function KpmDetailView({
                     </span>
                   </button>
                   {editableDocs && (
-                    <div className="mt-auto flex items-center justify-end border-t border-slate-200 bg-white p-1.5">
+                    <div className="mt-auto flex items-center gap-1 border-t border-slate-200 bg-white p-1.5">
+                      {isPendingDoc && pendingJob && pendingJob.status !== 'uploading' && !isOffline && (
+                        <button
+                          type="button"
+                          onClick={() => void retryPhotoUploadJob(pendingJob.id)}
+                          className="inline-flex min-h-[28px] items-center justify-center rounded-lg border border-teal-200 bg-teal-50 px-2 text-[11px] font-semibold text-teal-800 hover:bg-teal-100"
+                          title="Kirim ulang ke Drive"
+                        >
+                          <RefreshCw className="h-3 w-3" />
+                        </button>
+                      )}
                       <button
                         type="button"
-                        disabled={Boolean(docBusySlot) || isOffline}
+                        disabled={Boolean(docBusySlot) || (!isPendingDoc && isOffline)}
                         onClick={() =>
                           setPendingDeleteDoc({
                             category: 'rumah',
@@ -1970,10 +2195,10 @@ export function KpmDetailView({
                             doc,
                           })
                         }
-                        className="inline-flex min-h-[28px] w-full items-center justify-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="inline-flex min-h-[28px] flex-1 items-center justify-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         <Trash2 className="h-3 w-3" />
-                        <span>Hapus Foto</span>
+                        <span>{isPendingDoc ? 'Batalkan' : 'Hapus Foto'}</span>
                       </button>
                     </div>
                   )}
@@ -1982,29 +2207,57 @@ export function KpmDetailView({
             })}
           </div>
 
-          {!isProposalLocked && canUpdate && onUpdateKpmDocuments && (
-            <div className="mt-3 flex flex-wrap gap-2">
+          {!isProposalLocked && canUpdate && (onEnqueuePhoto || onUpdateKpmDocuments) && (
+            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
               {lainnyaDocs.length < 5 && (
-                <button
-                  type="button"
-                  disabled={Boolean(docBusySlot) || isOffline}
-                  onClick={() => handleTriggerSingleOrMultiUpload('lainnya', 'Foto Lainnya')}
-                  className="inline-flex min-h-[36px] flex-1 items-center justify-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <Plus className="h-3.5 w-3.5 text-teal-700" />
-                  <span>Tambah Foto Lainnya ({lainnyaDocs.length}/5)</span>
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleTriggerSingleOrMultiUpload('lainnya', 'Foto Lainnya', 'camera')
+                    }
+                    className="inline-flex min-h-[36px] flex-1 items-center justify-center gap-1 rounded-xl border border-teal-200 bg-teal-50 px-2.5 text-xs font-semibold text-teal-800 hover:bg-teal-100"
+                  >
+                    <Camera className="h-3.5 w-3.5 shrink-0" />
+                    <span>Kamera Lainnya ({lainnyaDocs.length}/5)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleTriggerSingleOrMultiUpload('lainnya', 'Foto Lainnya', 'file')
+                    }
+                    className="inline-flex min-h-[36px] items-center justify-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                    title="Pilih dari Galeri"
+                  >
+                    <Upload className="h-3.5 w-3.5 text-slate-600" />
+                    <span>Galeri</span>
+                  </button>
+                </div>
               )}
               {rumahDocs.length < 3 && (
-                <button
-                  type="button"
-                  disabled={Boolean(docBusySlot) || isOffline}
-                  onClick={() => handleTriggerSingleOrMultiUpload('rumah', 'Foto Rumah')}
-                  className="inline-flex min-h-[36px] flex-1 items-center justify-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <Plus className="h-3.5 w-3.5 text-teal-700" />
-                  <span>Tambah Foto Rumah ({rumahDocs.length}/3)</span>
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleTriggerSingleOrMultiUpload('rumah', 'Foto Rumah', 'camera')
+                    }
+                    className="inline-flex min-h-[36px] flex-1 items-center justify-center gap-1 rounded-xl border border-teal-200 bg-teal-50 px-2.5 text-xs font-semibold text-teal-800 hover:bg-teal-100"
+                  >
+                    <Camera className="h-3.5 w-3.5 shrink-0" />
+                    <span>Kamera Rumah ({rumahDocs.length}/3)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleTriggerSingleOrMultiUpload('rumah', 'Foto Rumah', 'file')
+                    }
+                    className="inline-flex min-h-[36px] items-center justify-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                    title="Pilih dari Galeri"
+                  >
+                    <Upload className="h-3.5 w-3.5 text-slate-600" />
+                    <span>Galeri</span>
+                  </button>
+                </div>
               )}
             </div>
           )}
@@ -2422,8 +2675,8 @@ export function KpmDetailView({
         </div>
       )}
 
-      {/* Confirmation Modal for Deleting KPM Photo from Drive + Supabase */}
-      {pendingDeleteDoc && !isOffline && (
+      {/* Confirmation Modal for Deleting KPM Photo from Drive + Supabase (or Canceling Local Queue) */}
+      {pendingDeleteDoc && (isLocalPendingDocument(pendingDeleteDoc.doc) || !isOffline) && (
         <div
           className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-4 backdrop-blur-xs sm:items-center"
           onClick={() => !docBusySlot && setPendingDeleteDoc(null)}
@@ -2440,10 +2693,23 @@ export function KpmDetailView({
                 <Trash2 className="h-5 w-5" />
               </div>
               <div>
-                <h3 className="text-sm font-bold text-slate-900">Hapus Foto?</h3>
+                <h3 className="text-sm font-bold text-slate-900">
+                  {isLocalPendingDocument(pendingDeleteDoc.doc)
+                    ? 'Batalkan Antrean Foto?'
+                    : 'Hapus Foto?'}
+                </h3>
                 <p className="mt-1 text-xs leading-relaxed text-slate-600">
-                  Foto <strong>{pendingDeleteDoc.label}</strong> akan dipindahkan ke Trash Google
-                  Drive dan kolom foto pada database Supabase akan dikosongkan.
+                  {isLocalPendingDocument(pendingDeleteDoc.doc) ? (
+                    <>
+                      Foto <strong>{pendingDeleteDoc.label}</strong> yang belum terunggah akan
+                      dibatalkan dari antrean dan dihapus dari perangkat.
+                    </>
+                  ) : (
+                    <>
+                      Foto <strong>{pendingDeleteDoc.label}</strong> akan dipindahkan ke Trash
+                      Google Drive dan kolom foto pada database Supabase akan dikosongkan.
+                    </>
+                  )}
                 </p>
               </div>
             </div>
@@ -2458,7 +2724,10 @@ export function KpmDetailView({
               </button>
               <button
                 type="button"
-                disabled={Boolean(docBusySlot) || isOffline}
+                disabled={
+                  Boolean(docBusySlot) ||
+                  (!isLocalPendingDocument(pendingDeleteDoc.doc) && isOffline)
+                }
                 onClick={() => void handleConfirmDeleteDocument()}
                 className="inline-flex min-h-[42px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-rose-600 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
               >
@@ -2467,7 +2736,13 @@ export function KpmDetailView({
                 ) : (
                   <Trash2 className="h-3.5 w-3.5" />
                 )}
-                <span>{docBusySlot ? 'Menghapus...' : 'Ya, Hapus Foto'}</span>
+                <span>
+                  {docBusySlot
+                    ? 'Memproses...'
+                    : isLocalPendingDocument(pendingDeleteDoc.doc)
+                      ? 'Ya, Batalkan'
+                      : 'Ya, Hapus Foto'}
+                </span>
               </button>
             </div>
           </div>
