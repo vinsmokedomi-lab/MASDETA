@@ -27,6 +27,7 @@ import {
   PhotoDocCategory,
   PhotoUploadJobSummary,
   retryPhotoUploadJob,
+  subscribePhotoUploadCancelled,
   subscribePhotoUploadJobs,
 } from '../utils/photoUploadManager';
 import { useOfflineStatus } from '../contexts/OfflineContext';
@@ -71,11 +72,24 @@ export function MultiDocumentUploadCard({
   const [localError, setLocalError] = useState<string | null>(null);
   const [vaultJobs, setVaultJobs] = useState<PhotoUploadJobSummary[]>([]);
 
+  const valuesRef = useRef<KpmDocumentFile[]>(values);
+  valuesRef.current = values;
+
   useEffect(() => {
     return subscribePhotoUploadJobs((jobs) => {
       setVaultJobs(jobs);
     });
   }, []);
+
+  useEffect(() => {
+    return subscribePhotoUploadCancelled((cancelledJob) => {
+      if (cancelledJob.category !== category) return;
+      const cur = valuesRef.current;
+      if (cur.some((item) => extractPendingJobId(item) === cancelledJob.id)) {
+        onChange(cur.filter((item) => extractPendingJobId(item) !== cancelledJob.id));
+      }
+    });
+  }, [category, onChange]);
 
   const remainingSlots = Math.max(0, maxFiles - values.length);
   const isAtLimit = remainingSlots === 0;
@@ -83,7 +97,8 @@ export function MultiDocumentUploadCard({
   const handleFiles = async (fileList: FileList | null, source: PhotoCaptureSource = 'file') => {
     if (!fileList || fileList.length === 0 || isProcessing || effectiveDisabled) return;
 
-    if (values.length >= maxFiles) {
+    const currentSnapshot = valuesRef.current;
+    if (currentSnapshot.length >= maxFiles) {
       setLocalError(
         `Maksimal ${maxFiles} foto sudah tercapai. Hapus salah satu foto terlebih dahulu.`
       );
@@ -95,7 +110,7 @@ export function MultiDocumentUploadCard({
 
     try {
       const incoming = Array.from(fileList);
-      const allowedCount = maxFiles - values.length;
+      const allowedCount = maxFiles - currentSnapshot.length;
       const filesToProcess = incoming.slice(0, allowedCount);
       const skippedDueToLimit = incoming.length > allowedCount;
 
@@ -120,12 +135,18 @@ export function MultiDocumentUploadCard({
       }
 
       if (processedList.length > 0) {
-        onChange([...values, ...processedList]);
+        const latestValues = valuesRef.current;
+        const existingIds = new Set(latestValues.map((v) => v.id));
+        const merged = [
+          ...latestValues,
+          ...processedList.filter((p) => !existingIds.has(p.id)),
+        ].slice(0, maxFiles);
+        onChange(merged);
       }
 
       if (failedNames.length > 0) {
         setLocalError(
-          `Sebagian file gagal diproses (${failedNames.join(', ')}). Pastikan format JPG/PNG/WebP dan ukuran maks 15 MB.`
+          `Sebagian file gagal diproses (${failedNames.join(', ')}). Pastikan format JPG/PNG/WebP/HEIC dan ukuran maks 15 MB.`
         );
       } else if (skippedDueToLimit) {
         setLocalError(

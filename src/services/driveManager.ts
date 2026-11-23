@@ -77,7 +77,28 @@ export function buildDriveDownloadUrl(urlOrId?: string | null): string {
   return (urlOrId || '').trim();
 }
 
-export function readFileAsPureBase64(file: File): Promise<string> {
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  const chunkSize = 0x8000;
+  const parts: string[] = [];
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    parts.push(String.fromCharCode(...chunk));
+  }
+  return btoa(parts.join(''));
+}
+
+export async function readFileAsPureBase64(file: File): Promise<string> {
+  if (typeof file.arrayBuffer === 'function') {
+    try {
+      const buf = await file.arrayBuffer();
+      if (buf && buf.byteLength > 0) {
+        return uint8ArrayToBase64(new Uint8Array(buf));
+      }
+    } catch {
+      // Fallback ke FileReader di bawah
+    }
+  }
+
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
@@ -98,10 +119,27 @@ export function readFileAsPureBase64(file: File): Promise<string> {
   });
 }
 
+function inferUploadMimeType(file: File): string {
+  const raw = (file.type || '').trim();
+  if (raw) return raw;
+  const lower = (file.name || '').trim().toLowerCase();
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  if (lower.endsWith('.heic')) return 'image/heic';
+  if (lower.endsWith('.heif')) return 'image/heif';
+  if (lower.endsWith('.pdf')) return 'application/pdf';
+  return 'application/octet-stream';
+}
+
 export function measureImageFileDimensions(
   file: File
 ): Promise<{ width: number; height: number }> {
-  if (!file.type.startsWith('image/')) {
+  const looksLikeImage =
+    file.type.startsWith('image/') ||
+    /\.(jpe?g|png|webp|gif|bmp|heic|heif|avif)$/i.test(file.name || '');
+  if (!looksLikeImage) {
     return Promise.resolve({ width: 0, height: 0 });
   }
   return new Promise((resolve) => {
@@ -266,15 +304,23 @@ export async function uploadMediaToDrive(file: File): Promise<DriveMediaResult> 
     apiKey,
     action: 'upload',
     fileName: file.name,
-    mimeType: file.type || 'application/octet-stream',
+    mimeType: inferUploadMimeType(file),
     base64Data,
   });
 
   return normalizeDriveMediaResponse(result);
 }
 
+function isTransientGasNetworkError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return /timeout|batas waktu|koneksi|failed to fetch|networkerror|load failed|http 5\d\d|\(5\d\d\)/i.test(
+    err.message
+  );
+}
+
 /**
  * Ganti media yang sudah ada di Google Drive (upload baru + pindahkan file lama ke Trash).
+ * Jika file lama sudah terhapus/tidak ditemukan di Drive, otomatis fallback unggah sebagai file baru.
  */
 export async function replaceMediaInDrive(
   newFile: File,
@@ -288,17 +334,32 @@ export async function replaceMediaInDrive(
 
   const { apiKey } = getGasConfig();
   const base64Data = await readFileAsPureBase64(newFile);
+  const mimeType = inferUploadMimeType(newFile);
 
-  const result = await postToGasEndpoint<Record<string, unknown>>({
-    apiKey,
-    action: 'replace',
-    fileName: newFile.name,
-    mimeType: newFile.type || 'application/octet-stream',
-    base64Data,
-    oldFileUrl: cleanOld,
-  });
+  try {
+    const result = await postToGasEndpoint<Record<string, unknown>>({
+      apiKey,
+      action: 'replace',
+      fileName: newFile.name,
+      mimeType,
+      base64Data,
+      oldFileUrl: cleanOld,
+    });
 
-  return normalizeDriveMediaResponse(result);
+    return normalizeDriveMediaResponse(result);
+  } catch (err) {
+    if (isTransientGasNetworkError(err)) {
+      throw err;
+    }
+    const fallbackResult = await postToGasEndpoint<Record<string, unknown>>({
+      apiKey,
+      action: 'upload',
+      fileName: newFile.name,
+      mimeType,
+      base64Data,
+    });
+    return normalizeDriveMediaResponse(fallbackResult);
+  }
 }
 
 /**

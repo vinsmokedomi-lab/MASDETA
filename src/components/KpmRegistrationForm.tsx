@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, FormEvent } from 'react';
+import { useState, useEffect, useMemo, useRef, FormEvent } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
@@ -74,6 +74,7 @@ import { useIsDesktopWeb } from '../utils/platform';
 import { useOfflineStatus } from '../contexts/OfflineContext';
 import {
   extractPendingJobId,
+  subscribePhotoUploadCancelled,
   subscribePhotoUploadCompleted,
 } from '../utils/photoUploadManager';
 
@@ -193,6 +194,8 @@ export function KpmRegistrationForm({
   };
 
   const [values, setValues] = useState<KpmFormValues>(buildInitialFormValues);
+  const valuesRef = useRef<KpmFormValues>(values);
+  valuesRef.current = values;
   const [formDraftId, setFormDraftId] = useState<string>(
     () => `fdraft-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
   );
@@ -433,6 +436,59 @@ export function KpmRegistrationForm({
             documents: {
               ...docs,
               lainnya: docs.lainnya.map((d) => (extractPendingJobId(d) === job.id ? uploadedDoc : d)),
+            },
+          };
+        }
+        return prev;
+      });
+    });
+  }, [editingRecord?.id, formDraftId]);
+
+  useEffect(() => {
+    const ownerKpmId = editingRecord?.id;
+    return subscribePhotoUploadCancelled((cancelledJob) => {
+      const matchesOwner =
+        (ownerKpmId && cancelledJob.kpmId === ownerKpmId) ||
+        (!ownerKpmId && cancelledJob.formDraftId === formDraftId);
+      if (!matchesOwner) return;
+
+      setValues((prev) => {
+        const docs = prev.documents;
+        if (
+          cancelledJob.category === 'ktp' ||
+          cancelledJob.category === 'kk' ||
+          cancelledJob.category === 'penerima' ||
+          cancelledJob.category === 'survey'
+        ) {
+          const cur = docs[cancelledJob.category];
+          if (cur && extractPendingJobId(cur) === cancelledJob.id) {
+            return {
+              ...prev,
+              documents: {
+                ...docs,
+                [cancelledJob.category]: cancelledJob.existingDoc,
+              },
+            };
+          }
+          return prev;
+        }
+        if (cancelledJob.category === 'rumah') {
+          if (!docs.rumah.some((d) => extractPendingJobId(d) === cancelledJob.id)) return prev;
+          return {
+            ...prev,
+            documents: {
+              ...docs,
+              rumah: docs.rumah.filter((d) => extractPendingJobId(d) !== cancelledJob.id),
+            },
+          };
+        }
+        if (cancelledJob.category === 'lainnya') {
+          if (!docs.lainnya.some((d) => extractPendingJobId(d) === cancelledJob.id)) return prev;
+          return {
+            ...prev,
+            documents: {
+              ...docs,
+              lainnya: docs.lainnya.filter((d) => extractPendingJobId(d) !== cancelledJob.id),
             },
           };
         }
@@ -799,19 +855,20 @@ export function KpmRegistrationForm({
   };
 
   const updateSingleDocument = (key: SingleDocumentKey, file?: KpmDocumentFile) => {
-    setValues((prev) => {
-      const nextDocuments: KpmDocuments = {
+    const nextDocuments: KpmDocuments = {
+      ...valuesRef.current.documents,
+      [key]: file,
+    };
+    setValues((prev) => ({
+      ...prev,
+      documents: {
         ...prev.documents,
         [key]: file,
-      };
-      if (editingRecord && onQuickSyncKpmDocuments) {
-        void onQuickSyncKpmDocuments(editingRecord.id, nextDocuments);
-      }
-      return {
-        ...prev,
-        documents: nextDocuments,
-      };
-    });
+      },
+    }));
+    if (editingRecord && onQuickSyncKpmDocuments) {
+      void onQuickSyncKpmDocuments(editingRecord.id, nextDocuments);
+    }
     if (key === 'ktp') {
       if (!file) setKtpOcrImage(undefined);
       setScanError(null);
@@ -831,35 +888,37 @@ export function KpmRegistrationForm({
   };
 
   const updateRumahDocuments = (files: KpmDocumentFile[]) => {
-    setValues((prev) => {
-      const nextDocuments: KpmDocuments = {
+    const nextDocuments: KpmDocuments = {
+      ...valuesRef.current.documents,
+      rumah: files,
+    };
+    setValues((prev) => ({
+      ...prev,
+      documents: {
         ...prev.documents,
         rumah: files,
-      };
-      if (editingRecord && onQuickSyncKpmDocuments) {
-        void onQuickSyncKpmDocuments(editingRecord.id, nextDocuments);
-      }
-      return {
-        ...prev,
-        documents: nextDocuments,
-      };
-    });
+      },
+    }));
+    if (editingRecord && onQuickSyncKpmDocuments) {
+      void onQuickSyncKpmDocuments(editingRecord.id, nextDocuments);
+    }
   };
 
   const updateLainnyaDocuments = (files: KpmDocumentFile[]) => {
-    setValues((prev) => {
-      const nextDocuments: KpmDocuments = {
+    const nextDocuments: KpmDocuments = {
+      ...valuesRef.current.documents,
+      lainnya: files,
+    };
+    setValues((prev) => ({
+      ...prev,
+      documents: {
         ...prev.documents,
         lainnya: files,
-      };
-      if (editingRecord && onQuickSyncKpmDocuments) {
-        void onQuickSyncKpmDocuments(editingRecord.id, nextDocuments);
-      }
-      return {
-        ...prev,
-        documents: nextDocuments,
-      };
-    });
+      },
+    }));
+    if (editingRecord && onQuickSyncKpmDocuments) {
+      void onQuickSyncKpmDocuments(editingRecord.id, nextDocuments);
+    }
   };
 
   const validate = (): FormErrors => {

@@ -141,6 +141,7 @@ import {
   generateRegisterCode,
   getKpmSlotNumberInProposal,
   getProposalSlotKey,
+  hasRenderableMedia,
   isLegacyDummyProposal,
   loadCustomYears,
   loadInternalUsers,
@@ -193,6 +194,7 @@ import { RecapDrillTarget, SubItemRecapView } from './components/SubItemRecapVie
 import { AddProposalForm } from './components/AddProposalForm';
 import { ProposalForm } from './components/ProposalForm';
 import { ProposalDetailView } from './components/ProposalDetailView';
+import { ProposalPhotoGalleryView } from './components/ProposalPhotoGalleryView';
 import { DocumentLightbox } from './components/DocumentLightbox';
 import { OfflineIndicator } from './components/PWAInstallButton';
 import { PhotoUploadQueueBar } from './components/PhotoUploadQueueBar';
@@ -202,6 +204,7 @@ import {
   cancelPendingPhotoUploadJob,
   enqueuePhotoUploadJob,
   extractPendingJobId,
+  getCompletedUploadForJob,
   getExistingDriveFallbackDoc,
   getPendingPhotoUploadJobs,
   initPhotoUploadManager,
@@ -365,6 +368,41 @@ function sanitizeDocumentsForRemoteSync(
   return next;
 }
 
+function resolveCompletedLocalPendingDocs(
+  docs: KpmDocuments,
+  latestDocs?: KpmDocuments
+): KpmDocuments {
+  const next: KpmDocuments = {
+    ...docs,
+    rumah: Array.isArray(docs.rumah)
+      ? docs.rumah.map((item) => {
+          if (!isLocalPendingDocument(item)) return item;
+          const done = getCompletedUploadForJob(extractPendingJobId(item));
+          return done || item;
+        })
+      : [],
+    lainnya: Array.isArray(docs.lainnya)
+      ? docs.lainnya.map((item) => {
+          if (!isLocalPendingDocument(item)) return item;
+          const done = getCompletedUploadForJob(extractPendingJobId(item));
+          return done || item;
+        })
+      : [],
+  };
+  for (const key of SINGLE_DOC_KEYS) {
+    const cur = next[key];
+    if (cur && isLocalPendingDocument(cur)) {
+      const done = getCompletedUploadForJob(extractPendingJobId(cur));
+      if (done) {
+        next[key] = done;
+      } else if (latestDocs?.[key] && !isLocalPendingDocument(latestDocs[key])) {
+        next[key] = latestDocs[key];
+      }
+    }
+  }
+  return next;
+}
+
 function mergePendingVaultDocsIntoRecords(
   records: KpmRecord[],
   vaultJobs: PhotoUploadJobSummary[]
@@ -417,6 +455,7 @@ type SubView =
   | 'edit-proposal'
   | 'proposal-detail'
   | 'proposal-history'
+  | 'proposal-photo-gallery'
   | 'chat'
   | 'notifications'
   | 'profile';
@@ -636,7 +675,12 @@ export default function App() {
   const [kpmFormReturnToProposalDetail, setKpmFormReturnToProposalDetail] = useState(false);
   const [kpmDetailReturnToRecap, setKpmDetailReturnToRecap] = useState(false);
   const [kpmDetailReturnToProposalDetail, setKpmDetailReturnToProposalDetail] = useState(false);
+  const [kpmDetailReturnToPhotoGallery, setKpmDetailReturnToPhotoGallery] = useState(false);
   const [kpmDetailReturnToChatPeerId, setKpmDetailReturnToChatPeerId] = useState<string | null>(null);
+  const [photoGalleryProposalId, setPhotoGalleryProposalId] = useState<string | null>(null);
+  const [photoGalleryReturnTarget, setPhotoGalleryReturnTarget] = useState<
+    'proposal-list' | 'proposal-detail' | 'menu'
+  >('proposal-list');
   const [addProposalFromKpmForm, setAddProposalFromKpmForm] = useState(false);
   const [menuSection, setMenuSection] = useState<MenuSection>('root');
   const [usersOpenedFromSuperAdmin, setUsersOpenedFromSuperAdmin] = useState(false);
@@ -1567,7 +1611,18 @@ export default function App() {
         if (snapshot.records && (snapshot.records.length > 0 || latestDataRef.current.records.length === 0)) {
           const hydratedWithBast = snapshot.records.map((r) => {
             const bast = kpmBastMapRef.current[r.id];
-            const attendance = kpmAttendanceMapRef.current[r.id];
+            const explicitAttendance = kpmAttendanceMapRef.current[r.id];
+            const attendance: KpmAttendanceInfo | undefined =
+              explicitAttendance !== undefined
+                ? explicitAttendance
+                : hasRenderableMedia(r.documents?.penerima)
+                  ? {
+                      present: true,
+                      updatedAt: r.documents?.penerima?.uploadedAt || r.updatedAt,
+                      updatedBy: 'Otomatis (Foto Penerima)',
+                      source: 'auto_photo',
+                    }
+                  : undefined;
             if (!bast && !attendance) return r;
             return {
               ...r,
@@ -1808,7 +1863,18 @@ export default function App() {
     ): KpmRecord[] =>
       list.map((r) => {
         const bast = bastMap[r.id];
-        const attendance = attendanceMap[r.id];
+        const explicitAttendance = attendanceMap[r.id];
+        const attendance: KpmAttendanceInfo | undefined =
+          explicitAttendance !== undefined
+            ? explicitAttendance
+            : hasRenderableMedia(r.documents?.penerima)
+              ? {
+                  present: true,
+                  updatedAt: r.documents?.penerima?.uploadedAt || r.updatedAt,
+                  updatedBy: 'Otomatis (Foto Penerima)',
+                  source: 'auto_photo',
+                }
+              : undefined;
         if (!bast && !attendance) return r;
         return {
           ...r,
@@ -4134,6 +4200,9 @@ export default function App() {
         setActiveChatPeerId(peer);
         setSubView('chat');
         if (peer) void handleMarkChatRead(peer);
+      } else if (kpmDetailReturnToPhotoGallery) {
+        setKpmDetailReturnToPhotoGallery(false);
+        setSubView('proposal-photo-gallery');
       } else if (kpmDetailReturnToProposalDetail && activeProposal) {
         setKpmDetailReturnToProposalDetail(false);
         setSubView('proposal-detail');
@@ -4143,6 +4212,21 @@ export default function App() {
       } else {
         setSubView('none');
         setActiveTab(returnToTab);
+      }
+      return;
+    }
+
+    if (subView === 'proposal-photo-gallery') {
+      navigateRestoreScroll();
+      setFeedback(null);
+      if (photoGalleryReturnTarget === 'proposal-detail' && activeProposal) {
+        setSubView('proposal-detail');
+      } else if (photoGalleryReturnTarget === 'menu') {
+        setSubView('none');
+        setActiveTab('menu');
+      } else {
+        setSubView('none');
+        setActiveTab('proposal');
       }
       return;
     }
@@ -4343,16 +4427,29 @@ export default function App() {
     fromTab: MainTab = activeTab,
     fromRecap = false,
     fromChatPeerId: string | null = null,
-    fromProposalDetail = false
+    fromProposalDetail = false,
+    fromPhotoGallery = false
   ) => {
     navigateForwardScroll();
     setFeedback(null);
     setReturnToTab(fromTab);
     setKpmDetailReturnToRecap(fromRecap);
     setKpmDetailReturnToProposalDetail(fromProposalDetail);
+    setKpmDetailReturnToPhotoGallery(fromPhotoGallery);
     setKpmDetailReturnToChatPeerId(fromChatPeerId);
     setActiveKpmId(record.id);
     setSubView('kpm-detail');
+  };
+
+  const openPhotoGallery = (
+    proposalId?: string,
+    fromTarget: 'proposal-list' | 'proposal-detail' | 'menu' = 'proposal-list'
+  ) => {
+    navigateForwardScroll();
+    setFeedback(null);
+    setPhotoGalleryProposalId(proposalId ?? null);
+    setPhotoGalleryReturnTarget(fromTarget);
+    setSubView('proposal-photo-gallery');
   };
 
   const openSubItemRecap = (fromTab: MainTab = activeTab) => {
@@ -4794,11 +4891,30 @@ export default function App() {
         }
       }
 
+      const addedPenerimaInEdit =
+        hasRenderableMedia(normalizedValues.documents.penerima) &&
+        normalizedValues.documents.penerima?.id !== previousRecord?.documents?.penerima?.id;
+      const autoAttEdit = addedPenerimaInEdit
+        ? markAttendanceFromPenerimaPhoto(editingId, {
+            proposalName: normalizedValues.proposal,
+            tahun: normalizedValues.tahun,
+            syncRemoteAudit: false,
+          })
+        : null;
+      if (autoAttEdit?.auditEntry) {
+        nextAuditLogs = [autoAttEdit.auditEntry, ...nextAuditLogs];
+      }
+
       const mapped = records.map((rec) =>
         rec.id === editingId
           ? {
               ...rec,
               ...normalizedValues,
+              ...(autoAttEdit ? { attendance: autoAttEdit.attendance } : {}),
+              documents: resolveCompletedLocalPendingDocs(
+                normalizedValues.documents,
+                latestDataRef.current.records.find((r) => r.id === editingId)?.documents
+              ),
               updatedAt: now,
             }
           : rec
@@ -5195,15 +5311,26 @@ export default function App() {
         await bindFormDraftJobsToKpm(formDraftId, editingId, normalizedValues.nama);
       }
 
+      const latestEditedRec = latestDataRef.current.records.find((r) => r.id === editingId);
+      const finalEditedRecords = nextRecords.map((r) =>
+        r.id === editingId
+          ? {
+              ...r,
+              documents: resolveCompletedLocalPendingDocs(r.documents, latestEditedRec?.documents),
+            }
+          : r
+      );
+
       if (nextSlotMap !== proposalSlotMapRef.current) {
-        persistProposalSlotMap(nextSlotMap, nextRecords);
+        persistProposalSlotMap(nextSlotMap, finalEditedRecords);
       }
       if (editChangeLogs.length > 0) {
         appendProposalChangeLogs(editChangeLogs);
       }
+      latestDataRef.current.records = finalEditedRecords;
       setKpmAuditLogs(nextAuditLogs);
       setProposalHistory(nextProposalHistory);
-      setRecords(nextRecords);
+      setRecords(finalEditedRecords);
       setEditingKpmRecord(null);
       setKpmFormInitialStandaloneStatus(null);
       setTargetKpmFormSlot(null);
@@ -5340,15 +5467,49 @@ export default function App() {
         clientRecordId: rawNewRecord.id,
         values: offlineSafeValues,
       });
+      let finalOfflineNewRecords = nextRecordsList.map((r) =>
+        r.id === savedNewRecord.id
+          ? { ...r, documents: resolveCompletedLocalPendingDocs(r.documents) }
+          : r
+      );
       if (formDraftId) {
-        await bindFormDraftJobsToKpm(formDraftId, savedNewRecord.id, savedNewRecord.nama);
+        const earlyCompleted = await bindFormDraftJobsToKpm(
+          formDraftId,
+          savedNewRecord.id,
+          savedNewRecord.nama
+        );
+        if (earlyCompleted.length > 0) {
+          let patchedDocs =
+            finalOfflineNewRecords.find((r) => r.id === savedNewRecord.id)?.documents ||
+            savedNewRecord.documents;
+          for (const ev of earlyCompleted) {
+            patchedDocs = replacePendingJobWithUploadedDoc(patchedDocs, ev.job, ev.uploadedDoc);
+          }
+          finalOfflineNewRecords = finalOfflineNewRecords.map((r) =>
+            r.id === savedNewRecord.id ? { ...r, documents: patchedDocs } : r
+          );
+        }
+      }
+      const createdOfflineRec = finalOfflineNewRecords.find((r) => r.id === savedNewRecord.id);
+      if (hasRenderableMedia(createdOfflineRec?.documents?.penerima)) {
+        const autoAttCreate = markAttendanceFromPenerimaPhoto(savedNewRecord.id, {
+          proposalName: savedNewRecord.proposal,
+          tahun: savedNewRecord.tahun,
+          appendAuditLog: false,
+        });
+        if (autoAttCreate) {
+          finalOfflineNewRecords = finalOfflineNewRecords.map((r) =>
+            r.id === savedNewRecord.id ? { ...r, attendance: autoAttCreate.attendance } : r
+          );
+        }
       }
       const queue = await getOfflineQueue();
       setOfflineQueueCount(queue.length);
       if (nextSlotMap !== proposalSlotMapRef.current) {
-        persistProposalSlotMap(nextSlotMap, nextRecordsList, proposals);
+        persistProposalSlotMap(nextSlotMap, finalOfflineNewRecords, proposals);
       }
-      setRecords(nextRecordsList);
+      latestDataRef.current.records = finalOfflineNewRecords;
+      setRecords(finalOfflineNewRecords);
       setKpmAuditLogs(nextAuditLogs);
       setProposalHistory(nextProposalHistory);
       setPendingSelectedProposal(null);
@@ -5413,7 +5574,11 @@ export default function App() {
           'add'
         );
     if (!ok) return false;
-    let finalNewRecordsList = nextRecordsList;
+    let finalNewRecordsList = nextRecordsList.map((r) =>
+      r.id === savedNewRecord.id
+        ? { ...r, documents: resolveCompletedLocalPendingDocs(r.documents) }
+        : r
+    );
     if (formDraftId) {
       const earlyCompleted = await bindFormDraftJobsToKpm(
         formDraftId,
@@ -5421,11 +5586,13 @@ export default function App() {
         savedNewRecord.nama
       );
       if (earlyCompleted.length > 0) {
-        let patchedDocs = savedNewRecord.documents;
+        let patchedDocs =
+          finalNewRecordsList.find((r) => r.id === savedNewRecord.id)?.documents ||
+          savedNewRecord.documents;
         for (const ev of earlyCompleted) {
           patchedDocs = replacePendingJobWithUploadedDoc(patchedDocs, ev.job, ev.uploadedDoc);
         }
-        finalNewRecordsList = nextRecordsList.map((r) =>
+        finalNewRecordsList = finalNewRecordsList.map((r) =>
           r.id === savedNewRecord.id ? { ...r, documents: patchedDocs } : r
         );
         const safeEarlyDocs = sanitizeDocumentsForRemoteSync(savedNewRecord.id, patchedDocs);
@@ -5436,6 +5603,19 @@ export default function App() {
             pengelolaList
           ).catch(() => undefined);
         }
+      }
+    }
+    const createdOnlineRec = finalNewRecordsList.find((r) => r.id === savedNewRecord.id);
+    if (hasRenderableMedia(createdOnlineRec?.documents?.penerima)) {
+      const autoAttOnline = markAttendanceFromPenerimaPhoto(savedNewRecord.id, {
+        proposalName: savedNewRecord.proposal,
+        tahun: savedNewRecord.tahun,
+        appendAuditLog: false,
+      });
+      if (autoAttOnline) {
+        finalNewRecordsList = finalNewRecordsList.map((r) =>
+          r.id === savedNewRecord.id ? { ...r, attendance: autoAttOnline.attendance } : r
+        );
       }
     }
 
@@ -5698,6 +5878,78 @@ export default function App() {
     });
   };
 
+  const markAttendanceFromPenerimaPhoto = useCallback(
+    (
+      kpmId: string,
+      options?: {
+        actorName?: string;
+        actorEmail?: string;
+        proposalName?: string;
+        tahun?: string;
+        syncRemoteAudit?: boolean;
+        appendAuditLog?: boolean;
+      }
+    ): { attendance: KpmAttendanceInfo; auditEntry?: KpmAuditLogEntry } | null => {
+      const existingMapEntry = kpmAttendanceMapRef.current[kpmId];
+      const targetRec = latestDataRef.current.records.find((r) => r.id === kpmId);
+      const prevPresent = Boolean(existingMapEntry?.present ?? targetRec?.attendance?.present);
+      if (existingMapEntry?.present === true && targetRec?.attendance?.present === true) {
+        return { attendance: existingMapEntry };
+      }
+
+      const now = new Date().toISOString();
+      const actorName = options?.actorName || currentUser?.nama || 'Petugas Internal';
+      const actorEmail = options?.actorEmail ?? currentUser?.email;
+      const nextAttendance: KpmAttendanceInfo = {
+        present: true,
+        updatedAt: now,
+        updatedBy: actorName,
+        source: 'auto_photo',
+      };
+
+      const nextAttendanceMap: Record<string, KpmAttendanceInfo> = {
+        ...kpmAttendanceMapRef.current,
+        [kpmId]: nextAttendance,
+      };
+      kpmAttendanceMapRef.current = nextAttendanceMap;
+      setKpmAttendanceMap(nextAttendanceMap);
+      void saveAppStateSlice('masdeta_kpm_attendance_v1', nextAttendanceMap);
+
+      let auditEntry: KpmAuditLogEntry | undefined;
+      if (!prevPresent && options?.appendAuditLog !== false) {
+        auditEntry = {
+          id: `audit-att-photo-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+          kpmId,
+          action: 'updated',
+          actorName,
+          actorEmail,
+          timestamp: now,
+          proposal: options?.proposalName ?? targetRec?.proposal ?? '',
+          tahun: options?.tahun ?? targetRec?.tahun ?? '',
+          changes: [
+            {
+              field: 'Kehadiran (Absensi)',
+              before: 'Belum hadir',
+              after: 'Hadir (Otomatis dari Foto Penerima)',
+            },
+          ],
+        };
+        setKpmAuditLogs((prev) => [auditEntry!, ...prev]);
+        if (
+          options?.syncRemoteAudit !== false &&
+          supabaseReadyRef.current &&
+          isOnlineRef.current &&
+          (typeof navigator === 'undefined' || navigator.onLine)
+        ) {
+          void appendKpmAuditLogsInSupabase([auditEntry], new Set([kpmId])).catch(() => undefined);
+        }
+      }
+
+      return { attendance: nextAttendance, auditEntry };
+    },
+    [currentUser]
+  );
+
   const handleUpdateKpmDocuments = async (
     kpmId: string,
     nextDocuments: KpmDocuments,
@@ -5708,9 +5960,17 @@ export default function App() {
     if (!target) return;
 
     const now = new Date().toISOString();
+    const addedPenerima =
+      hasRenderableMedia(nextDocuments.penerima) &&
+      nextDocuments.penerima?.id !== target.documents?.penerima?.id;
+    const autoAtt = addedPenerima
+      ? markAttendanceFromPenerimaPhoto(kpmId, { syncRemoteAudit: true })
+      : null;
+
     const updatedRecord: KpmRecord = {
       ...target,
       documents: nextDocuments,
+      ...(autoAtt ? { attendance: autoAtt.attendance } : {}),
       updatedAt: now,
     };
 
@@ -5791,9 +6051,17 @@ export default function App() {
     const target = latestDataRef.current.records.find((r) => r.id === kpmId);
     if (!target) return;
     const now = new Date().toISOString();
+    const addedPenerima =
+      hasRenderableMedia(nextDocuments.penerima) &&
+      nextDocuments.penerima?.id !== target.documents?.penerima?.id;
+    const autoAtt = addedPenerima
+      ? markAttendanceFromPenerimaPhoto(kpmId, { syncRemoteAudit: true })
+      : null;
+
     const updatedRecord: KpmRecord = {
       ...target,
       documents: nextDocuments,
+      ...(autoAtt ? { attendance: autoAtt.attendance } : {}),
       updatedAt: now,
     };
     const nextRecords = latestDataRef.current.records.map((r) =>
@@ -5862,12 +6130,16 @@ export default function App() {
         source: params.source,
       });
 
+      const autoAtt =
+        params.category === 'penerima' ? markAttendanceFromPenerimaPhoto(kpmId) : null;
+
       const now = new Date().toISOString();
       const nextRecords = latestDataRef.current.records.map((r) =>
         r.id === kpmId
           ? {
               ...r,
               documents: attachPendingJobToDocuments(r.documents, params.category, pendingDoc),
+              ...(autoAtt ? { attendance: autoAtt.attendance } : {}),
               updatedAt: now,
             }
           : r
@@ -5877,21 +6149,39 @@ export default function App() {
       void saveIdbValue('records', nextRecords);
       setFeedback({
         type: 'success',
-        message: `${params.label} diamankan di perangkat (${job.galleryStatusNote.toLowerCase()}). Anda bebas berpindah KPM tanpa menunggu unggahan selesai.`,
+        message: `${params.label} diamankan di perangkat (${job.galleryStatusNote.toLowerCase()}).${
+          params.category === 'penerima' ? ' Absensi KPM otomatis ditandai Hadir.' : ''
+        } Anda bebas berpindah KPM tanpa menunggu unggahan selesai.`,
       });
     },
-    [requirePermission]
+    [requirePermission, markAttendanceFromPenerimaPhoto]
   );
 
   const handleCancelPendingKpmDetailPhoto = useCallback(
     async (kpmId: string, jobId: string, category: PhotoDocCategory, label: string) => {
       const fallbackDoc = getExistingDriveFallbackDoc(kpmId, category);
       await cancelPendingPhotoUploadJob(jobId);
+
+      let clearAutoAtt = false;
+      if (category === 'penerima' && !fallbackDoc) {
+        const currentRec = latestDataRef.current.records.find((r) => r.id === kpmId);
+        const currentAtt = kpmAttendanceMapRef.current[kpmId] ?? currentRec?.attendance;
+        if (currentAtt?.source === 'auto_photo') {
+          clearAutoAtt = true;
+          const nextAttendanceMap = { ...kpmAttendanceMapRef.current };
+          delete nextAttendanceMap[kpmId];
+          kpmAttendanceMapRef.current = nextAttendanceMap;
+          setKpmAttendanceMap(nextAttendanceMap);
+          void saveAppStateSlice('masdeta_kpm_attendance_v1', nextAttendanceMap);
+        }
+      }
+
       const nextRecords = latestDataRef.current.records.map((r) =>
         r.id === kpmId
           ? {
               ...r,
               documents: removePendingJobFromDocuments(r.documents, jobId, category, fallbackDoc),
+              ...(clearAutoAtt ? { attendance: undefined } : {}),
             }
           : r
       );
@@ -5910,7 +6200,11 @@ export default function App() {
     let cancelled = false;
     void initPhotoUploadManager().then((jobs) => {
       if (cancelled || jobs.length === 0) return;
-      setRecords((prev) => mergePendingVaultDocsIntoRecords(prev, jobs));
+      const merged = mergePendingVaultDocsIntoRecords(latestDataRef.current.records, jobs);
+      if (merged !== latestDataRef.current.records) {
+        latestDataRef.current.records = merged;
+        setRecords(merged);
+      }
     });
 
     const unsubscribe = subscribePhotoUploadCompleted(async ({ job, uploadedDoc }) => {
@@ -5921,9 +6215,12 @@ export default function App() {
 
         const now = new Date().toISOString();
         const nextDocs = replacePendingJobWithUploadedDoc(target.documents, job, uploadedDoc);
+        const autoAtt =
+          job.category === 'penerima' ? markAttendanceFromPenerimaPhoto(target.id) : null;
         const updatedRecord: KpmRecord = {
           ...target,
           documents: nextDocs,
+          ...(autoAtt ? { attendance: autoAtt.attendance } : {}),
           updatedAt: now,
         };
         const nextRecords = latestDataRef.current.records.map((r) =>
@@ -6007,7 +6304,7 @@ export default function App() {
       cancelled = true;
       unsubscribe();
     };
-  }, [currentUser?.email, currentUser?.nama, enqueueKpmPhotoSyncTask, syncOperationalData]);
+  }, [currentUser?.email, currentUser?.nama, enqueueKpmPhotoSyncTask, markAttendanceFromPenerimaPhoto, syncOperationalData]);
 
   const handleQuickSyncProposalDocuments = async (
     proposalId: string,
@@ -6454,6 +6751,7 @@ export default function App() {
       present: nextPresent,
       updatedAt: now,
       updatedBy: currentActor.nama,
+      source: 'manual',
     };
 
     const auditEntry: KpmAuditLogEntry = {
@@ -6482,7 +6780,7 @@ export default function App() {
     setKpmAttendanceMap(nextAttendanceMap);
 
     const nextLogs = [auditEntry, ...kpmAuditLogs];
-    const nextRecords = records.map((r) =>
+    const nextRecords = latestDataRef.current.records.map((r) =>
       r.id === kpmId
         ? {
             ...r,
@@ -6491,8 +6789,10 @@ export default function App() {
           }
         : r
     );
+    latestDataRef.current.records = nextRecords;
     setKpmAuditLogs(nextLogs);
     setRecords(nextRecords);
+    void saveIdbValue('records', nextRecords);
 
     void saveAppStateSlice('masdeta_kpm_attendance_v1', nextAttendanceMap);
 
@@ -6778,8 +7078,27 @@ export default function App() {
               } else {
                 docs[act.category] = uploaded;
               }
+              const autoAtt =
+                act.category === 'penerima'
+                  ? markAttendanceFromPenerimaPhoto(act.kpmId, {
+                      proposalName: target.proposal,
+                      tahun: target.tahun,
+                      syncRemoteAudit: false,
+                    })
+                  : null;
+              if (autoAtt?.auditEntry) {
+                workAuditLogs = [autoAtt.auditEntry, ...workAuditLogs];
+                addedAuditLogs.push(autoAtt.auditEntry);
+              }
               workRecords = workRecords.map((r) =>
-                r.id === act.kpmId ? { ...r, documents: docs, updatedAt: act.createdAt } : r
+                r.id === act.kpmId
+                  ? {
+                      ...r,
+                      documents: docs,
+                      ...(autoAtt ? { attendance: autoAtt.attendance } : {}),
+                      updatedAt: act.createdAt,
+                    }
+                  : r
               );
               touchedRecordIds.add(act.kpmId);
             }
@@ -6788,11 +7107,27 @@ export default function App() {
           } else if (act.kind === 'sync_kpm_docs') {
             const target = workRecords.find((r) => r.id === act.kpmId);
             if (target) {
+              const safeDocs = sanitizeDocumentsForRemoteSync(act.kpmId, act.documents);
+              const addedPenerima =
+                hasRenderableMedia(safeDocs.penerima) &&
+                safeDocs.penerima?.id !== target.documents?.penerima?.id;
+              const autoAtt = addedPenerima
+                ? markAttendanceFromPenerimaPhoto(act.kpmId, {
+                    proposalName: target.proposal,
+                    tahun: target.tahun,
+                    syncRemoteAudit: false,
+                  })
+                : null;
+              if (autoAtt?.auditEntry) {
+                workAuditLogs = [autoAtt.auditEntry, ...workAuditLogs];
+                addedAuditLogs.push(autoAtt.auditEntry);
+              }
               workRecords = workRecords.map((r) =>
                 r.id === act.kpmId
                   ? {
                       ...r,
-                      documents: sanitizeDocumentsForRemoteSync(act.kpmId, act.documents),
+                      documents: safeDocs,
+                      ...(autoAtt ? { attendance: autoAtt.attendance } : {}),
                       updatedAt: act.createdAt,
                     }
                   : r
@@ -6868,7 +7203,7 @@ export default function App() {
     } finally {
       isFlushingQueueRef.current = false;
     }
-  }, [currentUser, applyRemoteOperationalState, runSupabaseMutation, syncOperationalData]);
+  }, [currentUser, applyRemoteOperationalState, runSupabaseMutation, syncOperationalData, markAttendanceFromPenerimaPhoto]);
 
   useEffect(() => {
     const onOnline = () => {
@@ -12056,6 +12391,9 @@ export default function App() {
                 setActiveChatPeerId(peer);
                 setSubView('chat');
                 if (peer) void handleMarkChatRead(peer);
+              } else if (kpmDetailReturnToPhotoGallery) {
+                setKpmDetailReturnToPhotoGallery(false);
+                setSubView('proposal-photo-gallery');
               } else if (kpmDetailReturnToProposalDetail && activeProposal) {
                 setKpmDetailReturnToProposalDetail(false);
                 setSubView('proposal-detail');
@@ -12294,6 +12632,7 @@ export default function App() {
               }}
               onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
               onUpdateProposalDocuments={handleQuickSyncProposalDocuments}
+              onOpenPhotoGallery={(proposalId) => openPhotoGallery(proposalId, 'proposal-detail')}
               onSelectKpm={(rec) => openKpmDetail(rec, returnToTab, false, null, true)}
               onCreateForEmptySlot={(proposalId, proposalName, tahun, slotNumber, item) =>
                 openKpmForm(
@@ -12370,6 +12709,44 @@ export default function App() {
             onToggleProposalLock={handleToggleProposalLock}
             onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
           />
+        )}
+
+        {(subView === 'proposal-photo-gallery' ||
+          (kpmDetailReturnToPhotoGallery &&
+            (subView === 'kpm-detail' ||
+              subView === 'kpm-history' ||
+              subView === 'kpm-form'))) && (
+          <div className={subView === 'proposal-photo-gallery' ? '' : 'hidden'}>
+            <ProposalPhotoGalleryView
+              proposals={proposals}
+              records={records}
+              items={items}
+              wilayahList={wilayahList}
+              proposalSlotMap={proposalSlotMap}
+              initialProposalId={photoGalleryProposalId}
+              selectedYear={selectedYear}
+              canUpdate={hasPermission('update')}
+              onBack={() => {
+                navigateRestoreScroll();
+                setFeedback(null);
+                if (photoGalleryReturnTarget === 'proposal-detail' && activeProposal) {
+                  setSubView('proposal-detail');
+                } else if (photoGalleryReturnTarget === 'menu') {
+                  setSubView('none');
+                  setActiveTab('menu');
+                } else {
+                  setSubView('none');
+                  setActiveTab('proposal');
+                }
+              }}
+              onSelectKpm={(rec) =>
+                openKpmDetail(rec, returnToTab, false, null, false, true)
+              }
+              onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
+              onOpenProposalDetail={(proposalId) => openProposalDetailById(proposalId, 'proposal')}
+              onEnqueuePhoto={handleEnqueueKpmDetailPhoto}
+            />
+          </div>
         )}
 
         {/* Top-Level Main Tabs (kept mounted so scroll position, pagination & local filters persist across sub-views) */}
@@ -12556,6 +12933,7 @@ export default function App() {
             canUpdate={hasPermission('update')}
             canDelete={hasPermission('delete')}
             onOpenProposalDetail={(id) => openProposalDetailById(id, 'proposal')}
+            onOpenPhotoGallery={(id) => openPhotoGallery(id, 'proposal-list')}
             onToggleProposalLock={handleToggleProposalLock}
             onBulkSetProposalLock={handleBulkSetProposalLock}
             onDeleteProposal={handleDeleteProposal}
@@ -12708,6 +13086,7 @@ export default function App() {
               }
             }}
             onOpenSubItemRecap={() => openSubItemRecap('menu')}
+            onOpenPhotoGallery={() => openPhotoGallery(undefined, 'menu')}
             onAddPengelola={handleCreatePengelola}
             onUpdatePengelola={handleUpdatePengelola}
             onDeletePengelola={handleDeletePengelola}

@@ -47,6 +47,10 @@ export function PhotoUploadQueueBar({
   );
   const [confirmRemoveJobId, setConfirmRemoveJobId] = useState<string | null>(null);
   const [galleryToast, setGalleryToast] = useState<string | null>(null);
+  const [manualSavePreview, setManualSavePreview] = useState<{
+    fileName: string;
+    dataUrl: string;
+  } | null>(null);
 
   useEffect(() => {
     return subscribePhotoUploadJobs((nextJobs) => {
@@ -63,6 +67,7 @@ export function PhotoUploadQueueBar({
   const uploadingCount = jobs.filter((j) => j.status === 'uploading').length;
   const failedCount = jobs.filter((j) => j.status === 'failed').length;
   const queuedCount = jobs.filter((j) => j.status === 'queued').length;
+  const retryableCount = jobs.filter((j) => !j.corrupted && j.status !== 'uploading').length;
 
   const handleToggleAutoSave = () => {
     const next = !autoSaveGallery;
@@ -70,14 +75,16 @@ export function PhotoUploadQueueBar({
     setAutoSaveGallerySetting(next);
   };
 
-  const handleManualSaveGallery = async (jobId: string) => {
-    const ok = await downloadPendingJobToGallery(jobId);
-    setGalleryToast(
-      ok
-        ? 'Salinan foto berhasil dikirim ke Galeri / Unduhan perangkat.'
-        : 'Memori perangkat terbatas atau izin ditolak. Foto tetap aman di cache aplikasi.'
-    );
-    window.setTimeout(() => setGalleryToast(null), 3500);
+  const handleManualSaveGallery = async (job: PhotoUploadJobSummary) => {
+    const res = await downloadPendingJobToGallery(job.id);
+    setGalleryToast(res.note);
+    if (res.fallbackPreviewDataUrl) {
+      setManualSavePreview({
+        fileName: job.fileName,
+        dataUrl: res.fallbackPreviewDataUrl,
+      });
+    }
+    window.setTimeout(() => setGalleryToast(null), 4500);
   };
 
   const handleConfirmDelete = async (job: PhotoUploadJobSummary) => {
@@ -149,7 +156,7 @@ export function PhotoUploadQueueBar({
 
       {drawerOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-xs sm:items-center sm:p-4"
+          className="fixed inset-0 z-[140] flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-xs sm:items-center sm:p-4"
           onClick={() => setDrawerOpen(false)}
           role="dialog"
           aria-modal="true"
@@ -225,7 +232,7 @@ export function PhotoUploadQueueBar({
                 </span>
                 <button
                   type="button"
-                  disabled={isOffline}
+                  disabled={isOffline || retryableCount === 0}
                   onClick={() => void retryAllPendingPhotoUploads()}
                   className="inline-flex min-h-[34px] items-center gap-1.5 rounded-xl bg-teal-700 px-3 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
                 >
@@ -246,6 +253,7 @@ export function PhotoUploadQueueBar({
             <div className="flex-1 space-y-2.5 overflow-y-auto p-4 sm:p-5">
               {jobs.map((job) => {
                 const isConfirmingDelete = confirmRemoveJobId === job.id;
+                const thumbSrc = job.previewUrl || job.previewThumbUrl || '';
                 return (
                   <div
                     key={job.id}
@@ -253,11 +261,22 @@ export function PhotoUploadQueueBar({
                   >
                     <div className="flex items-start gap-3">
                       <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
-                        {job.previewUrl ? (
+                        {thumbSrc ? (
                           <img
-                            src={job.previewUrl}
+                            src={thumbSrc}
                             alt={`${job.slotLabel} ${job.kpmName}`}
                             className="h-full w-full object-cover"
+                            onError={(e) => {
+                              const imgEl = e.currentTarget;
+                              if (
+                                job.previewThumbUrl &&
+                                imgEl.getAttribute('src') !== job.previewThumbUrl
+                              ) {
+                                imgEl.src = job.previewThumbUrl;
+                              } else {
+                                imgEl.style.display = 'none';
+                              }
+                            }}
                           />
                         ) : null}
                       </div>
@@ -292,11 +311,13 @@ export function PhotoUploadQueueBar({
                             )}
                             {job.status === 'uploading'
                               ? 'Mengunggah...'
-                              : job.status === 'failed'
-                                ? `Gagal (${job.attempts}x)`
-                                : isOffline
-                                  ? 'Menunggu Sinyal'
-                                  : 'Antrean'}
+                              : job.corrupted
+                                ? 'File Lama Rusak'
+                                : job.status === 'failed'
+                                  ? `Gagal (${job.attempts}x)`
+                                  : isOffline
+                                    ? 'Menunggu Sinyal'
+                                    : 'Antrean'}
                           </span>
                         </div>
 
@@ -349,24 +370,28 @@ export function PhotoUploadQueueBar({
                           </button>
                         )}
 
-                        <button
-                          type="button"
-                          disabled={isOffline || job.status === 'uploading'}
-                          onClick={() => void retryPhotoUploadJob(job.id)}
-                          className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-[11px] font-semibold text-teal-800 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          <RefreshCw className="h-3 w-3" />
-                          <span>Kirim Ulang</span>
-                        </button>
+                        {!job.corrupted && (
+                          <button
+                            type="button"
+                            disabled={isOffline || job.status === 'uploading'}
+                            onClick={() => void retryPhotoUploadJob(job.id)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-[11px] font-semibold text-teal-800 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <RefreshCw className="h-3 w-3" />
+                            <span>Kirim Ulang</span>
+                          </button>
+                        )}
 
-                        <button
-                          type="button"
-                          onClick={() => void handleManualSaveGallery(job.id)}
-                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
-                        >
-                          <Download className="h-3 w-3" />
-                          <span>Simpan Galeri</span>
-                        </button>
+                        {(!job.corrupted || job.previewThumbUrl) && (
+                          <button
+                            type="button"
+                            onClick={() => void handleManualSaveGallery(job)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                          >
+                            <Download className="h-3 w-3" />
+                            <span>{job.corrupted ? 'Lihat Miniatur' : 'Simpan Galeri'}</span>
+                          </button>
+                        )}
 
                         <button
                           type="button"
@@ -383,6 +408,40 @@ export function PhotoUploadQueueBar({
                 );
               })}
             </div>
+          </div>
+        </div>
+      )}
+
+      {manualSavePreview && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/85 p-4 backdrop-blur-xs"
+          onClick={() => setManualSavePreview(null)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md space-y-3 rounded-2xl border border-slate-700 bg-slate-900 p-4 text-white shadow-2xl"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <p className="truncate text-xs font-bold">{manualSavePreview.fileName}</p>
+              <button
+                type="button"
+                onClick={() => setManualSavePreview(null)}
+                className="rounded-lg p-1.5 text-slate-300 hover:bg-white/10"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <img
+              src={manualSavePreview.dataUrl}
+              alt={manualSavePreview.fileName}
+              className="max-h-[65vh] w-full rounded-xl bg-black object-contain"
+            />
+            <p className="text-center text-[11px] text-slate-300">
+              Tekan &amp; tahan gambar di atas lalu pilih <strong>Simpan ke Foto</strong> untuk
+              menyimpan ke galeri HP.
+            </p>
           </div>
         </div>
       )}

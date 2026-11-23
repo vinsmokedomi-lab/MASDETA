@@ -24,6 +24,7 @@ import {
   FileSpreadsheet,
   FileText,
   History,
+  Images,
   Layers,
   Lock,
   MapPin,
@@ -199,6 +200,7 @@ interface MenuHubViewProps {
   onDeletePekerjaan?: (name: string) => void;
   onUpdateWilayahList: (nextList: WilayahKabKota[]) => void;
   onOpenSubItemRecap: () => void;
+  onOpenPhotoGallery?: () => void;
   onAddPengelola: (profile: PengelolaProfile) => void;
   onUpdatePengelola?: (profile: PengelolaProfile, previousDisplayName: string) => void;
   onDeletePengelola?: (pengelolaId: string) => void;
@@ -367,6 +369,7 @@ export function MenuHubView({
   onDeletePekerjaan,
   onUpdateWilayahList,
   onOpenSubItemRecap,
+  onOpenPhotoGallery,
   onAddPengelola,
   onUpdatePengelola,
   onDeletePengelola,
@@ -1772,6 +1775,27 @@ export function MenuHubView({
                     </div>
                     <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
                   </button>
+
+                  {onOpenPhotoGallery && (
+                    <button
+                      type="button"
+                      onClick={onOpenPhotoGallery}
+                      className="flex min-h-[60px] w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                    >
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                        <Images className="h-5 w-5" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-slate-900">
+                          Galeri Foto Pembagian
+                        </p>
+                        <p className="mt-0.5 truncate text-xs text-slate-500">
+                          Daftar foto penyaluran per kelurahan sesuai nomor urut KPM
+                        </p>
+                      </div>
+                      <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                    </button>
+                  )}
 
                   <button
                     type="button"

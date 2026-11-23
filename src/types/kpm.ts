@@ -75,6 +75,7 @@ export interface KpmAttendanceInfo {
   present: boolean;
   updatedAt: string;
   updatedBy: string;
+  source?: 'manual' | 'auto_photo';
 }
 
 export interface KpmRecord {

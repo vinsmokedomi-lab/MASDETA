@@ -640,8 +640,8 @@ export async function processImageUpload(
   file: File,
   options?: { maxDimension?: number; quality?: number }
 ): Promise<KpmDocumentFile> {
-  if (!file.type.startsWith('image/')) {
-    throw new Error('Format file harus berupa gambar (JPG, PNG, atau WebP).');
+  if (!isImageFileLike(file)) {
+    throw new Error('Format file harus berupa gambar (JPG, PNG, WebP, atau HEIC).');
   }
 
   if (file.size > MAX_RAW_SIZE_BYTES) {
@@ -765,9 +765,30 @@ export function buildKpmDocumentFileFromDrive(
   };
 }
 
+const IMAGE_EXT_REGEX = /\.(jpe?g|png|webp|gif|bmp|heic|heif|avif)$/i;
+
+export function isImageFileLike(file: Pick<File, 'type' | 'name'>): boolean {
+  const mime = (file.type || '').trim().toLowerCase();
+  if (mime.startsWith('image/')) return true;
+  return IMAGE_EXT_REGEX.test((file.name || '').trim());
+}
+
+export function inferImageMimeType(file: Pick<File, 'type' | 'name'>): string {
+  const mime = (file.type || '').trim().toLowerCase();
+  if (mime.startsWith('image/')) return mime;
+  const lower = (file.name || '').trim().toLowerCase();
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  if (lower.endsWith('.heic')) return 'image/heic';
+  if (lower.endsWith('.heif')) return 'image/heif';
+  if (lower.endsWith('.avif')) return 'image/avif';
+  return 'image/jpeg';
+}
+
 export function validateImageUploadFile(file: File): void {
-  if (!file.type.startsWith('image/')) {
-    throw new Error('Format file harus berupa gambar (JPG, PNG, atau WebP).');
+  if (!isImageFileLike(file)) {
+    throw new Error('Format file harus berupa gambar (JPG, PNG, WebP, atau HEIC).');
   }
   if (file.size > MAX_RAW_SIZE_BYTES) {
     throw new Error('Ukuran file terlalu besar. Maksimal 15 MB per dokumen.');
@@ -775,7 +796,7 @@ export function validateImageUploadFile(file: File): void {
 }
 
 export function validateProposalDocumentFile(file: File): void {
-  if (file.type.startsWith('image/')) {
+  if (isImageFileLike(file)) {
     if (file.size > MAX_RAW_SIZE_BYTES) {
       throw new Error('Ukuran gambar terlalu besar. Maksimal 15 MB per file.');
     }
@@ -823,7 +844,7 @@ export async function uploadProposalDocumentToDrive(
   existingDoc?: KpmDocumentFile | null
 ): Promise<KpmDocumentFile> {
   validateProposalDocumentFile(file);
-  const dims = file.type.startsWith('image/')
+  const dims = isImageFileLike(file)
     ? await measureImageFileDimensions(file)
     : { width: 0, height: 0 };
   const existingTarget = existingDoc?.fileId || existingDoc?.directUrl || existingDoc?.dataUrl || '';
@@ -885,7 +906,24 @@ export async function compressImageFileForOcr(
   };
 }
 
-function readFileAsDataUrl(file: File): Promise<string> {
+async function readFileAsDataUrl(file: File): Promise<string> {
+  if (typeof file.arrayBuffer === 'function') {
+    try {
+      const buf = await file.arrayBuffer();
+      if (buf && buf.byteLength > 0) {
+        const bytes = new Uint8Array(buf);
+        const chunkSize = 0x8000;
+        const parts: string[] = [];
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+          parts.push(String.fromCharCode(...bytes.subarray(i, i + chunkSize)));
+        }
+        const mime = inferImageMimeType(file);
+        return `data:${mime};base64,${btoa(parts.join(''))}`;
+      }
+    } catch {
+      // Fallback to FileReader below
+    }
+  }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
@@ -2814,7 +2852,7 @@ export function saveCustomYears(years: string[]): boolean {
   }
 }
 
-const hasRenderableMedia = (doc?: KpmDocumentFile): doc is KpmDocumentFile =>
+export const hasRenderableMedia = (doc?: KpmDocumentFile): doc is KpmDocumentFile =>
   Boolean(doc && (doc.dataUrl || doc.directUrl || doc.thumbnailUrl || doc.fileId));
 
 export function getPrimaryKpmPhotoWithMeta(

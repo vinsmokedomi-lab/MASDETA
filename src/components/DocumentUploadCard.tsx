@@ -27,6 +27,7 @@ import {
   compressImageFileForOcr,
   formatBytes,
   formatUploadDateTime,
+  isImageFileLike,
   removeDocumentFromDrive,
 } from '../utils/imageProcessor';
 import {
@@ -38,6 +39,7 @@ import {
   PhotoDocCategory,
   PhotoUploadJobSummary,
   retryPhotoUploadJob,
+  subscribePhotoUploadCancelled,
   subscribePhotoUploadJobs,
 } from '../utils/photoUploadManager';
 import {
@@ -130,6 +132,16 @@ export function DocumentUploadCard({
       setVaultJobs(jobs);
     });
   }, []);
+
+  useEffect(() => {
+    if (!isPendingValue || !pendingJobId) return;
+    return subscribePhotoUploadCancelled((cancelledJob) => {
+      if (cancelledJob.id === pendingJobId) {
+        if (!cancelledJob.existingDoc) onImageForOcrReady?.(undefined);
+        onChange(cancelledJob.existingDoc);
+      }
+    });
+  }, [isPendingValue, pendingJobId, onChange, onImageForOcrReady]);
 
   const handleFile = async (rawFile?: File, source: PhotoCaptureSource = 'file') => {
     if (!rawFile || effectiveDisabled || isProcessing) return;
@@ -289,7 +301,7 @@ export function DocumentUploadCard({
         const item = items[i];
         if (item.kind === 'file') {
           const pastedFile = item.getAsFile();
-          if (pastedFile && (pastedFile.type.startsWith('image/') || isPdfDocumentFile(pastedFile))) {
+          if (pastedFile && (isImageFileLike(pastedFile) || isPdfDocumentFile(pastedFile))) {
             e.preventDefault();
             setScannerWatchActive(false);
             setIsScannerModalOpen(false);

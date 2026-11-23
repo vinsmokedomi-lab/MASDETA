@@ -18,6 +18,7 @@ import {
   getDocumentDownloadHref,
 } from '../utils/imageProcessor';
 import {
+  downloadPendingJobToGallery,
   ensurePendingPhotoObjectUrl,
   extractPendingJobId,
   getPendingPhotoObjectUrl,
@@ -43,6 +44,7 @@ export function DocumentLightbox({ documentFile, title, onClose }: DocumentLight
   const [rotation, setRotation] = useState(0);
   const [isInteracting, setIsInteracting] = useState(false);
   const [pendingObjectUrl, setPendingObjectUrl] = useState<string>('');
+  const [saveToast, setSaveToast] = useState<string | null>(null);
 
   const stageRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -148,6 +150,7 @@ export function DocumentLightbox({ documentFile, title, onClose }: DocumentLight
     setPan({ x: 0, y: 0 });
     setRotation(0);
     setIsInteracting(false);
+    setSaveToast(null);
     baseSizeRef.current = { width: 0, height: 0 };
   }, [documentFile?.id]);
 
@@ -195,7 +198,10 @@ export function DocumentLightbox({ documentFile, title, onClose }: DocumentLight
   const isPdf =
     documentFile.mimeType === 'application/pdf' ||
     documentFile.fileName.toLowerCase().endsWith('.pdf');
-  const isImage = documentFile.mimeType.startsWith('image/');
+  const isImage =
+    !isPdf &&
+    (documentFile.mimeType.startsWith('image/') ||
+      /\.(jpe?g|png|webp|gif|bmp|heic|heif|avif)$/i.test(documentFile.fileName));
   const uploadTimeText = formatUploadDateTime(documentFile.uploadedAt);
   const directUrl = getDocumentDirectUrl(documentFile);
   const downloadHref = isLocalPending
@@ -558,18 +564,37 @@ export function DocumentLightbox({ documentFile, title, onClose }: DocumentLight
             </>
           )}
 
-          <a
-            href={downloadHref}
-            target="_blank"
-            rel="noopener noreferrer"
-            download={documentFile.fileName}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/15 bg-white/10 text-white transition-colors hover:bg-white/20 sm:w-auto sm:gap-1.5 sm:px-3"
-            aria-label={`Unduh ${documentFile.fileName}`}
-            title="Unduh"
-          >
-            <Download className="h-4 w-4" />
-            <span className="hidden text-xs font-medium sm:inline">Unduh</span>
-          </a>
+          {isLocalPending ? (
+            <button
+              type="button"
+              onClick={async () => {
+                const jobId = extractPendingJobId(documentFile);
+                if (!jobId) return;
+                const res = await downloadPendingJobToGallery(jobId);
+                setSaveToast(res.note);
+                window.setTimeout(() => setSaveToast(null), 4500);
+              }}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/15 bg-white/10 text-white transition-colors hover:bg-white/20 sm:w-auto sm:gap-1.5 sm:px-3"
+              aria-label={`Simpan ${documentFile.fileName}`}
+              title="Simpan ke Perangkat"
+            >
+              <Download className="h-4 w-4" />
+              <span className="hidden text-xs font-medium sm:inline">Simpan</span>
+            </button>
+          ) : (
+            <a
+              href={downloadHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              download={documentFile.fileName}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/15 bg-white/10 text-white transition-colors hover:bg-white/20 sm:w-auto sm:gap-1.5 sm:px-3"
+              aria-label={`Unduh ${documentFile.fileName}`}
+              title="Unduh"
+            >
+              <Download className="h-4 w-4" />
+              <span className="hidden text-xs font-medium sm:inline">Unduh</span>
+            </a>
+          )}
 
           <button
             type="button"
@@ -582,6 +607,12 @@ export function DocumentLightbox({ documentFile, title, onClose }: DocumentLight
           </button>
         </div>
       </div>
+
+      {saveToast && (
+        <div className="border-b border-teal-500/30 bg-teal-950/90 px-4 py-2 text-center text-xs font-medium text-teal-100">
+          {saveToast}
+        </div>
+      )}
 
       {/* Viewport Stage */}
       <div

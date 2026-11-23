@@ -18,6 +18,7 @@ import {
   FileSpreadsheet,
   FileText,
   History,
+  Images,
   Loader2,
   Lock,
   MapPin,
@@ -130,6 +131,7 @@ interface ProposalDetailViewProps {
   onEditProposal: (proposalId: string) => void;
   onAddKpmInProposal: (proposalName: string, tahun: string) => void;
   onViewKpmInProposal: (proposalName: string, tahun: string) => void;
+  onOpenPhotoGallery?: (proposalId: string) => void;
   onSelectKpm?: (record: KpmRecord) => void;
   onAcceptAllKpm?: (proposalName: string, tahun: string) => void;
   onTransferKpm?: (kpmIds: string[], targetProposalId: string) => Promise<boolean> | boolean;
@@ -201,6 +203,7 @@ export function ProposalDetailView({
   onEditProposal,
   onAddKpmInProposal,
   onViewKpmInProposal,
+  onOpenPhotoGallery,
   onSelectKpm,
   onTransferKpm,
   onOpenFullHistory,
@@ -1961,15 +1964,26 @@ export function ProposalDetailView({
             </div>
           ) : (
             <div className="mt-4 space-y-2">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={() => onViewKpmInProposal(proposal.namaProposal, proposal.tahun)}
-                  className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800"
+                  className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 whitespace-nowrap"
                 >
                   <Users className="h-4 w-4 shrink-0" />
                   <span className="truncate">Lihat Daftar KPM ({kpmCounts.total})</span>
                 </button>
+
+                {onOpenPhotoGallery && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenPhotoGallery(proposal.id)}
+                    className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50/80 px-3.5 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100 active:scale-[0.98] whitespace-nowrap"
+                  >
+                    <Images className="h-4 w-4 shrink-0" />
+                    <span>Galeri Foto</span>
+                  </button>
+                )}
 
                 {proposal.status !== 'locked' && canUpdate && onTransferKpm && (
                   <button
@@ -3114,6 +3128,16 @@ export function ProposalDetailView({
           </p>
         </div>
         <div className="flex flex-wrap shrink-0 items-center gap-2">
+          {onOpenPhotoGallery && (
+            <button
+              type="button"
+              onClick={() => onOpenPhotoGallery(proposal.id)}
+              className="inline-flex min-h-[38px] shrink-0 items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50/70 px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100 whitespace-nowrap"
+            >
+              <Images className="h-3.5 w-3.5 shrink-0" />
+              <span>Galeri Foto</span>
+            </button>
+          )}
           <button
             type="button"
             disabled={(proposalRecords.length === 0 && emptySlotsCount === 0) || kpmPdfBusy}

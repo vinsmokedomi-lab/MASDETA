@@ -100,6 +100,7 @@ export function DesktopSidebar({
     (activeSubView === 'none' && activeTab === 'proposal') ||
     activeSubView === 'proposal-detail' ||
     activeSubView === 'proposal-history' ||
+    activeSubView === 'proposal-photo-gallery' ||
     activeSubView === 'add-proposal' ||
     activeSubView === 'edit-proposal';
   const isDatabaseKpmActive =
