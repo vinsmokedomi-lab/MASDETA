@@ -6,12 +6,17 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock,
+  FileDown,
+  FolderArchive,
   Image as ImageIcon,
   Images,
   LayoutGrid,
   List,
+  Loader2,
   Lock,
+  RotateCcw,
   Search,
+  Share2,
   Upload,
   UserCheck,
   Users,
@@ -24,6 +29,8 @@ import {
   KpmRecord,
   ProposalRecord,
   ProposalSlotMap,
+  ReportTemplateConfig,
+  SingleDocumentKey,
   WilayahKabKota,
 } from '../types/kpm';
 import {
@@ -41,6 +48,12 @@ import {
   PhotoCaptureSource,
   PhotoDocCategory,
 } from '../utils/photoUploadManager';
+import { exportProposalPhotoLpjPdf } from '../utils/pdfExporter';
+import {
+  exportProposalPhotosZip,
+  triggerIosShareZipFile,
+  ZipPhotoCategory,
+} from '../utils/photoZipExporter';
 import { useIsDesktopWeb } from '../utils/platform';
 import { DriveImage } from './DriveImage';
 import { FilterSelect, SegmentedTabs } from './FormControls';
@@ -56,6 +69,7 @@ type GalleryPhotoCategoryFilter =
   | 'lainnya';
 
 type GalleryStatusFilter = 'all' | 'has_penerima' | 'missing_penerima';
+type GalleryAttendanceFilter = 'all' | 'present' | 'absent';
 type GalleryLayoutMode = 'list' | 'grid';
 
 interface ProposalPhotoGalleryViewProps {
@@ -67,6 +81,7 @@ interface ProposalPhotoGalleryViewProps {
   initialProposalId?: string | null;
   selectedYear?: string;
   canUpdate?: boolean;
+  reportTemplate?: ReportTemplateConfig;
   onBack: () => void;
   onSelectKpm: (record: KpmRecord) => void;
   onPreviewDocument: (file: KpmDocumentFile, title: string) => void;
@@ -83,7 +98,8 @@ interface ProposalPhotoGalleryViewProps {
   ) => Promise<void>;
   onSwapPenerimaPhoto?: (
     sourceKpmId: string,
-    targetKpmId: string
+    targetKpmId: string,
+    category?: SingleDocumentKey
   ) => Promise<boolean | void> | boolean | void;
 }
 
@@ -179,6 +195,7 @@ export function ProposalPhotoGalleryView({
   initialProposalId = null,
   selectedYear = 'all',
   canUpdate = true,
+  reportTemplate,
   onBack,
   onSelectKpm,
   onPreviewDocument,
@@ -203,12 +220,32 @@ export function ProposalPhotoGalleryView({
   const [kelurahanFilter, setKelurahanFilter] = useState<string>('all');
   const [categoryFilter, setCategoryFilter] = useState<GalleryPhotoCategoryFilter>('all');
   const [statusFilter, setStatusFilter] = useState<GalleryStatusFilter>('all');
+  const [attendanceFilter, setAttendanceFilter] = useState<GalleryAttendanceFilter>('all');
   const [layoutMode, setLayoutMode] = useState<GalleryLayoutMode>('list');
   const [showEmptySlots, setShowEmptySlots] = useState<boolean>(true);
   const [query, setQuery] = useState('');
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [busyKpmId, setBusyKpmId] = useState<string | null>(null);
-  const [swapSourceRecord, setSwapSourceRecord] = useState<KpmRecord | null>(null);
+  const [swapTarget, setSwapTarget] = useState<{
+    record: KpmRecord;
+    category: SingleDocumentKey;
+  } | null>(null);
+  const [lastSwapUndo, setLastSwapUndo] = useState<{
+    sourceKpmId: string;
+    targetKpmId: string;
+    sourceName: string;
+    targetName: string;
+    category: SingleDocumentKey;
+  } | null>(null);
+  const [undoSwapBusy, setUndoSwapBusy] = useState(false);
+  const [isExportingLpj, setIsExportingLpj] = useState(false);
+  const [isExportingZip, setIsExportingZip] = useState(false);
+  const [exportProgressLabel, setExportProgressLabel] = useState<string | null>(null);
+  const [exportNotice, setExportNotice] = useState<{
+    type: 'success' | 'error';
+    message: string;
+    pendingIosFile?: File;
+  } | null>(null);
 
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
@@ -372,11 +409,11 @@ export function ProposalPhotoGalleryView({
   }, [mergedSlots, kelurahanFilter, proposals, wilayahList]);
 
   const filteredSlots = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = query.trim().toLowerCase().replace(/^#/, '');
     return mergedSlots.filter((entry) => {
       if (entry.kind === 'empty') {
         if (!showEmptySlots || layoutMode === 'grid') return false;
-        if (kelurahanFilter !== 'all' || statusFilter !== 'all') return false;
+        if (kelurahanFilter !== 'all' || statusFilter !== 'all' || attendanceFilter !== 'all') return false;
         if (!q) return true;
         const seqStr = String(entry.slotNumber).padStart(2, '0');
         return (
@@ -395,6 +432,10 @@ export function ProposalPhotoGalleryView({
       const hasPenerima = hasRenderableMedia(rec.documents.penerima);
       if (statusFilter === 'has_penerima' && !hasPenerima) return false;
       if (statusFilter === 'missing_penerima' && hasPenerima) return false;
+
+      const isPresent = Boolean(rec.attendance?.present);
+      if (attendanceFilter === 'present' && !isPresent) return false;
+      if (attendanceFilter === 'absent' && isPresent) return false;
 
       const photos = collectKpmPhotos(rec, categoryFilter);
       if (layoutMode === 'grid' && categoryFilter !== 'all' && photos.length === 0) {
@@ -421,6 +462,7 @@ export function ProposalPhotoGalleryView({
     layoutMode,
     kelurahanFilter,
     statusFilter,
+    attendanceFilter,
     categoryFilter,
     proposals,
     wilayahList,
@@ -511,6 +553,114 @@ export function ProposalPhotoGalleryView({
   };
 
   const isProposalLocked = activeProposal?.status === 'locked';
+
+  const activeSwapCategory: SingleDocumentKey =
+    categoryFilter === 'survey' || categoryFilter === 'ktp' || categoryFilter === 'kk'
+      ? categoryFilter
+      : 'penerima';
+
+  const exportTargetEntries = useMemo(() => {
+    const visibleKpm = filteredSlots
+      .filter((entry): entry is Extract<typeof entry, { kind: 'kpm' }> => entry.kind === 'kpm')
+      .map((entry) => ({ slotNumber: entry.slotNumber, record: entry.record }));
+    if (visibleKpm.length > 0) return visibleKpm;
+    return mergedSlots
+      .filter((entry): entry is Extract<typeof entry, { kind: 'kpm' }> => entry.kind === 'kpm')
+      .map((entry) => ({ slotNumber: entry.slotNumber, record: entry.record }));
+  }, [filteredSlots, mergedSlots]);
+
+  const handleExportLpjPdf = async (layout: '4up' | '6up') => {
+    if (!activeProposal || exportTargetEntries.length === 0 || isExportingLpj || isExportingZip) {
+      return;
+    }
+    setExportNotice(null);
+    setIsExportingLpj(true);
+    setExportProgressLabel(`Menyiapkan PDF LPJ (${layout === '4up' ? '4' : '6'} foto/hal)...`);
+    try {
+      const zipCategory: ZipPhotoCategory =
+        categoryFilter === 'survey' || categoryFilter === 'ktp' || categoryFilter === 'kk'
+          ? categoryFilter
+          : 'penerima';
+      const res = await exportProposalPhotoLpjPdf({
+        proposal: activeProposal,
+        entries: exportTargetEntries,
+        items,
+        wilayahList,
+        proposals,
+        reportTemplate,
+        layout,
+        photoCategory: zipCategory,
+        onProgress: (done, total) => {
+          setExportProgressLabel(`Memuat foto ${done}/${total}...`);
+        },
+      });
+      setExportNotice({
+        type: 'success',
+        message: res.openedNative
+          ? `PDF LPJ Foto "${res.savedFileName}" (${res.renderedCount} KPM) berhasil dibuat & dibuka.`
+          : `PDF LPJ Foto "${res.savedFileName}" (${res.renderedCount} KPM) berhasil diunduh.`,
+      });
+    } catch (err) {
+      setExportNotice({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Gagal membuat PDF LPJ Foto.',
+      });
+    } finally {
+      setIsExportingLpj(false);
+      setExportProgressLabel(null);
+    }
+  };
+
+  const handleExportZip = async () => {
+    if (!activeProposal || exportTargetEntries.length === 0 || isExportingLpj || isExportingZip) {
+      return;
+    }
+    setExportNotice(null);
+    setIsExportingZip(true);
+    setExportProgressLabel('Menyiapkan arsip .ZIP...');
+    try {
+      const zipCategory: ZipPhotoCategory =
+        categoryFilter === 'survey' ||
+        categoryFilter === 'ktp' ||
+        categoryFilter === 'kk' ||
+        categoryFilter === 'rumah' ||
+        categoryFilter === 'lainnya'
+          ? categoryFilter
+          : 'penerima';
+      const res = await exportProposalPhotosZip({
+        proposal: activeProposal,
+        entries: exportTargetEntries,
+        category: zipCategory,
+        onProgress: (done, total) => {
+          setExportProgressLabel(`Mengemas foto ${done}/${total}...`);
+        },
+      });
+      if (res.pendingIosFile) {
+        setExportNotice({
+          type: 'success',
+          message: `Arsip ${res.savedFileName} (${res.exportedCount} foto) siap dibagikan.`,
+          pendingIosFile: res.pendingIosFile,
+        });
+      } else {
+        const skippedNote =
+          res.skippedCount > 0 ? ` (${res.skippedCount} KPM belum memiliki foto)` : '';
+        setExportNotice({
+          type: 'success',
+          message: res.openedNative
+            ? `Arsip ${res.savedFileName} (${res.exportedCount} foto) berhasil dibuat & dibuka${skippedNote}.`
+            : `Arsip ${res.savedFileName} (${res.exportedCount} foto) berhasil diunduh${skippedNote}.`,
+        });
+      }
+    } catch (err) {
+      setExportNotice({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Gagal membuat file .ZIP foto.',
+      });
+    } finally {
+      setIsExportingZip(false);
+      setExportProgressLabel(null);
+    }
+  };
 
   const categoryOptions: { key: GalleryPhotoCategoryFilter; label: string }[] = [
     { key: 'all', label: 'Semua Foto' },
@@ -772,15 +922,30 @@ export function ProposalPhotoGalleryView({
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <SegmentedTabs<GalleryStatusFilter>
-                value={statusFilter}
-                onChange={setStatusFilter}
-                tabs={[
-                  { key: 'all', label: `Semua (${summaryStats.totalKpm})` },
-                  { key: 'has_penerima', label: `Sudah Foto (${summaryStats.withPenerima})` },
-                  { key: 'missing_penerima', label: `Belum Foto (${summaryStats.missingPenerima})` },
-                ]}
-              />
+              <div className="flex flex-wrap items-center gap-2">
+                <SegmentedTabs<GalleryStatusFilter>
+                  value={statusFilter}
+                  onChange={setStatusFilter}
+                  tabs={[
+                    { key: 'all', label: `Semua (${summaryStats.totalKpm})` },
+                    { key: 'has_penerima', label: `Sudah Foto (${summaryStats.withPenerima})` },
+                    { key: 'missing_penerima', label: `Belum Foto (${summaryStats.missingPenerima})` },
+                  ]}
+                />
+
+                <SegmentedTabs<GalleryAttendanceFilter>
+                  value={attendanceFilter}
+                  onChange={setAttendanceFilter}
+                  tabs={[
+                    { key: 'all', label: 'Semua Absen' },
+                    { key: 'present', label: `Hadir (${summaryStats.attendingCount})` },
+                    {
+                      key: 'absent',
+                      label: `Belum Hadir (${Math.max(0, summaryStats.totalKpm - summaryStats.attendingCount)})`,
+                    },
+                  ]}
+                />
+              </div>
 
               {layoutMode === 'list' && summaryStats.emptyCount > 0 && (
                 <button
@@ -794,24 +959,152 @@ export function ProposalPhotoGalleryView({
             </div>
 
             {/* Category filter strip */}
-            <div className="flex flex-wrap items-center gap-1.5">
-              {categoryOptions.map((opt) => (
-                <button
-                  key={opt.key}
-                  type="button"
-                  onClick={() => setCategoryFilter(opt.key)}
-                  className={`min-h-[30px] rounded-lg px-2.5 text-xs font-semibold transition-colors whitespace-nowrap ${
-                    categoryFilter === opt.key
-                      ? 'bg-teal-700 text-white'
-                      : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {categoryOptions.map((opt) => (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => setCategoryFilter(opt.key)}
+                    className={`min-h-[30px] rounded-lg px-2.5 text-xs font-semibold transition-colors whitespace-nowrap ${
+                      categoryFilter === opt.key
+                        ? 'bg-teal-700 text-white'
+                        : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+
+              {activeProposal && exportTargetEntries.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={isExportingLpj || isExportingZip}
+                    onClick={() => void handleExportLpjPdf('4up')}
+                    className="inline-flex min-h-[32px] items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50/70 px-2.5 text-[11px] font-semibold text-teal-800 hover:bg-teal-100 disabled:opacity-50 whitespace-nowrap"
+                    title="Export PDF LPJ Dokumentasi Foto (4 foto per halaman F4)"
+                  >
+                    {isExportingLpj ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                    ) : (
+                      <FileDown className="h-3.5 w-3.5 shrink-0" />
+                    )}
+                    <span>PDF LPJ (4/hal)</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isExportingLpj || isExportingZip}
+                    onClick={() => void handleExportLpjPdf('6up')}
+                    className="inline-flex min-h-[32px] items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap"
+                    title="Export PDF LPJ Dokumentasi Foto (6 foto per halaman F4)"
+                  >
+                    <FileDown className="h-3.5 w-3.5 shrink-0 text-teal-700" />
+                    <span>PDF LPJ (6/hal)</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isExportingLpj || isExportingZip}
+                    onClick={() => void handleExportZip()}
+                    className="inline-flex min-h-[32px] items-center gap-1.5 rounded-lg bg-teal-700 px-2.5 text-[11px] font-semibold text-white hover:bg-teal-800 disabled:opacity-50 whitespace-nowrap"
+                    title="Download semua foto kelurahan terurut & rename otomatis dalam 1 file .ZIP"
+                  >
+                    {isExportingZip ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                    ) : (
+                      <FolderArchive className="h-3.5 w-3.5 shrink-0" />
+                    )}
+                    <span>Download .ZIP</span>
+                  </button>
+                </div>
+              )}
             </div>
+
+            {exportProgressLabel && (
+              <div className="flex items-center gap-2 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-medium text-teal-900">
+                <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0 text-teal-700" />
+                <span>{exportProgressLabel}</span>
+              </div>
+            )}
+
+            {exportNotice && (
+              <div
+                role="status"
+                className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 text-xs ${
+                  exportNotice.type === 'success'
+                    ? 'border-teal-200 bg-teal-50 text-teal-900'
+                    : 'border-rose-200 bg-rose-50 text-rose-900'
+                }`}
+              >
+                <span className="font-medium">{exportNotice.message}</span>
+                <div className="flex items-center gap-2">
+                  {exportNotice.pendingIosFile && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const f = exportNotice.pendingIosFile!;
+                        void triggerIosShareZipFile(f).then(() => setExportNotice(null));
+                      }}
+                      className="inline-flex items-center gap-1 rounded-lg bg-teal-700 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-teal-800"
+                    >
+                      <Share2 className="h-3 w-3" />
+                      <span>Bagikan / Simpan File</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setExportNotice(null)}
+                    className="rounded p-0.5 text-current/70 hover:text-current"
+                    aria-label="Tutup notifikasi export"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </section>
+
+        {lastSwapUndo && onSwapPenerimaPhoto && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-teal-200 bg-teal-50 px-4 py-2.5 text-xs text-teal-900">
+            <span>
+              Foto antara <strong>{lastSwapUndo.sourceName}</strong> dan{' '}
+              <strong>{lastSwapUndo.targetName}</strong> baru saja ditukar/dipindah.
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={undoSwapBusy}
+                onClick={async () => {
+                  setUndoSwapBusy(true);
+                  try {
+                    await onSwapPenerimaPhoto(
+                      lastSwapUndo.sourceKpmId,
+                      lastSwapUndo.targetKpmId,
+                      lastSwapUndo.category
+                    );
+                    setLastSwapUndo(null);
+                  } finally {
+                    setUndoSwapBusy(false);
+                  }
+                }}
+                className="inline-flex items-center gap-1 rounded-lg bg-teal-700 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
+              >
+                <RotateCcw className="h-3 w-3" />
+                <span>{undoSwapBusy ? 'Mengembalikan...' : 'Undo Cepat'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setLastSwapUndo(null)}
+                className="rounded-lg p-1 text-teal-700 hover:bg-teal-100"
+                aria-label="Tutup notifikasi undo"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
 
         {uploadError && (
           <div
@@ -938,22 +1231,26 @@ export function ProposalPhotoGalleryView({
                         ) : (
                           <Clock className="h-3.5 w-3.5 shrink-0" />
                         )}
-                        <span>{isAttending ? 'Hadir' : 'Belum Hadir'}</span>
+                        <span>
+                          {isAttending
+                            ? rec.attendance?.representativeName
+                              ? `Hadir (Diwakilkan: ${rec.attendance.representativeName})`
+                              : 'Hadir'
+                            : 'Belum Hadir'}
+                        </span>
                       </span>
 
-                      {canUpdate && !isProposalLocked && onSwapPenerimaPhoto && (hasPenerima || summaryStats.withPenerima > 0) && (
+                      {canUpdate && !isProposalLocked && onSwapPenerimaPhoto && (
                         <button
                           type="button"
-                          onClick={() => setSwapSourceRecord(rec)}
-                          title={
-                            hasPenerima
-                              ? 'Tukar atau pindahkan Foto Penerima ke KPM lain'
-                              : 'Ambil Foto Penerima yang salah upload dari KPM lain'
+                          onClick={() =>
+                            setSwapTarget({ record: rec, category: activeSwapCategory })
                           }
+                          title="Tukar atau pindahkan foto dengan KPM lain"
                           className="inline-flex min-h-[32px] items-center gap-1 rounded-lg border border-teal-200 bg-teal-50/80 px-2.5 text-[11px] font-semibold text-teal-800 hover:bg-teal-100 whitespace-nowrap"
                         >
                           <ArrowLeftRight className="h-3.5 w-3.5 shrink-0" />
-                          <span>{hasPenerima ? 'Tukar / Pindah' : 'Ambil Foto'}</span>
+                          <span>{hasPenerima ? 'Tukar / Pindah' : 'Tukar / Ambil'}</span>
                         </button>
                       )}
 
@@ -1156,24 +1453,34 @@ export function ProposalPhotoGalleryView({
                     </button>
                     <div className="flex items-center justify-between gap-1.5 border-t border-slate-100 pt-1.5 text-[11px]">
                       <span
-                        className={`inline-flex items-center gap-1 font-semibold ${
+                        className={`inline-flex items-center gap-1 font-semibold truncate ${
                           isAttending ? 'text-teal-700' : 'text-slate-400'
                         }`}
                       >
                         <CheckCircle2 className="h-3 w-3 shrink-0" />
-                        <span>{isAttending ? 'Hadir' : 'Belum'}</span>
+                        <span className="truncate">
+                          {isAttending
+                            ? card.record.attendance?.representativeName
+                              ? `Hadir (${card.record.attendance.representativeName})`
+                              : 'Hadir'
+                            : 'Belum'}
+                        </span>
                       </span>
                       <div className="flex items-center gap-1.5">
-                        {canUpdate &&
-                          !isProposalLocked &&
-                          onSwapPenerimaPhoto &&
-                          (card.photo?.category === 'penerima' ||
-                            (!card.photo && summaryStats.withPenerima > 0)) && (
+                        {canUpdate && !isProposalLocked && onSwapPenerimaPhoto && (
                             <button
                               type="button"
-                              onClick={() => setSwapSourceRecord(card.record)}
+                              onClick={() => {
+                                const cat: SingleDocumentKey =
+                                  card.photo?.category === 'survey' ||
+                                  card.photo?.category === 'ktp' ||
+                                  card.photo?.category === 'kk'
+                                    ? card.photo.category
+                                    : activeSwapCategory;
+                                setSwapTarget({ record: card.record, category: cat });
+                              }}
                               className="inline-flex items-center gap-1 rounded-md border border-teal-200 bg-teal-50/80 px-1.5 py-0.5 text-[10px] font-semibold text-teal-800 hover:bg-teal-100 whitespace-nowrap"
-                              title="Tukar / Pindah Foto Penerima"
+                              title="Tukar / Pindah Foto dengan KPM lain"
                             >
                               <ArrowLeftRight className="h-2.5 w-2.5" />
                               <span>Tukar</span>
@@ -1198,15 +1505,30 @@ export function ProposalPhotoGalleryView({
 
       {onSwapPenerimaPhoto && (
         <SwapPenerimaPhotoModal
-          open={Boolean(swapSourceRecord)}
-          sourceRecord={swapSourceRecord}
+          open={Boolean(swapTarget)}
+          sourceRecord={swapTarget?.record ?? null}
+          initialCategory={swapTarget?.category ?? 'penerima'}
           allRecords={records}
           proposals={proposals}
           items={items}
           wilayahList={wilayahList}
           proposalSlotMap={proposalSlotMap}
-          onClose={() => setSwapSourceRecord(null)}
-          onConfirmSwap={onSwapPenerimaPhoto}
+          onClose={() => setSwapTarget(null)}
+          onConfirmSwap={async (sourceId, targetId, cat = 'penerima') => {
+            const ok = await onSwapPenerimaPhoto(sourceId, targetId, cat);
+            if (ok !== false) {
+              const src = records.find((r) => r.id === sourceId);
+              const tgt = records.find((r) => r.id === targetId);
+              setLastSwapUndo({
+                sourceKpmId: sourceId,
+                targetKpmId: targetId,
+                sourceName: src?.nama || 'KPM asal',
+                targetName: tgt?.nama || 'KPM tujuan',
+                category: cat,
+              });
+            }
+            return ok;
+          }}
         />
       )}
     </div>

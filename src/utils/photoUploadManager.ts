@@ -16,10 +16,14 @@ const PHOTO_VAULT_DB_NAME = 'masdeta_photo_vault_v1';
 const PHOTO_VAULT_STORE = 'jobs';
 const PHOTO_VAULT_CACHE_NAME = 'masdeta-photo-vault-bytes-v1';
 const AUTO_SAVE_GALLERY_KEY = 'masdeta_auto_save_gallery_v1';
+const LOW_BANDWIDTH_MODE_KEY = 'masdeta_low_bandwidth_photo_v1';
 const MAX_CONCURRENT_UPLOADS = 2;
 const MAX_IMAGE_EDGE = 1600;
 const JPEG_QUALITY = 0.84;
 const SKIP_REENCODE_SIZE_BYTES = 450 * 1024;
+const LOW_BW_MAX_IMAGE_EDGE = 1280;
+const LOW_BW_JPEG_QUALITY = 0.72;
+const LOW_BW_SKIP_REENCODE_SIZE_BYTES = 240 * 1024;
 const MIN_GALLERY_FREE_BYTES = 35 * 1024 * 1024; // 35 MB safety headroom
 
 export interface PhotoUploadJob {
@@ -159,6 +163,102 @@ export function setAutoSaveGallerySetting(enabled: boolean): void {
     // ignore storage errors
   }
   notifyJobsListeners();
+}
+
+export function getLowBandwidthModeSetting(): boolean {
+  try {
+    return localStorage.getItem(LOW_BANDWIDTH_MODE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export function setLowBandwidthModeSetting(enabled: boolean): void {
+  try {
+    localStorage.setItem(LOW_BANDWIDTH_MODE_KEY, enabled ? 'true' : 'false');
+  } catch {
+    // ignore storage errors
+  }
+  notifyJobsListeners();
+}
+
+export interface DeviceStorageEstimate {
+  usageBytes: number;
+  quotaBytes: number;
+  freeBytes: number;
+  usedPct: number;
+  localJobsBytes: number;
+}
+
+export async function getDeviceStorageEstimate(): Promise<DeviceStorageEstimate> {
+  let localJobsBytes = 0;
+  for (const job of jobsMap.values()) {
+    if (!job.corrupted && job.bytes) {
+      localJobsBytes += job.bytes.byteLength;
+    }
+  }
+
+  let usageBytes = localJobsBytes;
+  let quotaBytes = 0;
+  try {
+    if (typeof navigator !== 'undefined' && navigator.storage?.estimate) {
+      const est = await navigator.storage.estimate();
+      if (typeof est.usage === 'number' && est.usage > 0) usageBytes = est.usage;
+      if (typeof est.quota === 'number' && est.quota > 0) quotaBytes = est.quota;
+    }
+  } catch {
+    // fallback cleanly with localJobsBytes
+  }
+
+  const freeBytes = quotaBytes > 0 ? Math.max(0, quotaBytes - usageBytes) : 0;
+  const usedPct =
+    quotaBytes > 0 ? Math.min(100, Math.round((usageBytes / quotaBytes) * 100)) : 0;
+
+  return {
+    usageBytes,
+    quotaBytes,
+    freeBytes,
+    usedPct,
+    localJobsBytes,
+  };
+}
+
+export async function getPendingPhotoBytesByDoc(
+  doc?: KpmDocumentFile | null
+): Promise<{ bytes: ArrayBuffer; mimeType: string; fileName: string } | null> {
+  if (!doc || !isLocalPendingDocument(doc)) return null;
+  const jobId = extractPendingJobId(doc);
+  if (!jobId) return null;
+  await initPhotoUploadManager();
+  const job = jobsMap.get(jobId);
+  if (!job || job.corrupted || !job.bytes || job.bytes.byteLength === 0) {
+    // Also check if job already completed just moments ago
+    const completed = completedByJobId.get(jobId);
+    if (completed?.dataUrl && completed.dataUrl.startsWith('data:')) {
+      const buf = dataUrlToArrayBuffer(completed.dataUrl);
+      if (buf && buf.byteLength > 0) {
+        return {
+          bytes: buf,
+          mimeType: completed.mimeType || 'image/jpeg',
+          fileName: completed.fileName || doc.fileName,
+        };
+      }
+    }
+    return null;
+  }
+  return {
+    bytes: job.bytes.slice(0),
+    mimeType: job.mimeType || 'image/jpeg',
+    fileName: job.fileName,
+  };
+}
+
+export async function getPendingPhotoDataUrlByDoc(
+  doc?: KpmDocumentFile | null
+): Promise<string | null> {
+  const res = await getPendingPhotoBytesByDoc(doc);
+  if (!res) return null;
+  return uint8ArrayToDataUrl(new Uint8Array(res.bytes), res.mimeType);
 }
 
 function uint8ArrayToBase64(bytes: Uint8Array): string {
@@ -1060,8 +1160,17 @@ async function preparePhotoForSafeUpload(
       }
     }
 
+    const lowBandwidth = getLowBandwidthModeSetting();
+    const targetMaxEdge = lowBandwidth ? LOW_BW_MAX_IMAGE_EDGE : MAX_IMAGE_EDGE;
+    const targetQuality = lowBandwidth ? LOW_BW_JPEG_QUALITY : JPEG_QUALITY;
+    const targetSkipReencode = lowBandwidth
+      ? LOW_BW_SKIP_REENCODE_SIZE_BYTES
+      : SKIP_REENCODE_SIZE_BYTES;
+    const targetFallbackMaxBytes = lowBandwidth ? 450 * 1024 : 1_200_000;
+    const targetFallbackQuality = lowBandwidth ? 0.6 : 0.74;
+
     const needsResize =
-      Math.max(srcW, srcH) > MAX_IMAGE_EDGE || rawBytes.byteLength > SKIP_REENCODE_SIZE_BYTES;
+      Math.max(srcW, srcH) > targetMaxEdge || rawBytes.byteLength > targetSkipReencode;
     if (!needsResize || srcW === 0 || srcH === 0) {
       return {
         bytes: rawBytes,
@@ -1075,7 +1184,7 @@ async function preparePhotoForSafeUpload(
       };
     }
 
-    const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(srcW, srcH));
+    const scale = Math.min(1, targetMaxEdge / Math.max(srcW, srcH));
     const dstW = Math.max(1, Math.round(srcW * scale));
     const dstH = Math.max(1, Math.round(srcH * scale));
     const canvas = document.createElement('canvas');
@@ -1099,15 +1208,15 @@ async function preparePhotoForSafeUpload(
     ctx.fillRect(0, 0, dstW, dstH);
     ctx.drawImage(img, 0, 0, dstW, dstH);
 
-    let outBytes = await encodeCanvasToJpegBytes(canvas, JPEG_QUALITY);
-    if (outBytes && outBytes.byteLength > 1_200_000) {
-      const lighter = await encodeCanvasToJpegBytes(canvas, 0.74);
+    let outBytes = await encodeCanvasToJpegBytes(canvas, targetQuality);
+    if (outBytes && outBytes.byteLength > targetFallbackMaxBytes) {
+      const lighter = await encodeCanvasToJpegBytes(canvas, targetFallbackQuality);
       if (lighter) outBytes = lighter;
     }
 
     if (
       !outBytes ||
-      (outBytes.byteLength >= rawBytes.byteLength && Math.max(srcW, srcH) <= MAX_IMAGE_EDGE)
+      (outBytes.byteLength >= rawBytes.byteLength && Math.max(srcW, srcH) <= targetMaxEdge)
     ) {
       return {
         bytes: rawBytes,
@@ -1369,13 +1478,20 @@ export async function bindFormDraftJobsToKpm(
   return alreadyCompleted;
 }
 
-export async function swapPendingPenerimaJobOwners(params: {
+export async function swapPendingPhotoJobOwners(params: {
+  category?: SingleDocumentKey;
   firstKpmId: string;
   firstKpmName: string;
   secondKpmId: string;
   secondKpmName: string;
 }): Promise<void> {
-  const { firstKpmId, firstKpmName, secondKpmId, secondKpmName } = params;
+  const {
+    category = 'penerima',
+    firstKpmId,
+    firstKpmName,
+    secondKpmId,
+    secondKpmName,
+  } = params;
   if (!firstKpmId || !secondKpmId || firstKpmId === secondKpmId) return;
   await initPhotoUploadManager();
 
@@ -1383,7 +1499,7 @@ export async function swapPendingPenerimaJobOwners(params: {
   const fromSecond: PhotoUploadJob[] = [];
 
   for (const job of jobsMap.values()) {
-    if (job.category !== 'penerima') continue;
+    if (job.category !== category) continue;
     if (job.kpmId === firstKpmId) fromFirst.push(job);
     else if (job.kpmId === secondKpmId) fromSecond.push(job);
   }
@@ -1406,6 +1522,15 @@ export async function swapPendingPenerimaJobOwners(params: {
     await putVaultJobToDb(job);
   }
   notifyJobsListeners();
+}
+
+export async function swapPendingPenerimaJobOwners(params: {
+  firstKpmId: string;
+  firstKpmName: string;
+  secondKpmId: string;
+  secondKpmName: string;
+}): Promise<void> {
+  return swapPendingPhotoJobOwners({ ...params, category: 'penerima' });
 }
 
 export async function cancelPendingPhotoUploadJob(jobId: string): Promise<void> {

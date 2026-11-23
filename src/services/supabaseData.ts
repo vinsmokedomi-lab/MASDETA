@@ -3672,9 +3672,21 @@ export async function saveAppStateSlice<T>(stateKey: string, payload: T): Promis
 // ============================================================================
 const SCHEDULES_LEGACY_STATE_KEY = 'masdeta_schedules_v1';
 
+function isMissingBookIdColumnError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const err = error as { code?: string; message?: string; details?: string; hint?: string };
+  const code = String(err.code || '');
+  const msg = `${err.message || ''} ${err.details || ''} ${err.hint || ''}`.toLowerCase();
+  return (
+    (code === 'PGRST204' || code === '42703' || msg.includes('column') || msg.includes('schema cache')) &&
+    msg.includes('book_id')
+  );
+}
+
 function mapRowToSchedule(row: Record<string, unknown>): ScheduleEventItem {
   return {
     id: String(row.id || ''),
+    bookId: row.book_id ? String(row.book_id) : undefined,
     title: String(row.title || 'Agenda Kegiatan'),
     category: (String(row.category || 'lainnya') as ScheduleCategory) || 'lainnya',
     targetDay: row.target_day ? String(row.target_day) : undefined,
@@ -3695,8 +3707,8 @@ function mapRowToSchedule(row: Record<string, unknown>): ScheduleEventItem {
   };
 }
 
-function mapScheduleToRow(item: ScheduleEventItem) {
-  return {
+function mapScheduleToRow(item: ScheduleEventItem, includeBookId = true) {
+  const base = {
     id: item.id,
     title: item.title,
     category: item.category,
@@ -3713,6 +3725,7 @@ function mapScheduleToRow(item: ScheduleEventItem) {
     created_at: item.createdAt || new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
+  return includeBookId ? { ...base, book_id: item.bookId || null } : base;
 }
 
 export async function fetchSchedulesFromSupabase(): Promise<ScheduleEventItem[]> {
@@ -3750,7 +3763,18 @@ export async function fetchSchedulesFromSupabase(): Promise<ScheduleEventItem[]>
     }
 
     if (data.length > 0) {
-      const mapped = data.map((row) => mapRowToSchedule(row));
+      // Preserve local bookId for items where remote row has null/missing book_id
+      const localBookById = new Map<string, string>();
+      localList.forEach((item) => {
+        if (item.id && item.bookId) localBookById.set(item.id, item.bookId);
+      });
+      const mapped = data.map((row) => {
+        const parsed = mapRowToSchedule(row);
+        if (!parsed.bookId && localBookById.has(parsed.id)) {
+          parsed.bookId = localBookById.get(parsed.id);
+        }
+        return parsed;
+      });
       try {
         localStorage.setItem(localKey, JSON.stringify(mapped));
       } catch {
@@ -3763,9 +3787,15 @@ export async function fetchSchedulesFromSupabase(): Promise<ScheduleEventItem[]>
     const legacyRemote = await fetchAppStateSlice<ScheduleEventItem[]>(SCHEDULES_LEGACY_STATE_KEY, []);
     const seedSource = legacyRemote.length > 0 ? legacyRemote : localList;
     if (seedSource.length > 0) {
-      const { error: seedErr } = await supabase
+      let { error: seedErr } = await supabase
         .from('schedules')
-        .upsert(seedSource.map(mapScheduleToRow), { onConflict: 'id' });
+        .upsert(seedSource.map((s) => mapScheduleToRow(s, true)), { onConflict: 'id' });
+      if (seedErr && isMissingBookIdColumnError(seedErr)) {
+        const retryRes = await supabase
+          .from('schedules')
+          .upsert(seedSource.map((s) => mapScheduleToRow(s, false)), { onConflict: 'id' });
+        seedErr = retryRes.error;
+      }
       if (!seedErr) {
         try {
           localStorage.setItem(localKey, JSON.stringify(seedSource));
@@ -3802,9 +3832,15 @@ export async function upsertScheduleInSupabase(
   if (!isSupabaseConfigured) return;
 
   try {
-    const { error } = await supabase
+    let { error } = await supabase
       .from('schedules')
-      .upsert(mapScheduleToRow(item), { onConflict: 'id' });
+      .upsert(mapScheduleToRow(item, true), { onConflict: 'id' });
+    if (error && isMissingBookIdColumnError(error)) {
+      const retry = await supabase
+        .from('schedules')
+        .upsert(mapScheduleToRow(item, false), { onConflict: 'id' });
+      error = retry.error;
+    }
     if (error) {
       if (isSchemaMissingError(error) && fullNextList) {
         await saveAppStateSlice(SCHEDULES_LEGACY_STATE_KEY, fullNextList);

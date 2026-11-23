@@ -76,6 +76,8 @@ export interface KpmAttendanceInfo {
   updatedAt: string;
   updatedBy: string;
   source?: 'manual' | 'auto_photo';
+  representativeName?: string;
+  representativeRelation?: string;
 }
 
 export interface KpmRecord {

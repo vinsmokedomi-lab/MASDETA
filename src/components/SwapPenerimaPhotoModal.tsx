@@ -15,6 +15,7 @@ import {
   KpmRecord,
   ProposalRecord,
   ProposalSlotMap,
+  SingleDocumentKey,
   WilayahKabKota,
 } from '../types/kpm';
 import {
@@ -27,24 +28,40 @@ import {
 import { isLocalPendingDocument } from '../utils/photoUploadManager';
 import { DriveImage } from './DriveImage';
 
+const SWAP_CATEGORY_META: {
+  key: SingleDocumentKey;
+  shortLabel: string;
+  label: string;
+}[] = [
+  { key: 'penerima', shortLabel: 'Penerima', label: 'Foto Penerima' },
+  { key: 'survey', shortLabel: 'Survey', label: 'Foto Survey' },
+  { key: 'ktp', shortLabel: 'KTP', label: 'Foto KTP' },
+  { key: 'kk', shortLabel: 'KK', label: 'Foto KK' },
+];
+
 interface SwapPenerimaPhotoModalProps {
   open: boolean;
   sourceRecord: KpmRecord | null;
+  initialCategory?: SingleDocumentKey;
   allRecords: KpmRecord[];
   proposals: ProposalRecord[];
   items: ItemBantuan[];
   wilayahList?: WilayahKabKota[];
   proposalSlotMap?: ProposalSlotMap;
   onClose: () => void;
-  onConfirmSwap: (sourceKpmId: string, targetKpmId: string) => Promise<boolean | void> | boolean | void;
+  onConfirmSwap: (
+    sourceKpmId: string,
+    targetKpmId: string,
+    category?: SingleDocumentKey
+  ) => Promise<boolean | void> | boolean | void;
 }
 
 interface CandidateKpmSlot {
   record: KpmRecord;
   slotNumber: number | null;
   kelurahan: string;
-  penerimaDoc?: KpmDocumentFile;
-  hasPenerima: boolean;
+  doc?: KpmDocumentFile;
+  hasDoc: boolean;
   isLockedProposal: boolean;
 }
 
@@ -87,6 +104,7 @@ function MiniPhotoPreview({
 export function SwapPenerimaPhotoModal({
   open,
   sourceRecord,
+  initialCategory = 'penerima',
   allRecords,
   proposals,
   items,
@@ -95,16 +113,26 @@ export function SwapPenerimaPhotoModal({
   onClose,
   onConfirmSwap,
 }: SwapPenerimaPhotoModalProps) {
+  const [activeCategory, setActiveCategory] = useState<SingleDocumentKey>(initialCategory);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTargetId, setSelectedTargetId] = useState<string>('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!open) return;
+    setActiveCategory(initialCategory);
     setSearchQuery('');
     setSelectedTargetId('');
     setBusy(false);
-  }, [open, sourceRecord?.id]);
+  }, [open, sourceRecord?.id, initialCategory]);
+
+  useEffect(() => {
+    setSelectedTargetId('');
+  }, [activeCategory]);
+
+  const categoryMeta =
+    SWAP_CATEGORY_META.find((m) => m.key === activeCategory) ?? SWAP_CATEGORY_META[0];
+  const categoryLabel = categoryMeta.label;
 
   const sourceProposal = useMemo(() => {
     if (!sourceRecord) return null;
@@ -176,14 +204,14 @@ export function SwapPenerimaPhotoModal({
         }
         const dom = resolveKpmDomicile(entry.record, proposals, wilayahList);
         const kel = dom.kelurahan?.trim() || entry.record.kelurahan?.trim() || '-';
-        const doc = entry.record.documents.penerima;
+        const doc = entry.record.documents[activeCategory];
         const hasDoc = Boolean(doc && hasRenderableMedia(doc));
         list.push({
           record: entry.record,
           slotNumber: entry.slotNumber,
           kelurahan: kel,
-          penerimaDoc: doc,
-          hasPenerima: hasDoc,
+          doc,
+          hasDoc,
           isLockedProposal: isRecordProposalLocked(entry.record),
         });
       }
@@ -197,29 +225,38 @@ export function SwapPenerimaPhotoModal({
       .map((rec) => {
         const dom = resolveKpmDomicile(rec, proposals, wilayahList);
         const kel = dom.kelurahan?.trim() || rec.kelurahan?.trim() || '-';
-        const doc = rec.documents.penerima;
+        const doc = rec.documents[activeCategory];
         return {
           record: rec,
           slotNumber: null,
           kelurahan: kel,
-          penerimaDoc: doc,
-          hasPenerima: Boolean(doc && hasRenderableMedia(doc)),
+          doc,
+          hasDoc: Boolean(doc && hasRenderableMedia(doc)),
           isLockedProposal: isRecordProposalLocked(rec),
         };
       });
 
     return { sourceSlotNumber: null, candidates: list };
-  }, [sourceRecord, sourceProposal, allRecords, proposals, items, wilayahList, proposalSlotMap]);
+  }, [
+    sourceRecord,
+    sourceProposal,
+    allRecords,
+    proposals,
+    items,
+    wilayahList,
+    proposalSlotMap,
+    activeCategory,
+  ]);
 
   if (!open || !sourceRecord) return null;
 
-  const sourceDoc = sourceRecord.documents.penerima;
-  const sourceHasPenerima = Boolean(sourceDoc && hasRenderableMedia(sourceDoc));
+  const sourceDoc = sourceRecord.documents[activeCategory];
+  const sourceHasDoc = Boolean(sourceDoc && hasRenderableMedia(sourceDoc));
 
-  // If source has NO Foto Penerima yet, only offer candidates that DO have a Foto Penerima to pull from
+  // If source has NO photo yet in this category, only offer candidates that DO have a photo to pull from
   const eligibleCandidates = candidates.filter((c) => {
     if (c.isLockedProposal) return false;
-    if (!sourceHasPenerima && !c.hasPenerima) return false;
+    if (!sourceHasDoc && !c.hasDoc) return false;
     return true;
   });
 
@@ -232,7 +269,7 @@ export function SwapPenerimaPhotoModal({
         )
       : [];
 
-  const q = searchQuery.trim().toLowerCase();
+  const q = searchQuery.trim().toLowerCase().replace(/^#/, '');
   const filteredCandidates = eligibleCandidates.filter((c) => {
     if (!q) return true;
     const seqPad = c.slotNumber !== null ? String(c.slotNumber).padStart(2, '0') : '';
@@ -258,14 +295,14 @@ export function SwapPenerimaPhotoModal({
       : 'KPM';
 
   const isTwoWaySwap = Boolean(
-    sourceHasPenerima && selectedTarget && selectedTarget.hasPenerima
+    sourceHasDoc && selectedTarget && selectedTarget.hasDoc
   );
 
   const handleSubmit = async () => {
     if (!selectedTarget || busy) return;
     setBusy(true);
     try {
-      const ok = await onConfirmSwap(sourceRecord.id, selectedTarget.record.id);
+      const ok = await onConfirmSwap(sourceRecord.id, selectedTarget.record.id, activeCategory);
       if (ok !== false) {
         onClose();
       }
@@ -289,31 +326,54 @@ export function SwapPenerimaPhotoModal({
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
-          <div className="flex items-start gap-2.5 min-w-0">
-            <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
-              <ArrowLeftRight className="h-4.5 w-4.5" />
+        <div className="border-b border-slate-100 px-5 py-4 space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-2.5 min-w-0">
+              <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+                <ArrowLeftRight className="h-4.5 w-4.5" />
+              </div>
+              <div className="min-w-0">
+                <h2 id="swap-penerima-modal-title" className="text-base font-bold text-slate-900">
+                  Tukar / Pindah {categoryLabel}
+                </h2>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  {sourceHasDoc
+                    ? `Pilih KPM tujuan untuk menukar atau memindahkan ${categoryLabel} tanpa upload ulang.`
+                    : `Pilih KPM lain yang sudah memiliki ${categoryLabel} untuk dipindahkan ke KPM ini.`}
+                </p>
+              </div>
             </div>
-            <div className="min-w-0">
-              <h2 id="swap-penerima-modal-title" className="text-base font-bold text-slate-900">
-                Tukar / Pindah Foto Penerima
-              </h2>
-              <p className="mt-0.5 text-xs text-slate-500">
-                {sourceHasPenerima
-                  ? 'Pilih KPM tujuan untuk menukar atau memindahkan Foto Penerima tanpa upload ulang.'
-                  : 'Pilih KPM lain yang sudah memiliki Foto Penerima untuk dipindahkan ke KPM ini.'}
-              </p>
-            </div>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onClose}
+              aria-label="Tutup modal tukar foto"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-40"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onClose}
-            aria-label="Tutup modal tukar foto"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-40"
-          >
-            <X className="h-4 w-4" />
-          </button>
+
+          <div className="grid grid-cols-4 gap-1 rounded-xl bg-slate-100 p-1">
+            {SWAP_CATEGORY_META.map((tab) => {
+              const isActive = tab.key === activeCategory;
+              return (
+                <button
+                  key={tab.key}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setActiveCategory(tab.key)}
+                  className={`rounded-lg px-2 py-1.5 text-[11px] font-bold transition-colors ${
+                    isActive
+                      ? 'bg-white text-teal-800 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {tab.shortLabel}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* Body */}
@@ -346,9 +406,9 @@ export function SwapPenerimaPhotoModal({
                 {sourceProposal ? ` · ${sourceProposal.namaProposal}` : ''}
               </p>
               <p className="mt-0.5 text-[11px] font-medium text-teal-800">
-                {sourceHasPenerima
-                  ? 'Memiliki Foto Penerima saat ini'
-                  : 'Belum memiliki Foto Penerima (akan menerima foto)'}
+                {sourceHasDoc
+                  ? `Memiliki ${categoryLabel} saat ini`
+                  : `Belum memiliki ${categoryLabel} (akan menerima foto)`}
               </p>
             </div>
           </div>
@@ -378,7 +438,7 @@ export function SwapPenerimaPhotoModal({
                       }`}
                     >
                       <div className="h-9 w-9 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
-                        <MiniPhotoPreview doc={cand.penerimaDoc} alt={cand.record.nama} />
+                        <MiniPhotoPreview doc={cand.doc} alt={cand.record.nama} />
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-1">
@@ -406,7 +466,7 @@ export function SwapPenerimaPhotoModal({
                 type="search"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Cari nomor urut (misal 39), nama KPM, atau NIK..."
+                placeholder="Cari nomor urut (misal #39 / 39), nama KPM, atau NIK..."
                 className="min-h-[42px] w-full rounded-xl border border-slate-200 bg-white pr-3.5 pl-10 text-sm text-slate-800 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none"
               />
             </div>
@@ -431,9 +491,9 @@ export function SwapPenerimaPhotoModal({
                       ? String(cand.slotNumber).padStart(2, '0')
                       : '-';
                   const actionHint =
-                    sourceHasPenerima && cand.hasPenerima
+                    sourceHasDoc && cand.hasDoc
                       ? 'Tukar 2 arah'
-                      : sourceHasPenerima
+                      : sourceHasDoc
                         ? 'Pindah ke sini'
                         : 'Ambil foto ini';
 
@@ -457,8 +517,8 @@ export function SwapPenerimaPhotoModal({
                       </span>
 
                       <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
-                        <MiniPhotoPreview doc={cand.penerimaDoc} alt={cand.record.nama} />
-                        {cand.penerimaDoc && isLocalPendingDocument(cand.penerimaDoc) && (
+                        <MiniPhotoPreview doc={cand.doc} alt={cand.record.nama} />
+                        {cand.doc && isLocalPendingDocument(cand.doc) && (
                           <span className="absolute right-0.5 bottom-0.5 rounded bg-amber-500 px-1 text-[8px] font-bold text-white">
                             Antre
                           </span>
@@ -478,7 +538,7 @@ export function SwapPenerimaPhotoModal({
                       <div className="flex shrink-0 items-center gap-1.5">
                         <span
                           className={`text-[11px] font-semibold whitespace-nowrap ${
-                            cand.hasPenerima ? 'text-teal-700' : 'text-slate-500'
+                            cand.hasDoc ? 'text-teal-700' : 'text-slate-500'
                           }`}
                         >
                           {actionHint}
@@ -499,12 +559,12 @@ export function SwapPenerimaPhotoModal({
                 <span className="text-xs font-bold text-teal-900">
                   {isTwoWaySwap
                     ? 'Pratinjau Tukar 2 Arah (Swap)'
-                    : sourceHasPenerima
+                    : sourceHasDoc
                       ? 'Pratinjau Pemindahan Foto (1 Arah)'
                       : 'Pratinjau Penarikan Foto (1 Arah)'}
                 </span>
                 <span className="font-mono text-[11px] font-bold text-teal-800 tabular-nums">
-                  {sourceSeqLabel} {isTwoWaySwap ? '⇄' : sourceHasPenerima ? '→' : '←'} {targetSeqLabel}
+                  {sourceSeqLabel} {isTwoWaySwap ? '⇄' : sourceHasDoc ? '→' : '←'} {targetSeqLabel}
                 </span>
               </div>
 
@@ -513,7 +573,7 @@ export function SwapPenerimaPhotoModal({
                 <div className="flex items-center gap-2 rounded-lg border border-teal-200/80 bg-white p-2 min-w-0">
                   <div className="h-10 w-10 shrink-0 overflow-hidden rounded-md border border-slate-200 bg-slate-100">
                     <MiniPhotoPreview
-                      doc={selectedTarget.penerimaDoc}
+                      doc={selectedTarget.doc}
                       alt={sourceRecord.nama}
                       emptyLabel="Kosong"
                     />
@@ -526,7 +586,7 @@ export function SwapPenerimaPhotoModal({
                       {sourceRecord.nama}
                     </p>
                     <p className="truncate text-[10px] text-slate-500">
-                      {selectedTarget.hasPenerima ? 'Terima foto baru' : 'Foto menjadi kosong'}
+                      {selectedTarget.hasDoc ? 'Terima foto baru' : 'Foto menjadi kosong'}
                     </p>
                   </div>
                 </div>
@@ -536,7 +596,7 @@ export function SwapPenerimaPhotoModal({
                     <ArrowLeftRight className="h-3.5 w-3.5" />
                   ) : (
                     <ArrowRight
-                      className={`h-3.5 w-3.5 ${sourceHasPenerima ? '' : 'rotate-180'}`}
+                      className={`h-3.5 w-3.5 ${sourceHasDoc ? '' : 'rotate-180'}`}
                     />
                   )}
                 </div>
@@ -558,15 +618,17 @@ export function SwapPenerimaPhotoModal({
                       {selectedTarget.record.nama}
                     </p>
                     <p className="truncate text-[10px] text-slate-500">
-                      {sourceHasPenerima ? 'Terima foto baru' : 'Foto dipindahkan'}
+                      {sourceHasDoc ? 'Terima foto baru' : 'Foto dipindahkan'}
                     </p>
                   </div>
                 </div>
               </div>
 
-              <p className="mt-2 text-[11px] text-teal-900/90">
-                Status kehadiran (absensi otomatis) akan ikut menyesuaikan berdasarkan kepemilikan Foto Penerima setelah dipindah.
-              </p>
+              {activeCategory === 'penerima' && (
+                <p className="mt-2 text-[11px] text-teal-900/90">
+                  Status kehadiran (absensi otomatis) akan ikut menyesuaikan berdasarkan kepemilikan Foto Penerima setelah dipindah.
+                </p>
+              )}
             </div>
           )}
         </div>
@@ -597,10 +659,10 @@ export function SwapPenerimaPhotoModal({
                 <ArrowLeftRight className="h-4 w-4" />
                 <span>
                   {isTwoWaySwap
-                    ? 'Tukar Foto Penerima'
-                    : sourceHasPenerima
-                      ? 'Pindahkan Foto Penerima'
-                      : 'Ambil Foto Penerima'}
+                    ? `Tukar ${categoryLabel}`
+                    : sourceHasDoc
+                      ? `Pindahkan ${categoryLabel}`
+                      : `Ambil ${categoryLabel}`}
                 </span>
               </>
             )}

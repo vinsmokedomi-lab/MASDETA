@@ -28,6 +28,7 @@ import {
   PenTool,
   Plus,
   RefreshCw,
+  RotateCcw,
   Send,
   Share2,
   ShieldCheck,
@@ -143,6 +144,11 @@ interface KpmDetailViewProps {
     slotHandling?: SlotRemovalMode
   ) => void;
   onToggleAttendance?: (kpmId: string, nextPresent: boolean) => void;
+  onUpdateAttendanceRepresentative?: (
+    kpmId: string,
+    representativeName: string,
+    representativeRelation: string
+  ) => void;
   onToggleSubItem: (
     kpmId: string,
     subItemKey: string,
@@ -181,7 +187,8 @@ interface KpmDetailViewProps {
   ) => Promise<void>;
   onSwapPenerimaPhoto?: (
     sourceKpmId: string,
-    targetKpmId: string
+    targetKpmId: string,
+    category?: SingleDocumentKey
   ) => Promise<boolean | void> | boolean | void;
   reportTemplate?: ReportTemplateConfig;
   schedules?: ScheduleEventItem[];
@@ -274,6 +281,7 @@ export function KpmDetailView({
   onDeleteRecord,
   onUpdateStatus,
   onToggleAttendance,
+  onUpdateAttendanceRepresentative,
   onToggleSubItem,
   onMarkAllSubItemsDelivered,
   onShareToChat,
@@ -304,7 +312,19 @@ export function KpmDetailView({
   const isDesktopWeb = useIsDesktopWeb();
   const { isOffline } = useOfflineStatus();
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [isSwapPenerimaOpen, setIsSwapPenerimaOpen] = useState(false);
+  const [swapModalCategory, setSwapModalCategory] = useState<SingleDocumentKey | null>(null);
+  const [lastSwapUndo, setLastSwapUndo] = useState<{
+    kpmId: string;
+    targetKpmId: string;
+    targetKpmName: string;
+    category: SingleDocumentKey;
+  } | null>(null);
+  const [undoSwapBusy, setUndoSwapBusy] = useState(false);
+  const [isRepEditorOpen, setIsRepEditorOpen] = useState(false);
+  const [repNameDraft, setRepNameDraft] = useState(record.attendance?.representativeName || '');
+  const [repRelationDraft, setRepRelationDraft] = useState(
+    record.attendance?.representativeRelation || 'Suami / Istri'
+  );
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [shareRecipientId, setShareRecipientId] = useState<string>('');
   const [shareMessage, setShareMessage] = useState<string>('');
@@ -1431,6 +1451,112 @@ export function KpmDetailView({
               />
             </button>
           </div>
+
+          {/* Diwakilkan saat pengambilan */}
+          {isAttending && (
+            <div className="border-t border-slate-100 bg-slate-50/70 px-4 py-3 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-slate-700">
+                    {record.attendance?.representativeName
+                      ? `Diwakilkan: ${record.attendance.representativeName}${
+                          record.attendance.representativeRelation
+                            ? ` (${record.attendance.representativeRelation})`
+                            : ''
+                        }`
+                      : 'Diambil langsung oleh KPM (tidak diwakilkan)'}
+                  </p>
+                </div>
+                {canUpdate && !isProposalLocked && onUpdateAttendanceRepresentative && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRepNameDraft(record.attendance?.representativeName || '');
+                      setRepRelationDraft(
+                        record.attendance?.representativeRelation || 'Suami / Istri'
+                      );
+                      setIsRepEditorOpen((v) => !v);
+                    }}
+                    className="inline-flex min-h-[30px] items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-[11px] font-semibold text-teal-800 hover:bg-teal-50 whitespace-nowrap"
+                  >
+                    <Pencil className="h-3 w-3" />
+                    <span>
+                      {isRepEditorOpen
+                        ? 'Tutup'
+                        : record.attendance?.representativeName
+                          ? 'Ubah Perwakilan'
+                          : 'Catat Diwakilkan'}
+                    </span>
+                  </button>
+                )}
+              </div>
+
+              {isRepEditorOpen && canUpdate && !isProposalLocked && onUpdateAttendanceRepresentative && (
+                <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-2.5">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                        Nama Pengambil (Perwakilan)
+                      </label>
+                      <input
+                        type="text"
+                        value={repNameDraft}
+                        onChange={(e) => setRepNameDraft(e.target.value)}
+                        placeholder="Misal: Siti Aminah"
+                        className="min-h-[38px] w-full rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold text-slate-600">
+                        Hubungan dengan KPM
+                      </label>
+                      <select
+                        value={repRelationDraft}
+                        onChange={(e) => setRepRelationDraft(e.target.value)}
+                        className="min-h-[38px] w-full rounded-lg border border-slate-200 bg-white px-2.5 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                      >
+                        <option value="Suami / Istri">Suami / Istri</option>
+                        <option value="Anak">Anak</option>
+                        <option value="Orang Tua">Orang Tua</option>
+                        <option value="Saudara">Saudara</option>
+                        <option value="Tetangga / Lainnya">Tetangga / Lainnya</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    {record.attendance?.representativeName && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onUpdateAttendanceRepresentative(record.id, '', '');
+                          setRepNameDraft('');
+                          setIsRepEditorOpen(false);
+                        }}
+                        className="min-h-[34px] rounded-lg border border-rose-200 bg-rose-50 px-3 text-[11px] font-semibold text-rose-700 hover:bg-rose-100"
+                      >
+                        Hapus Perwakilan
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={!repNameDraft.trim()}
+                      onClick={() => {
+                        onUpdateAttendanceRepresentative(
+                          record.id,
+                          repNameDraft.trim(),
+                          repRelationDraft
+                        );
+                        setIsRepEditorOpen(false);
+                      }}
+                      className="min-h-[34px] rounded-lg bg-teal-700 px-3.5 text-[11px] font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+                    >
+                      Simpan Perwakilan
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </section>
 
         {/* Penyaluran Sub-Item Bantuan (Interactive Toggles & Hutang Tracking) */}
@@ -2056,13 +2182,13 @@ export function KpmDetailView({
                                 <RefreshCw className="h-3 w-3" />
                               </button>
                             )}
-                          {item.key === 'penerima' && onSwapPenerimaPhoto && (
+                          {onSwapPenerimaPhoto && (
                             <button
                               type="button"
                               disabled={Boolean(isSlotBusy)}
-                              onClick={() => setIsSwapPenerimaOpen(true)}
+                              onClick={() => setSwapModalCategory(item.key)}
                               className="inline-flex min-h-[32px] items-center justify-center gap-1 rounded-lg border border-teal-200 bg-teal-50/70 px-2 text-[11px] font-semibold text-teal-800 hover:bg-teal-100 disabled:opacity-50 whitespace-nowrap"
-                              title="Tukar atau pindahkan Foto Penerima ke KPM lain"
+                              title={`Tukar atau pindahkan ${item.label} ke KPM lain`}
                             >
                               <ArrowLeftRight className="h-3 w-3 shrink-0" />
                               <span>Tukar</span>
@@ -2132,10 +2258,10 @@ export function KpmDetailView({
                               <span>Galeri</span>
                             </button>
                           </div>
-                          {item.key === 'penerima' && onSwapPenerimaPhoto && (
+                          {onSwapPenerimaPhoto && (
                             <button
                               type="button"
-                              onClick={() => setIsSwapPenerimaOpen(true)}
+                              onClick={() => setSwapModalCategory(item.key)}
                               className="inline-flex min-h-[30px] w-full items-center justify-center gap-1 rounded-lg border border-teal-200 bg-teal-50/70 px-2 text-[11px] font-semibold text-teal-800 hover:bg-teal-100"
                             >
                               <ArrowLeftRight className="h-3 w-3 shrink-0" />
@@ -2150,6 +2276,45 @@ export function KpmDetailView({
               );
             })}
           </div>
+
+          {lastSwapUndo && lastSwapUndo.kpmId === record.id && onSwapPenerimaPhoto && (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2 text-xs text-teal-900">
+              <span>
+                Baru saja menukar foto dengan <strong>{lastSwapUndo.targetKpmName}</strong>.
+              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={undoSwapBusy}
+                  onClick={async () => {
+                    setUndoSwapBusy(true);
+                    try {
+                      await onSwapPenerimaPhoto(
+                        lastSwapUndo.kpmId,
+                        lastSwapUndo.targetKpmId,
+                        lastSwapUndo.category
+                      );
+                      setLastSwapUndo(null);
+                    } finally {
+                      setUndoSwapBusy(false);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1 rounded-lg bg-teal-700 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  <span>{undoSwapBusy ? 'Mengembalikan...' : 'Undo Tukar'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLastSwapUndo(null)}
+                  className="rounded-lg p-1 text-teal-700 hover:bg-teal-100"
+                  aria-label="Tutup banner undo"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Sub-Bagian Foto Tambahan: Foto Rumah & Foto Lainnya Terpisah Rapi */}
           {(() => {
@@ -3690,15 +3855,28 @@ export function KpmDetailView({
       />
       {onSwapPenerimaPhoto && (
         <SwapPenerimaPhotoModal
-          open={isSwapPenerimaOpen}
+          open={Boolean(swapModalCategory)}
           sourceRecord={record}
+          initialCategory={swapModalCategory ?? 'penerima'}
           allRecords={allRecords}
           proposals={proposals}
           items={items}
           wilayahList={wilayahList}
           proposalSlotMap={proposalSlotMap}
-          onClose={() => setIsSwapPenerimaOpen(false)}
-          onConfirmSwap={onSwapPenerimaPhoto}
+          onClose={() => setSwapModalCategory(null)}
+          onConfirmSwap={async (sourceId, targetId, cat = 'penerima') => {
+            const ok = await onSwapPenerimaPhoto(sourceId, targetId, cat);
+            if (ok !== false) {
+              const targetRec = allRecords.find((r) => r.id === targetId);
+              setLastSwapUndo({
+                kpmId: sourceId,
+                targetKpmId: targetId,
+                targetKpmName: targetRec?.nama || 'KPM lain',
+                category: cat,
+              });
+            }
+            return ok;
+          }}
         />
       )}
     </div>

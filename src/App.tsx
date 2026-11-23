@@ -213,7 +213,7 @@ import {
   PhotoDocCategory,
   PhotoUploadJobSummary,
   subscribePhotoUploadCompleted,
-  swapPendingPenerimaJobOwners,
+  swapPendingPhotoJobOwners,
 } from './utils/photoUploadManager';
 import { useOnlineStatus } from './hooks/usePWAInstall';
 import { OfflineProvider } from './contexts/OfflineContext';
@@ -747,6 +747,8 @@ export default function App() {
   const [lightboxDoc, setLightboxDoc] = useState<{ file: KpmDocumentFile; title: string } | null>(
     null
   );
+  const [pendingLogoutConfirmCount, setPendingLogoutConfirmCount] = useState<number | null>(null);
+  const [photoQueueOpenSignal, setPhotoQueueOpenSignal] = useState(0);
 
   // Auth, 1-on-1 Direct Chat, Presence & Push Notification states
   const [sessionToken, setSessionToken] = useState<string | null>(() => {
@@ -6198,9 +6200,21 @@ export default function App() {
   );
 
   const handleSwapPenerimaPhoto = useCallback(
-    async (sourceKpmId: string, targetKpmId: string): Promise<boolean> => {
+    async (
+      sourceKpmId: string,
+      targetKpmId: string,
+      category: SingleDocumentKey = 'penerima'
+    ): Promise<boolean> => {
+      const categoryLabelMap: Record<SingleDocumentKey, string> = {
+        penerima: 'Foto Penerima',
+        survey: 'Foto Survey',
+        ktp: 'Foto KTP',
+        kk: 'Foto KK',
+      };
+      const categoryLabel = categoryLabelMap[category] ?? 'Foto';
+
       if (!sourceKpmId || !targetKpmId || sourceKpmId === targetKpmId) return false;
-      if (!requirePermission('update', 'menukar foto penerima', { allowOffline: true })) {
+      if (!requirePermission('update', `menukar ${categoryLabel.toLowerCase()}`, { allowOffline: true })) {
         return false;
       }
 
@@ -6227,18 +6241,19 @@ export default function App() {
           if (sourceProp?.status === 'locked' || targetProp?.status === 'locked') {
             setFeedback({
               type: 'error',
-              message: 'Proposal berstatus Terkunci. Foto Penerima tidak dapat ditukar.',
+              message: `Proposal berstatus Terkunci. ${categoryLabel} tidak dapat ditukar.`,
             });
             return;
           }
 
-          const rawDocA = source.documents.penerima;
-          const rawDocB = target.documents.penerima;
+          const rawDocA = source.documents[category];
+          const rawDocB = target.documents[category];
           const hasA = hasRenderableMedia(rawDocA);
           const hasB = hasRenderableMedia(rawDocB);
           if (!hasA && !hasB) return;
 
-          await swapPendingPenerimaJobOwners({
+          await swapPendingPhotoJobOwners({
+            category,
             firstKpmId: source.id,
             firstKpmName: source.nama,
             secondKpmId: target.id,
@@ -6262,16 +6277,16 @@ export default function App() {
 
           const nextSourceDocs: KpmDocuments = { ...source.documents };
           if (docForSource) {
-            nextSourceDocs.penerima = docForSource;
+            nextSourceDocs[category] = docForSource;
           } else {
-            delete nextSourceDocs.penerima;
+            delete nextSourceDocs[category];
           }
 
           const nextTargetDocs: KpmDocuments = { ...target.documents };
           if (docForTarget) {
-            nextTargetDocs.penerima = docForTarget;
+            nextTargetDocs[category] = docForTarget;
           } else {
-            delete nextTargetDocs.penerima;
+            delete nextTargetDocs[category];
           }
 
           const now = new Date().toISOString();
@@ -6287,6 +6302,9 @@ export default function App() {
             rec: KpmRecord,
             nowHasPhoto: boolean
           ): KpmAttendanceInfo | undefined => {
+            if (category !== 'penerima') {
+              return nextAttendanceMap[rec.id] ?? rec.attendance;
+            }
             const explicitAtt = nextAttendanceMap[rec.id];
             const currentSource = explicitAtt?.source ?? rec.attendance?.source;
             if (nowHasPhoto) {
@@ -6358,7 +6376,7 @@ export default function App() {
             tahun: source.tahun,
             changes: [
               {
-                field: 'Foto Penerima',
+                field: categoryLabel,
                 before: rawDocA?.fileName || 'Belum ada',
                 after: docForSource
                   ? `${docForSource.fileName} (${actionVerb} ${target.nama})`
@@ -6377,7 +6395,7 @@ export default function App() {
             tahun: target.tahun,
             changes: [
               {
-                field: 'Foto Penerima',
+                field: categoryLabel,
                 before: rawDocB?.fileName || 'Belum ada',
                 after: docForTarget
                   ? `${docForTarget.fileName} (${isTwoWay ? 'Ditukar dengan' : 'Dari'} ${source.nama})`
@@ -6402,7 +6420,7 @@ export default function App() {
               id: `off-swap-a-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
               createdAt: now,
               kind: 'sync_kpm_docs',
-              label: `Tukar Foto Penerima (${source.nama})`,
+              label: `Tukar ${categoryLabel} (${source.nama})`,
               kpmId: source.id,
               documents: safeSourceForRemote.documents,
               auditEntry: sourceAudit,
@@ -6411,7 +6429,7 @@ export default function App() {
               id: `off-swap-b-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
               createdAt: now,
               kind: 'sync_kpm_docs',
-              label: `Tukar Foto Penerima (${target.nama})`,
+              label: `Tukar ${categoryLabel} (${target.nama})`,
               kpmId: target.id,
               documents: safeTargetForRemote.documents,
               auditEntry: targetAudit,
@@ -6425,8 +6443,8 @@ export default function App() {
             setFeedback({
               type: 'success',
               message: isTwoWay
-                ? `Mode Offline: Foto Penerima ${source.nama} ⇄ ${target.nama} berhasil ditukar & masuk antrean sinkronisasi.`
-                : `Mode Offline: Foto Penerima berhasil dipindahkan & masuk antrean sinkronisasi.`,
+                ? `Mode Offline: ${categoryLabel} ${source.nama} ⇄ ${target.nama} berhasil ditukar & masuk antrean sinkronisasi.`
+                : `Mode Offline: ${categoryLabel} berhasil dipindahkan & masuk antrean sinkronisasi.`,
             });
             didSucceed = true;
             return;
@@ -6445,10 +6463,10 @@ export default function App() {
               setFeedback({
                 type: 'success',
                 message: isTwoWay
-                  ? `Foto Penerima ${source.nama} dan ${target.nama} berhasil ditukar.`
+                  ? `${categoryLabel} ${source.nama} dan ${target.nama} berhasil ditukar.`
                   : hasA
-                    ? `Foto Penerima dari ${source.nama} berhasil dipindahkan ke ${target.nama}.`
-                    : `Foto Penerima dari ${target.nama} berhasil dipindahkan ke ${source.nama}.`,
+                    ? `${categoryLabel} dari ${source.nama} berhasil dipindahkan ke ${target.nama}.`
+                    : `${categoryLabel} dari ${target.nama} berhasil dipindahkan ke ${source.nama}.`,
               });
               didSucceed = true;
               return;
@@ -6457,7 +6475,7 @@ export default function App() {
               setFeedback({
                 type: 'success',
                 message:
-                  'Foto Penerima berhasil ditukar di perangkat & diantrekan untuk sinkronisasi server.',
+                  `${categoryLabel} berhasil ditukar di perangkat & diantrekan untuk sinkronisasi server.`,
               });
               didSucceed = true;
               return;
@@ -6473,8 +6491,8 @@ export default function App() {
           setFeedback({
             type: 'success',
             message: isTwoWay
-              ? `Foto Penerima ${source.nama} dan ${target.nama} berhasil ditukar.`
-              : `Foto Penerima berhasil dipindahkan.`,
+              ? `${categoryLabel} ${source.nama} dan ${target.nama} berhasil ditukar.`
+              : `${categoryLabel} berhasil dipindahkan.`,
           });
           didSucceed = true;
         })
@@ -7099,6 +7117,104 @@ export default function App() {
     } else {
       void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
     }
+  };
+
+  const handleUpdateAttendanceRepresentative = (
+    kpmId: string,
+    representativeName: string,
+    representativeRelation: string
+  ) => {
+    if (!requirePermission('update', 'memperbarui catatan perwakilan KPM', { allowOffline: true })) return;
+    const target = latestDataRef.current.records.find((r) => r.id === kpmId);
+    if (!target) return;
+
+    const prop =
+      proposalsRef.current.find((p) => p.namaProposal === target.proposal && p.tahun === target.tahun) ??
+      proposalsRef.current.find((p) => p.namaProposal === target.proposal);
+    if (prop?.status === 'locked') {
+      setFeedback({
+        type: 'error',
+        message: 'Proposal ini terkunci. Catatan perwakilan KPM tidak dapat diubah.',
+      });
+      return;
+    }
+
+    const cleanName = representativeName.trim();
+    const cleanRelation = representativeRelation.trim();
+    const prevAtt = kpmAttendanceMapRef.current[kpmId] ?? target.attendance;
+    const prevSummary = prevAtt?.representativeName
+      ? `${prevAtt.representativeName}${prevAtt.representativeRelation ? ` (${prevAtt.representativeRelation})` : ''}`
+      : 'Tidak diwakilkan';
+    const nextSummary = cleanName
+      ? `${cleanName}${cleanRelation ? ` (${cleanRelation})` : ''}`
+      : 'Tidak diwakilkan';
+
+    const now = new Date().toISOString();
+    const nextAttendance: KpmAttendanceInfo = {
+      present: true,
+      updatedAt: now,
+      updatedBy: currentActor.nama,
+      source: prevAtt?.source ?? 'manual',
+      representativeName: cleanName || undefined,
+      representativeRelation: cleanName && cleanRelation ? cleanRelation : undefined,
+    };
+
+    const auditEntry: KpmAuditLogEntry = {
+      id: `audit-rep-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      kpmId: target.id,
+      action: 'updated',
+      actorName: currentActor.nama,
+      actorEmail: currentActor.email,
+      timestamp: now,
+      proposal: target.proposal,
+      tahun: target.tahun,
+      changes: [
+        {
+          field: 'Perwakilan Pengambilan',
+          before: prevSummary,
+          after: nextSummary,
+        },
+      ],
+    };
+
+    const nextAttendanceMap: Record<string, KpmAttendanceInfo> = {
+      ...kpmAttendanceMapRef.current,
+      [kpmId]: nextAttendance,
+    };
+    kpmAttendanceMapRef.current = nextAttendanceMap;
+    setKpmAttendanceMap(nextAttendanceMap);
+
+    const nextLogs = [auditEntry, ...kpmAuditLogs];
+    const nextRecords = latestDataRef.current.records.map((r) =>
+      r.id === kpmId
+        ? {
+            ...r,
+            attendance: nextAttendance,
+            updatedAt: now,
+          }
+        : r
+    );
+    latestDataRef.current.records = nextRecords;
+    setKpmAuditLogs(nextLogs);
+    setRecords(nextRecords);
+    void saveIdbValue('records', nextRecords);
+    void saveAppStateSlice('masdeta_kpm_attendance_v1', nextAttendanceMap);
+
+    if (supabaseReadyRef.current) {
+      void runSupabaseMutation(
+        () => appendKpmAuditLogsInSupabase([auditEntry]),
+        'Gagal menyimpan catatan perwakilan KPM ke Supabase'
+      );
+    } else {
+      void syncOperationalData({ records: nextRecords, kpmAuditLogs: nextLogs }, 'update');
+    }
+
+    setFeedback({
+      type: 'success',
+      message: cleanName
+        ? `Perwakilan pengambilan dicatat: ${nextSummary}.`
+        : 'Catatan perwakilan pengambilan dihapus.',
+    });
   };
 
   const handleMarkAllSubItemsDelivered = (
@@ -9880,7 +9996,8 @@ export default function App() {
     }
   };
 
-  const handleLogout = async () => {
+  const executeLogout = async () => {
+    setPendingLogoutConfirmCount(null);
     if (supabaseReadyRef.current && currentUser && !currentUser.presenceManual) {
       await supabaseSetUserPresence(currentUser.id, 'offline', false).catch(() => {});
     }
@@ -9903,6 +10020,15 @@ export default function App() {
     setMenuSection('root');
     setSubView('none');
     setActiveTab('dashboard');
+  };
+
+  const handleLogout = async () => {
+    const pendingJobsCount = getPendingPhotoUploadJobs().filter((j) => !j.corrupted).length;
+    if (pendingJobsCount > 0) {
+      setPendingLogoutConfirmCount(pendingJobsCount);
+      return;
+    }
+    await executeLogout();
   };
 
   const handleUpdateProfile = async (patch: {
@@ -12704,6 +12830,7 @@ export default function App() {
             onDeleteRecord={handleDeleteKpm}
             onUpdateStatus={handleUpdateKpmStatus}
             onToggleAttendance={handleToggleKpmAttendance}
+            onUpdateAttendanceRepresentative={handleUpdateAttendanceRepresentative}
             onToggleSubItem={handleToggleSubItem}
             onMarkAllSubItemsDelivered={handleMarkAllSubItemsDelivered}
             onShareToChat={handleShareKpmToChat}
@@ -13022,6 +13149,7 @@ export default function App() {
               initialProposalId={photoGalleryProposalId}
               selectedYear={selectedYear}
               canUpdate={hasPermission('update')}
+              reportTemplate={reportTemplate}
               onBack={() => {
                 navigateRestoreScroll();
                 setFeedback(null);
@@ -13523,10 +13651,74 @@ export default function App() {
         onAddProposal={() => openAddProposalForm(activeTab)}
       />
 
+      {/* Logout Safety Guard when Photo Vault Queue still has pending uploads */}
+      {pendingLogoutConfirmCount !== null && (
+        <div
+          className="fixed inset-0 z-[150] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-xs"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="logout-pending-photo-title"
+          onClick={() => setPendingLogoutConfirmCount(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl border border-amber-200 bg-white p-5 shadow-2xl"
+          >
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-800">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3
+                  id="logout-pending-photo-title"
+                  className="text-base font-bold text-slate-900"
+                >
+                  Masih Ada {pendingLogoutConfirmCount} Foto Belum Selesai Diunggah
+                </h3>
+                <p className="mt-1.5 text-xs leading-relaxed text-slate-600">
+                  Antrean brankas foto di perangkat masih memiliki{' '}
+                  <strong className="text-slate-900">{pendingLogoutConfirmCount} foto</strong> yang
+                  belum masuk ke Google Drive. Disarankan menunggu upload selesai terlebih dahulu agar
+                  sinkronisasi akun tetap lengkap.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setPendingLogoutConfirmCount(null);
+                  setPhotoQueueOpenSignal((n) => n + 1);
+                }}
+                className="min-h-[38px] rounded-xl border border-teal-200 bg-teal-50 px-3.5 text-xs font-semibold text-teal-800 hover:bg-teal-100"
+              >
+                Lihat Antrean Foto
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingLogoutConfirmCount(null)}
+                className="min-h-[38px] rounded-xl border border-slate-200 bg-white px-3.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => void executeLogout()}
+                className="min-h-[38px] rounded-xl bg-rose-600 px-3.5 text-xs font-semibold text-white hover:bg-rose-700"
+              >
+                Tetap Logout
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Persistent Photo Vault Queue Indicator & Recovery Drawer */}
       <PhotoUploadQueueBar
         hasBottomNav={showBottomNav}
         isNativeApp={isNativeApp}
+        externalOpenSignal={photoQueueOpenSignal}
         onSelectKpm={(kpmId) => {
           const rec = latestDataRef.current.records.find((r) => r.id === kpmId);
           if (rec) openKpmDetail(rec, returnToTab);

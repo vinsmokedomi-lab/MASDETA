@@ -17,18 +17,23 @@ import { useOfflineStatus } from '../contexts/OfflineContext';
 import { formatBytes } from '../utils/imageProcessor';
 import {
   cancelPendingPhotoUploadJob,
+  DeviceStorageEstimate,
   downloadPendingJobToGallery,
   getAutoSaveGallerySetting,
+  getDeviceStorageEstimate,
+  getLowBandwidthModeSetting,
   PhotoUploadJobSummary,
   retryAllPendingPhotoUploads,
   retryPhotoUploadJob,
   setAutoSaveGallerySetting,
+  setLowBandwidthModeSetting,
   subscribePhotoUploadJobs,
 } from '../utils/photoUploadManager';
 
 interface PhotoUploadQueueBarProps {
   hasBottomNav?: boolean;
   isNativeApp?: boolean;
+  externalOpenSignal?: number;
   onSelectKpm?: (kpmId: string) => void;
   onJobRemoved?: (job: PhotoUploadJobSummary) => void;
 }
@@ -36,6 +41,7 @@ interface PhotoUploadQueueBarProps {
 export function PhotoUploadQueueBar({
   hasBottomNav = false,
   isNativeApp = false,
+  externalOpenSignal = 0,
   onSelectKpm,
   onJobRemoved,
 }: PhotoUploadQueueBarProps) {
@@ -45,6 +51,10 @@ export function PhotoUploadQueueBar({
   const [autoSaveGallery, setAutoSaveGallery] = useState<boolean>(() =>
     getAutoSaveGallerySetting()
   );
+  const [lowBandwidthMode, setLowBandwidthMode] = useState<boolean>(() =>
+    getLowBandwidthModeSetting()
+  );
+  const [storageEstimate, setStorageEstimate] = useState<DeviceStorageEstimate | null>(null);
   const [confirmRemoveJobId, setConfirmRemoveJobId] = useState<string | null>(null);
   const [galleryToast, setGalleryToast] = useState<string | null>(null);
   const [manualSavePreview, setManualSavePreview] = useState<{
@@ -56,11 +66,29 @@ export function PhotoUploadQueueBar({
     return subscribePhotoUploadJobs((nextJobs) => {
       setJobs(nextJobs);
       setAutoSaveGallery(getAutoSaveGallerySetting());
+      setLowBandwidthMode(getLowBandwidthModeSetting());
       if (nextJobs.length === 0) {
         setConfirmRemoveJobId(null);
       }
     });
   }, []);
+
+  useEffect(() => {
+    if (externalOpenSignal > 0 && jobs.length > 0) {
+      setDrawerOpen(true);
+    }
+  }, [externalOpenSignal, jobs.length]);
+
+  useEffect(() => {
+    if (!drawerOpen) return;
+    let cancelled = false;
+    void getDeviceStorageEstimate().then((est) => {
+      if (!cancelled) setStorageEstimate(est);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [drawerOpen, jobs.length]);
 
   if (jobs.length === 0) return null;
 
@@ -73,6 +101,12 @@ export function PhotoUploadQueueBar({
     const next = !autoSaveGallery;
     setAutoSaveGallery(next);
     setAutoSaveGallerySetting(next);
+  };
+
+  const handleToggleLowBandwidth = () => {
+    const next = !lowBandwidthMode;
+    setLowBandwidthMode(next);
+    setLowBandwidthModeSetting(next);
   };
 
   const handleManualSaveGallery = async (job: PhotoUploadJobSummary) => {
@@ -218,6 +252,63 @@ export function PhotoUploadQueueBar({
                   />
                 </button>
               </div>
+
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-semibold text-slate-900">
+                    Mode Hemat Kuota (Sinyal Lemah)
+                  </p>
+                  <p className="mt-0.5 text-[10px] leading-snug text-slate-500">
+                    Kompresi lebih ringkas (±200 KB) agar cepat terkirim saat jaringan lambat.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={lowBandwidthMode}
+                  onClick={handleToggleLowBandwidth}
+                  className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                    lowBandwidthMode ? 'bg-teal-600' : 'bg-slate-300'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4.5 w-4.5 transform rounded-full bg-white shadow transition-transform ${
+                      lowBandwidthMode ? 'translate-x-5.5' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {storageEstimate && (
+                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                  <div className="flex items-center justify-between gap-2 text-[11px]">
+                    <span className="font-semibold text-slate-700">
+                      Memori Brankas Foto: {formatBytes(storageEstimate.localJobsBytes)}
+                    </span>
+                    <span className="text-slate-500 tabular-nums">
+                      {storageEstimate.freeBytes !== null
+                        ? `Sisa ${formatBytes(storageEstimate.freeBytes)}`
+                        : storageEstimate.usageBytes !== null
+                          ? `Terpakai ${formatBytes(storageEstimate.usageBytes)}`
+                          : 'Tersimpan lokal'}
+                    </span>
+                  </div>
+                  {storageEstimate.usedPct !== null && (
+                    <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                      <div
+                        className={`h-full rounded-full transition-all ${
+                          storageEstimate.usedPct >= 85
+                            ? 'bg-rose-500'
+                            : storageEstimate.usedPct >= 65
+                              ? 'bg-amber-500'
+                              : 'bg-teal-600'
+                        }`}
+                        style={{ width: `${Math.min(100, Math.max(2, storageEstimate.usedPct))}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-600">

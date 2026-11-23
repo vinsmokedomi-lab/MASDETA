@@ -41,7 +41,9 @@ import {
   getKpmSlotNumberInProposal,
   getKpmSubItemStatusList,
   getPrimaryKpmPhotoWithMeta,
+  hasRenderableMedia,
   isKecamatanProposal,
+  MergedProposalSlot,
   normalizeSubItemKey,
   resolveKpmDomicile,
   resolvePackageForKpm,
@@ -51,6 +53,10 @@ import {
   sortKecamatanCategoryNames,
   sortProposalsWithinKecamatan,
 } from './imageProcessor';
+import {
+  getPendingPhotoDataUrlByDoc,
+  isLocalPendingDocument,
+} from './photoUploadManager';
 import type { TroubleshootingReconcileResult } from './troubleshootingReconciler';
 import {
   RabCalculatedSummary,
@@ -2096,6 +2102,15 @@ function loadSingleImageForPdf(url: string, timeoutMs = 2400): Promise<LoadedPdf
 
 async function resolveKpmPortraitForPdf(docFile?: KpmDocumentFile): Promise<LoadedPdfImage | null> {
   if (!docFile) return null;
+
+  if (isLocalPendingDocument(docFile)) {
+    const pendingDataUrl = await getPendingPhotoDataUrlByDoc(docFile).catch(() => null);
+    if (pendingDataUrl) {
+      const loadedPending = await loadSingleImageForPdf(pendingDataUrl);
+      if (loadedPending) return loadedPending;
+    }
+  }
+
   const candidates = Array.from(
     new Set(
       [
@@ -9725,6 +9740,318 @@ export async function exportAbsenArsipToPdf(
     totalRows: totalRowsRendered,
   };
 }
+
+export interface ExportProposalPhotoLpjOptions {
+  proposal: ProposalRecord;
+  mergedSlots: MergedProposalSlot[];
+  items: ItemBantuan[];
+  wilayahList?: WilayahKabKota[];
+  reportTemplate?: ReportTemplateConfig;
+  layoutMode?: '4up' | '6up';
+  kelurahanFilter?: string;
+  statusFilterLabel?: string;
+  fileName?: string;
+  onProgress?: (done: number, total: number) => void;
+}
+
+export async function exportProposalPhotoLpjPdf({
+  proposal,
+  mergedSlots,
+  items,
+  wilayahList = INITIAL_WILAYAH_LIST,
+  reportTemplate,
+  layoutMode = '4up',
+  kelurahanFilter,
+  statusFilterLabel,
+  fileName,
+  onProgress,
+}: ExportProposalPhotoLpjOptions): Promise<{
+  savedFileName: string;
+  openedNative: boolean;
+  count: number;
+  photoLoadedCount: number;
+}> {
+  const kpmEntries = mergedSlots.filter(
+    (entry): entry is Extract<MergedProposalSlot, { kind: 'kpm' }> => entry.kind === 'kpm'
+  );
+
+  if (kpmEntries.length === 0) {
+    throw new Error('Tidak ada data KPM pada daftar untuk dicetak ke PDF LPJ Foto.');
+  }
+
+  // Load foto penerima secara paralel bertahap (batch 4) agar cepat dan aman memori
+  const loadedImages = new Map<string, LoadedPdfImage | null>();
+  let photoLoadedCount = 0;
+  const BATCH_SIZE = 4;
+  for (let i = 0; i < kpmEntries.length; i += BATCH_SIZE) {
+    const batch = kpmEntries.slice(i, i + BATCH_SIZE);
+    const res = await Promise.all(
+      batch.map(async (entry) => {
+        const docFile = entry.record.documents.penerima;
+        if (!docFile || !hasRenderableMedia(docFile)) return { id: entry.record.id, img: null };
+        const img = await resolveKpmPortraitForPdf(docFile);
+        return { id: entry.record.id, img };
+      })
+    );
+    for (const item of res) {
+      loadedImages.set(item.id, item.img);
+      if (item.img) photoLoadedCount += 1;
+    }
+    onProgress?.(Math.min(i + BATCH_SIZE, kpmEntries.length), kpmEntries.length);
+  }
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: [F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM],
+  });
+
+  const pageW = F4_PAPER_WIDTH_MM; // 216mm
+  const pageH = F4_PAPER_HEIGHT_MM; // 310mm
+  const marginLeft = 14;
+  const marginRight = 14;
+  const marginTop = 12;
+  const marginBottom = 13;
+  const contentW = pageW - marginLeft - marginRight; // 188mm
+
+  const cols = 2;
+  const rows = layoutMode === '6up' ? 3 : 2;
+  const perPage = cols * rows;
+  const colGap = 5;
+  const rowGap = 4.5;
+  const cardW = (contentW - colGap) / cols;
+
+  const institutionName = (
+    reportTemplate?.institutionLine1 || 'DOKUMENTASI PENYALURAN BANTUAN PERALATAN KERJA'
+  ).trim();
+  const subInstName = (reportTemplate?.institutionLine2 || 'LAPORAN PERTANGGUNGJAWABAN (LPJ) FOTO PENERIMA').trim();
+
+  const attendedCount = kpmEntries.filter((e) => Boolean(e.record.attendance?.present)).length;
+  const withPhotoCount = kpmEntries.filter((e) => hasRenderableMedia(e.record.documents.penerima)).length;
+
+  const drawPageHeader = (pageIndex: number) => {
+    doc.setTextColor(15, 23, 42);
+    if (pageIndex === 0) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10.5);
+      doc.text(institutionName.toUpperCase(), marginLeft, marginTop + 3.5);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(12);
+      doc.setTextColor(15, 118, 110);
+      doc.text(
+        `${proposal.namaProposal}${proposal.tahun ? ` (${proposal.tahun})` : ''}`,
+        marginLeft,
+        marginTop + 9.2
+      );
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.2);
+      doc.setTextColor(71, 85, 105);
+      const subtitleParts = [
+        subInstName,
+        kelurahanFilter && kelurahanFilter !== 'all' ? `Kel. ${kelurahanFilter}` : '',
+        statusFilterLabel ? `Filter: ${statusFilterLabel}` : '',
+      ].filter(Boolean);
+      doc.text(subtitleParts.join(' · '), marginLeft, marginTop + 14);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(15, 23, 42);
+      doc.text(
+        `Total: ${kpmEntries.length} KPM · Foto: ${withPhotoCount} · Hadir: ${attendedCount}`,
+        pageW - marginRight,
+        marginTop + 9.2,
+        { align: 'right' }
+      );
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.5);
+      doc.setTextColor(100, 116, 139);
+      doc.text(
+        `Cetak: ${formatIndonesianShortDate()}`,
+        pageW - marginRight,
+        marginTop + 14,
+        { align: 'right' }
+      );
+
+      doc.setDrawColor(15, 118, 110);
+      doc.setLineWidth(0.5);
+      doc.line(marginLeft, marginTop + 16.5, pageW - marginRight, marginTop + 16.5);
+      return marginTop + 20;
+    }
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.text(
+      `LPJ FOTO PENYALURAN · ${proposal.namaProposal}${proposal.tahun ? ` (${proposal.tahun})` : ''}`,
+      marginLeft,
+      marginTop + 3
+    );
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.8);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      kelurahanFilter && kelurahanFilter !== 'all' ? `Kel. ${kelurahanFilter}` : 'Dokumentasi KPM',
+      pageW - marginRight,
+      marginTop + 3,
+      { align: 'right' }
+    );
+    doc.setDrawColor(203, 213, 225);
+    doc.setLineWidth(0.3);
+    doc.line(marginLeft, marginTop + 5.5, pageW - marginRight, marginTop + 5.5);
+    return marginTop + 9;
+  };
+
+  const totalPages = Math.ceil(kpmEntries.length / perPage);
+
+  for (let pageIdx = 0; pageIdx < totalPages; pageIdx++) {
+    if (pageIdx > 0) {
+      doc.addPage([F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM], 'portrait');
+    }
+    const gridStartY = drawPageHeader(pageIdx);
+    const availH = pageH - marginBottom - gridStartY;
+    const cardH = (availH - rowGap * (rows - 1)) / rows;
+    const infoBlockH = layoutMode === '6up' ? 23 : 27;
+    const photoPad = 2.2;
+    const photoAreaH = Math.max(20, cardH - infoBlockH - photoPad * 2);
+
+    const slice = kpmEntries.slice(pageIdx * perPage, (pageIdx + 1) * perPage);
+    slice.forEach((entry, localIdx) => {
+      const rIdx = Math.floor(localIdx / cols);
+      const cIdx = localIdx % cols;
+      const x = marginLeft + cIdx * (cardW + colGap);
+      const y = gridStartY + rIdx * (cardH + rowGap);
+
+      // Card outer frame
+      doc.setFillColor(255, 255, 255);
+      doc.setDrawColor(203, 213, 225);
+      doc.setLineWidth(0.3);
+      doc.roundedRect(x, y, cardW, cardH, 1.8, 1.8, 'FD');
+
+      // Photo frame inside card
+      const px = x + photoPad;
+      const py = y + photoPad;
+      const pw = cardW - photoPad * 2;
+      const ph = photoAreaH;
+      doc.setFillColor(248, 250, 252);
+      doc.setDrawColor(226, 232, 240);
+      doc.setLineWidth(0.2);
+      doc.rect(px, py, pw, ph, 'FD');
+
+      const rec = entry.record;
+      const seqLabel = String(entry.slotNumber).padStart(2, '0');
+      const loadedImg = loadedImages.get(rec.id) ?? null;
+
+      if (loadedImg) {
+        const imgRatio = loadedImg.width / loadedImg.height;
+        const boxRatio = pw / ph;
+        let drawW = pw - 1;
+        let drawH = ph - 1;
+        if (imgRatio > boxRatio) {
+          drawH = drawW / imgRatio;
+        } else {
+          drawW = drawH * imgRatio;
+        }
+        const drawX = px + (pw - drawW) / 2;
+        const drawY = py + (ph - drawH) / 2;
+        try {
+          doc.addImage(loadedImg.dataUrl, loadedImg.format, drawX, drawY, drawW, drawH);
+        } catch {
+          // leave box cleanly drawn
+        }
+      } else {
+        const hasDoc = hasRenderableMedia(rec.documents.penerima);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(8.5);
+        doc.setTextColor(148, 163, 184);
+        doc.text(
+          hasDoc ? 'Foto tidak dapat dimuat (Offline/CORS)' : 'Belum ada Foto Penerima',
+          px + pw / 2,
+          py + ph / 2,
+          { align: 'center', maxWidth: pw - 6 }
+        );
+      }
+
+      // Slot badge at top-left of photo
+      doc.setFillColor(15, 118, 110);
+      doc.roundedRect(px + 1.5, py + 1.5, 10.5, 5.2, 1, 1, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.8);
+      doc.setTextColor(255, 255, 255);
+      doc.text(`#${seqLabel}`, px + 6.75, py + 5.1, { align: 'center' });
+
+      // Text info block below photo
+      const infoY = py + ph + 3.4;
+      const dom = resolveKpmDomicile(rec, [proposal], wilayahList);
+      const pkg = resolvePackageForKpm(items, rec.tahun || proposal.tahun, rec.item);
+      const itemText = pkg?.name ? `${rec.item} (${pkg.name})` : rec.item || 'Tanpa Item';
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(layoutMode === '6up' ? 8.3 : 9.2);
+      doc.setTextColor(15, 23, 42);
+      const nameLines = doc.splitTextToSize(`${seqLabel}. ${rec.nama}`, cardW - 5) as string[];
+      doc.text(nameLines[0] || rec.nama, x + 2.5, infoY);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(layoutMode === '6up' ? 7.2 : 7.8);
+      doc.setTextColor(71, 85, 105);
+      const nikItemLine = `NIK: ${rec.nikKtp || '-'} · ${itemText}`;
+      const nikItemCut = (doc.splitTextToSize(nikItemLine, cardW - 5) as string[])[0] || nikItemLine;
+      doc.text(nikItemCut, x + 2.5, infoY + 4.1);
+
+      const addrParts = [
+        dom.kelurahan || rec.kelurahan,
+        rec.rt || rec.rw ? `RT ${rec.rt || '-'}/RW ${rec.rw || '-'}` : '',
+        rec.pengelola ? `Pengelola: ${rec.pengelola}` : '',
+      ].filter(Boolean);
+      const addrLine = addrParts.join(' · ') || rec.alamat || '-';
+      const addrCut = (doc.splitTextToSize(addrLine, cardW - 5) as string[])[0] || addrLine;
+      doc.text(addrCut, x + 2.5, infoY + 8.0);
+
+      // Attendance + Representative line
+      const att = rec.attendance;
+      const isPresent = Boolean(att?.present);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(layoutMode === '6up' ? 7.1 : 7.6);
+      if (isPresent) {
+        doc.setTextColor(15, 118, 110);
+        const rep = att?.representativeName?.trim();
+        const rel = att?.representativeRelation?.trim();
+        const repText = rep ? ` · Diwakilkan: ${rep}${rel ? ` (${rel})` : ''}` : '';
+        const attText = `HADIR${repText}`;
+        const attCut = (doc.splitTextToSize(attText, cardW - 5) as string[])[0] || attText;
+        doc.text(attCut, x + 2.5, infoY + 12.1);
+      } else {
+        doc.setTextColor(180, 83, 9);
+        doc.text('BELUM HADIR', x + 2.5, infoY + 12.1);
+      }
+    });
+
+    // Page footer
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      `MASDETA · Dokumentasi Penyaluran Bantuan (${layoutMode === '6up' ? '6' : '4'} Foto/Hal)`,
+      marginLeft,
+      pageH - 7
+    );
+    doc.text(`Halaman ${pageIdx + 1} dari ${totalPages}`, pageW - marginRight, pageH - 7, {
+      align: 'right',
+    });
+  }
+
+  const kelSuffix = kelurahanFilter && kelurahanFilter !== 'all' ? `_${kelurahanFilter}` : '';
+  const defaultName = `LPJ_Foto_${proposal.namaProposal}${kelSuffix}_${proposal.tahun || '2026'}`;
+  const saved = await saveOrOpenPdfDocument(doc, fileName || defaultName);
+
+  return {
+    ...saved,
+    count: kpmEntries.length,
+    photoLoadedCount,
+  };
+}
+
 
 
 
