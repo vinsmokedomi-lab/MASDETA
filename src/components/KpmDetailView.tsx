@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Archive,
   ArrowLeft,
+  ArrowLeftRight,
   Camera,
   Check,
   CheckCircle2,
@@ -42,6 +43,7 @@ import { DriveImage } from './DriveImage';
 import { ProposalPickerModal } from './ProposalPickerModal';
 import { SignaturePadModal } from './SignaturePadModal';
 import { SlotHandlingConfirmModal } from './SlotHandlingConfirmModal';
+import { SwapPenerimaPhotoModal } from './SwapPenerimaPhotoModal';
 import { DTSEN_OPTION_ITEMS, INITIAL_WILAYAH_LIST } from '../data/kpmOptions';
 import {
   BastTemplateConfig,
@@ -177,6 +179,10 @@ interface KpmDetailViewProps {
     category: PhotoDocCategory,
     label: string
   ) => Promise<void>;
+  onSwapPenerimaPhoto?: (
+    sourceKpmId: string,
+    targetKpmId: string
+  ) => Promise<boolean | void> | boolean | void;
   reportTemplate?: ReportTemplateConfig;
   schedules?: ScheduleEventItem[];
   couponConfig?: CouponPrintConfig;
@@ -278,6 +284,7 @@ export function KpmDetailView({
   onUpdateKpmDocuments,
   onEnqueuePhoto,
   onCancelPendingPhoto,
+  onSwapPenerimaPhoto,
   reportTemplate,
   schedules = [],
   couponConfig,
@@ -297,6 +304,7 @@ export function KpmDetailView({
   const isDesktopWeb = useIsDesktopWeb();
   const { isOffline } = useOfflineStatus();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [isSwapPenerimaOpen, setIsSwapPenerimaOpen] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [shareRecipientId, setShareRecipientId] = useState<string>('');
   const [shareMessage, setShareMessage] = useState<string>('');
@@ -2048,6 +2056,18 @@ export function KpmDetailView({
                                 <RefreshCw className="h-3 w-3" />
                               </button>
                             )}
+                          {item.key === 'penerima' && onSwapPenerimaPhoto && (
+                            <button
+                              type="button"
+                              disabled={Boolean(isSlotBusy)}
+                              onClick={() => setIsSwapPenerimaOpen(true)}
+                              className="inline-flex min-h-[32px] items-center justify-center gap-1 rounded-lg border border-teal-200 bg-teal-50/70 px-2 text-[11px] font-semibold text-teal-800 hover:bg-teal-100 disabled:opacity-50 whitespace-nowrap"
+                              title="Tukar atau pindahkan Foto Penerima ke KPM lain"
+                            >
+                              <ArrowLeftRight className="h-3 w-3 shrink-0" />
+                              <span>Tukar</span>
+                            </button>
+                          )}
                           <button
                             type="button"
                             disabled={Boolean(docBusySlot) || (!isPendingDoc && isOffline)}
@@ -2089,27 +2109,39 @@ export function KpmDetailView({
                         <p className="mt-0.5 text-[10px] text-slate-400">Belum diunggah</p>
                       </div>
                       {editableDocs && !isSlotBusy && (
-                        <div className="mt-2.5 flex w-full items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              handleTriggerSingleOrMultiUpload(item.key, item.label, 'camera')
-                            }
-                            className="inline-flex min-h-[34px] flex-1 items-center justify-center gap-1 rounded-lg bg-teal-700 px-2 text-[11px] font-semibold text-white hover:bg-teal-800 active:scale-[0.99]"
-                          >
-                            <Camera className="h-3 w-3 shrink-0" />
-                            <span>Kamera</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              handleTriggerSingleOrMultiUpload(item.key, item.label, 'file')
-                            }
-                            className="inline-flex min-h-[34px] flex-1 items-center justify-center gap-1 rounded-lg border border-slate-200 bg-white px-2 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 active:scale-[0.99]"
-                          >
-                            <Upload className="h-3 w-3 shrink-0" />
-                            <span>Galeri</span>
-                          </button>
+                        <div className="mt-2.5 space-y-1.5">
+                          <div className="flex w-full items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleTriggerSingleOrMultiUpload(item.key, item.label, 'camera')
+                              }
+                              className="inline-flex min-h-[34px] flex-1 items-center justify-center gap-1 rounded-lg bg-teal-700 px-2 text-[11px] font-semibold text-white hover:bg-teal-800 active:scale-[0.99]"
+                            >
+                              <Camera className="h-3 w-3 shrink-0" />
+                              <span>Kamera</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleTriggerSingleOrMultiUpload(item.key, item.label, 'file')
+                              }
+                              className="inline-flex min-h-[34px] flex-1 items-center justify-center gap-1 rounded-lg border border-slate-200 bg-white px-2 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 active:scale-[0.99]"
+                            >
+                              <Upload className="h-3 w-3 shrink-0" />
+                              <span>Galeri</span>
+                            </button>
+                          </div>
+                          {item.key === 'penerima' && onSwapPenerimaPhoto && (
+                            <button
+                              type="button"
+                              onClick={() => setIsSwapPenerimaOpen(true)}
+                              className="inline-flex min-h-[30px] w-full items-center justify-center gap-1 rounded-lg border border-teal-200 bg-teal-50/70 px-2 text-[11px] font-semibold text-teal-800 hover:bg-teal-100"
+                            >
+                              <ArrowLeftRight className="h-3 w-3 shrink-0" />
+                              <span>Ambil dari KPM Lain</span>
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>
@@ -3656,6 +3688,19 @@ export function KpmDetailView({
           onUpdateStatus(record.id, nextSt, undefined, slotHandling);
         }}
       />
+      {onSwapPenerimaPhoto && (
+        <SwapPenerimaPhotoModal
+          open={isSwapPenerimaOpen}
+          sourceRecord={record}
+          allRecords={allRecords}
+          proposals={proposals}
+          items={items}
+          wilayahList={wilayahList}
+          proposalSlotMap={proposalSlotMap}
+          onClose={() => setIsSwapPenerimaOpen(false)}
+          onConfirmSwap={onSwapPenerimaPhoto}
+        />
+      )}
     </div>
   );
 }

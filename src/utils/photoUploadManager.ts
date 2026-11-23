@@ -1369,6 +1369,45 @@ export async function bindFormDraftJobsToKpm(
   return alreadyCompleted;
 }
 
+export async function swapPendingPenerimaJobOwners(params: {
+  firstKpmId: string;
+  firstKpmName: string;
+  secondKpmId: string;
+  secondKpmName: string;
+}): Promise<void> {
+  const { firstKpmId, firstKpmName, secondKpmId, secondKpmName } = params;
+  if (!firstKpmId || !secondKpmId || firstKpmId === secondKpmId) return;
+  await initPhotoUploadManager();
+
+  const fromFirst: PhotoUploadJob[] = [];
+  const fromSecond: PhotoUploadJob[] = [];
+
+  for (const job of jobsMap.values()) {
+    if (job.category !== 'penerima') continue;
+    if (job.kpmId === firstKpmId) fromFirst.push(job);
+    else if (job.kpmId === secondKpmId) fromSecond.push(job);
+  }
+
+  if (fromFirst.length === 0 && fromSecond.length === 0) return;
+
+  const nowIso = new Date().toISOString();
+  for (const job of fromFirst) {
+    job.kpmId = secondKpmId;
+    job.kpmName = secondKpmName.trim() || 'KPM';
+    job.existingDoc = undefined;
+    job.updatedAt = nowIso;
+    await putVaultJobToDb(job);
+  }
+  for (const job of fromSecond) {
+    job.kpmId = firstKpmId;
+    job.kpmName = firstKpmName.trim() || 'KPM';
+    job.existingDoc = undefined;
+    job.updatedAt = nowIso;
+    await putVaultJobToDb(job);
+  }
+  notifyJobsListeners();
+}
+
 export async function cancelPendingPhotoUploadJob(jobId: string): Promise<void> {
   await initPhotoUploadManager();
   const existing = jobsMap.get(jobId);

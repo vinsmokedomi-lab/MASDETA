@@ -838,7 +838,7 @@ export function resolveScheduleForProposal(
     let s = 0;
     if (ev.category === 'distribusi') s += 100;
     else if (ev.category === 'dinas') s += 20;
-    if (ev.bookId === 'book-2') s += 25;
+    if (ev.bookId === 'book-2') s += 200;
     if ((ev.location || '').trim()) s += 30;
     if (!ev.completed) s += 15;
     return s;
@@ -857,7 +857,9 @@ export function resolveScheduleForProposalInBook(
   proposalName: string | undefined,
   tahun: string | undefined,
   schedules: ScheduleEventItem[] = [],
-  bookId?: string
+  bookId?: string,
+  scheduleBooks?: ScheduleBook[],
+  scheduleBookMap: Record<string, string> = {}
 ): ScheduleEventItem | undefined {
   const targetName = (proposalName || '').trim().toLowerCase();
   if (!targetName || !Array.isArray(schedules) || schedules.length === 0) return undefined;
@@ -869,7 +871,9 @@ export function resolveScheduleForProposalInBook(
   }
 
   const matches = schedules.filter((ev) => {
-    if (resolveScheduleBookId(ev) !== normalizedBookId) return false;
+    if (resolveScheduleBookId(ev, scheduleBookMap, scheduleBooks) !== normalizedBookId) {
+      return false;
+    }
     const evProp = (ev.proposalName || '').trim().toLowerCase();
     if (!evProp || evProp !== targetName) return false;
     const evYear = (ev.tahun || '').trim();
@@ -8140,6 +8144,7 @@ export interface ExportAbsensiDinsosPdfOptions {
   proposalSlotMap?: ProposalSlotMap;
   schedules?: ScheduleEventItem[];
   scheduleBookId?: string;
+  scheduleBooks?: ScheduleBook[];
   bastConfig?: BastTemplateConfig;
   reportTemplate?: ReportTemplateConfig;
   /** Jika diisi untuk 1 proposal spesifik, override jadwal/lokasi manual */
@@ -8163,6 +8168,7 @@ export async function exportAbsensiDinsosToPdf(
     proposalSlotMap = {},
     schedules = [],
     scheduleBookId,
+    scheduleBooks,
     bastConfig = DEFAULT_BAST_TEMPLATE,
     reportTemplate,
     manualOverride,
@@ -8301,7 +8307,8 @@ export async function exportAbsensiDinsosToPdf(
       prop.namaProposal,
       prop.tahun,
       schedules,
-      scheduleBookId
+      scheduleBookId,
+      scheduleBooks
     );
     const autoFields = formatAbsensiScheduleFields(matchedSchedule);
 
@@ -9299,6 +9306,7 @@ export interface ExportAbsenArsipPdfOptions {
   proposalSlotMap?: ProposalSlotMap;
   schedules?: ScheduleEventItem[];
   scheduleBookId?: string;
+  scheduleBooks?: ScheduleBook[];
   singleProposal?: ProposalRecord;
   manualOverride?: AbsenArsipManualOverride;
   fallbackFields?: AbsenArsipManualOverride;
@@ -9320,6 +9328,7 @@ export async function exportAbsenArsipToPdf(
     proposalSlotMap = {},
     schedules = [],
     scheduleBookId,
+    scheduleBooks,
     singleProposal,
     manualOverride,
     fallbackFields,
@@ -9512,7 +9521,8 @@ export async function exportAbsenArsipToPdf(
       prop.namaProposal,
       prop.tahun,
       schedules,
-      scheduleBookId
+      scheduleBookId,
+      scheduleBooks
     );
     const autoFields = formatAbsensiScheduleFields(matchedSchedule);
 

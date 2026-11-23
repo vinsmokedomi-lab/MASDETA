@@ -1565,7 +1565,8 @@ export function MenuDownloadView({
         prop.namaProposal,
         prop.tahun,
         schedules,
-        absensiBookId
+        absensiBookId,
+        effectiveScheduleBooks
       );
       if (ev) matchedCount += 1;
     }
@@ -1576,7 +1577,8 @@ export function MenuDownloadView({
           firstProp.namaProposal,
           firstProp.tahun,
           schedules,
-          absensiBookId
+          absensiBookId,
+          effectiveScheduleBooks
         )
       : undefined;
     const firstFields = formatAbsensiScheduleFields(firstEv);
@@ -1609,6 +1611,7 @@ export function MenuDownloadView({
     wilayahList,
     schedules,
     absensiBookId,
+    effectiveScheduleBooks,
     absensiFallbackTanggal,
     absensiFallbackHari,
     absensiFallbackPukul,
@@ -1657,6 +1660,7 @@ export function MenuDownloadView({
           proposalSlotMap,
           schedules,
           scheduleBookId: absensiBookId,
+          scheduleBooks: effectiveScheduleBooks,
           fallbackFields: {
             tanggal: absensiFallbackTanggal.trim(),
             hari: absensiFallbackHari.trim(),
@@ -1684,6 +1688,7 @@ export function MenuDownloadView({
           proposalSlotMap,
           schedules,
           scheduleBookId: absensiBookId,
+          scheduleBooks: effectiveScheduleBooks,
           bastConfig: bastTemplate,
           reportTemplate,
           fallbackFields: {
@@ -5329,7 +5334,8 @@ export function MenuDownloadView({
                               prop.namaProposal,
                               prop.tahun,
                               schedules,
-                              book.id
+                              book.id,
+                              effectiveScheduleBooks
                             )
                           )
                         ).length;

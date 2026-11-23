@@ -213,6 +213,7 @@ import {
   PhotoDocCategory,
   PhotoUploadJobSummary,
   subscribePhotoUploadCompleted,
+  swapPendingPenerimaJobOwners,
 } from './utils/photoUploadManager';
 import { useOnlineStatus } from './hooks/usePWAInstall';
 import { OfflineProvider } from './contexts/OfflineContext';
@@ -6194,6 +6195,300 @@ export default function App() {
       });
     },
     []
+  );
+
+  const handleSwapPenerimaPhoto = useCallback(
+    async (sourceKpmId: string, targetKpmId: string): Promise<boolean> => {
+      if (!sourceKpmId || !targetKpmId || sourceKpmId === targetKpmId) return false;
+      if (!requirePermission('update', 'menukar foto penerima', { allowOffline: true })) {
+        return false;
+      }
+
+      const [lockFirstId, lockSecondId] = [sourceKpmId, targetKpmId].sort();
+      let didSucceed = false;
+
+      await enqueueKpmPhotoSyncTask(lockFirstId, () =>
+        enqueueKpmPhotoSyncTask(lockSecondId, async () => {
+          const source = latestDataRef.current.records.find((r) => r.id === sourceKpmId);
+          const target = latestDataRef.current.records.find((r) => r.id === targetKpmId);
+          if (!source || !target) return;
+
+          const findProposalForRec = (rec: KpmRecord) =>
+            (rec.proposalId
+              ? proposalsRef.current.find((p) => p.id === rec.proposalId)
+              : undefined) ??
+            proposalsRef.current.find(
+              (p) => p.namaProposal === rec.proposal && p.tahun === rec.tahun
+            ) ??
+            proposalsRef.current.find((p) => p.namaProposal === rec.proposal);
+
+          const sourceProp = findProposalForRec(source);
+          const targetProp = findProposalForRec(target);
+          if (sourceProp?.status === 'locked' || targetProp?.status === 'locked') {
+            setFeedback({
+              type: 'error',
+              message: 'Proposal berstatus Terkunci. Foto Penerima tidak dapat ditukar.',
+            });
+            return;
+          }
+
+          const rawDocA = source.documents.penerima;
+          const rawDocB = target.documents.penerima;
+          const hasA = hasRenderableMedia(rawDocA);
+          const hasB = hasRenderableMedia(rawDocB);
+          if (!hasA && !hasB) return;
+
+          await swapPendingPenerimaJobOwners({
+            firstKpmId: source.id,
+            firstKpmName: source.nama,
+            secondKpmId: target.id,
+            secondKpmName: target.nama,
+          });
+
+          const cloneDocForNewOwner = (
+            doc: KpmDocumentFile | undefined,
+            suffix: string
+          ): KpmDocumentFile | undefined => {
+            if (!doc || !hasRenderableMedia(doc)) return undefined;
+            if (isLocalPendingDocument(doc)) return doc;
+            return {
+              ...doc,
+              id: `doc-swap-${Date.now()}-${suffix}-${Math.random().toString(36).slice(2, 5)}`,
+            };
+          };
+
+          const docForTarget = cloneDocForNewOwner(rawDocA, 't');
+          const docForSource = cloneDocForNewOwner(rawDocB, 's');
+
+          const nextSourceDocs: KpmDocuments = { ...source.documents };
+          if (docForSource) {
+            nextSourceDocs.penerima = docForSource;
+          } else {
+            delete nextSourceDocs.penerima;
+          }
+
+          const nextTargetDocs: KpmDocuments = { ...target.documents };
+          if (docForTarget) {
+            nextTargetDocs.penerima = docForTarget;
+          } else {
+            delete nextTargetDocs.penerima;
+          }
+
+          const now = new Date().toISOString();
+          const actorName = currentUser?.nama ?? 'Petugas Internal';
+          const actorEmail = currentUser?.email;
+
+          const nextAttendanceMap: Record<string, KpmAttendanceInfo> = {
+            ...kpmAttendanceMapRef.current,
+          };
+          let attendanceChanged = false;
+
+          const resolveNextAttendance = (
+            rec: KpmRecord,
+            nowHasPhoto: boolean
+          ): KpmAttendanceInfo | undefined => {
+            const explicitAtt = nextAttendanceMap[rec.id];
+            const currentSource = explicitAtt?.source ?? rec.attendance?.source;
+            if (nowHasPhoto) {
+              if (explicitAtt?.present === true) return explicitAtt;
+              const nextAtt: KpmAttendanceInfo = {
+                present: true,
+                updatedAt: now,
+                updatedBy: actorName,
+                source: 'auto_photo',
+              };
+              nextAttendanceMap[rec.id] = nextAtt;
+              attendanceChanged = true;
+              return nextAtt;
+            }
+            if (
+              currentSource === 'auto_photo' ||
+              (explicitAtt === undefined && rec.attendance?.present)
+            ) {
+              if (nextAttendanceMap[rec.id]) {
+                delete nextAttendanceMap[rec.id];
+                attendanceChanged = true;
+              }
+              return undefined;
+            }
+            return explicitAtt ?? rec.attendance;
+          };
+
+          const nextSourceAttendance = resolveNextAttendance(source, Boolean(docForSource));
+          const nextTargetAttendance = resolveNextAttendance(target, Boolean(docForTarget));
+
+          if (attendanceChanged) {
+            kpmAttendanceMapRef.current = nextAttendanceMap;
+            setKpmAttendanceMap(nextAttendanceMap);
+            void saveAppStateSlice('masdeta_kpm_attendance_v1', nextAttendanceMap);
+          }
+
+          const updatedSource: KpmRecord = {
+            ...source,
+            documents: nextSourceDocs,
+            attendance: nextSourceAttendance,
+            updatedAt: now,
+          };
+          const updatedTarget: KpmRecord = {
+            ...target,
+            documents: nextTargetDocs,
+            attendance: nextTargetAttendance,
+            updatedAt: now,
+          };
+
+          const nextRecords = latestDataRef.current.records.map((r) => {
+            if (r.id === source.id) return updatedSource;
+            if (r.id === target.id) return updatedTarget;
+            return r;
+          });
+          latestDataRef.current.records = nextRecords;
+          setRecords(nextRecords);
+          void saveIdbValue('records', nextRecords);
+
+          const isTwoWay = hasA && hasB;
+          const actionVerb = isTwoWay ? 'Ditukar dengan' : hasA ? 'Dipindahkan ke' : 'Diambil dari';
+          const sourceAudit: KpmAuditLogEntry = {
+            id: `audit-swap-a-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+            kpmId: source.id,
+            action: 'updated',
+            actorName,
+            actorEmail,
+            timestamp: now,
+            proposal: source.proposal,
+            tahun: source.tahun,
+            changes: [
+              {
+                field: 'Foto Penerima',
+                before: rawDocA?.fileName || 'Belum ada',
+                after: docForSource
+                  ? `${docForSource.fileName} (${actionVerb} ${target.nama})`
+                  : `Kosong (${actionVerb} ${target.nama})`,
+              },
+            ],
+          };
+          const targetAudit: KpmAuditLogEntry = {
+            id: `audit-swap-b-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+            kpmId: target.id,
+            action: 'updated',
+            actorName,
+            actorEmail,
+            timestamp: now,
+            proposal: target.proposal,
+            tahun: target.tahun,
+            changes: [
+              {
+                field: 'Foto Penerima',
+                before: rawDocB?.fileName || 'Belum ada',
+                after: docForTarget
+                  ? `${docForTarget.fileName} (${isTwoWay ? 'Ditukar dengan' : 'Dari'} ${source.nama})`
+                  : `Kosong (${source.nama})`,
+              },
+            ],
+          };
+          const addedAudits = [sourceAudit, targetAudit];
+          setKpmAuditLogs((prev) => [...addedAudits, ...prev]);
+
+          const safeSourceForRemote = {
+            ...updatedSource,
+            documents: sanitizeDocumentsForRemoteSync(source.id, nextSourceDocs),
+          };
+          const safeTargetForRemote = {
+            ...updatedTarget,
+            documents: sanitizeDocumentsForRemoteSync(target.id, nextTargetDocs),
+          };
+
+          const enqueueSwapOffline = async () => {
+            await enqueueOfflineAction({
+              id: `off-swap-a-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              createdAt: now,
+              kind: 'sync_kpm_docs',
+              label: `Tukar Foto Penerima (${source.nama})`,
+              kpmId: source.id,
+              documents: safeSourceForRemote.documents,
+              auditEntry: sourceAudit,
+            });
+            await enqueueOfflineAction({
+              id: `off-swap-b-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              createdAt: now,
+              kind: 'sync_kpm_docs',
+              label: `Tukar Foto Penerima (${target.nama})`,
+              kpmId: target.id,
+              documents: safeTargetForRemote.documents,
+              auditEntry: targetAudit,
+            });
+            const q = await getOfflineQueue();
+            setOfflineQueueCount(q.length);
+          };
+
+          if (!isOnlineRef.current || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+            await enqueueSwapOffline();
+            setFeedback({
+              type: 'success',
+              message: isTwoWay
+                ? `Mode Offline: Foto Penerima ${source.nama} ⇄ ${target.nama} berhasil ditukar & masuk antrean sinkronisasi.`
+                : `Mode Offline: Foto Penerima berhasil dipindahkan & masuk antrean sinkronisasi.`,
+            });
+            didSucceed = true;
+            return;
+          }
+
+          if (supabaseReadyRef.current) {
+            try {
+              lastLocalSyncAtRef.current = Date.now();
+              await upsertKpmRecordsBatchInSupabase({
+                records: [safeSourceForRemote, safeTargetForRemote],
+                proposals: proposalsRef.current,
+                pengelolaList: latestDataRef.current.pengelolaList,
+                auditLogs: addedAudits,
+                includeDeliveries: false,
+              });
+              setFeedback({
+                type: 'success',
+                message: isTwoWay
+                  ? `Foto Penerima ${source.nama} dan ${target.nama} berhasil ditukar.`
+                  : hasA
+                    ? `Foto Penerima dari ${source.nama} berhasil dipindahkan ke ${target.nama}.`
+                    : `Foto Penerima dari ${target.nama} berhasil dipindahkan ke ${source.nama}.`,
+              });
+              didSucceed = true;
+              return;
+            } catch {
+              await enqueueSwapOffline();
+              setFeedback({
+                type: 'success',
+                message:
+                  'Foto Penerima berhasil ditukar di perangkat & diantrekan untuk sinkronisasi server.',
+              });
+              didSucceed = true;
+              return;
+            }
+          }
+
+          const nextRecordsSafe = nextRecords.map((r) => {
+            if (r.id === source.id) return safeSourceForRemote;
+            if (r.id === target.id) return safeTargetForRemote;
+            return r;
+          });
+          await syncOperationalData({ records: nextRecordsSafe }, 'update');
+          setFeedback({
+            type: 'success',
+            message: isTwoWay
+              ? `Foto Penerima ${source.nama} dan ${target.nama} berhasil ditukar.`
+              : `Foto Penerima berhasil dipindahkan.`,
+          });
+          didSucceed = true;
+        })
+      );
+
+      return didSucceed;
+    },
+    [
+      currentUser?.email,
+      currentUser?.nama,
+      enqueueKpmPhotoSyncTask,
+      requirePermission,
+      syncOperationalData,
+    ]
   );
 
   useEffect(() => {
@@ -12427,6 +12722,7 @@ export default function App() {
             onUpdateKpmDocuments={handleUpdateKpmDocuments}
             onEnqueuePhoto={handleEnqueueKpmDetailPhoto}
             onCancelPendingPhoto={handleCancelPendingKpmDetailPhoto}
+            onSwapPenerimaPhoto={handleSwapPenerimaPhoto}
             reportTemplate={reportTemplate}
             schedules={schedulesWithBooks}
             couponConfig={couponConfig}
@@ -12745,6 +13041,7 @@ export default function App() {
               onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
               onOpenProposalDetail={(proposalId) => openProposalDetailById(proposalId, 'proposal')}
               onEnqueuePhoto={handleEnqueueKpmDetailPhoto}
+              onSwapPenerimaPhoto={handleSwapPenerimaPhoto}
             />
           </div>
         )}

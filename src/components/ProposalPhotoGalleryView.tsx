@@ -1,6 +1,7 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
+  ArrowLeftRight,
   Camera,
   CheckCircle2,
   ChevronRight,
@@ -43,6 +44,7 @@ import {
 import { useIsDesktopWeb } from '../utils/platform';
 import { DriveImage } from './DriveImage';
 import { FilterSelect, SegmentedTabs } from './FormControls';
+import { SwapPenerimaPhotoModal } from './SwapPenerimaPhotoModal';
 
 type GalleryPhotoCategoryFilter =
   | 'all'
@@ -79,6 +81,10 @@ interface ProposalPhotoGalleryViewProps {
       existingDoc?: KpmDocumentFile;
     }
   ) => Promise<void>;
+  onSwapPenerimaPhoto?: (
+    sourceKpmId: string,
+    targetKpmId: string
+  ) => Promise<boolean | void> | boolean | void;
 }
 
 interface KpmPhotoEntry {
@@ -178,6 +184,7 @@ export function ProposalPhotoGalleryView({
   onPreviewDocument,
   onOpenProposalDetail,
   onEnqueuePhoto,
+  onSwapPenerimaPhoto,
 }: ProposalPhotoGalleryViewProps) {
   const isDesktopWeb = useIsDesktopWeb();
   const isNativeApp = !isDesktopWeb;
@@ -201,6 +208,7 @@ export function ProposalPhotoGalleryView({
   const [query, setQuery] = useState('');
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [busyKpmId, setBusyKpmId] = useState<string | null>(null);
+  const [swapSourceRecord, setSwapSourceRecord] = useState<KpmRecord | null>(null);
 
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
@@ -933,6 +941,22 @@ export function ProposalPhotoGalleryView({
                         <span>{isAttending ? 'Hadir' : 'Belum Hadir'}</span>
                       </span>
 
+                      {canUpdate && !isProposalLocked && onSwapPenerimaPhoto && (hasPenerima || summaryStats.withPenerima > 0) && (
+                        <button
+                          type="button"
+                          onClick={() => setSwapSourceRecord(rec)}
+                          title={
+                            hasPenerima
+                              ? 'Tukar atau pindahkan Foto Penerima ke KPM lain'
+                              : 'Ambil Foto Penerima yang salah upload dari KPM lain'
+                          }
+                          className="inline-flex min-h-[32px] items-center gap-1 rounded-lg border border-teal-200 bg-teal-50/80 px-2.5 text-[11px] font-semibold text-teal-800 hover:bg-teal-100 whitespace-nowrap"
+                        >
+                          <ArrowLeftRight className="h-3.5 w-3.5 shrink-0" />
+                          <span>{hasPenerima ? 'Tukar / Pindah' : 'Ambil Foto'}</span>
+                        </button>
+                      )}
+
                       <button
                         type="button"
                         onClick={() => onSelectKpm(rec)}
@@ -1117,37 +1141,74 @@ export function ProposalPhotoGalleryView({
                     </div>
                   )}
 
-                  <button
-                    type="button"
-                    onClick={() => onSelectKpm(card.record)}
-                    className="flex flex-1 flex-col justify-between gap-1.5 p-3 text-left transition-colors hover:bg-slate-50"
-                  >
-                    <div className="min-w-0">
-                      <p className="truncate text-xs font-bold text-slate-900">
+                  <div className="flex flex-1 flex-col justify-between gap-1.5 p-3">
+                    <button
+                      type="button"
+                      onClick={() => onSelectKpm(card.record)}
+                      className="min-w-0 text-left group"
+                    >
+                      <p className="truncate text-xs font-bold text-slate-900 group-hover:text-teal-700">
                         {card.record.nama}
                       </p>
                       <p className="mt-0.5 truncate text-[11px] text-slate-500">
                         {card.record.item || 'Tanpa Item'} · {card.kelurahan}
                       </p>
-                    </div>
-                    <div className="flex items-center justify-between gap-1 border-t border-slate-100 pt-1.5 text-[11px]">
+                    </button>
+                    <div className="flex items-center justify-between gap-1.5 border-t border-slate-100 pt-1.5 text-[11px]">
                       <span
                         className={`inline-flex items-center gap-1 font-semibold ${
                           isAttending ? 'text-teal-700' : 'text-slate-400'
                         }`}
                       >
                         <CheckCircle2 className="h-3 w-3 shrink-0" />
-                        <span>{isAttending ? 'Hadir' : 'Belum Hadir'}</span>
+                        <span>{isAttending ? 'Hadir' : 'Belum'}</span>
                       </span>
-                      <span className="font-medium text-teal-700">Detail →</span>
+                      <div className="flex items-center gap-1.5">
+                        {canUpdate &&
+                          !isProposalLocked &&
+                          onSwapPenerimaPhoto &&
+                          (card.photo?.category === 'penerima' ||
+                            (!card.photo && summaryStats.withPenerima > 0)) && (
+                            <button
+                              type="button"
+                              onClick={() => setSwapSourceRecord(card.record)}
+                              className="inline-flex items-center gap-1 rounded-md border border-teal-200 bg-teal-50/80 px-1.5 py-0.5 text-[10px] font-semibold text-teal-800 hover:bg-teal-100 whitespace-nowrap"
+                              title="Tukar / Pindah Foto Penerima"
+                            >
+                              <ArrowLeftRight className="h-2.5 w-2.5" />
+                              <span>Tukar</span>
+                            </button>
+                          )}
+                        <button
+                          type="button"
+                          onClick={() => onSelectKpm(card.record)}
+                          className="font-medium text-teal-700 hover:underline whitespace-nowrap"
+                        >
+                          Detail →
+                        </button>
+                      </div>
                     </div>
-                  </button>
+                  </div>
                 </article>
               );
             })}
           </section>
         )}
       </div>
+
+      {onSwapPenerimaPhoto && (
+        <SwapPenerimaPhotoModal
+          open={Boolean(swapSourceRecord)}
+          sourceRecord={swapSourceRecord}
+          allRecords={records}
+          proposals={proposals}
+          items={items}
+          wilayahList={wilayahList}
+          proposalSlotMap={proposalSlotMap}
+          onClose={() => setSwapSourceRecord(null)}
+          onConfirmSwap={onSwapPenerimaPhoto}
+        />
+      )}
     </div>
   );
 }

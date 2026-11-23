@@ -599,7 +599,8 @@ export function ProposalDetailView({
       proposal.namaProposal,
       proposal.tahun,
       schedules,
-      bookId
+      bookId,
+      effectiveScheduleBooks
     );
     const fields = formatAbsensiScheduleFields(ev);
     setAbsensiTanggal(fields.tanggal);
@@ -615,7 +616,8 @@ export function ProposalDetailView({
           proposal.namaProposal,
           proposal.tahun,
           schedules,
-          b.id
+          b.id,
+          effectiveScheduleBooks
         )
       )
     );
@@ -641,9 +643,10 @@ export function ProposalDetailView({
         proposal.namaProposal,
         proposal.tahun,
         schedules,
-        absensiBookId
+        absensiBookId,
+        effectiveScheduleBooks
       ),
-    [proposal.namaProposal, proposal.tahun, schedules, absensiBookId]
+    [proposal.namaProposal, proposal.tahun, schedules, absensiBookId, effectiveScheduleBooks]
   );
 
   const handleExportProposalAbsensi = async () => {
@@ -688,6 +691,7 @@ export function ProposalDetailView({
           proposalSlotMap,
           schedules,
           scheduleBookId: absensiBookId,
+          scheduleBooks: effectiveScheduleBooks,
           singleProposal: proposal,
           extraBlankRows: parsedExtra,
           manualOverride: {
@@ -715,6 +719,7 @@ export function ProposalDetailView({
           proposalSlotMap,
           schedules,
           scheduleBookId: absensiBookId,
+          scheduleBooks: effectiveScheduleBooks,
           bastConfig: effectiveBastConfig,
           reportTemplate,
           singleProposal: proposal,
@@ -5330,7 +5335,8 @@ export function ProposalDetailView({
                           proposal.namaProposal,
                           proposal.tahun,
                           schedules,
-                          book.id
+                          book.id,
+                          effectiveScheduleBooks
                         )
                       );
                       const active = absensiBookId === book.id;

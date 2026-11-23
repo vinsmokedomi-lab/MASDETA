@@ -408,16 +408,19 @@ export interface ScheduleEventItem {
 export function resolveScheduleBookId(
   ev: Pick<ScheduleEventItem, 'id' | 'bookId' | 'category'>,
   scheduleBookMap: Record<string, string> = {},
-  books: ScheduleBook[] = DEFAULT_SCHEDULE_BOOKS
+  books?: ScheduleBook[]
 ): string {
-  const mapped = ev.bookId || scheduleBookMap[ev.id];
-  if (mapped && books.some((b) => b.id === mapped)) {
-    return mapped;
+  const mapped = (ev.bookId || scheduleBookMap[ev.id] || '').trim();
+  if (mapped) {
+    if (!books || books.length === 0 || books.some((b) => b.id === mapped)) {
+      return mapped;
+    }
   }
-  if (ev.category === 'distribusi' && books.some((b) => b.id === 'book-2')) {
+  const effectiveBooks = books && books.length > 0 ? books : DEFAULT_SCHEDULE_BOOKS;
+  if (ev.category === 'distribusi' && effectiveBooks.some((b) => b.id === 'book-2')) {
     return 'book-2';
   }
-  return books[0]?.id || 'book-1';
+  return effectiveBooks[0]?.id || 'book-1';
 }
 
 export interface ProposalEmptySlot {
