@@ -356,6 +356,8 @@ export interface ReconciledMainRow {
   bastOriginalItemCode: string | null;
   proposalOriginalNo: string | null;
   keterangan: string;
+  hasSequenceWarning?: boolean;
+  sequenceWarningReason?: string | null;
 }
 
 export interface ReconciledExcludedRow {
@@ -384,6 +386,8 @@ export interface ReconciledItemComparison {
   terisi: number;
   barisKosong: number;
   dikeluarkan: number;
+  hasSequenceAnomaly?: boolean;
+  blockRangesText?: string;
 }
 
 export interface OverQuotaCandidate {
@@ -430,6 +434,36 @@ export interface PengelolaImpactRow {
   dikeluarkan: number;
 }
 
+export type BastSequenceAnomalyType =
+  | 'split_item_block'
+  | 'missing_bast_no'
+  | 'duplicate_bast_no';
+
+export interface BastSequenceSegment {
+  blockIndex: number;
+  startNo: number;
+  endNo: number;
+  count: number;
+  isPrimary: boolean;
+  isSandwiched: boolean;
+  prevItemCode: string | null;
+  nextItemCode: string | null;
+  sampleRows: { bastNo: number; nama: string }[];
+}
+
+export interface BastSequenceAnomaly {
+  id: string;
+  type: BastSequenceAnomalyType;
+  severity: 'critical' | 'warning';
+  kodeItem: string;
+  namaItem: string;
+  title: string;
+  message: string;
+  affectedBastNos: number[];
+  surroundingItemCode?: string | null;
+  segments?: BastSequenceSegment[];
+}
+
 export interface TroubleshootingMatchMetrics {
   totalProposalCount: number;
   totalBastCount: number;
@@ -452,6 +486,7 @@ export interface TroubleshootingReconcileResult {
   overQuotaGroups: OverQuotaItemGroup[];
   unmatchedBastRows: UnmatchedBastRow[];
   pengelolaImpacts: PengelolaImpactRow[];
+  sequenceAnomalies: BastSequenceAnomaly[];
   totals: {
     kuotaBast: number;
     usulanKpm: number;
@@ -678,7 +713,9 @@ export function reconcileProposalWithBast(params: {
   const bastBlocks: { itemCode: string; slots: IndexedBastSlot[] }[] = [];
 
   for (const slot of indexedBastSlots) {
-    bastSlotByNo.set(slot.bastNo, slot);
+    if (!bastSlotByNo.has(slot.bastNo)) {
+      bastSlotByNo.set(slot.bastNo, slot);
+    }
     bastQuotaByItem.set(slot.itemCode, (bastQuotaByItem.get(slot.itemCode) ?? 0) + 1);
     const barangSet = bastBarangSetByItem.get(slot.itemCode) ?? new Set<string>();
     for (const b of slot.barangList) {
@@ -693,6 +730,249 @@ export function reconcileProposalWithBast(params: {
       bastBlocks.push({ itemCode: slot.itemCode, slots: [slot] });
     }
   }
+
+  // Deteksi anomali nomor urut & blok item pada dokumen BAST Dinas
+  const formatBastRangeText = (startNo: number, endNo: number): string =>
+    startNo === endNo ? `No. ${pad2(startNo)}` : `No. ${pad2(startNo)}–${pad2(endNo)}`;
+
+  const sequenceAnomalies: BastSequenceAnomaly[] = [];
+  const straySlotWarningMap = new Map<IndexedBastSlot, string>();
+  const blockRangesByItem = new Map<string, string>();
+  const anomalyItemSet = new Set<string>();
+
+  // 1) Nomor urut ganda di BAST
+  const slotsByBastNo = new Map<number, IndexedBastSlot[]>();
+  for (const slot of indexedBastSlots) {
+    const arr = slotsByBastNo.get(slot.bastNo) || [];
+    arr.push(slot);
+    slotsByBastNo.set(slot.bastNo, arr);
+  }
+  for (const [bastNo, dupSlots] of slotsByBastNo.entries()) {
+    if (dupSlots.length <= 1) continue;
+    const itemCodes = Array.from(new Set(dupSlots.map((s) => s.itemCode)));
+    const primaryCode = itemCodes[0] || 'LAINNYA';
+    const primaryItemName = getTroubleshootingItemName(primaryCode, catalog);
+    const namesPreview = dupSlots
+      .map((s) => `${s.nama || '-'} (${s.itemCode})`)
+      .join(' & ');
+    const reasonText = `Nomor urut No. ${pad2(bastNo)} tercatat ganda (${dupSlots.length} kali) di BAST Dinas: ${namesPreview}.`;
+    dupSlots.forEach((s) => {
+      straySlotWarningMap.set(s, reasonText);
+      anomalyItemSet.add(s.itemCode);
+    });
+    sequenceAnomalies.push({
+      id: `dup-${bastNo}`,
+      type: 'duplicate_bast_no',
+      severity: 'critical',
+      kodeItem: primaryCode,
+      namaItem: primaryItemName,
+      title: `Nomor urut BAST No. ${pad2(bastNo)} tercatat ganda (${dupSlots.length} baris)`,
+      message: reasonText,
+      affectedBastNos: [bastNo],
+    });
+  }
+
+  // 2) Nomor urut melompat / hilang di BAST
+  if (indexedBastSlots.length > 0) {
+    const uniqueNos = Array.from(new Set(indexedBastSlots.map((s) => s.bastNo))).sort((a, b) => a - b);
+    const missingRanges: string[] = [];
+    const missingSampleNos: number[] = [];
+    if (uniqueNos[0] > 1) {
+      missingRanges.push(formatBastRangeText(1, uniqueNos[0] - 1));
+      for (let n = 1; n < uniqueNos[0]; n += 1) {
+        if (missingSampleNos.length < 15) missingSampleNos.push(n);
+      }
+    }
+    for (let i = 1; i < uniqueNos.length; i += 1) {
+      const prev = uniqueNos[i - 1];
+      const curr = uniqueNos[i];
+      if (curr - prev > 1) {
+        missingRanges.push(formatBastRangeText(prev + 1, curr - 1));
+        for (let n = prev + 1; n < curr; n += 1) {
+          if (missingSampleNos.length < 15) missingSampleNos.push(n);
+        }
+      }
+    }
+    if (missingRanges.length > 0) {
+      sequenceAnomalies.push({
+        id: `missing-${missingSampleNos.join('-') || 'seq'}`,
+        type: 'missing_bast_no',
+        severity: 'warning',
+        kodeItem: 'UMUM',
+        namaItem: 'Penomoran BAST',
+        title: `Nomor urut BAST tidak berurutan / ada nomor terlewat (${missingRanges.join(', ')})`,
+        message: `Ditemukan celah penomoran pada dokumen BAST Dinas: ${missingRanges.join(
+          ', '
+        )} tidak ada di daftar BAST. Pastikan bukan baris KPM yang terhapus/terpotong.`,
+        affectedBastNos: missingSampleNos,
+      });
+    }
+  }
+
+  // 3) Blok item terpisah / terselip di antara blok item lain (contoh: OV di tengah tumpukan KPR)
+  interface RawBlockSegment extends BastSequenceSegment {
+    slots: IndexedBastSlot[];
+  }
+  const rawSegmentsByItem = new Map<string, RawBlockSegment[]>();
+  bastBlocks.forEach((block, blockIndex) => {
+    const startNo = block.slots[0].bastNo;
+    const endNo = block.slots[block.slots.length - 1].bastNo;
+    const prevItemCode = blockIndex > 0 ? bastBlocks[blockIndex - 1].itemCode : null;
+    const nextItemCode =
+      blockIndex < bastBlocks.length - 1 ? bastBlocks[blockIndex + 1].itemCode : null;
+    const isSandwiched = Boolean(prevItemCode && nextItemCode && prevItemCode === nextItemCode);
+    const seg: RawBlockSegment = {
+      blockIndex,
+      startNo,
+      endNo,
+      count: block.slots.length,
+      isPrimary: false,
+      isSandwiched,
+      prevItemCode,
+      nextItemCode,
+      sampleRows: block.slots.slice(0, 3).map((s) => ({ bastNo: s.bastNo, nama: s.nama || '-' })),
+      slots: block.slots,
+    };
+    const list = rawSegmentsByItem.get(block.itemCode) || [];
+    list.push(seg);
+    rawSegmentsByItem.set(block.itemCode, list);
+  });
+
+  // Tentukan blok utama per item (ukuran terbesar; seri -> blok paling awal)
+  for (const [, segs] of rawSegmentsByItem.entries()) {
+    let primaryIdx = 0;
+    for (let i = 1; i < segs.length; i += 1) {
+      if (segs[i].count > segs[primaryIdx].count) {
+        primaryIdx = i;
+      }
+    }
+    segs[primaryIdx].isPrimary = true;
+  }
+
+  // Kumpulkan item yang terselip untuk menjelaskan penyebab blok yang terpecah
+  const sandwichedBlockByGapKey = new Map<number, string>();
+  bastBlocks.forEach((block, idx) => {
+    if (idx > 0 && idx < bastBlocks.length - 1) {
+      const prevCode = bastBlocks[idx - 1].itemCode;
+      const nextCode = bastBlocks[idx + 1].itemCode;
+      if (prevCode === nextCode) {
+        const range = formatBastRangeText(
+          block.slots[0].bastNo,
+          block.slots[block.slots.length - 1].bastNo
+        );
+        sandwichedBlockByGapKey.set(idx - 1, `${block.itemCode} pada ${range}`);
+      }
+    }
+  });
+
+  for (const [code, segs] of rawSegmentsByItem.entries()) {
+    const rangeListText = segs
+      .map((s) => formatBastRangeText(s.startNo, s.endNo))
+      .join(' & ');
+    blockRangesByItem.set(code, rangeListText);
+
+    if (segs.length <= 1) continue;
+
+    anomalyItemSet.add(code);
+    const itemName = getTroubleshootingItemName(code, catalog);
+    const primarySeg = segs.find((s) => s.isPrimary) || segs[0];
+    const straySegs = segs.filter((s) => !s.isPrimary);
+
+    // Cek apakah item ini terpecah murni karena ada item lain terselip di tengahnya
+    const interruptingNotes: string[] = [];
+    for (let i = 0; i < segs.length - 1; i += 1) {
+      const note = sandwichedBlockByGapKey.get(segs[i].blockIndex);
+      if (note) interruptingNotes.push(note);
+    }
+    const isBrokenBySandwichedOther =
+      interruptingNotes.length > 0 && straySegs.every((s) => !s.isSandwiched);
+
+    if (isBrokenBySandwichedOther) {
+      const firstResumeNo = straySegs[0]?.startNo ?? primarySeg.endNo + 1;
+      const segSummaries = segs
+        .map((s) => `${formatBastRangeText(s.startNo, s.endNo)} (${s.count} unit)`)
+        .join(' dan ');
+      sequenceAnomalies.push({
+        id: `split-broken-${code}`,
+        type: 'split_item_block',
+        severity: 'warning',
+        kodeItem: code,
+        namaItem: itemName,
+        title: `Blok item ${code} (${itemName}) terpecah menjadi ${segs.length} bagian`,
+        message: `Urutan item ${code} (${itemName}) terpotong menjadi ${segSummaries} karena di tengahnya terdapat ${interruptingNotes.join(
+          ', '
+        )}.`,
+        affectedBastNos: [firstResumeNo],
+        segments: segs.map(({ slots: _slots, ...rest }) => rest),
+      });
+    } else {
+      const primaryRangeText = formatBastRangeText(primarySeg.startNo, primarySeg.endNo);
+      const strayDescParts = straySegs.map((s) => {
+        const rangeText = formatBastRangeText(s.startNo, s.endNo);
+        const namesText = s.sampleRows
+          .map((r) => r.nama)
+          .filter(Boolean)
+          .join(', ');
+        const moreText = s.count > s.sampleRows.length ? ` +${s.count - s.sampleRows.length} lainnya` : '';
+        return `${rangeText}${namesText ? ` (${namesText}${moreText})` : ''}`;
+      });
+
+      const sandwichedSeg = straySegs.find((s) => s.isSandwiched);
+      const neighborCode = sandwichedSeg?.prevItemCode || null;
+      const neighborBlocks = neighborCode ? rawSegmentsByItem.get(neighborCode) || [] : [];
+      const neighborRangesText = neighborBlocks
+        .map((nb) => formatBastRangeText(nb.startNo, nb.endNo))
+        .join(' & ');
+
+      const contextSuffix = neighborCode
+        ? ` dan berada di tengah tumpukan item ${neighborCode} (${getTroubleshootingItemName(
+            neighborCode,
+            catalog
+          )}${neighborRangesText ? `: ${neighborRangesText}` : ''})`
+        : ' dan tidak menyatu dalam satu blok berurutan di dokumen BAST';
+
+      const fullMessage = `Sepertinya ada kekeliruan nomor urut pada item ${code} (${itemName}): ${strayDescParts.join(
+        ', '
+      )} terpisah dari blok utama ${code} (${primaryRangeText})${contextSuffix}.`;
+
+      const affectedNos: number[] = [];
+      for (const stray of straySegs) {
+        const singleRange = formatBastRangeText(stray.startNo, stray.endNo);
+        const slotReason = neighborCode
+          ? `Kekeliruan No. Urut BAST: ${singleRange} item ${code} (${itemName}) terselip di antara blok item ${neighborCode} (${neighborRangesText}), terpisah dari blok utama ${code} (${primaryRangeText}).`
+          : `Kekeliruan No. Urut BAST: ${singleRange} item ${code} (${itemName}) terpisah dari blok utama ${code} (${primaryRangeText}).`;
+        for (const sl of stray.slots) {
+          affectedNos.push(sl.bastNo);
+          if (!straySlotWarningMap.has(sl)) {
+            straySlotWarningMap.set(sl, slotReason);
+          }
+        }
+      }
+
+      sequenceAnomalies.push({
+        id: `split-stray-${code}`,
+        type: 'split_item_block',
+        severity: 'critical',
+        kodeItem: code,
+        namaItem: itemName,
+        title: `Sepertinya ada kekeliruan nomor urut pada item ${code} (${itemName})`,
+        message: fullMessage,
+        affectedBastNos: affectedNos,
+        surroundingItemCode: neighborCode,
+        segments: segs.map(({ slots: _slots, ...rest }) => rest),
+      });
+    }
+  }
+
+  sequenceAnomalies.sort((a, b) => {
+    const sevRank = (s: BastSequenceAnomaly['severity']) => (s === 'critical' ? 0 : 1);
+    if (sevRank(a.severity) !== sevRank(b.severity)) {
+      return sevRank(a.severity) - sevRank(b.severity);
+    }
+    const aNo = a.affectedBastNos[0] ?? 9999;
+    const bNo = b.affectedBastNos[0] ?? 9999;
+    return aNo - bNo;
+  });
 
   // Kelompokkan KPM Proposal menurut kode item ASLI-nya (Aturan 2: DILARANG mengubah item usulan)
   const cleanProposalRows: CleanProposalRow[] = proposalRows
@@ -850,7 +1130,7 @@ export function reconcileProposalWithBast(params: {
   // Siapkan assignment per slot BAST berdasarkan strategi penempatan
   // Strategi 1 ('proposal_order'): isi berurutan dari atas blok, kosong di akhir blok
   // Strategi 2 ('preserve_bast_number'): KPM yg sudah punya No. BAST di item tsb tetap di nomornya, sisanya isi celah kosong
-  const assignedPropByBastNo = new Map<number, CleanProposalRow | null>();
+  const assignedPropByBastSlot = new Map<IndexedBastSlot, CleanProposalRow | null>();
   const consumedCountByItem = new Map<string, number>();
 
   // Kelompokkan seluruh slot BAST per itemCode
@@ -866,16 +1146,20 @@ export function reconcileProposalWithBast(params: {
     const hasCustomOrderForItem = Boolean(overrides?.orderedIncludedKeysByItem?.[code]?.length);
 
     if (placementStrategy === 'preserve_bast_number' && !hasCustomOrderForItem) {
-      const slotNoSet = new Set(slots.map((s) => s.bastNo));
-      const claimedSlots = new Set<number>();
+      const slotByNoInItem = new Map<number, IndexedBastSlot>();
+      for (const s of slots) {
+        if (!slotByNoInItem.has(s.bastNo)) slotByNoInItem.set(s.bastNo, s);
+      }
+      const claimedSlots = new Set<IndexedBastSlot>();
       const unpinned: CleanProposalRow[] = [];
 
       // Pass 1: pin KPM ke nomor BAST aslinya jika slot tsb bagian dari blok item ini
       for (const row of inc) {
         const matched = matchedBastByPropRow.get(row) || null;
-        if (matched && slotNoSet.has(matched.bastNo) && !claimedSlots.has(matched.bastNo)) {
-          assignedPropByBastNo.set(matched.bastNo, row);
-          claimedSlots.add(matched.bastNo);
+        const targetSlot = matched ? slotByNoInItem.get(matched.bastNo) : undefined;
+        if (targetSlot && !claimedSlots.has(targetSlot)) {
+          assignedPropByBastSlot.set(targetSlot, row);
+          claimedSlots.add(targetSlot);
         } else {
           unpinned.push(row);
         }
@@ -884,13 +1168,13 @@ export function reconcileProposalWithBast(params: {
       // Pass 2: isi slot tersisa secara berurutan
       let cursor = 0;
       for (const slot of slots) {
-        if (claimedSlots.has(slot.bastNo)) continue;
+        if (claimedSlots.has(slot)) continue;
         const nextRow = cursor < unpinned.length ? unpinned[cursor] : null;
         if (nextRow) {
           cursor += 1;
-          assignedPropByBastNo.set(slot.bastNo, nextRow);
+          assignedPropByBastSlot.set(slot, nextRow);
         } else {
-          assignedPropByBastNo.set(slot.bastNo, null);
+          assignedPropByBastSlot.set(slot, null);
         }
       }
       consumedCountByItem.set(code, Math.min(inc.length, slots.length));
@@ -901,9 +1185,9 @@ export function reconcileProposalWithBast(params: {
         const nextRow = cursor < inc.length ? inc[cursor] : null;
         if (nextRow) {
           cursor += 1;
-          assignedPropByBastNo.set(slot.bastNo, nextRow);
+          assignedPropByBastSlot.set(slot, nextRow);
         } else {
-          assignedPropByBastNo.set(slot.bastNo, null);
+          assignedPropByBastSlot.set(slot, null);
         }
       }
       consumedCountByItem.set(code, cursor);
@@ -926,7 +1210,9 @@ export function reconcileProposalWithBast(params: {
     const itemName = getTroubleshootingItemName(code, catalog);
 
     for (const slot of block.slots) {
-      const propKpm = assignedPropByBastNo.get(slot.bastNo) || null;
+      const propKpm = assignedPropByBastSlot.get(slot) || null;
+      const sequenceWarningReason = straySlotWarningMap.get(slot) || null;
+      const hasSequenceWarning = Boolean(sequenceWarningReason);
 
       if (propKpm) {
         const matchedBast = matchedBastByPropRow.get(propKpm) || null;
@@ -957,6 +1243,10 @@ export function reconcileProposalWithBast(params: {
           keterangan = `Tidak tercatat di BAST awal (KPM usulan pada No. Asal Proposal ${propKpm.no || '-'}); ditempatkan pada No. Urut ${pad2(newNo)} dengan item ${code} (${itemName}) sesuai usulan Proposal.`;
         }
 
+        if (sequenceWarningReason) {
+          keterangan = `${keterangan} [${sequenceWarningReason}]`;
+        }
+
         mainRows.push({
           rowKey: propKpm.rowKey,
           sourceKpmId: propKpm.sourceKpmId,
@@ -975,9 +1265,12 @@ export function reconcileProposalWithBast(params: {
           bastOriginalItemCode: matchedBast?.itemCode ?? null,
           proposalOriginalNo: propKpm.no || null,
           keterangan,
+          hasSequenceWarning,
+          sequenceWarningReason,
         });
       } else {
         emptyCount += 1;
+        const baseKeterangan = `BARIS KOSONG (Sisa kuota BAST item ${code} - ${itemName} belum terisi; usulan Proposal ${totalPropForItem} KPM dari kuota ${totalBastForItem} unit).`;
         mainRows.push({
           noUrut: slot.bastNo,
           noUrutText: pad2(slot.bastNo),
@@ -992,7 +1285,11 @@ export function reconcileProposalWithBast(params: {
           bastOriginalNo: null,
           bastOriginalItemCode: null,
           proposalOriginalNo: null,
-          keterangan: `BARIS KOSONG (Sisa kuota BAST item ${code} - ${itemName} belum terisi; usulan Proposal ${totalPropForItem} KPM dari kuota ${totalBastForItem} unit).`,
+          keterangan: sequenceWarningReason
+            ? `${baseKeterangan} [${sequenceWarningReason}]`
+            : baseKeterangan,
+          hasSequenceWarning,
+          sequenceWarningReason,
         });
       }
     }
@@ -1116,6 +1413,8 @@ export function reconcileProposalWithBast(params: {
       terisi,
       barisKosong,
       dikeluarkan,
+      hasSequenceAnomaly: anomalyItemSet.has(code),
+      blockRangesText: blockRangesByItem.get(code) || undefined,
     };
   });
 
@@ -1176,6 +1475,7 @@ export function reconcileProposalWithBast(params: {
     overQuotaGroups,
     unmatchedBastRows,
     pengelolaImpacts,
+    sequenceAnomalies,
     totals,
     matchMetrics,
     hasProposalPengelolaData,
@@ -1190,6 +1490,13 @@ export function buildWhatsAppReconcileSummary(result: TroubleshootingReconcileRe
   lines.push(`*LAPORAN REKONSILIASI PROPOSAL vs BAST DINAS*`);
   lines.push(`Proposal: ${result.proposalTitle}`);
   lines.push(`BAST Dinas: ${result.bastTitle}`);
+  if (result.sequenceAnomalies.length > 0) {
+    lines.push('');
+    lines.push(`*PERINGATAN KEKELIRUAN NOMOR URUT BAST (${result.sequenceAnomalies.length}):*`);
+    result.sequenceAnomalies.forEach((anom, idx) => {
+      lines.push(`${idx + 1}. ${anom.message}`);
+    });
+  }
   lines.push('');
   lines.push(`*Ringkasan Kuota:*`);
   lines.push(`• Kuota BAST: ${result.totals.kuotaBast} unit`);

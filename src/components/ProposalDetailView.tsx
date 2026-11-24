@@ -22,6 +22,7 @@ import {
   Loader2,
   Lock,
   MapPin,
+  PackageCheck,
   Pencil,
   Plus,
   RotateCcw,
@@ -34,6 +35,7 @@ import {
   Upload,
   UserPlus,
   Users,
+  Wrench,
   X,
 } from 'lucide-react';
 import { INITIAL_WILAYAH_LIST } from '../data/kpmOptions';
@@ -72,6 +74,7 @@ import {
   getDocumentDownloadHref,
   getItemHierarchyRank,
   getKpmSlotNumberInProposal,
+  getKpmSubItemStatusList,
   removeDocumentFromDrive,
   resolveKpmDomicile,
   resolvePackageForKpm,
@@ -313,7 +316,12 @@ export function ProposalDetailView({
   const [allowTitleWrap, setAllowTitleWrap] = useState(false);
   const [kpmListQuery, setKpmListQuery] = useState('');
   const [kpmListItemFilter, setKpmListItemFilter] = useState<string>('all');
+  const [subItemTrackerFilter, setSubItemTrackerFilter] = useState<
+    'incomplete' | 'partial' | 'not_taken' | 'complete' | 'all'
+  >('incomplete');
+  const [subItemTrackerQuery, setSubItemTrackerQuery] = useState('');
   const [expandedSections, setExpandedSections] = useState({
+    subItemTracker: true,
     kelurahan: false,
     item: false,
     subItem: false,
@@ -856,7 +864,7 @@ export function ProposalDetailView({
 
     for (const rec of proposalRecords) {
       const d = (rec.dtsen || '').trim();
-      if (['1', '2', '3', '4'].includes(d)) {
+      if (['1 - 5', '1-5', '1', '2', '3', '4'].includes(d)) {
         desil1to4 += 1;
       } else if (d === '5') {
         desil5 += 1;
@@ -1200,17 +1208,123 @@ export function ProposalDetailView({
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
   }, [proposalRecords]);
 
-  // History for this proposal (newest first, excluding general ACTLOG:: entries)
+  // Pantauan Pengambilan Item & Sub-Item per KPM dalam proposal ini (Web & Android)
+  const subItemTrackerData = useMemo(() => {
+    const rows: {
+      record: KpmRecord;
+      slotNumber: number | null;
+      takenNames: string[];
+      pendingNames: string[];
+      takenCount: number;
+      totalCount: number;
+      statusCategory: 'not_taken' | 'partial' | 'complete';
+    }[] = [];
+
+    let partial = 0;
+    let notTaken = 0;
+    let complete = 0;
+
+    for (const { record, displaySeq } of orderedProposalRecords) {
+      if (record.validasi !== 'accepted') continue;
+      const subList = getKpmSubItemStatusList(record, items);
+      if (subList.length === 0) continue;
+
+      const takenNames = subList.filter((s) => s.delivered).map((s) => s.baseName || s.name);
+      const pendingNames = subList.filter((s) => !s.delivered).map((s) => s.baseName || s.name);
+      const takenCount = takenNames.length;
+      const totalCount = subList.length;
+      const statusCategory: 'not_taken' | 'partial' | 'complete' =
+        takenCount === 0 ? 'not_taken' : takenCount >= totalCount ? 'complete' : 'partial';
+
+      if (statusCategory === 'partial') partial += 1;
+      else if (statusCategory === 'not_taken') notTaken += 1;
+      else complete += 1;
+
+      rows.push({
+        record,
+        slotNumber: displaySeq < 999999 ? displaySeq : null,
+        takenNames,
+        pendingNames,
+        takenCount,
+        totalCount,
+        statusCategory,
+      });
+    }
+
+    return {
+      rows,
+      counts: {
+        incomplete: partial + notTaken,
+        partial,
+        notTaken,
+        complete,
+        total: rows.length,
+      },
+    };
+  }, [orderedProposalRecords, items]);
+
+  const filteredSubItemTrackerRows = useMemo(() => {
+    const q = subItemTrackerQuery.trim().toLowerCase();
+    return subItemTrackerData.rows.filter((row) => {
+      if (subItemTrackerFilter === 'incomplete' && row.statusCategory === 'complete') {
+        return false;
+      }
+      if (subItemTrackerFilter === 'partial' && row.statusCategory !== 'partial') {
+        return false;
+      }
+      if (subItemTrackerFilter === 'not_taken' && row.statusCategory !== 'not_taken') {
+        return false;
+      }
+      if (subItemTrackerFilter === 'complete' && row.statusCategory !== 'complete') {
+        return false;
+      }
+      if (!q) return true;
+      return (
+        row.record.nama.toLowerCase().includes(q) ||
+        row.record.item.toLowerCase().includes(q) ||
+        row.takenNames.some((n) => n.toLowerCase().includes(q)) ||
+        row.pendingNames.some((n) => n.toLowerCase().includes(q))
+      );
+    });
+  }, [subItemTrackerData.rows, subItemTrackerFilter, subItemTrackerQuery]);
+
+  // History for this proposal (newest first; include KPM movement + Troubleshooting Reconcile logs)
   const proposalHistory = useMemo(() => {
-    return historyEntries
-      .filter(
+    const base = historyEntries.filter(
+      (h) =>
+        (!h.registerCode?.startsWith('ACTLOG::') ||
+          h.registerCode === 'ACTLOG::reconcile_apply' ||
+          h.registerCode === 'ACTLOG::reconcile_undo') &&
+        h.proposalName === proposal.namaProposal &&
+        (!h.tahun || h.tahun === proposal.tahun)
+    );
+
+    if (activeReconcileSnapshot && activeReconcileSnapshot.proposalId === proposal.id) {
+      const hasMatchingApplyLog = base.some(
         (h) =>
-          !h.registerCode?.startsWith('ACTLOG::') &&
-          h.proposalName === proposal.namaProposal &&
-          (!h.tahun || h.tahun === proposal.tahun)
-      )
-      .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
-  }, [historyEntries, proposal.namaProposal, proposal.tahun]);
+          h.registerCode === 'ACTLOG::reconcile_apply' &&
+          (h.toProposal === activeReconcileSnapshot.id ||
+            h.timestamp === activeReconcileSnapshot.appliedAt)
+      );
+      if (!hasMatchingApplyLog) {
+        base.push({
+          id: `synth-reconcile-${activeReconcileSnapshot.id}`,
+          tahun: activeReconcileSnapshot.tahun || proposal.tahun,
+          proposalName: activeReconcileSnapshot.proposalName || proposal.namaProposal,
+          kpmId: '',
+          kpmName: `Penyesuaian BAST diterapkan pada ${activeReconcileSnapshot.proposalName} (${activeReconcileSnapshot.tahun}): ${activeReconcileSnapshot.summary.shiftedCount} bergeser, ${activeReconcileSnapshot.summary.emptySlotsCount} baris kosong, ${activeReconcileSnapshot.summary.movedToDatabaseCount} ke Database.`,
+          registerCode: 'ACTLOG::reconcile_apply',
+          action: 'entered',
+          fromProposal: 'Admin',
+          toProposal: activeReconcileSnapshot.id,
+          actorName: activeReconcileSnapshot.appliedBy,
+          timestamp: activeReconcileSnapshot.appliedAt,
+        });
+      }
+    }
+
+    return base.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  }, [historyEntries, proposal.id, proposal.namaProposal, proposal.tahun, activeReconcileSnapshot]);
 
   // Gabungan Rekap Pergantian KPM & Item (stored + retroaktif dari emptySlots & audit Item Bantuan)
   const combinedChangeRecapEntries = useMemo(() => {
@@ -2332,6 +2446,144 @@ export function ProposalDetailView({
 
   const breakdownsBlock = (
     <>
+        {/* Pantauan Pengambilan Item & Sub-Item KPM (Web & Mobile/Android) */}
+        {subItemTrackerData.counts.total > 0 && (
+          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+            <button
+              type="button"
+              aria-expanded={expandedSections.subItemTracker}
+              onClick={() => toggleBreakdownSection('subItemTracker')}
+              className={`flex w-full items-center justify-between gap-2 px-4 py-3 text-left transition-colors hover:bg-slate-50/80 ${
+                expandedSections.subItemTracker ? 'border-b border-slate-100' : ''
+              }`}
+            >
+              <div className="flex min-w-0 items-center gap-2">
+                <PackageCheck className="h-4 w-4 shrink-0 text-teal-700" />
+                <h2 className="truncate text-sm font-bold text-slate-900">
+                  Pantauan Item &amp; Sub-Item
+                </h2>
+                <span className="shrink-0 text-xs font-medium text-slate-500 tabular-nums">
+                  · {subItemTrackerData.counts.incomplete} Belum Lengkap
+                </span>
+              </div>
+              <ChevronDown
+                className={`h-4 w-4 shrink-0 text-slate-500 transition-transform duration-200 ${
+                  expandedSections.subItemTracker ? 'rotate-180' : ''
+                }`}
+              />
+            </button>
+
+            {expandedSections.subItemTracker && (
+              <div className="space-y-3 p-3.5">
+                <div className="flex flex-wrap items-center gap-1 rounded-xl bg-slate-100 p-1">
+                  {(
+                    [
+                      {
+                        key: 'incomplete',
+                        label: `Belum Lengkap (${subItemTrackerData.counts.incomplete})`,
+                      },
+                      {
+                        key: 'partial',
+                        label: `Sebagian (${subItemTrackerData.counts.partial})`,
+                      },
+                      {
+                        key: 'not_taken',
+                        label: `Belum (${subItemTrackerData.counts.notTaken})`,
+                      },
+                      {
+                        key: 'complete',
+                        label: `Lengkap (${subItemTrackerData.counts.complete})`,
+                      },
+                      { key: 'all', label: `Semua (${subItemTrackerData.counts.total})` },
+                    ] as const
+                  ).map((tab) => (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      onClick={() => setSubItemTrackerFilter(tab.key)}
+                      className={`rounded-lg px-2 py-1 text-[11px] font-semibold transition-colors whitespace-nowrap tabular-nums ${
+                        subItemTrackerFilter === tab.key
+                          ? 'bg-white text-slate-900 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="relative">
+                  <Search className="pointer-events-none absolute top-1/2 left-3 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="search"
+                    value={subItemTrackerQuery}
+                    onChange={(e) => setSubItemTrackerQuery(e.target.value)}
+                    placeholder="Cari nama KPM atau sub-item..."
+                    className="min-h-[38px] w-full rounded-xl border border-slate-200 bg-slate-50 pr-3 pl-8 text-xs text-slate-800 placeholder:text-slate-400 focus:border-teal-700 focus:bg-white focus:outline-none"
+                  />
+                </div>
+
+                {filteredSubItemTrackerRows.length === 0 ? (
+                  <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50/70 px-3 py-5 text-center text-xs text-slate-500">
+                    Tidak ada KPM pada filter status ini.
+                  </p>
+                ) : (
+                  <div className="max-h-[340px] divide-y divide-slate-100 overflow-y-auto rounded-xl border border-slate-200">
+                    {filteredSubItemTrackerRows.map((row) => (
+                      <button
+                        key={`prop-subtracker-${row.record.id}`}
+                        type="button"
+                        onClick={() => onSelectKpm?.(row.record)}
+                        className="flex w-full flex-col gap-1.5 px-3 py-2.5 text-left transition-colors hover:bg-teal-50/40 active:bg-teal-50"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            {row.slotNumber && (
+                              <span className="shrink-0 font-mono text-[11px] font-bold text-slate-500 tabular-nums">
+                                #{String(row.slotNumber).padStart(2, '0')}
+                              </span>
+                            )}
+                            <span className="truncate text-xs font-bold text-slate-900">
+                              {row.record.nama}
+                            </span>
+                            <span className="shrink-0 text-[11px] font-medium text-slate-500">
+                              · {row.record.item || '-'}
+                            </span>
+                          </div>
+                          <span
+                            className={`shrink-0 text-xs font-bold tabular-nums ${
+                              row.statusCategory === 'complete'
+                                ? 'text-emerald-700'
+                                : row.statusCategory === 'partial'
+                                  ? 'text-teal-700'
+                                  : 'text-amber-700'
+                            }`}
+                          >
+                            {row.takenCount}/{row.totalCount}
+                          </span>
+                        </div>
+
+                        {row.takenNames.length > 0 && (
+                          <p className="text-[11px] leading-relaxed text-emerald-800">
+                            <span className="font-semibold">Sudah:</span>{' '}
+                            {row.takenNames.join(', ')}
+                          </p>
+                        )}
+                        {row.pendingNames.length > 0 && (
+                          <p className="text-[11px] leading-relaxed text-amber-900">
+                            <span className="font-semibold">Belum:</span>{' '}
+                            {row.pendingNames.join(', ')}
+                          </p>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+        )}
+
         {/* Conditional Listing: Kelurahan (Collapsible, default collapsed) */}
         {showKelurahanCard && (
           <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
@@ -2987,12 +3239,17 @@ export function ProposalDetailView({
               expandedSections.rekamJejak ? 'border-b border-slate-100' : ''
             }`}
           >
-            <div className="flex min-w-0 items-center gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
               <History className="h-4 w-4 shrink-0 text-slate-700" />
               <h2 className="text-sm font-bold text-slate-900">Rekam Jejak</h2>
               {proposalHistory.length > 0 && (
                 <span className="text-xs font-medium text-slate-500 tabular-nums">
                   · {proposalHistory.length} Aktivitas
+                </span>
+              )}
+              {activeReconcileSnapshot && onUndoReconcileSnapshot && (
+                <span className="rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-800">
+                  Undo tersedia
                 </span>
               )}
             </div>
@@ -3006,59 +3263,139 @@ export function ProposalDetailView({
           {expandedSections.rekamJejak && (
             proposalHistory.length === 0 ? (
               <p className="px-4 py-6 text-center text-xs text-slate-400">
-                Belum ada riwayat perpindahan KPM pada proposal ini.
+                Belum ada riwayat perpindahan KPM atau rekonsiliasi pada proposal ini.
               </p>
             ) : (
               <>
                 <div className="divide-y divide-slate-100">
-                  {proposalHistory.slice(0, 3).map((entry) => {
-                    const isIncoming = entry.action === 'entered' || entry.action === 'moved_in';
-                    const actionSummary =
-                      entry.action === 'moved_in'
-                        ? `Pindah masuk dari ${entry.fromProposal || 'proposal lain'}`
-                        : entry.action === 'moved_out'
-                          ? `Pindah keluar ke ${entry.toProposal || 'proposal lain'}`
-                          : entry.action === 'removed'
-                            ? 'Dihapus dari daftar proposal'
-                            : 'Didaftarkan masuk ke proposal';
+                  {(() => {
+                    const previewEntries = proposalHistory.slice(0, 5);
+                    return previewEntries.map((entry) => {
+                      const isReconcileApply = entry.registerCode === 'ACTLOG::reconcile_apply';
+                      const isReconcileUndo = entry.registerCode === 'ACTLOG::reconcile_undo';
 
-                    return (
-                      <div key={entry.id} className="flex items-start gap-3 px-4 py-3">
-                        <div
-                          className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${
-                            isIncoming
-                              ? 'bg-teal-50 text-teal-700'
-                              : 'bg-amber-50 text-amber-700'
-                          }`}
-                        >
-                          {isIncoming ? (
-                            <ArrowDownLeft className="h-4 w-4" />
-                          ) : (
-                            <ArrowUpRight className="h-4 w-4" />
-                          )}
-                        </div>
+                      if (isReconcileApply || isReconcileUndo) {
+                        const matchingActiveApply =
+                          isReconcileApply &&
+                          activeReconcileSnapshot &&
+                          activeReconcileSnapshot.proposalId === proposal.id &&
+                          (entry.toProposal === activeReconcileSnapshot.id ||
+                            entry.timestamp === activeReconcileSnapshot.appliedAt);
 
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between gap-2">
-                            <p className="truncate text-sm font-medium text-slate-900">
-                              {entry.kpmName}
-                            </p>
-                            <span
-                              className={`shrink-0 text-xs font-semibold ${
-                                isIncoming ? 'text-teal-700' : 'text-amber-700'
+                        return (
+                          <div
+                            key={entry.id}
+                            className={`flex items-start gap-3 px-4 py-3 ${
+                              matchingActiveApply ? 'bg-amber-50/40' : ''
+                            }`}
+                          >
+                            <div
+                              className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${
+                                isReconcileApply
+                                  ? 'bg-teal-50 text-teal-700'
+                                  : 'bg-amber-50 text-amber-700'
                               }`}
                             >
-                              {isIncoming ? 'Masuk' : 'Keluar'}
-                            </span>
+                              {isReconcileApply ? (
+                                <Wrench className="h-4 w-4" />
+                              ) : (
+                                <RotateCcw className="h-4 w-4" />
+                              )}
+                            </div>
+
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="text-sm font-semibold text-slate-900">
+                                  {isReconcileApply
+                                    ? 'Troubleshooting & Rekonsiliasi BAST Dinas'
+                                    : 'Undo Rekonsiliasi BAST Dinas'}
+                                </p>
+                                <span
+                                  className={`shrink-0 text-xs font-semibold ${
+                                    isReconcileApply ? 'text-teal-700' : 'text-amber-700'
+                                  }`}
+                                >
+                                  {isReconcileApply ? 'Apply BAST' : 'Dibatalkan'}
+                                </span>
+                              </div>
+                              <p className="mt-0.5 text-xs leading-relaxed text-slate-600">
+                                {entry.kpmName}
+                              </p>
+                              <p className="mt-1 text-xs text-slate-500 tabular-nums">
+                                {formatUploadDateTime(entry.timestamp)} · Oleh {entry.actorName}
+                              </p>
+                              {matchingActiveApply && onUndoReconcileSnapshot && (
+                                <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                                  <button
+                                    type="button"
+                                    disabled={
+                                      isOffline ||
+                                      !canUpdate ||
+                                      proposal.status === 'locked' ||
+                                      undoBusy
+                                    }
+                                    onClick={() => setConfirmUndoOpen(true)}
+                                    className="inline-flex min-h-[34px] items-center gap-1.5 rounded-xl bg-amber-600 px-3 text-xs font-bold text-white transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    <RotateCcw className="h-3.5 w-3.5" />
+                                    <span>Batalkan Apply (Undo)</span>
+                                  </button>
+                                </div>
+                              )}
+                            </div>
                           </div>
-                          <p className="mt-0.5 text-xs text-slate-600">{actionSummary}</p>
-                          <p className="mt-1 text-xs text-slate-500 tabular-nums">
-                            {formatUploadDateTime(entry.timestamp)} · Oleh {entry.actorName}
-                          </p>
+                        );
+                      }
+
+                      const isIncoming =
+                        entry.action === 'entered' || entry.action === 'moved_in';
+                      const actionSummary =
+                        entry.action === 'moved_in'
+                          ? `Pindah masuk dari ${entry.fromProposal || 'proposal lain'}`
+                          : entry.action === 'moved_out'
+                            ? `Pindah keluar ke ${entry.toProposal || 'proposal lain'}`
+                            : entry.action === 'removed'
+                              ? 'Dihapus dari daftar proposal'
+                              : 'Didaftarkan masuk ke proposal';
+
+                      return (
+                        <div key={entry.id} className="flex items-start gap-3 px-4 py-3">
+                          <div
+                            className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${
+                              isIncoming
+                                ? 'bg-teal-50 text-teal-700'
+                                : 'bg-amber-50 text-amber-700'
+                            }`}
+                          >
+                            {isIncoming ? (
+                              <ArrowDownLeft className="h-4 w-4" />
+                            ) : (
+                              <ArrowUpRight className="h-4 w-4" />
+                            )}
+                          </div>
+
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="truncate text-sm font-medium text-slate-900">
+                                {entry.kpmName}
+                              </p>
+                              <span
+                                className={`shrink-0 text-xs font-semibold ${
+                                  isIncoming ? 'text-teal-700' : 'text-amber-700'
+                                }`}
+                              >
+                                {isIncoming ? 'Masuk' : 'Keluar'}
+                              </span>
+                            </div>
+                            <p className="mt-0.5 text-xs text-slate-600">{actionSummary}</p>
+                            <p className="mt-1 text-xs text-slate-500 tabular-nums">
+                              {formatUploadDateTime(entry.timestamp)} · Oleh {entry.actorName}
+                            </p>
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    });
+                  })()}
                 </div>
 
                 <button
@@ -3075,38 +3412,6 @@ export function ProposalDetailView({
         </section>
     </>
   );
-
-  const proposalUndoBannerBlock =
-    activeReconcileSnapshot && onUndoReconcileSnapshot ? (
-      <section className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-950">
-        <div className="flex min-w-0 flex-1 items-start gap-2.5">
-          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-800">
-            <RotateCcw className="h-4 w-4" />
-          </div>
-          <div className="min-w-0 flex-1 space-y-0.5">
-            <p className="font-bold text-amber-950">
-              Rekonsiliasi BAST Terakhir Aktif (Bisa Di-Undo)
-            </p>
-            <p className="text-[11px] leading-relaxed text-amber-900 tabular-nums">
-              Diterapkan {formatUploadDateTime(activeReconcileSnapshot.appliedAt)} oleh{' '}
-              <strong>{activeReconcileSnapshot.appliedBy}</strong> ·{' '}
-              {activeReconcileSnapshot.summary.shiftedCount} bergeser ·{' '}
-              {activeReconcileSnapshot.summary.emptySlotsCount} baris kosong ·{' '}
-              {activeReconcileSnapshot.summary.movedToDatabaseCount} ke Database
-            </p>
-          </div>
-        </div>
-        <button
-          type="button"
-          disabled={isOffline || !canUpdate || proposal.status === 'locked' || undoBusy}
-          onClick={() => setConfirmUndoOpen(true)}
-          className="inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-xl bg-amber-600 px-3.5 text-xs font-bold text-white transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <RotateCcw className="h-3.5 w-3.5" />
-          <span>Batalkan Apply Terakhir</span>
-        </button>
-      </section>
-    ) : null;
 
   let firstEmptySlotAssigned = false;
 
@@ -3411,7 +3716,9 @@ export function ProposalDetailView({
                       )}
                       {rec.dtsen && (
                         <span className="shrink-0 rounded-md bg-teal-50 px-1.5 py-0.5 text-[10px] font-semibold text-teal-800">
-                          {['1', '2', '3', '4', '5'].includes(rec.dtsen.trim())
+                          {['1 - 5', '1-5', '1', '2', '3', '4', '5', '6 - 10', '6-10'].includes(
+                            rec.dtsen.trim()
+                          )
                             ? `Desil ${rec.dtsen}`
                             : rec.dtsen}
                         </span>
@@ -3464,7 +3771,6 @@ export function ProposalDetailView({
             </button>
             <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">Proposal</h1>
           </div>
-          {proposalUndoBannerBlock && <div className="col-span-12">{proposalUndoBannerBlock}</div>}
           <div className="col-span-5 space-y-5">
             {overviewAndDtsenBlock}
             {breakdownsBlock}
@@ -3476,7 +3782,6 @@ export function ProposalDetailView({
         </main>
       ) : (
         <main className="space-y-4 px-4 pt-4">
-          {proposalUndoBannerBlock}
           {overviewAndDtsenBlock}
           {(emptySlotsCount > 0 || highlightEmptySlots) && proposalKpmListBlock}
           {breakdownsBlock}
@@ -4093,21 +4398,6 @@ export function ProposalDetailView({
                   </div>
                 </div>
               </div>
-
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">
-                  Nilai Nominal BAST
-                </label>
-                <input
-                  type="text"
-                  value={bastDraft.nilaiNominalText}
-                  onChange={(e) =>
-                    setBastDraft((prev) => ({ ...prev, nilaiNominalText: e.target.value }))
-                  }
-                  placeholder=". . . . . . . . . . . . . . . . . . . . . . . . . . ."
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none focus:border-teal-600"
-                />
-              </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 bg-slate-50 px-5 py-3.5">
@@ -4240,7 +4530,9 @@ export function ProposalDetailView({
                             )}
                             {rec.dtsen && (
                               <span className="shrink-0 rounded-md bg-teal-50 px-1.5 py-0.5 text-[10px] font-semibold text-teal-800">
-                                {['1', '2', '3', '4', '5'].includes(rec.dtsen.trim())
+                                {['1 - 5', '1-5', '1', '2', '3', '4', '5', '6 - 10', '6-10'].includes(
+                                  rec.dtsen.trim()
+                                )
                                   ? `Desil ${rec.dtsen}`
                                   : rec.dtsen}
                               </span>

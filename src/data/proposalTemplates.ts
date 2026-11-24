@@ -206,8 +206,8 @@ export function padThreeDigits(raw?: string | null): string {
 export function formatDesilNumber(dtsen?: string | null): string {
   const trimmed = String(dtsen || '').trim();
   if (!trimmed || trimmed.toLowerCase() === 'tidak ada') return '-';
-  const match = trimmed.match(/(\d+)/);
-  return match ? match[1] : trimmed;
+  const match = trimmed.match(/(\d+(?:\s*-\s*\d+)?)/);
+  return match ? match[1].replace(/\s+/g, '') : trimmed;
 }
 
 export function getDefaultUsahaLabelForItem(itemCode: string, itemName?: string): string {

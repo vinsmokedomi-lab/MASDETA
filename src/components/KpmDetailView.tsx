@@ -100,6 +100,7 @@ import {
   formatIndonesianDateWords,
   formatSptjmFullDate,
   getSptjmAutoDayFromIso,
+  getTodayLocalIsoDate,
   normalizePejabatNipNumber,
   resolveCouponScheduleForRecord,
   resolveEffectiveBastConfig,
@@ -3383,7 +3384,7 @@ export function KpmDetailView({
                 <strong>Tanggal Terbilang:</strong>{' '}
                 {bastDraft.tanggalSerahTerimaCustomText?.trim() ||
                   formatIndonesianDateWords(
-                    bastDraft.tanggalSerahTerimaIso || new Date().toISOString().slice(0, 10)
+                    bastDraft.tanggalSerahTerimaIso || getTodayLocalIsoDate()
                   )}
               </p>
             </div>
@@ -3399,33 +3400,18 @@ export function KpmDetailView({
                   className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
                 />
               </div>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600">
-                    Tanggal Serah Terima
-                  </label>
-                  <input
-                    type="date"
-                    value={bastDraft.tanggalSerahTerimaIso}
-                    onChange={(e) =>
-                      setBastDraft((prev) => ({ ...prev, tanggalSerahTerimaIso: e.target.value }))
-                    }
-                    className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600">
-                    Nilai Nominal (Opsional)
-                  </label>
-                  <input
-                    type="text"
-                    value={bastDraft.nilaiNominalText}
-                    onChange={(e) =>
-                      setBastDraft((prev) => ({ ...prev, nilaiNominalText: e.target.value }))
-                    }
-                    className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                  />
-                </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600">
+                  Tanggal Serah Terima
+                </label>
+                <input
+                  type="date"
+                  value={bastDraft.tanggalSerahTerimaIso}
+                  onChange={(e) =>
+                    setBastDraft((prev) => ({ ...prev, tanggalSerahTerimaIso: e.target.value }))
+                  }
+                  className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                />
               </div>
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600">

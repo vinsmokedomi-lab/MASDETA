@@ -134,6 +134,7 @@ export const INITIAL_WILAYAH_LIST: WilayahKabKota[] = [
 ];
 
 export const DTSEN_OPTION_ITEMS: { value: string; label: string }[] = [
+  { value: '1 - 5', label: 'Desil 1 - 5 — Kurang Mampu / Layak' },
   { value: '1', label: 'Desil 1 — Sangat Miskin (Miskin Ekstrem)' },
   { value: '2', label: 'Desil 2 — Miskin' },
   { value: '3', label: 'Desil 3 — Hampir Miskin' },

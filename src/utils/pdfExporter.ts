@@ -292,8 +292,8 @@ function sanitizePdfFileName(name: string): string {
 function formatDesilValue(dtsen: string): string {
   const trimmed = (dtsen || '').trim();
   if (!trimmed || trimmed.toLowerCase() === 'tidak ada') return '-';
-  const match = trimmed.match(/(\d+)/);
-  return match ? match[1] : trimmed;
+  const match = trimmed.match(/(\d+(?:\s*-\s*\d+)?)/);
+  return match ? match[1].replace(/\s+/g, '') : trimmed;
 }
 
 function formatPhoneForPdf(raw: string): string {
@@ -389,17 +389,59 @@ function numberToIndonesianWords(n: number): string {
   return String(val);
 }
 
-export function formatIndonesianDateWords(isoDate?: string): string {
-  let date: Date;
-  if (isoDate && /^\d{4}-\d{2}-\d{2}$/.test(isoDate.trim())) {
-    const [y, m, d] = isoDate.trim().split('-').map(Number);
-    date = new Date(y, m - 1, d);
-  } else if (isoDate && isoDate.trim()) {
-    const parsed = new Date(isoDate);
-    date = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
-  } else {
-    date = new Date();
+export function getTodayLocalIsoDate(offsetDays = 0): string {
+  const dt = new Date();
+  if (offsetDays !== 0) {
+    dt.setDate(dt.getDate() + offsetDays);
   }
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth() + 1).padStart(2, '0');
+  const d = String(dt.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+export function normalizeIsoDateInput(raw?: string): string {
+  const trimmed = (raw || '').trim();
+  if (!trimmed) return '';
+  const isoPrefix = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:$|T|\s)/.exec(trimmed);
+  if (isoPrefix) {
+    const y = Number(isoPrefix[1]);
+    const m = Number(isoPrefix[2]);
+    const d = Number(isoPrefix[3]);
+    if (y >= 1900 && m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+  }
+  const dmy = /^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/.exec(trimmed);
+  if (dmy) {
+    const d = Number(dmy[1]);
+    const m = Number(dmy[2]);
+    const y = Number(dmy[3]);
+    if (y >= 1900 && m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+  }
+  const parsed = new Date(trimmed);
+  if (!Number.isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return '';
+}
+
+function parseLocalDateFromInput(raw?: string): Date {
+  const iso = normalizeIsoDateInput(raw);
+  if (iso) {
+    const [y, m, d] = iso.split('-').map(Number);
+    return new Date(y, m - 1, d);
+  }
+  return new Date();
+}
+
+export function formatIndonesianDateWords(isoDate?: string): string {
+  const date = parseLocalDateFromInput(isoDate);
 
   const dayName = INDONESIAN_WEEKDAYS[date.getDay()] || 'Senin';
   const dayWords = numberToIndonesianWords(date.getDate());
@@ -410,16 +452,7 @@ export function formatIndonesianDateWords(isoDate?: string): string {
 }
 
 export function formatIndonesianShortDate(isoDate?: string): string {
-  let date: Date;
-  if (isoDate && /^\d{4}-\d{2}-\d{2}$/.test(isoDate.trim())) {
-    const [y, m, d] = isoDate.trim().split('-').map(Number);
-    date = new Date(y, m - 1, d);
-  } else if (isoDate && isoDate.trim()) {
-    const parsed = new Date(isoDate);
-    date = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
-  } else {
-    date = new Date();
-  }
+  const date = parseLocalDateFromInput(isoDate);
   const monthName = INDONESIAN_MONTHS[date.getMonth()] || 'Januari';
   return `${date.getDate()} ${monthName} ${date.getFullYear()}`;
 }
@@ -435,15 +468,7 @@ export const SPTJM_DAY_OPTIONS = [
 ] as const;
 
 function parseIsoOrTodayDate(isoDate?: string): Date {
-  if (isoDate && /^\d{4}-\d{2}-\d{2}$/.test(isoDate.trim())) {
-    const [y, m, d] = isoDate.trim().split('-').map(Number);
-    return new Date(y, m - 1, d);
-  }
-  if (isoDate && isoDate.trim()) {
-    const parsed = new Date(isoDate);
-    if (!Number.isNaN(parsed.getTime())) return parsed;
-  }
-  return new Date();
+  return parseLocalDateFromInput(isoDate);
 }
 
 export function getSptjmAutoDayFromIso(isoDate?: string): string {
@@ -462,7 +487,7 @@ export function formatIndonesianDDMonthYYYY(isoDate?: string): string {
 
 export function formatSptjmFullDate(sptjmConfig?: Partial<SptjmTemplateConfig>): string {
   const hariVal = (sptjmConfig?.hari || '').trim();
-  const isoVal = (sptjmConfig?.tanggalIso || '').trim();
+  const isoVal = normalizeIsoDateInput(sptjmConfig?.tanggalIso) || (sptjmConfig?.tanggalIso || '').trim();
   const customLegacy = (sptjmConfig?.tanggalCustomText || '').trim();
   if (customLegacy && !hariVal && !isoVal) {
     return customLegacy;
@@ -480,18 +505,11 @@ export function formatIndonesianDayShortDate(isoDate?: string): string {
 export function formatScheduleIndonesianDate(targetDate?: string, targetDay?: string): string {
   const raw = (targetDate || '').trim();
   const manualDay = (targetDay || '').trim();
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
-  if (m) {
-    const dayName = manualDay || getSptjmAutoDayFromIso(raw);
-    return `${dayName}, ${m[3]}-${m[2]}-${m[1]}`;
-  }
   if (!raw) return manualDay || '-';
-  const parsed = new Date(raw);
-  if (!Number.isNaN(parsed.getTime())) {
-    const dd = String(parsed.getDate()).padStart(2, '0');
-    const mm = String(parsed.getMonth() + 1).padStart(2, '0');
-    const yyyy = parsed.getFullYear();
-    const dayName = manualDay || (parsed.getDay() === 5 ? "Jum'at" : INDONESIAN_WEEKDAYS[parsed.getDay()] || 'Senin');
+  const normalizedIso = normalizeIsoDateInput(raw);
+  if (normalizedIso) {
+    const [yyyy, mm, dd] = normalizedIso.split('-');
+    const dayName = manualDay || getSptjmAutoDayFromIso(normalizedIso);
     return `${dayName}, ${dd}-${mm}-${yyyy}`;
   }
   return manualDay ? `${manualDay}, ${raw}` : raw;
@@ -805,10 +823,11 @@ export function formatScheduleDateTimeForCoupon(
   targetTime?: string,
   targetDay?: string
 ): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec((targetDate || '').trim());
+  const normalizedIso = normalizeIsoDateInput(targetDate);
   let dateLabel = (targetDate || '').trim();
-  if (m) {
-    const dt = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  if (normalizedIso) {
+    const [y, m, d] = normalizedIso.split('-').map(Number);
+    const dt = new Date(y, m - 1, d);
     if (!Number.isNaN(dt.getTime())) {
       const autoDay = dt.getDay() === 5 ? "Jum'at" : INDONESIAN_WEEKDAYS[dt.getDay()] || 'Senin';
       const dayName = (targetDay || '').trim() || autoDay;
@@ -913,7 +932,7 @@ export function formatAbsensiScheduleFields(
   if (!schedule) {
     return { tanggal: '', hari: '', pukul: '' };
   }
-  const iso = (schedule.targetDate || '').trim();
+  const iso = normalizeIsoDateInput(schedule.targetDate);
   const days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
   const months = [
     'Januari',
@@ -957,7 +976,12 @@ export function resolveCouponScheduleForRecord(
   record: Pick<KpmRecord, 'proposal' | 'proposalId' | 'tahun'>,
   schedules: ScheduleEventItem[] = [],
   proposals: ProposalRecord[] = [],
-  fallbackConfig: CouponPrintConfig = DEFAULT_COUPON_CONFIG
+  fallbackConfig: CouponPrintConfig = DEFAULT_COUPON_CONFIG,
+  bookOptions?: {
+    scheduleBookId?: string;
+    scheduleBooks?: ScheduleBook[];
+    scheduleBookMap?: Record<string, string>;
+  }
 ): CouponPrintConfig & { matchedSchedule?: ScheduleEventItem } {
   const matchedProp =
     (record.proposalId ? proposals.find((p) => p.id === record.proposalId) : undefined) ??
@@ -966,7 +990,18 @@ export function resolveCouponScheduleForRecord(
 
   const propName = matchedProp?.namaProposal || record.proposal;
   const propYear = matchedProp?.tahun || record.tahun;
-  const matchedSchedule = resolveScheduleForProposal(propName, propYear, schedules);
+  const targetBookId = (bookOptions?.scheduleBookId || '').trim();
+  const matchedSchedule =
+    targetBookId && targetBookId !== 'all'
+      ? resolveScheduleForProposalInBook(
+          propName,
+          propYear,
+          schedules,
+          targetBookId,
+          bookOptions?.scheduleBooks,
+          bookOptions?.scheduleBookMap
+        )
+      : resolveScheduleForProposal(propName, propYear, schedules);
 
   if (!matchedSchedule) {
     return {
@@ -2645,6 +2680,9 @@ export interface ExportKuponPdfOptions {
   wilayahList?: WilayahKabKota[];
   proposalSlotMap?: ProposalSlotMap;
   schedules?: ScheduleEventItem[];
+  scheduleBookId?: string;
+  scheduleBooks?: ScheduleBook[];
+  scheduleBookMap?: Record<string, string>;
   couponConfig?: CouponPrintConfig;
   resolvePerProposalSchedule?: boolean;
   mode?: 'single' | 'bulk';
@@ -2847,6 +2885,9 @@ export async function exportKuponPdf({
   wilayahList = INITIAL_WILAYAH_LIST,
   proposalSlotMap = {},
   schedules = [],
+  scheduleBookId,
+  scheduleBooks,
+  scheduleBookMap,
   couponConfig = DEFAULT_COUPON_CONFIG,
   resolvePerProposalSchedule,
   mode = 'bulk',
@@ -2863,6 +2904,10 @@ export async function exportKuponPdf({
   const sourcePool = allRecords && allRecords.length > 0 ? allRecords : records;
   const shouldAutoResolveSchedule =
     resolvePerProposalSchedule !== undefined ? resolvePerProposalSchedule : mode === 'bulk';
+  const couponBookOpts =
+    scheduleBookId || scheduleBooks || scheduleBookMap
+      ? { scheduleBookId, scheduleBooks, scheduleBookMap }
+      : undefined;
 
   const targetRecords =
     mode === 'single'
@@ -2910,7 +2955,7 @@ export async function exportKuponPdf({
     const rec = targetRecords[0];
     const { label } = getCouponNumber(rec, 0);
     const effectiveConfig = shouldAutoResolveSchedule
-      ? resolveCouponScheduleForRecord(rec, schedules, proposals, couponConfig)
+      ? resolveCouponScheduleForRecord(rec, schedules, proposals, couponConfig, couponBookOpts)
       : couponConfig;
     drawCouponCard(doc, {
       x: F4_PDF_MARGINS.left,
@@ -2963,7 +3008,7 @@ export async function exportKuponPdf({
       const y = F4_PDF_MARGINS.top + rowIdx * (CARD_H + ROW_GAP);
 
       const effectiveConfig = shouldAutoResolveSchedule
-        ? resolveCouponScheduleForRecord(entry.rec, schedules, proposals, couponConfig)
+        ? resolveCouponScheduleForRecord(entry.rec, schedules, proposals, couponConfig, couponBookOpts)
         : couponConfig;
 
       drawCouponCard(doc, {
@@ -3336,7 +3381,7 @@ function renderSingleBastPage(
   const dateWords = bastConfig.tanggalSerahTerimaCustomText?.trim()
     ? bastConfig.tanggalSerahTerimaCustomText.trim()
     : formatIndonesianDateWords(
-        bastConfig.tanggalSerahTerimaIso?.trim() || new Date().toISOString().slice(0, 10)
+        bastConfig.tanggalSerahTerimaIso?.trim() || getTodayLocalIsoDate()
       );
   const locationText = formatBastProposalLocation(record, proposals, wilayahList);
   const nomorSk = bastConfig.nomorSk?.trim() || DEFAULT_BAST_TEMPLATE.nomorSk;
@@ -4933,7 +4978,7 @@ export async function exportSchedulesToPdf({
 }: ExportSchedulesPdfOptions): Promise<{ savedFileName: string; openedNative: boolean; count: number }> {
   const catLabelMap = SCHEDULE_CATEGORY_LABELS;
 
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getTodayLocalIsoDate();
   const sorted = [...schedules].sort((a, b) => {
     if (a.completed !== b.completed) return a.completed ? 1 : -1;
     const dateCmp = (a.targetDate || '').localeCompare(b.targetDate || '');
@@ -6534,7 +6579,39 @@ export async function exportTroubleshootingToPdf(
     MARGIN.left,
     cursorY
   );
-  cursorY += 6;
+  cursorY += 5.5;
+
+  if (result.sequenceAnomalies && result.sequenceAnomalies.length > 0) {
+    const warnLines = result.sequenceAnomalies.flatMap((anom, idx) =>
+      doc.splitTextToSize(`${idx + 1}. ${anom.message}`, PRINT_W - 8) as string[]
+    );
+    const boxH = 7.5 + warnLines.length * 3.8;
+    doc.setFillColor(255, 241, 242);
+    doc.setDrawColor(225, 29, 72);
+    doc.setLineWidth(0.35);
+    doc.roundedRect(MARGIN.left, cursorY, PRINT_W, boxH, 1.5, 1.5, 'FD');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.2);
+    doc.setTextColor(159, 18, 57);
+    doc.text(
+      `PERINGATAN KEKELIRUAN NOMOR URUT BAST DINAS (${result.sequenceAnomalies.length} TEMUAN):`,
+      MARGIN.left + 3,
+      cursorY + 4.3
+    );
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.4);
+    doc.setTextColor(136, 19, 55);
+    let wy = cursorY + 8.2;
+    for (const line of warnLines) {
+      doc.text(line, MARGIN.left + 3, wy);
+      wy += 3.8;
+    }
+    cursorY += boxH + 4.5;
+  } else {
+    cursorY += 0.5;
+  }
 
   // BAGIAN 1: TABEL UTAMA DAFTAR KPM HASIL PENYESUAIAN KUOTA BAST
   doc.setFont('helvetica', 'bold');
@@ -6604,7 +6681,14 @@ export async function exportTroubleshootingToPdf(
     didParseCell: (hookData) => {
       if (hookData.section === 'body') {
         const rowData = result.mainRows[hookData.row.index];
-        if (rowData?.isEmpty) {
+        if (rowData?.hasSequenceWarning) {
+          hookData.cell.styles.fillColor = [255, 241, 242]; // #FFF1F2
+          if (hookData.column.index === 0 || hookData.column.index === 1) {
+            hookData.cell.styles.textColor = [190, 18, 60];
+          } else if (hookData.column.index === 6) {
+            hookData.cell.styles.textColor = [136, 19, 55];
+          }
+        } else if (rowData?.isEmpty) {
           hookData.cell.styles.fillColor = [254, 252, 232]; // #FEFCE8
           if (hookData.column.index >= 2 && hookData.column.index <= 5) {
             hookData.cell.styles.textColor = [148, 163, 184];

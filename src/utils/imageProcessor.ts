@@ -468,7 +468,7 @@ export function buildCombinedProposalName({
 
 export function getValidationForDtsen(dtsen: string): 'accepted' | 'pending' | '' {
   if (!dtsen) return '';
-  if (['1', '2', '3', '4'].includes(dtsen)) return 'accepted';
+  if (['1 - 5', '1-5', '1', '2', '3', '4'].includes(dtsen.trim())) return 'accepted';
   return 'pending';
 }
 

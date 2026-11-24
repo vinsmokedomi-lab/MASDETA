@@ -40,7 +40,7 @@ import {
   getItemHierarchyRank,
   resolvePackageForKpm,
 } from '../utils/imageProcessor';
-import { formatScheduleIndonesianDate } from '../utils/pdfExporter';
+import { formatScheduleIndonesianDate, getTodayLocalIsoDate } from '../utils/pdfExporter';
 import { useIsDesktopWeb } from '../utils/platform';
 import { DriveImage } from './DriveImage';
 import { PresenceDot } from './PresenceDot';
@@ -233,7 +233,7 @@ export function DashboardView({
     for (const r of acceptedYearRecords) {
       const raw = (r.dtsen || '').trim();
       const d = raw.replace(/^desil\s+/i, '').trim();
-      if (d === '1' || d === '2' || d === '3' || d === '4') {
+      if (d === '1 - 5' || d === '1-5' || d === '1' || d === '2' || d === '3' || d === '4') {
         priorityCount += 1;
       } else if (d === '5') {
         reviewCount += 1;
@@ -413,7 +413,7 @@ export function DashboardView({
   );
 
   const urgentSchedules = useMemo(() => {
-    const limitDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const limitDate = getTodayLocalIsoDate(3);
     return schedules
       .filter((s) => !s.completed && s.targetDate <= limitDate)
       .sort((a, b) => a.targetDate.localeCompare(b.targetDate));

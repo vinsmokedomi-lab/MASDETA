@@ -428,13 +428,30 @@ export async function parseBastPdfLocally(
     }
   }
 
-  // Gabungkan bila ada duplikasi nomor urut akibat split halaman tak standar
-  const mergedByNo = new Map<number, BastExtractedRow>();
+  // Gabungkan hanya jika nomor urut sama dan berasal dari KPM yang sama (akibat split halaman tak standar).
+  // Jika nama & NIK berbeda, pertahankan kedua baris agar anomali nomor urut ganda BAST terdeteksi!
+  const normalizeCmp = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const mergedByKey = new Map<string, BastExtractedRow>();
+  let dupCounter = 0;
   for (const row of rows) {
-    const existing = mergedByNo.get(row.no);
+    const baseKey = `no:${row.no}`;
+    const existing = mergedByKey.get(baseKey);
     if (!existing) {
-      mergedByNo.set(row.no, row);
-    } else {
+      mergedByKey.set(baseKey, row);
+      continue;
+    }
+
+    const existingNameNorm = normalizeCmp(existing.nama);
+    const rowNameNorm = normalizeCmp(row.nama);
+    const sameNik = Boolean(existing.nik && row.nik && existing.nik === row.nik);
+    const sameName =
+      !rowNameNorm ||
+      !existingNameNorm ||
+      existingNameNorm === rowNameNorm ||
+      existingNameNorm.includes(rowNameNorm) ||
+      rowNameNorm.includes(existingNameNorm);
+
+    if (sameNik || (sameName && (!existing.nik || !row.nik || existing.nik === row.nik))) {
       if (!existing.nik && row.nik) existing.nik = row.nik;
       if (row.alamat && !existing.alamat.includes(row.alamat)) {
         existing.alamat = `${existing.alamat} ${row.alamat}`.trim();
@@ -444,10 +461,13 @@ export async function parseBastPdfLocally(
           existing.barangList.push(b);
         }
       }
+    } else {
+      dupCounter += 1;
+      mergedByKey.set(`no:${row.no}:dup:${dupCounter}`, row);
     }
   }
 
-  const finalRows = Array.from(mergedByNo.values()).sort((a, b) => a.no - b.no);
+  const finalRows = Array.from(mergedByKey.values()).sort((a, b) => a.no - b.no);
 
   return {
     documentTitle: documentTitle || fileName.replace(/\.pdf$/i, ''),

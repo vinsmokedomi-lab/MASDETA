@@ -131,7 +131,7 @@ import {
   resolveScheduleBookId,
 } from './types/kpm';
 import { TroubleshootingReconcileResult } from './utils/troubleshootingReconciler';
-import { normalizePejabatNipNumber } from './utils/pdfExporter';
+import { getTodayLocalIsoDate, normalizePejabatNipNumber } from './utils/pdfExporter';
 import {
   assignKpmToProposalSlot,
   clearSampleRecordsOnce,
@@ -1364,7 +1364,7 @@ export default function App() {
   );
 
   const unseenUrgentSchedulesCount = useMemo(() => {
-    const limitDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const limitDate = getTodayLocalIsoDate(3);
     return schedules.filter(
       (s) =>
         !s.completed &&
@@ -8583,28 +8583,40 @@ export default function App() {
     });
   };
 
-  const handleSaveCouponConfig = (next: CouponPrintConfig) => {
+  const handleSaveCouponConfig = (
+    next: CouponPrintConfig,
+    options?: { silent?: boolean }
+  ) => {
     if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
-      setFeedback({
-        type: 'error',
-        message: 'Mode Offline (Read-Only): Pengaturan tidak dapat disimpan saat offline.',
-      });
+      if (!options?.silent) {
+        setFeedback({
+          type: 'error',
+          message: 'Mode Offline (Read-Only): Pengaturan tidak dapat disimpan saat offline.',
+        });
+      }
       return;
     }
     setCouponConfig(next);
     void saveDocumentTemplateInSupabase('kupon', 'masdeta_coupon_config_v1', next);
-    setFeedback({
-      type: 'success',
-      message: 'Pengaturan cetak kupon pembagian berhasil disimpan.',
-    });
+    if (!options?.silent) {
+      setFeedback({
+        type: 'success',
+        message: 'Pengaturan cetak kupon pembagian berhasil disimpan.',
+      });
+    }
   };
 
-  const handleSaveBastTemplate = (next: BastTemplateConfig) => {
+  const handleSaveBastTemplate = (
+    next: BastTemplateConfig,
+    options?: { silent?: boolean }
+  ) => {
     if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
-      setFeedback({
-        type: 'error',
-        message: 'Mode Offline (Read-Only): Template tidak dapat disimpan saat offline.',
-      });
+      if (!options?.silent) {
+        setFeedback({
+          type: 'error',
+          message: 'Mode Offline (Read-Only): Template tidak dapat disimpan saat offline.',
+        });
+      }
       return;
     }
     const normalized: BastTemplateConfig = {
@@ -8613,18 +8625,25 @@ export default function App() {
     };
     setBastTemplate(normalized);
     void saveDocumentTemplateInSupabase('bast', 'masdeta_bast_template_v1', normalized);
-    setFeedback({
-      type: 'success',
-      message: 'Template BAST resmi Dinas Sosial berhasil disimpan.',
-    });
+    if (!options?.silent) {
+      setFeedback({
+        type: 'success',
+        message: 'Template BAST resmi Dinas Sosial berhasil disimpan.',
+      });
+    }
   };
 
-  const handleSaveSptjmTemplate = (next: SptjmTemplateConfig) => {
+  const handleSaveSptjmTemplate = (
+    next: SptjmTemplateConfig,
+    options?: { silent?: boolean }
+  ) => {
     if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
-      setFeedback({
-        type: 'error',
-        message: 'Mode Offline (Read-Only): Template tidak dapat disimpan saat offline.',
-      });
+      if (!options?.silent) {
+        setFeedback({
+          type: 'error',
+          message: 'Mode Offline (Read-Only): Template tidak dapat disimpan saat offline.',
+        });
+      }
       return;
     }
     const normalized: SptjmTemplateConfig = {
@@ -8633,10 +8652,12 @@ export default function App() {
     };
     setSptjmTemplate(normalized);
     void saveDocumentTemplateInSupabase('sptjm', 'masdeta_sptjm_template_v1', normalized);
-    setFeedback({
-      type: 'success',
-      message: 'Template SPTJM berhasil disimpan.',
-    });
+    if (!options?.silent) {
+      setFeedback({
+        type: 'success',
+        message: 'Template SPTJM berhasil disimpan.',
+      });
+    }
   };
 
   const handleSavePejabatList = (next: PejabatProfile[]) => {
@@ -8664,13 +8685,16 @@ export default function App() {
 
   const handleSaveProposalBastConfig = (
     proposalId: string,
-    config: Partial<BastTemplateConfig> | null
+    config: Partial<BastTemplateConfig> | null,
+    options?: { silent?: boolean }
   ) => {
     if ((typeof navigator !== 'undefined' && !navigator.onLine) || !isOnlineRef.current) {
-      setFeedback({
-        type: 'error',
-        message: 'Mode Offline (Read-Only): Pengaturan BAST proposal dinonaktifkan saat offline.',
-      });
+      if (!options?.silent) {
+        setFeedback({
+          type: 'error',
+          message: 'Mode Offline (Read-Only): Pengaturan BAST proposal dinonaktifkan saat offline.',
+        });
+      }
       return;
     }
     const next: ProposalBastMap = { ...proposalBastMap };
@@ -8686,15 +8710,17 @@ export default function App() {
     }
     setProposalBastMap(next);
     void saveDocumentTemplateInSupabase('proposal_bast', 'masdeta_proposal_bast_v1', next);
-    const propLabel =
-      proposals.find((p) => p.id === proposalId)?.namaProposal || 'proposal';
-    setFeedback({
-      type: 'success',
-      message:
-        config === null
-          ? `Pengaturan BAST ${propLabel} dikembalikan ke template default.`
-          : `Pengaturan info BAST khusus "${propLabel}" berhasil disimpan.`,
-    });
+    if (!options?.silent) {
+      const propLabel =
+        proposals.find((p) => p.id === proposalId)?.namaProposal || 'proposal';
+      setFeedback({
+        type: 'success',
+        message:
+          config === null
+            ? `Pengaturan BAST ${propLabel} dikembalikan ke template default.`
+            : `Pengaturan info BAST khusus "${propLabel}" berhasil disimpan.`,
+      });
+    }
   };
 
   const handleSaveProposalRab = async (config: SavedProposalRabConfig) => {
@@ -13108,6 +13134,9 @@ export default function App() {
                 h.proposalName === activeProposal.namaProposal &&
                 (!h.tahun || h.tahun === activeProposal.tahun)
             )}
+            activeReconcileSnapshot={reconcileSnapshots[activeProposal.id] ?? null}
+            onUndoReconcileSnapshot={handleUndoTroubleshootingSnapshot}
+            canUpdate={hasPermission('update')}
             onBack={() => {
               navigateRestoreScroll();
               setSubView('proposal-detail');
@@ -13351,7 +13380,9 @@ export default function App() {
           <ProposalListView
             proposals={proposals}
             records={records}
+            items={items}
             wilayahList={wilayahList}
+            proposalSlotMap={proposalSlotMap}
             yearOptions={allKnownYears}
             selectedYear={selectedYear}
             onChangeYear={setSelectedYear}
@@ -13359,6 +13390,7 @@ export default function App() {
             canDelete={hasPermission('delete')}
             onOpenProposalDetail={(id) => openProposalDetailById(id, 'proposal')}
             onOpenPhotoGallery={(id) => openPhotoGallery(id, 'proposal-list')}
+            onSelectKpm={(rec) => openKpmDetail(rec, 'proposal')}
             onToggleProposalLock={handleToggleProposalLock}
             onBulkSetProposalLock={handleBulkSetProposalLock}
             onDeleteProposal={handleDeleteProposal}

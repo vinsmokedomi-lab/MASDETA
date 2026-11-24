@@ -69,6 +69,7 @@ import {
   exportSchedulesToPdf,
   formatScheduleIndonesianDate,
   getSptjmAutoDayFromIso,
+  getTodayLocalIsoDate,
   normalizePejabatNipNumber,
 } from '../utils/pdfExporter';
 import {
@@ -274,17 +275,18 @@ interface MenuHubViewProps {
   reportTemplate?: ReportTemplateConfig;
   onSaveReportTemplate?: (next: ReportTemplateConfig) => void;
   couponConfig?: CouponPrintConfig;
-  onSaveCouponConfig?: (next: CouponPrintConfig) => void;
+  onSaveCouponConfig?: (next: CouponPrintConfig, options?: { silent?: boolean }) => void;
   bastTemplate?: BastTemplateConfig;
-  onSaveBastTemplate?: (next: BastTemplateConfig) => void;
+  onSaveBastTemplate?: (next: BastTemplateConfig, options?: { silent?: boolean }) => void;
   sptjmTemplate?: SptjmTemplateConfig;
-  onSaveSptjmTemplate?: (next: SptjmTemplateConfig) => void;
+  onSaveSptjmTemplate?: (next: SptjmTemplateConfig, options?: { silent?: boolean }) => void;
   pejabatList?: PejabatProfile[];
   onSavePejabatList?: (next: PejabatProfile[]) => void;
   proposalBastMap?: ProposalBastMap;
   onSaveProposalBastConfig?: (
     proposalId: string,
-    config: Partial<BastTemplateConfig> | null
+    config: Partial<BastTemplateConfig> | null,
+    options?: { silent?: boolean }
   ) => void;
   onOpenCreateStandaloneDatabaseKpm?: () => void;
   onBulkRecoverToDatabase?: (kpmIds: string[]) => Promise<void> | void;
@@ -901,7 +903,7 @@ export function MenuHubView({
   const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
   const [scheduleCategory, setScheduleCategory] = useState<ScheduleCategory>('distribusi');
   const [scheduleDay, setScheduleDay] = useState<string>('');
-  const [scheduleDate, setScheduleDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [scheduleDate, setScheduleDate] = useState(() => getTodayLocalIsoDate());
   const [scheduleTime, setScheduleTime] = useState('');
   const [scheduleYear, setScheduleYear] = useState(() =>
     selectedYear && selectedYear !== 'all'
@@ -1052,7 +1054,7 @@ export function MenuHubView({
   }, [allDuplicateGroups, selectedYear, seenDuplicateSignatureSet]);
 
   const urgentSchedulesCount = useMemo(() => {
-    const limitDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const limitDate = getTodayLocalIsoDate(3);
     return schedules.filter((s) => !s.completed && s.targetDate <= limitDate).length;
   }, [schedules]);
 
@@ -1073,6 +1075,7 @@ export function MenuHubView({
     if (trimmed.toLowerCase() === 'data tidak ditemukan') return 'Data Tidak Ditemukan';
     if (trimmed.toLowerCase() === 'belum ada desil') return 'Belum Ada Desil';
     const stripped = trimmed.replace(/^desil\s+/i, '').trim();
+    if (stripped === '1-5' || stripped === '1 - 5') return '1 - 5';
     if (stripped === '6-10' || stripped === '6 - 10') return '6 - 10';
     if (/^(10|[1-9])$/.test(stripped)) return stripped;
     return trimmed;
@@ -4123,7 +4126,7 @@ export function MenuHubView({
         >
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
             {dtsenSummary.map((row) => {
-              const dotClass = ['1', '2', '3', '4'].includes(row.value)
+              const dotClass = ['1 - 5', '1', '2', '3', '4'].includes(row.value)
                 ? 'bg-teal-700'
                 : row.value === '5'
                   ? 'bg-amber-500'
@@ -6085,7 +6088,7 @@ export function MenuHubView({
 
   // 10. JADWAL & TARGET PROPOSAL
   if (activeSection === 'jadwal') {
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = getTodayLocalIsoDate();
     const catLabelMap = SCHEDULE_CATEGORY_LABELS;
     const autoDayLabel = getSptjmAutoDayFromIso(scheduleDate);
     const effectiveBooks =
@@ -7166,6 +7169,7 @@ export function MenuHubView({
         proposalSlotMap={proposalSlotMap}
         schedules={schedules}
         scheduleBooks={scheduleBooks}
+        scheduleBookMap={scheduleBookMap}
         reportTemplate={reportTemplate}
         onSaveReportTemplate={onSaveReportTemplate}
         couponConfig={couponConfig}
@@ -7192,10 +7196,8 @@ export function MenuHubView({
         wilayahList={wilayahList}
         proposalSlotMap={proposalSlotMap}
         reportTemplate={reportTemplate}
-        reconcileSnapshots={reconcileSnapshots}
         canUpdate={canUpdate}
         onApplyReconciliation={onApplyTroubleshootingReconciliation}
-        onUndoSnapshot={onUndoTroubleshootingSnapshot}
         onOpenProposalDetail={onOpenProposalDetailFromTroubleshooting}
         onBack={() => onChangeSection('root')}
       />

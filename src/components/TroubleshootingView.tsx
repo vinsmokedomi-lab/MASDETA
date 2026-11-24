@@ -61,7 +61,6 @@ import {
 import { exportTroubleshootingToPdf } from '../utils/pdfExporter';
 import {
   buildMergedProposalSlots,
-  formatUploadDateTime,
   resolveProposalSlotStateForGroup,
 } from '../utils/imageProcessor';
 import { useIsDesktopWeb } from '../utils/platform';
@@ -74,7 +73,6 @@ interface TroubleshootingViewProps {
   wilayahList: WilayahKabKota[];
   proposalSlotMap?: ProposalSlotMap;
   reportTemplate?: ReportTemplateConfig;
-  reconcileSnapshots?: Record<string, TroubleshootingReconcileSnapshot>;
   canUpdate?: boolean;
   onApplyReconciliation?: (params: {
     proposalId: string;
@@ -85,9 +83,6 @@ interface TroubleshootingViewProps {
     snapshot?: TroubleshootingReconcileSnapshot;
     error?: string;
   }>;
-  onUndoSnapshot?: (
-    snapshotOrProposalId: string
-  ) => Promise<{ ok: boolean; message?: string; warning?: string }>;
   onOpenProposalDetail?: (proposalId: string) => void;
   onBack: () => void;
 }
@@ -119,6 +114,7 @@ interface TroubleshootingWorkspaceCache {
   searchQuery: string;
   itemFilter: string;
   statusFilter: 'all' | ReconciledRowStatus;
+  resultSectionTab: 'summary' | 'main_table' | 'all';
   auditPanelOpen: boolean;
   auditTab: 'unmatched_bast' | 'pengelola';
 }
@@ -166,6 +162,10 @@ function createInitialTroubleshootingWorkspace(): TroubleshootingWorkspaceCache 
           searchQuery: typeof parsed.searchQuery === 'string' ? parsed.searchQuery : '',
           itemFilter: typeof parsed.itemFilter === 'string' ? parsed.itemFilter : 'all',
           statusFilter: parsed.statusFilter ?? 'all',
+          resultSectionTab:
+            parsed.resultSectionTab === 'main_table' || parsed.resultSectionTab === 'all'
+              ? parsed.resultSectionTab
+              : 'summary',
           auditPanelOpen: Boolean(parsed.auditPanelOpen),
           auditTab: parsed.auditTab === 'pengelola' ? 'pengelola' : 'unmatched_bast',
         };
@@ -189,6 +189,7 @@ function createInitialTroubleshootingWorkspace(): TroubleshootingWorkspaceCache 
     searchQuery: '',
     itemFilter: 'all',
     statusFilter: 'all',
+    resultSectionTab: 'summary',
     auditPanelOpen: false,
     auditTab: 'unmatched_bast',
   };
@@ -216,10 +217,8 @@ export function TroubleshootingView({
   wilayahList,
   proposalSlotMap = {},
   reportTemplate,
-  reconcileSnapshots = {},
   canUpdate = true,
   onApplyReconciliation,
-  onUndoSnapshot,
   onOpenProposalDetail,
   onBack,
 }: TroubleshootingViewProps) {
@@ -261,11 +260,16 @@ export function TroubleshootingView({
     initialCache.summaryPengelolaPdf
   );
 
-  // Filter untuk preview Tabel Utama (Bagian 1)
+  // Filter & Tab tampilan hasil rekonsiliasi
   const [searchQuery, setSearchQuery] = useState(initialCache.searchQuery);
   const [itemFilter, setItemFilter] = useState<string>(initialCache.itemFilter);
   const [statusFilter, setStatusFilter] = useState<'all' | ReconciledRowStatus>(
     initialCache.statusFilter
+  );
+  const [onlySequenceWarnings, setOnlySequenceWarnings] = useState(false);
+  const [highlightedSequenceNo, setHighlightedSequenceNo] = useState<number | null>(null);
+  const [resultSectionTab, setResultSectionTab] = useState<'summary' | 'main_table' | 'all'>(
+    initialCache.resultSectionTab
   );
 
   // Modal pemilihan KPM over-kuota yang dikeluarkan
@@ -286,9 +290,6 @@ export function TroubleshootingView({
     proposalName: string;
     message: string;
   } | null>(initialCache.applySuccessInfo);
-  const [pendingUndoSnapshot, setPendingUndoSnapshot] =
-    useState<TroubleshootingReconcileSnapshot | null>(null);
-  const [undoBusy, setUndoBusy] = useState(false);
 
   useEffect(() => {
     const nextCache: TroubleshootingWorkspaceCache = {
@@ -304,6 +305,7 @@ export function TroubleshootingView({
       searchQuery,
       itemFilter,
       statusFilter,
+      resultSectionTab,
       auditPanelOpen,
       auditTab,
     };
@@ -321,6 +323,7 @@ export function TroubleshootingView({
           searchQuery,
           itemFilter,
           statusFilter,
+          resultSectionTab,
           auditPanelOpen,
           auditTab,
         };
@@ -342,6 +345,7 @@ export function TroubleshootingView({
     searchQuery,
     itemFilter,
     statusFilter,
+    resultSectionTab,
     auditPanelOpen,
     auditTab,
   ]);
@@ -367,6 +371,9 @@ export function TroubleshootingView({
     setSearchQuery('');
     setItemFilter('all');
     setStatusFilter('all');
+    setOnlySequenceWarnings(false);
+    setHighlightedSequenceNo(null);
+    setResultSectionTab('summary');
     setAuditPanelOpen(false);
     setAuditTab('unmatched_bast');
     setErrorMessage(null);
@@ -569,6 +576,8 @@ export function TroubleshootingView({
       setSearchQuery('');
       setItemFilter('all');
       setStatusFilter('all');
+      setOnlySequenceWarnings(false);
+      setHighlightedSequenceNo(null);
       setOverQuotaModalItem(null);
       setOverQuotaSearch('');
     } catch (err) {
@@ -775,16 +784,6 @@ export function TroubleshootingView({
     return proposals.find((p) => p.id === analyzedProposalId) ?? null;
   }, [proposals, analyzedProposalId]);
 
-  const activeUndoSnapshot = useMemo(() => {
-    const targetId = analyzedProposalId || selectedProposalId;
-    if (targetId && reconcileSnapshots[targetId]) {
-      return reconcileSnapshots[targetId];
-    }
-    const all = Object.values(reconcileSnapshots);
-    if (all.length === 0) return null;
-    return [...all].sort((a, b) => b.appliedAt.localeCompare(a.appliedAt))[0] ?? null;
-  }, [reconcileSnapshots, analyzedProposalId, selectedProposalId]);
-
   const isDatabaseResultReady = Boolean(
     result &&
       proposalMode === 'database' &&
@@ -939,30 +938,31 @@ export function TroubleshootingView({
     }
   };
 
-  const handleConfirmUndo = async () => {
-    if (!onUndoSnapshot || !pendingUndoSnapshot || undoBusy) return;
-    setUndoBusy(true);
-    setErrorMessage(null);
-    try {
-      const res = await onUndoSnapshot(pendingUndoSnapshot.id);
-      setPendingUndoSnapshot(null);
-      if (!res.ok) {
-        setErrorMessage(res.message || 'Gagal membatalkan Apply terakhir.');
-        return;
+  const handleJumpToSequenceRow = (bastNo: number) => {
+    setResultSectionTab('main_table');
+    setItemFilter('all');
+    setStatusFilter('all');
+    setSearchQuery('');
+    setOnlySequenceWarnings(false);
+    setHighlightedSequenceNo(bastNo);
+    setTimeout(() => {
+      if (typeof document !== 'undefined') {
+        const el = document.getElementById(`troubleshooting-main-row-${bastNo}`);
+        el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
-      setApplySuccessInfo(null);
-      setExportSuccessNotice(
-        res.message || `Perubahan Apply terakhir pada "${pendingUndoSnapshot.proposalName}" dibatalkan.`
-      );
-    } finally {
-      setUndoBusy(false);
-    }
+    }, 80);
   };
+
+  const sequenceWarningRowCount = useMemo(() => {
+    if (!result) return 0;
+    return result.mainRows.filter((r) => r.hasSequenceWarning).length;
+  }, [result]);
 
   const filteredMainRows = useMemo(() => {
     if (!result) return [];
     const q = searchQuery.trim().toLowerCase();
     return result.mainRows.filter((row) => {
+      if (onlySequenceWarnings && !row.hasSequenceWarning) return false;
       if (itemFilter !== 'all' && row.kodeItem !== itemFilter) return false;
       if (statusFilter !== 'all' && row.status !== statusFilter) return false;
       if (!q) return true;
@@ -976,7 +976,7 @@ export function TroubleshootingView({
         row.keterangan.toLowerCase().includes(q)
       );
     });
-  }, [result, searchQuery, itemFilter, statusFilter]);
+  }, [result, searchQuery, itemFilter, statusFilter, onlySequenceWarnings]);
 
   const itemFilterOptions = useMemo(() => {
     if (!result) return [];
@@ -1023,6 +1023,16 @@ export function TroubleshootingView({
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-base font-bold text-slate-900">Troubleshooting</h1>
           </div>
+          {hasWorkspaceData && (
+            <button
+              type="button"
+              onClick={handleResetWorkspace}
+              className="inline-flex min-h-[36px] shrink-0 items-center gap-1 rounded-xl border border-teal-200 bg-teal-50 px-2.5 text-xs font-semibold text-teal-800"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              <span>Cek Baru</span>
+            </button>
+          )}
         </header>
       ) : (
         <div className="mx-auto flex w-full max-w-[1440px] flex-wrap items-center justify-between gap-3 px-4 pt-4 md:px-6 md:pt-6">
@@ -1036,37 +1046,30 @@ export function TroubleshootingView({
               <span>Kembali</span>
             </button>
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
-                  Troubleshooting Rekonsiliasi BAST
-                </h1>
-              </div>
+              <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
+                Troubleshooting Rekonsiliasi BAST
+              </h1>
               <p className="mt-0.5 truncate text-xs text-slate-500">
                 Penyelarasan otomatis urutan KPM Proposal terhadap kuota resmi BAST Dinas
               </p>
             </div>
           </div>
 
-          {result && (
+          {hasWorkspaceData && (
             <button
               type="button"
-              onClick={() => void handleDownloadPdf()}
-              disabled={exportingPdf}
-              className="inline-flex min-h-[40px] shrink-0 items-center gap-2 whitespace-nowrap rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={handleResetWorkspace}
+              className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-teal-200 bg-teal-50 px-3.5 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100"
             >
-              {exportingPdf ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Download className="h-4 w-4" />
-              )}
-              <span>{exportingPdf ? 'Menyusun PDF...' : 'Download PDF Hasil Penyesuaian'}</span>
+              <RotateCcw className="h-3.5 w-3.5" />
+              <span>Cek Proposal / BAST Baru</span>
             </button>
           )}
         </div>
       )}
 
       <div
-        className={`space-y-5 px-4 pt-4 ${
+        className={`space-y-4 px-4 pt-4 ${
           !isNativeApp ? 'mx-auto max-w-[1440px] md:px-6 md:pt-5' : ''
         }`}
       >
@@ -1075,53 +1078,9 @@ export function TroubleshootingView({
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
             <p className="leading-relaxed">
               Mode Offline Read-Only aktif. Analisis &amp; pratinjau PDF digital tetap berjalan
-              secara lokal, sedangkan aksi Apply/Undo memerlukan koneksi internet aktif.
+              secara lokal, sedangkan aksi Apply memerlukan koneksi internet aktif.
             </p>
           </div>
-        )}
-
-        {/* BANNER UNDO APPLY TERAKHIR */}
-        {activeUndoSnapshot && onUndoSnapshot && (
-          <section className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3.5 text-xs text-amber-950">
-            <div className="flex min-w-0 flex-1 items-start gap-2.5">
-              <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-800">
-                <RotateCcw className="h-4 w-4" />
-              </div>
-              <div className="min-w-0 flex-1 space-y-0.5">
-                <p className="font-bold text-amber-950">
-                  Apply Terakhir Tersimpan: {activeUndoSnapshot.proposalName} ({activeUndoSnapshot.tahun})
-                </p>
-                <p className="text-[11px] leading-relaxed text-amber-900 tabular-nums">
-                  Diterapkan {formatUploadDateTime(activeUndoSnapshot.appliedAt)} oleh{' '}
-                  <strong>{activeUndoSnapshot.appliedBy}</strong> ·{' '}
-                  {activeUndoSnapshot.summary.shiftedCount} bergeser ·{' '}
-                  {activeUndoSnapshot.summary.emptySlotsCount} baris kosong ·{' '}
-                  {activeUndoSnapshot.summary.movedToDatabaseCount} ke Database
-                </p>
-              </div>
-            </div>
-            <div className="flex shrink-0 flex-wrap items-center gap-2">
-              {onOpenProposalDetail && (
-                <button
-                  type="button"
-                  onClick={() => onOpenProposalDetail(activeUndoSnapshot.proposalId)}
-                  className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl border border-amber-300 bg-white px-3 text-xs font-semibold text-amber-900 transition-colors hover:bg-amber-100/70"
-                >
-                  <span>Lihat Detail Proposal</span>
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </button>
-              )}
-              <button
-                type="button"
-                disabled={isOffline || !canUpdate || undoBusy}
-                onClick={() => setPendingUndoSnapshot(activeUndoSnapshot)}
-                className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl bg-amber-600 px-3.5 text-xs font-bold text-white transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-                <span>Batalkan Apply Terakhir</span>
-              </button>
-            </div>
-          </section>
         )}
 
         {/* PANEL INPUT DOKUMEN: 2 KOTAK UPLOAD BERDAMPINGAN */}
@@ -1136,7 +1095,7 @@ export function TroubleshootingView({
                   Sumber Dokumen Rekonsiliasi
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Unggah pasangan PDF Daftar KPM Proposal dan BAST Dinas untuk menyusun urutan final
+                  Pilih sumber Proposal (PDF atau Database) dan file PDF BAST Dinas
                 </p>
               </div>
             </div>
@@ -1148,7 +1107,7 @@ export function TroubleshootingView({
                 className="inline-flex min-h-[34px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
-                <span>Reset Analisis</span>
+                <span>Bersihkan Dokumen</span>
               </button>
             )}
           </div>
@@ -1435,28 +1394,14 @@ export function TroubleshootingView({
             </div>
           </div>
 
-          {/* TOMBOL AKSI UTAMA */}
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
-            <div className="text-xs text-slate-500">
-              {processing ? (
-                <span className="inline-flex items-center gap-2 font-medium text-teal-700">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  <span>{processingStep || 'Memproses dokumen...'}</span>
-                </span>
-              ) : (
-                <span>
-                  Item dan detail KPM (nama, NIK, alamat) tetap mengikuti data Proposal; BAST hanya
-                  menjadi acuan urutan blok &amp; kuota item.
-                </span>
-              )}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2.5">
+          {/* TOMBOL AKSI UTAMA (TERSTRUKTUR) */}
+          <div className="mt-4 flex flex-col gap-3 border-t border-slate-100 pt-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={() => void handleProcessReconciliation()}
                 disabled={!canProcess}
-                className="inline-flex min-h-[42px] items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-teal-700 px-5 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex min-h-[40px] items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {processing ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -1464,67 +1409,82 @@ export function TroubleshootingView({
                   <RefreshCw className="h-4 w-4" />
                 )}
                 <span>
-                  {processing ? 'Menganalisis Dokumen...' : 'Proses & Analisis Rekonsiliasi'}
+                  {processing
+                    ? processingStep || 'Menganalisis...'
+                    : result
+                      ? 'Analisis Ulang'
+                      : 'Proses & Analisis Rekonsiliasi'}
                 </span>
               </button>
 
               {result && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => void handleCopyWhatsAppSummary()}
-                    className="inline-flex min-h-[42px] items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-3.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
-                  >
-                    {copiedWaSummary ? (
-                      <Check className="h-4 w-4 text-emerald-600" />
-                    ) : (
-                      <Copy className="h-4 w-4 text-slate-500" />
-                    )}
-                    <span>{copiedWaSummary ? 'Tersalin!' : 'Salin Ringkasan WA'}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => void handleDownloadPdf()}
-                    disabled={exportingPdf}
-                    className="inline-flex min-h-[42px] items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-teal-700 bg-white px-4 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {exportingPdf ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Download className="h-4 w-4" />
-                    )}
-                    <span>{exportingPdf ? 'Menyusun PDF...' : 'Download PDF Hasil Penyesuaian'}</span>
-                  </button>
-                </>
-              )}
-
-              {result && proposalMode === 'database' && result.proposalSourceType === 'database' && (
                 <button
                   type="button"
-                  disabled={!canExecuteApply}
-                  onClick={() => setIsApplyModalOpen(true)}
-                  className={`inline-flex min-h-[42px] items-center justify-center gap-2 whitespace-nowrap rounded-xl px-4 text-xs font-bold transition-colors disabled:cursor-not-allowed ${
-                    isAlreadySyncedWithProposal
-                      ? 'border border-emerald-200 bg-emerald-50 text-emerald-800'
-                      : 'bg-slate-900 text-white hover:bg-slate-800 disabled:bg-slate-300 disabled:text-slate-500'
-                  }`}
+                  onClick={handleResetWorkspace}
+                  className="inline-flex min-h-[40px] items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-slate-50 px-3.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
                 >
-                  {isAlreadySyncedWithProposal ? (
-                    <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                  ) : isMismatchBlocked || isProposalLocked ? (
-                    <Lock className="h-4 w-4" />
-                  ) : (
-                    <CheckCircle2 className="h-4 w-4" />
-                  )}
-                  <span>
-                    {isAlreadySyncedWithProposal
-                      ? 'Sudah Sinkron (0 Perubahan)'
-                      : 'Apply Hasil ke Proposal'}
-                  </span>
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  <span>Cek Proposal / BAST Baru</span>
                 </button>
               )}
             </div>
+
+            {result && (
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleCopyWhatsAppSummary()}
+                  className="inline-flex min-h-[40px] items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-3.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+                >
+                  {copiedWaSummary ? (
+                    <Check className="h-4 w-4 text-emerald-600" />
+                  ) : (
+                    <Copy className="h-4 w-4 text-slate-500" />
+                  )}
+                  <span>{copiedWaSummary ? 'Tersalin!' : 'Salin Ringkasan WA'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => void handleDownloadPdf()}
+                  disabled={exportingPdf}
+                  className="inline-flex min-h-[40px] items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-teal-700 bg-white px-3.5 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {exportingPdf ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4" />
+                  )}
+                  <span>{exportingPdf ? 'Menyusun PDF...' : 'Download PDF Hasil'}</span>
+                </button>
+
+                {proposalMode === 'database' && result.proposalSourceType === 'database' && (
+                  <button
+                    type="button"
+                    disabled={!canExecuteApply}
+                    onClick={() => setIsApplyModalOpen(true)}
+                    className={`inline-flex min-h-[40px] items-center justify-center gap-1.5 whitespace-nowrap rounded-xl px-4 text-xs font-bold transition-colors disabled:cursor-not-allowed ${
+                      isAlreadySyncedWithProposal
+                        ? 'border border-emerald-200 bg-emerald-50 text-emerald-800'
+                        : 'bg-slate-900 text-white hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-500'
+                    }`}
+                  >
+                    {isAlreadySyncedWithProposal ? (
+                      <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                    ) : isMismatchBlocked || isProposalLocked ? (
+                      <Lock className="h-4 w-4" />
+                    ) : (
+                      <CheckCircle2 className="h-4 w-4" />
+                    )}
+                    <span>
+                      {isAlreadySyncedWithProposal
+                        ? 'Sudah Sinkron'
+                        : 'Apply ke Proposal'}
+                    </span>
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {/* KETERANGAN MODE SIMULASI PDF ATAU GUARD VALIDASI ANTI-SALAH FILE */}
@@ -1675,19 +1635,134 @@ export function TroubleshootingView({
         {/* PRATINJAU HASIL REKONSILIASI (3 BAGIAN TUNGGAL) */}
         {result && (
           <>
-            {/* KPI RINGKAS */}
+            {/* PERINGATAN KEKELIRUAN NOMOR URUT / BLOK ITEM DI BAST DINAS */}
+            {result.sequenceAnomalies.length > 0 && (
+              <section className="overflow-hidden rounded-2xl border-2 border-rose-300 bg-rose-50/90 p-4 shadow-xs">
+                <div className="flex flex-wrap items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-600 text-white">
+                    <AlertTriangle className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="text-sm font-bold text-rose-950">
+                        Peringatan: Terdeteksi Kekeliruan Nomor Urut pada BAST Dinas (
+                        {result.sequenceAnomalies.length} Temuan)
+                      </h2>
+                      <span className="rounded-md border border-rose-300 bg-white px-2 py-0.5 text-[11px] font-bold text-rose-700">
+                        Wajib Cek Sebelum Cetak / Apply
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs leading-relaxed text-rose-900">
+                      Dokumen BAST dari Dinas mengandung item yang terpisah/terselip di luar blok
+                      urutannya atau penomoran yang tidak berurutan. Periksa bagian berikut sebelum
+                      mencetak kupon/BAST atau menekan Apply:
+                    </p>
+
+                    <div className="mt-3 space-y-2">
+                      {result.sequenceAnomalies.map((anom) => {
+                        const targetNo = anom.affectedBastNos[0];
+                        const isCritical = anom.severity === 'critical';
+                        return (
+                          <div
+                            key={anom.id}
+                            className={`flex flex-col gap-2.5 rounded-xl border bg-white p-3 sm:flex-row sm:items-center sm:justify-between ${
+                              isCritical ? 'border-rose-300' : 'border-amber-300'
+                            }`}
+                          >
+                            <div className="min-w-0 flex-1 space-y-1">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                {anom.kodeItem !== 'UMUM' && (
+                                  <span
+                                    className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-bold ${getTroubleshootingItemBadgeClass(
+                                      anom.kodeItem
+                                    )}`}
+                                  >
+                                    {anom.kodeItem}
+                                  </span>
+                                )}
+                                <span
+                                  className={`rounded-md px-2 py-0.5 text-[10px] font-bold uppercase ${
+                                    isCritical
+                                      ? 'bg-rose-100 text-rose-800'
+                                      : 'bg-amber-100 text-amber-800'
+                                  }`}
+                                >
+                                  {anom.type === 'duplicate_bast_no'
+                                    ? 'Nomor Ganda'
+                                    : anom.type === 'missing_bast_no'
+                                      ? 'Nomor Terlewat'
+                                      : isCritical
+                                        ? 'Item Terselip / Terpisah'
+                                        : 'Blok Terpecah'}
+                                </span>
+                                <span className="text-xs font-bold text-slate-900">
+                                  {anom.title}
+                                </span>
+                              </div>
+                              <p className="text-xs leading-relaxed text-slate-700">
+                                {anom.message}
+                              </p>
+                            </div>
+
+                            <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                              {typeof targetNo === 'number' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleJumpToSequenceRow(targetNo)}
+                                  className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg bg-rose-700 px-3 text-[11px] font-bold text-white transition-colors hover:bg-rose-800"
+                                >
+                                  <span>
+                                    Lihat No. {String(targetNo).padStart(2, '0')} di Tabel
+                                  </span>
+                                  <ArrowRight className="h-3.5 w-3.5" />
+                                </button>
+                              )}
+                              {anom.kodeItem !== 'UMUM' && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setResultSectionTab('main_table');
+                                    setItemFilter(anom.kodeItem);
+                                    setStatusFilter('all');
+                                    setOnlySequenceWarnings(false);
+                                    setSearchQuery('');
+                                  }}
+                                  className="inline-flex min-h-[34px] items-center rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-100"
+                                >
+                                  Filter {anom.kodeItem}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {/* KPI RINGKAS (Klik untuk langsung buka bagian terkait) */}
             <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-              <div className="rounded-2xl border border-slate-200 bg-white p-3.5">
+              <button
+                type="button"
+                onClick={() => setResultSectionTab('summary')}
+                className="rounded-2xl border border-slate-200 bg-white p-3.5 text-left transition-colors hover:border-teal-300 hover:bg-slate-50/60"
+              >
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                   Kuota BAST
                 </p>
                 <p className="mt-1 text-2xl font-bold text-slate-900 tabular-nums">
                   {result.totals.kuotaBast}
                 </p>
-                <p className="mt-0.5 text-[11px] text-slate-500">Total slot unit resmi</p>
-              </div>
+                <p className="mt-0.5 text-[11px] text-slate-500">Lihat rincian paket</p>
+              </button>
 
-              <div className="rounded-2xl border border-slate-200 bg-white p-3.5">
+              <button
+                type="button"
+                onClick={() => setResultSectionTab('summary')}
+                className="rounded-2xl border border-slate-200 bg-white p-3.5 text-left transition-colors hover:border-teal-300 hover:bg-slate-50/60"
+              >
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                   Usulan Proposal
                 </p>
@@ -1695,9 +1770,16 @@ export function TroubleshootingView({
                   {result.totals.usulanKpm}
                 </p>
                 <p className="mt-0.5 text-[11px] text-slate-500">Total KPM diusulkan</p>
-              </div>
+              </button>
 
-              <div className="rounded-2xl border border-teal-200 bg-white p-3.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setStatusFilter('all');
+                  setResultSectionTab('main_table');
+                }}
+                className="rounded-2xl border border-teal-200 bg-white p-3.5 text-left transition-colors hover:bg-teal-50/50"
+              >
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-teal-700">
                   Terisi (Masuk)
                 </p>
@@ -1707,9 +1789,16 @@ export function TroubleshootingView({
                 <p className="mt-0.5 text-[11px] text-slate-500 tabular-nums">
                   {result.totals.unchangedCount} tetap · {result.totals.shiftedCount} bergeser
                 </p>
-              </div>
+              </button>
 
-              <div className="rounded-2xl border border-amber-200 bg-white p-3.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setStatusFilter('empty_slot');
+                  setResultSectionTab('main_table');
+                }}
+                className="rounded-2xl border border-amber-200 bg-white p-3.5 text-left transition-colors hover:bg-amber-50/50"
+              >
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-700">
                   Baris Kosong
                 </p>
@@ -1717,18 +1806,69 @@ export function TroubleshootingView({
                   {result.totals.barisKosong}
                 </p>
                 <p className="mt-0.5 text-[11px] text-slate-500">Sisa kuota belum terisi</p>
-              </div>
+              </button>
 
-              <div className="col-span-2 rounded-2xl border border-rose-200 bg-white p-3.5 sm:col-span-1">
+              <button
+                type="button"
+                onClick={() => setResultSectionTab('summary')}
+                className="col-span-2 rounded-2xl border border-rose-200 bg-white p-3.5 text-left transition-colors hover:bg-rose-50/50 sm:col-span-1"
+              >
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-rose-700">
                   Dikeluarkan
                 </p>
                 <p className="mt-1 text-2xl font-bold text-rose-700 tabular-nums">
                   {result.totals.dikeluarkan}
                 </p>
-                <p className="mt-0.5 text-[11px] text-slate-500">Melebihi limit kuota BAST</p>
-              </div>
+                <p className="mt-0.5 text-[11px] text-slate-500">Lihat KPM dikeluarkan</p>
+              </button>
             </section>
+
+            {/* NAVIGASI TAMPILAN HASIL (TIDAK PERLU SCROLL JAUH) */}
+            <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-2xl border border-slate-200 bg-white px-3.5 py-2.5">
+              <div className="flex flex-wrap items-center gap-1 rounded-xl bg-slate-100 p-1">
+                <button
+                  type="button"
+                  onClick={() => setResultSectionTab('summary')}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap tabular-nums ${
+                    resultSectionTab === 'summary'
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Ringkasan Paket &amp; Dikeluarkan
+                  {result.totals.dikeluarkan > 0 ? ` (${result.totals.dikeluarkan})` : ''}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setResultSectionTab('main_table')}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap tabular-nums ${
+                    resultSectionTab === 'main_table'
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Tabel Utama ({result.mainRows.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setResultSectionTab('all')}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
+                    resultSectionTab === 'all'
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Tampilkan Semua
+                </button>
+              </div>
+              <span className="text-[11px] text-slate-500">
+                {resultSectionTab === 'summary'
+                  ? 'Menampilkan Rekap Paket Barang BAST & Daftar KPM Dikeluarkan secara langsung'
+                  : resultSectionTab === 'main_table'
+                    ? 'Menampilkan susunan Tabel Utama BAST lengkap'
+                    : 'Menampilkan Ringkasan Paket, KPM Dikeluarkan, dan Tabel Utama'}
+              </span>
+            </div>
 
             {/* INFO JIKA KOLOM PENGELOLA TIDAK TERSEDIA DI PDF PROPOSAL */}
             {!result.hasProposalPengelolaData && (
@@ -1976,156 +2116,212 @@ export function TroubleshootingView({
               </section>
             )}
 
-            {/* BAGIAN 1: TABEL UTAMA DAFTAR KPM HASIL PENYESUAIAN KUOTA BAST */}
-            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-              <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3.5">
-                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                  <div>
-                    <h2 className="text-sm font-bold text-slate-900">
-                      Bagian 1 — Tabel Utama Daftar KPM Hasil Penyesuaian Kuota BAST
-                    </h2>
-                    <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
-                      Menampilkan {filteredMainRows.length} dari {result.mainRows.length} slot BAST (No. 01
-                      s.d. {String(result.totals.kuotaBast).padStart(2, '0')})
-                    </p>
+            {/* BAGIAN 3 & BAGIAN 2: DITAMPILKAN TERATAS PADA TAB RINGKASAN & SEMUA */}
+            {(resultSectionTab === 'summary' || resultSectionTab === 'all') && (
+              <>
+                {/* BAGIAN 3: SATU TABEL REKAPITULASI PERBANDINGAN KUOTA ITEM (BAST VS PROPOSAL) */}
+                <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                  <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3.5">
+                    <div className="flex items-center gap-2">
+                      <FileSpreadsheet className="h-4.5 w-4.5 text-teal-700" />
+                      <div>
+                        <h2 className="text-sm font-bold text-slate-900">
+                          Rincian Paket &amp; Perbandingan Kuota Item (BAST vs Proposal)
+                        </h2>
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          Ringkasan kecukupan kuota per kode item beserta rincian paket barang BAST
+                        </p>
+                      </div>
+                    </div>
                   </div>
 
-                  {/* Strategi Penempatan Slot */}
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div className="inline-flex rounded-xl border border-slate-200 bg-slate-100/80 p-0.5">
-                      <button
-                        type="button"
-                        onClick={() => handleChangePlacementStrategy('proposal_order')}
-                        className={`rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
-                          result.placementStrategy === 'proposal_order'
-                            ? 'bg-white text-slate-900 shadow-xs'
-                            : 'text-slate-600 hover:text-slate-900'
-                        }`}
-                      >
-                        Urutan Proposal
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleChangePlacementStrategy('preserve_bast_number')}
-                        className={`rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
-                          result.placementStrategy === 'preserve_bast_number'
-                            ? 'bg-white text-teal-800 shadow-xs'
-                            : 'text-slate-600 hover:text-slate-900'
-                        }`}
-                        title="KPM yang nomor BAST awalnya masih dalam blok itemnya akan dipertahankan di nomor yang sama untuk meminimalkan pergeseran"
-                      >
-                        Minimalkan Pergeseran (No. BAST)
-                      </button>
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[820px] border-collapse text-left text-xs">
+                      <thead>
+                        <tr className="border-b border-slate-200 bg-slate-900 text-[11px] font-bold uppercase tracking-wider text-white">
+                          <th className="w-24 px-3 py-2.5 text-center">Kode Item</th>
+                          <th className="px-3 py-2.5">Rincian Paket Barang BAST</th>
+                          <th className="w-28 px-3 py-2.5 text-center">Kuota BAST</th>
+                          <th className="w-28 px-3 py-2.5 text-center">Usulan KPM</th>
+                          <th className="w-28 px-3 py-2.5 text-center">Terisi (Masuk)</th>
+                          <th className="w-28 px-3 py-2.5 text-center">Baris Kosong</th>
+                          <th className="w-36 px-3 py-2.5 text-center">Dikeluarkan (Over Limit)</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {result.itemComparisons.map((item) => (
+                          <tr
+                            key={item.kodeItem}
+                            className={
+                              item.hasSequenceAnomaly
+                                ? 'bg-rose-50/45 hover:bg-rose-50/75'
+                                : 'bg-white hover:bg-slate-50/70'
+                            }
+                          >
+                            <td className="px-3 py-2.5 text-center">
+                              <span
+                                className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-bold ${getTroubleshootingItemBadgeClass(
+                                  item.kodeItem
+                                )}`}
+                              >
+                                {item.kodeItem}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2.5 leading-relaxed text-slate-700">
+                              <p>
+                                <span className="font-semibold text-slate-900">
+                                  {item.namaItem}:
+                                </span>{' '}
+                                {item.rincianBarangBast}
+                              </p>
+                              {item.blockRangesText && (
+                                <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                                  {item.hasSequenceAnomaly ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setResultSectionTab('main_table');
+                                        setItemFilter(item.kodeItem);
+                                        setStatusFilter('all');
+                                        setOnlySequenceWarnings(false);
+                                      }}
+                                      className="inline-flex items-center gap-1 rounded border border-rose-300 bg-rose-100/80 px-1.5 py-0.5 text-[10px] font-bold text-rose-800 tabular-nums hover:bg-rose-200/80"
+                                    >
+                                      <AlertTriangle className="h-3 w-3 shrink-0" />
+                                      <span>Urutan BAST Terpisah: {item.blockRangesText}</span>
+                                    </button>
+                                  ) : (
+                                    <span className="text-[10px] font-medium text-slate-500 tabular-nums">
+                                      Urutan BAST: {item.blockRangesText}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-3 py-2.5 text-center font-bold text-slate-900 tabular-nums">
+                              {item.kuotaBast}
+                            </td>
+                            <td className="px-3 py-2.5 text-center font-medium text-slate-700 tabular-nums">
+                              {item.usulanKpm}
+                            </td>
+                            <td className="px-3 py-2.5 text-center font-bold text-teal-700 tabular-nums">
+                              {item.terisi}
+                            </td>
+                            <td
+                              className={`px-3 py-2.5 text-center font-semibold tabular-nums ${
+                                item.barisKosong > 0 ? 'text-amber-700' : 'text-slate-400'
+                              }`}
+                            >
+                              {item.barisKosong}
+                            </td>
+                            <td
+                              className={`px-3 py-2.5 text-center font-semibold tabular-nums ${
+                                item.dikeluarkan > 0 ? 'text-rose-700' : 'text-slate-400'
+                              }`}
+                            >
+                              {item.dikeluarkan}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t-2 border-slate-300 bg-slate-100 font-bold text-slate-900 tabular-nums">
+                          <td className="px-3 py-2.5 text-center">TOTAL</td>
+                          <td className="px-3 py-2.5">
+                            Seluruh Paket Item ({result.itemComparisons.length} Kode)
+                          </td>
+                          <td className="px-3 py-2.5 text-center">{result.totals.kuotaBast}</td>
+                          <td className="px-3 py-2.5 text-center">{result.totals.usulanKpm}</td>
+                          <td className="px-3 py-2.5 text-center text-teal-700">
+                            {result.totals.terisi}
+                          </td>
+                          <td className="px-3 py-2.5 text-center text-amber-700">
+                            {result.totals.barisKosong}
+                          </td>
+                          <td className="px-3 py-2.5 text-center text-rose-700">
+                            {result.totals.dikeluarkan}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </section>
+
+                {/* BAGIAN 2: TABEL TERPISAH DAFTAR KPM YANG DIKELUARKAN (OVER LIMIT) + PILIH SIAPA YANG DIKELUARKAN */}
+                <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3.5">
+                    <div>
+                      <h2 className="text-sm font-bold text-slate-900">
+                        Daftar KPM yang Dikeluarkan (Melebihi Kuota/Limit BAST)
+                      </h2>
+                      <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
+                        {result.excludedRows.length > 0
+                          ? `${result.excludedRows.length} KPM melebihi limit unit BAST dikeluarkan — Anda dapat memilih sendiri siapa KPM yang ingin dikeluarkan`
+                          : 'Tidak ada KPM berlebih (seluruh usulan masuk dalam batas kuota BAST)'}
+                      </p>
                     </div>
 
-                    {Object.keys(overrides.orderedIncludedKeysByItem || {}).length > 0 && (
-                      <button
-                        type="button"
-                        onClick={handleResetCustomOrder}
-                        className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
-                      >
-                        <RotateCcw className="h-3 w-3" />
-                        <span>Reset Urutan</span>
-                      </button>
+                    {result.overQuotaGroups.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        {result.overQuotaGroups.map((grp) => (
+                          <button
+                            key={`pick-over-${grp.kodeItem}`}
+                            type="button"
+                            onClick={() => {
+                              setOverQuotaModalItem(grp.kodeItem);
+                              setOverQuotaSearch('');
+                            }}
+                            className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl border border-rose-300 bg-rose-50 px-3 text-xs font-bold text-rose-800 transition-colors hover:bg-rose-100"
+                          >
+                            <ArrowUpDown className="h-3.5 w-3.5" />
+                            <span>
+                              Pilih {grp.kodeItem} ({grp.excessCount}/{grp.usulanKpm})
+                            </span>
+                          </button>
+                        ))}
+                      </div>
                     )}
                   </div>
-                </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  <div className="relative min-w-[200px] flex-1 sm:flex-initial">
-                    <Search className="pointer-events-none absolute top-1/2 left-3 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
-                    <input
-                      type="text"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="Cari nama, NIK, alamat..."
-                      className="min-h-[38px] w-full rounded-xl border border-slate-200 bg-slate-50 pr-3 pl-8 text-xs text-slate-800 placeholder:text-slate-400 focus:border-teal-700 focus:bg-white focus:outline-none"
-                    />
-                  </div>
-
-                  <select
-                    aria-label="Filter Kode Item"
-                    value={itemFilter}
-                    onChange={(e) => setItemFilter(e.target.value)}
-                    className="min-h-[38px] rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 focus:border-teal-700 focus:outline-none"
-                  >
-                    <option value="all">Semua Item</option>
-                    {itemFilterOptions.map((code) => (
-                      <option key={code} value={code}>
-                        {code}
-                      </option>
-                    ))}
-                  </select>
-
-                  <select
-                    aria-label="Filter Status Rekonsiliasi"
-                    value={statusFilter}
-                    onChange={(e) =>
-                      setStatusFilter(e.target.value as 'all' | ReconciledRowStatus)
-                    }
-                    className="min-h-[38px] rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 focus:border-teal-700 focus:outline-none"
-                  >
-                    <option value="all">Semua Status</option>
-                    <option value="unchanged">Tetap</option>
-                    <option value="shifted">Bergeser</option>
-                    <option value="new_in_proposal">Usulan Baru</option>
-                    <option value="empty_slot">Baris Kosong</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[1040px] border-collapse text-left text-xs">
-                  <thead>
-                    <tr className="border-b border-slate-200 bg-teal-700 text-[11px] font-bold uppercase tracking-wider text-white">
-                      <th className="w-16 px-3 py-2.5 text-center">No. Urut</th>
-                      <th className="w-24 px-3 py-2.5 text-center">Kode Item</th>
-                      <th className="w-48 px-3 py-2.5">Nama Penerima (KPM)</th>
-                      <th className="w-36 px-3 py-2.5 text-center">NIK</th>
-                      <th className="w-60 px-3 py-2.5">Alamat &amp; Kelurahan</th>
-                      <th className="w-32 px-3 py-2.5">Pengelola</th>
-                      <th className="px-3 py-2.5">Keterangan Perubahan</th>
-                      <th className="w-20 px-2 py-2.5 text-center">Urutan</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200">
-                    {filteredMainRows.length === 0 ? (
-                      <tr>
-                        <td colSpan={8} className="px-4 py-8 text-center text-xs text-slate-500">
-                          Tidak ada baris yang cocok dengan filter pencarian.
-                        </td>
-                      </tr>
-                    ) : (
-                      (() => {
-                        // Peta indeks terisi per item agar tombol ↑/↓ tahu batas atas & bawah dalam blok itemnya
-                        const filledIndexByItem = new Map<string, string[]>();
-                        result.mainRows.forEach((r) => {
-                          if (!r.isEmpty && r.rowKey) {
-                            const arr = filledIndexByItem.get(r.kodeItem) || [];
-                            arr.push(r.rowKey);
-                            filledIndexByItem.set(r.kodeItem, arr);
-                          }
-                        });
-
-                        return filteredMainRows.map((row) => {
-                          const badgeMeta = statusMeta(row.status);
-                          const itemKeys = filledIndexByItem.get(row.kodeItem) || [];
-                          const idxInItem = row.rowKey ? itemKeys.indexOf(row.rowKey) : -1;
-                          const canMoveUp = !row.isEmpty && idxInItem > 0;
-                          const canMoveDown =
-                            !row.isEmpty && idxInItem >= 0 && idxInItem < itemKeys.length - 1;
-
-                          return (
-                            <tr
-                              key={`${row.noUrut}-${row.kodeItem}`}
-                              className={
-                                row.isEmpty
-                                  ? 'bg-[#FEFCE8] text-amber-950'
-                                  : 'bg-white hover:bg-slate-50/70'
-                              }
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[980px] border-collapse text-left text-xs">
+                      <thead>
+                        <tr
+                          className={`border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-white ${
+                            result.excludedRows.length > 0 ? 'bg-rose-700' : 'bg-amber-700'
+                          }`}
+                        >
+                          <th className="w-14 px-3 py-2.5 text-center">No.</th>
+                          <th className="w-28 px-3 py-2.5 text-center">No. Asal Proposal</th>
+                          <th className="w-24 px-3 py-2.5 text-center">Kode Item</th>
+                          <th className="w-48 px-3 py-2.5">Nama Penerima (KPM)</th>
+                          <th className="w-60 px-3 py-2.5">Alamat &amp; Kelurahan</th>
+                          <th className="w-32 px-3 py-2.5">Pengelola</th>
+                          <th className="px-3 py-2.5">Keterangan Alasan Pengeluaran</th>
+                          {result.excludedRows.length > 0 && (
+                            <th className="w-32 px-3 py-2.5 text-center">Aksi</th>
+                          )}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {result.excludedRows.length === 0 ? (
+                          <tr>
+                            <td
+                              colSpan={7}
+                              className="bg-emerald-50/50 px-4 py-4 text-center text-xs font-semibold text-teal-800"
                             >
+                              Tidak ada KPM yang dikeluarkan — seluruh {result.totals.usulanKpm} KPM
+                              usulan Proposal masuk dalam batas kuota BAST Dinas.
+                            </td>
+                          </tr>
+                        ) : (
+                          result.excludedRows.map((row) => (
+                            <tr key={`${row.no}-${row.rowKey || row.nama}`} className="bg-rose-50/30">
                               <td className="px-3 py-2.5 text-center font-bold text-slate-900 tabular-nums">
-                                {row.noUrutText}
+                                {row.noText}
+                              </td>
+                              <td className="px-3 py-2.5 text-center font-semibold text-slate-700 tabular-nums">
+                                {row.noAsalProposal}
                               </td>
                               <td className="px-3 py-2.5 text-center">
                                 <span
@@ -2136,329 +2332,350 @@ export function TroubleshootingView({
                                   {row.kodeItem}
                                 </span>
                               </td>
-                              <td
-                                className={`px-3 py-2.5 ${
-                                  row.isEmpty
-                                    ? 'text-center text-slate-400'
-                                    : 'font-bold text-slate-900'
-                                }`}
-                              >
-                                {row.isEmpty ? '-' : row.nama}
-                              </td>
-                              <td
-                                className={`px-3 py-2.5 text-center tabular-nums ${
-                                  row.isEmpty ? 'text-slate-400' : 'text-slate-700'
-                                }`}
-                              >
-                                {row.isEmpty ? '-' : row.nik}
-                              </td>
-                              <td
-                                className={`px-3 py-2.5 leading-relaxed ${
-                                  row.isEmpty ? 'text-center text-slate-400' : 'text-slate-700'
-                                }`}
-                              >
-                                {row.isEmpty ? '-' : row.alamat}
-                              </td>
-                              <td
-                                className={`px-3 py-2.5 ${
-                                  row.isEmpty ? 'text-center text-slate-400' : 'font-medium text-slate-700'
-                                }`}
-                              >
-                                {row.isEmpty ? '-' : row.pengelola}
-                              </td>
                               <td className="px-3 py-2.5">
-                                <div className="flex flex-col items-start gap-1">
-                                  <div className="flex flex-wrap items-center gap-1.5">
-                                    <span
-                                      className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-bold ${badgeMeta.className}`}
-                                    >
-                                      {badgeMeta.label}
-                                    </span>
-                                    {row.isManuallyLinked && row.rowKey && (
-                                      <button
-                                        type="button"
-                                        onClick={() => handleUnlinkBastManually(row.rowKey!)}
-                                        className="inline-flex items-center gap-1 rounded border border-teal-200 bg-teal-50 px-1.5 py-0.5 text-[10px] font-semibold text-teal-800 hover:bg-rose-50 hover:text-rose-700"
-                                        title="Lepaskan pencocokan manual BAST"
-                                      >
-                                        <Unlink className="h-2.5 w-2.5" />
-                                        <span>Lepas Link</span>
-                                      </button>
-                                    )}
-                                  </div>
-                                  <span
-                                    className={`leading-relaxed ${
-                                      row.isEmpty
-                                        ? 'font-semibold text-amber-900'
-                                        : 'text-slate-700'
-                                    }`}
-                                  >
-                                    {row.keterangan}
-                                  </span>
-                                </div>
+                                <p className="font-bold text-slate-900">{row.nama}</p>
+                                <p className="mt-0.5 text-[10px] font-semibold text-slate-500">
+                                  {row.matchedBastNo
+                                    ? `Ada di BAST awal (No. ${String(row.matchedBastNo).padStart(2, '0')})`
+                                    : 'Tidak ada di BAST awal'}
+                                </p>
                               </td>
-                              <td className="px-2 py-2.5 text-center">
-                                {!row.isEmpty && row.rowKey ? (
-                                  <div className="inline-flex items-center gap-1">
-                                    <button
-                                      type="button"
-                                      disabled={!canMoveUp}
-                                      onClick={() =>
-                                        handleMoveRowInItemBlock(row.kodeItem, row.rowKey!, 'up')
-                                      }
-                                      title={`Geser ke atas dalam blok ${row.kodeItem}`}
-                                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:border-teal-500 hover:bg-teal-50 hover:text-teal-800 disabled:cursor-not-allowed disabled:opacity-30"
-                                    >
-                                      <ArrowUp className="h-3.5 w-3.5" />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      disabled={!canMoveDown}
-                                      onClick={() =>
-                                        handleMoveRowInItemBlock(row.kodeItem, row.rowKey!, 'down')
-                                      }
-                                      title={`Geser ke bawah dalam blok ${row.kodeItem}`}
-                                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:border-teal-500 hover:bg-teal-50 hover:text-teal-800 disabled:cursor-not-allowed disabled:opacity-30"
-                                    >
-                                      <ArrowDown className="h-3.5 w-3.5" />
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <span className="text-slate-300">-</span>
+                              <td className="px-3 py-2.5 leading-relaxed text-slate-700">
+                                {row.alamat}
+                              </td>
+                              <td className="px-3 py-2.5 font-medium text-slate-700">
+                                {row.pengelola}
+                              </td>
+                              <td className="px-3 py-2.5 font-medium leading-relaxed text-rose-900">
+                                {row.isManuallySelected && (
+                                  <span className="mb-1 inline-flex items-center rounded border border-rose-300 bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-800">
+                                    Pilihan Manual Admin
+                                  </span>
                                 )}
+                                <p>{row.keterangan}</p>
+                              </td>
+                              <td className="px-3 py-2.5 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setOverQuotaModalItem(row.kodeItem);
+                                    setOverQuotaSearch('');
+                                  }}
+                                  className="inline-flex h-8 items-center gap-1 rounded-lg border border-rose-300 bg-white px-2.5 text-[11px] font-bold text-rose-700 transition-colors hover:bg-rose-600 hover:text-white"
+                                >
+                                  <ArrowUpDown className="h-3 w-3" />
+                                  <span>Ganti KPM</span>
+                                </button>
                               </td>
                             </tr>
-                          );
-                        });
-                      })()
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </section>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              </>
+            )}
 
-            {/* BAGIAN 2: TABEL TERPISAH DAFTAR KPM YANG DIKELUARKAN (OVER LIMIT) + PILIH SIAPA YANG DIKELUARKAN */}
-            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3.5">
-                <div>
-                  <h2 className="text-sm font-bold text-slate-900">
-                    Bagian 2 — Daftar KPM yang Dikeluarkan (Melebihi Kuota/Limit BAST)
-                  </h2>
-                  <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
-                    {result.excludedRows.length > 0
-                      ? `${result.excludedRows.length} KPM melebihi limit unit BAST dikeluarkan — Anda dapat memilih sendiri siapa KPM yang ingin dikeluarkan`
-                      : 'Tidak ada KPM berlebih (seluruh usulan masuk dalam batas kuota BAST)'}
-                  </p>
+            {/* BAGIAN 1: TABEL UTAMA DAFTAR KPM HASIL PENYESUAIAN KUOTA BAST */}
+            {(resultSectionTab === 'main_table' || resultSectionTab === 'all') && (
+              <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3.5">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <h2 className="text-sm font-bold text-slate-900">
+                        Tabel Utama Daftar KPM Hasil Penyesuaian Kuota BAST
+                      </h2>
+                      <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
+                        Menampilkan {filteredMainRows.length} dari {result.mainRows.length} slot
+                        BAST (No. 01 s.d. {String(result.totals.kuotaBast).padStart(2, '0')})
+                      </p>
+                    </div>
+
+                    {/* Strategi Penempatan Slot */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="inline-flex rounded-xl border border-slate-200 bg-slate-100/80 p-0.5">
+                        <button
+                          type="button"
+                          onClick={() => handleChangePlacementStrategy('proposal_order')}
+                          className={`rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
+                            result.placementStrategy === 'proposal_order'
+                              ? 'bg-white text-slate-900 shadow-xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          Urutan Proposal
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleChangePlacementStrategy('preserve_bast_number')}
+                          className={`rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
+                            result.placementStrategy === 'preserve_bast_number'
+                              ? 'bg-white text-teal-800 shadow-xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                          title="KPM yang nomor BAST awalnya masih dalam blok itemnya akan dipertahankan di nomor yang sama untuk meminimalkan pergeseran"
+                        >
+                          Minimalkan Pergeseran (No. BAST)
+                        </button>
+                      </div>
+
+                      {Object.keys(overrides.orderedIncludedKeysByItem || {}).length > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleResetCustomOrder}
+                          className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+                        >
+                          <RotateCcw className="h-3 w-3" />
+                          <span>Reset Urutan</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="relative min-w-[200px] flex-1 sm:flex-initial">
+                      <Search className="pointer-events-none absolute top-1/2 left-3 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        placeholder="Cari nama, NIK, alamat..."
+                        className="min-h-[38px] w-full rounded-xl border border-slate-200 bg-slate-50 pr-3 pl-8 text-xs text-slate-800 placeholder:text-slate-400 focus:border-teal-700 focus:bg-white focus:outline-none"
+                      />
+                    </div>
+
+                    <select
+                      aria-label="Filter Kode Item"
+                      value={itemFilter}
+                      onChange={(e) => setItemFilter(e.target.value)}
+                      className="min-h-[38px] rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 focus:border-teal-700 focus:outline-none"
+                    >
+                      <option value="all">Semua Item</option>
+                      {itemFilterOptions.map((code) => (
+                        <option key={code} value={code}>
+                          {code}
+                        </option>
+                      ))}
+                    </select>
+
+                    <select
+                      aria-label="Filter Status Rekonsiliasi"
+                      value={statusFilter}
+                      onChange={(e) =>
+                        setStatusFilter(e.target.value as 'all' | ReconciledRowStatus)
+                      }
+                      className="min-h-[38px] rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 focus:border-teal-700 focus:outline-none"
+                    >
+                      <option value="all">Semua Status</option>
+                      <option value="unchanged">Tetap</option>
+                      <option value="shifted">Bergeser</option>
+                      <option value="new_in_proposal">Usulan Baru</option>
+                      <option value="empty_slot">Baris Kosong</option>
+                    </select>
+
+                    {sequenceWarningRowCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setOnlySequenceWarnings((v) => !v)}
+                        className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border px-3 text-xs font-bold transition-colors tabular-nums ${
+                          onlySequenceWarnings
+                            ? 'border-rose-600 bg-rose-600 text-white'
+                            : 'border-rose-300 bg-rose-50 text-rose-800 hover:bg-rose-100'
+                        }`}
+                      >
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        <span>Keliru Urutan ({sequenceWarningRowCount})</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
 
-                {result.overQuotaGroups.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-2">
-                    {result.overQuotaGroups.map((grp) => (
-                      <button
-                        key={`pick-over-${grp.kodeItem}`}
-                        type="button"
-                        onClick={() => {
-                          setOverQuotaModalItem(grp.kodeItem);
-                          setOverQuotaSearch('');
-                        }}
-                        className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl border border-rose-300 bg-rose-50 px-3 text-xs font-bold text-rose-800 transition-colors hover:bg-rose-100"
-                      >
-                        <ArrowUpDown className="h-3.5 w-3.5" />
-                        <span>
-                          Pilih {grp.kodeItem} ({grp.excessCount}/{grp.usulanKpm})
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[980px] border-collapse text-left text-xs">
-                  <thead>
-                    <tr
-                      className={`border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-white ${
-                        result.excludedRows.length > 0 ? 'bg-rose-700' : 'bg-amber-700'
-                      }`}
-                    >
-                      <th className="w-14 px-3 py-2.5 text-center">No.</th>
-                      <th className="w-28 px-3 py-2.5 text-center">No. Asal Proposal</th>
-                      <th className="w-24 px-3 py-2.5 text-center">Kode Item</th>
-                      <th className="w-48 px-3 py-2.5">Nama Penerima (KPM)</th>
-                      <th className="w-60 px-3 py-2.5">Alamat &amp; Kelurahan</th>
-                      <th className="w-32 px-3 py-2.5">Pengelola</th>
-                      <th className="px-3 py-2.5">Keterangan Alasan Pengeluaran</th>
-                      {result.excludedRows.length > 0 && (
-                        <th className="w-32 px-3 py-2.5 text-center">Aksi</th>
-                      )}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200">
-                    {result.excludedRows.length === 0 ? (
-                      <tr>
-                        <td
-                          colSpan={7}
-                          className="bg-emerald-50/50 px-4 py-4 text-center text-xs font-semibold text-teal-800"
-                        >
-                          Tidak ada KPM yang dikeluarkan — seluruh {result.totals.usulanKpm} KPM
-                          usulan Proposal masuk dalam batas kuota BAST Dinas.
-                        </td>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[1040px] border-collapse text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-200 bg-teal-700 text-[11px] font-bold uppercase tracking-wider text-white">
+                        <th className="w-16 px-3 py-2.5 text-center">No. Urut</th>
+                        <th className="w-24 px-3 py-2.5 text-center">Kode Item</th>
+                        <th className="w-48 px-3 py-2.5">Nama Penerima (KPM)</th>
+                        <th className="w-36 px-3 py-2.5 text-center">NIK</th>
+                        <th className="w-60 px-3 py-2.5">Alamat &amp; Kelurahan</th>
+                        <th className="w-32 px-3 py-2.5">Pengelola</th>
+                        <th className="px-3 py-2.5">Keterangan Perubahan</th>
+                        <th className="w-20 px-2 py-2.5 text-center">Urutan</th>
                       </tr>
-                    ) : (
-                      result.excludedRows.map((row) => (
-                        <tr key={`${row.no}-${row.rowKey || row.nama}`} className="bg-rose-50/30">
-                          <td className="px-3 py-2.5 text-center font-bold text-slate-900 tabular-nums">
-                            {row.noText}
-                          </td>
-                          <td className="px-3 py-2.5 text-center font-semibold text-slate-700 tabular-nums">
-                            {row.noAsalProposal}
-                          </td>
-                          <td className="px-3 py-2.5 text-center">
-                            <span
-                              className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-bold ${getTroubleshootingItemBadgeClass(
-                                row.kodeItem
-                              )}`}
-                            >
-                              {row.kodeItem}
-                            </span>
-                          </td>
-                          <td className="px-3 py-2.5">
-                            <p className="font-bold text-slate-900">{row.nama}</p>
-                            <p className="mt-0.5 text-[10px] font-semibold text-slate-500">
-                              {row.matchedBastNo
-                                ? `Ada di BAST awal (No. ${String(row.matchedBastNo).padStart(2, '0')})`
-                                : 'Tidak ada di BAST awal'}
-                            </p>
-                          </td>
-                          <td className="px-3 py-2.5 leading-relaxed text-slate-700">
-                            {row.alamat}
-                          </td>
-                          <td className="px-3 py-2.5 font-medium text-slate-700">
-                            {row.pengelola}
-                          </td>
-                          <td className="px-3 py-2.5 font-medium leading-relaxed text-rose-900">
-                            {row.isManuallySelected && (
-                              <span className="mb-1 inline-flex items-center rounded border border-rose-300 bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-800">
-                                Pilihan Manual Admin
-                              </span>
-                            )}
-                            <p>{row.keterangan}</p>
-                          </td>
-                          <td className="px-3 py-2.5 text-center">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setOverQuotaModalItem(row.kodeItem);
-                                setOverQuotaSearch('');
-                              }}
-                              className="inline-flex h-8 items-center gap-1 rounded-lg border border-rose-300 bg-white px-2.5 text-[11px] font-bold text-rose-700 transition-colors hover:bg-rose-600 hover:text-white"
-                            >
-                              <ArrowUpDown className="h-3 w-3" />
-                              <span>Ganti KPM</span>
-                            </button>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200">
+                      {filteredMainRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} className="px-4 py-8 text-center text-xs text-slate-500">
+                            Tidak ada baris yang cocok dengan filter pencarian.
                           </td>
                         </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </section>
+                      ) : (
+                        (() => {
+                          const filledIndexByItem = new Map<string, string[]>();
+                          result.mainRows.forEach((r) => {
+                            if (!r.isEmpty && r.rowKey) {
+                              const arr = filledIndexByItem.get(r.kodeItem) || [];
+                              arr.push(r.rowKey);
+                              filledIndexByItem.set(r.kodeItem, arr);
+                            }
+                          });
 
-            {/* BAGIAN 3: SATU TABEL REKAPITULASI PERBANDINGAN KUOTA ITEM (BAST VS PROPOSAL) */}
-            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-              <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3.5">
-                <div className="flex items-center gap-2">
-                  <FileSpreadsheet className="h-4.5 w-4.5 text-teal-700" />
-                  <div>
-                    <h2 className="text-sm font-bold text-slate-900">
-                      Bagian 3 — Rekapitulasi Perbandingan Kuota Item (BAST vs Proposal)
-                    </h2>
-                    <p className="mt-0.5 text-xs text-slate-500">
-                      Ringkasan tunggal kecukupan kuota per kode item beserta jumlah terisi, baris
-                      kosong, dan over-limit
-                    </p>
-                  </div>
+                          return filteredMainRows.map((row, rowIdx) => {
+                            const badgeMeta = statusMeta(row.status);
+                            const itemKeys = filledIndexByItem.get(row.kodeItem) || [];
+                            const idxInItem = row.rowKey ? itemKeys.indexOf(row.rowKey) : -1;
+                            const canMoveUp = !row.isEmpty && idxInItem > 0;
+                            const canMoveDown =
+                              !row.isEmpty && idxInItem >= 0 && idxInItem < itemKeys.length - 1;
+                            const isSeqHighlighted =
+                              Boolean(row.hasSequenceWarning) ||
+                              highlightedSequenceNo === row.noUrut;
+
+                            return (
+                              <tr
+                                id={`troubleshooting-main-row-${row.noUrut}`}
+                                key={`${row.noUrut}-${row.kodeItem}-${rowIdx}`}
+                                className={
+                                  row.hasSequenceWarning
+                                    ? 'border-l-4 border-l-rose-600 bg-rose-50/75 text-slate-900'
+                                    : highlightedSequenceNo === row.noUrut
+                                      ? 'border-l-4 border-l-amber-500 bg-amber-50/80'
+                                      : row.isEmpty
+                                        ? 'bg-[#FEFCE8] text-amber-950'
+                                        : 'bg-white hover:bg-slate-50/70'
+                                }
+                              >
+                                <td className="px-3 py-2.5 text-center font-bold text-slate-900 tabular-nums">
+                                  <div className="inline-flex flex-col items-center">
+                                    <span>{row.noUrutText}</span>
+                                    {isSeqHighlighted && row.hasSequenceWarning && (
+                                      <span className="mt-0.5 text-[9px] font-bold uppercase text-rose-700">
+                                        Cek No.
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="px-3 py-2.5 text-center">
+                                  <span
+                                    className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-bold ${getTroubleshootingItemBadgeClass(
+                                      row.kodeItem
+                                    )}`}
+                                  >
+                                    {row.kodeItem}
+                                  </span>
+                                </td>
+                                <td
+                                  className={`px-3 py-2.5 ${
+                                    row.isEmpty
+                                      ? 'text-center text-slate-400'
+                                      : 'font-bold text-slate-900'
+                                  }`}
+                                >
+                                  {row.isEmpty ? '-' : row.nama}
+                                </td>
+                                <td
+                                  className={`px-3 py-2.5 text-center tabular-nums ${
+                                    row.isEmpty ? 'text-slate-400' : 'text-slate-700'
+                                  }`}
+                                >
+                                  {row.isEmpty ? '-' : row.nik}
+                                </td>
+                                <td
+                                  className={`px-3 py-2.5 leading-relaxed ${
+                                    row.isEmpty ? 'text-center text-slate-400' : 'text-slate-700'
+                                  }`}
+                                >
+                                  {row.isEmpty ? '-' : row.alamat}
+                                </td>
+                                <td
+                                  className={`px-3 py-2.5 ${
+                                    row.isEmpty ? 'text-center text-slate-400' : 'font-medium text-slate-700'
+                                  }`}
+                                >
+                                  {row.isEmpty ? '-' : row.pengelola}
+                                </td>
+                                <td className="px-3 py-2.5">
+                                  <div className="flex flex-col items-start gap-1">
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                      <span
+                                        className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-bold ${badgeMeta.className}`}
+                                      >
+                                        {badgeMeta.label}
+                                      </span>
+                                      {row.hasSequenceWarning && (
+                                        <span className="inline-flex items-center gap-1 rounded border border-rose-300 bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-800">
+                                          <AlertTriangle className="h-2.5 w-2.5" />
+                                          <span>Keliru Urutan BAST</span>
+                                        </span>
+                                      )}
+                                      {row.isManuallyLinked && row.rowKey && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleUnlinkBastManually(row.rowKey!)}
+                                          className="inline-flex items-center gap-1 rounded border border-teal-200 bg-teal-50 px-1.5 py-0.5 text-[10px] font-semibold text-teal-800 hover:bg-rose-50 hover:text-rose-700"
+                                          title="Lepaskan pencocokan manual BAST"
+                                        >
+                                          <Unlink className="h-2.5 w-2.5" />
+                                          <span>Lepas Link</span>
+                                        </button>
+                                      )}
+                                    </div>
+                                    <span
+                                      className={`leading-relaxed ${
+                                        row.hasSequenceWarning
+                                          ? 'font-medium text-rose-950'
+                                          : row.isEmpty
+                                            ? 'font-semibold text-amber-900'
+                                            : 'text-slate-700'
+                                      }`}
+                                    >
+                                      {row.keterangan}
+                                    </span>
+                                  </div>
+                                </td>
+                                <td className="px-2 py-2.5 text-center">
+                                  {!row.isEmpty && row.rowKey ? (
+                                    <div className="inline-flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        disabled={!canMoveUp}
+                                        onClick={() =>
+                                          handleMoveRowInItemBlock(row.kodeItem, row.rowKey!, 'up')
+                                        }
+                                        title={`Geser ke atas dalam blok ${row.kodeItem}`}
+                                        className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:border-teal-500 hover:bg-teal-50 hover:text-teal-800 disabled:cursor-not-allowed disabled:opacity-30"
+                                      >
+                                        <ArrowUp className="h-3.5 w-3.5" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={!canMoveDown}
+                                        onClick={() =>
+                                          handleMoveRowInItemBlock(row.kodeItem, row.rowKey!, 'down')
+                                        }
+                                        title={`Geser ke bawah dalam blok ${row.kodeItem}`}
+                                        className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:border-teal-500 hover:bg-teal-50 hover:text-teal-800 disabled:cursor-not-allowed disabled:opacity-30"
+                                      >
+                                        <ArrowDown className="h-3.5 w-3.5" />
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <span className="text-slate-300">-</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          });
+                        })()
+                      )}
+                    </tbody>
+                  </table>
                 </div>
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[820px] border-collapse text-left text-xs">
-                  <thead>
-                    <tr className="border-b border-slate-200 bg-slate-900 text-[11px] font-bold uppercase tracking-wider text-white">
-                      <th className="w-24 px-3 py-2.5 text-center">Kode Item</th>
-                      <th className="px-3 py-2.5">Rincian Paket Barang BAST</th>
-                      <th className="w-28 px-3 py-2.5 text-center">Kuota BAST</th>
-                      <th className="w-28 px-3 py-2.5 text-center">Usulan KPM</th>
-                      <th className="w-28 px-3 py-2.5 text-center">Terisi (Masuk)</th>
-                      <th className="w-28 px-3 py-2.5 text-center">Baris Kosong</th>
-                      <th className="w-36 px-3 py-2.5 text-center">Dikeluarkan (Over Limit)</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200">
-                    {result.itemComparisons.map((item) => (
-                      <tr key={item.kodeItem} className="bg-white hover:bg-slate-50/70">
-                        <td className="px-3 py-2.5 text-center">
-                          <span
-                            className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-bold ${getTroubleshootingItemBadgeClass(
-                              item.kodeItem
-                            )}`}
-                          >
-                            {item.kodeItem}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2.5 leading-relaxed text-slate-700">
-                          <span className="font-semibold text-slate-900">{item.namaItem}:</span>{' '}
-                          {item.rincianBarangBast}
-                        </td>
-                        <td className="px-3 py-2.5 text-center font-bold text-slate-900 tabular-nums">
-                          {item.kuotaBast}
-                        </td>
-                        <td className="px-3 py-2.5 text-center font-medium text-slate-700 tabular-nums">
-                          {item.usulanKpm}
-                        </td>
-                        <td className="px-3 py-2.5 text-center font-bold text-teal-700 tabular-nums">
-                          {item.terisi}
-                        </td>
-                        <td
-                          className={`px-3 py-2.5 text-center font-semibold tabular-nums ${
-                            item.barisKosong > 0 ? 'text-amber-700' : 'text-slate-400'
-                          }`}
-                        >
-                          {item.barisKosong}
-                        </td>
-                        <td
-                          className={`px-3 py-2.5 text-center font-semibold tabular-nums ${
-                            item.dikeluarkan > 0 ? 'text-rose-700' : 'text-slate-400'
-                          }`}
-                        >
-                          {item.dikeluarkan}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr className="border-t-2 border-slate-300 bg-slate-100 font-bold text-slate-900 tabular-nums">
-                      <td className="px-3 py-2.5 text-center">TOTAL</td>
-                      <td className="px-3 py-2.5">
-                        Seluruh Paket Item ({result.itemComparisons.length} Kode)
-                      </td>
-                      <td className="px-3 py-2.5 text-center">{result.totals.kuotaBast}</td>
-                      <td className="px-3 py-2.5 text-center">{result.totals.usulanKpm}</td>
-                      <td className="px-3 py-2.5 text-center text-teal-700">
-                        {result.totals.terisi}
-                      </td>
-                      <td className="px-3 py-2.5 text-center text-amber-700">
-                        {result.totals.barisKosong}
-                      </td>
-                      <td className="px-3 py-2.5 text-center text-rose-700">
-                        {result.totals.dikeluarkan}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
-            </section>
+              </section>
+            )}
           </>
         )}
       </div>
@@ -2529,6 +2746,22 @@ export function TroubleshootingView({
                 inputan <strong>Proposal MASDETA</strong> dan tidak diubah mengikuti BAST.
               </p>
             </div>
+
+            {result.sequenceAnomalies.length > 0 && (
+              <div className="space-y-1 rounded-xl border border-rose-300 bg-rose-50 px-3 py-2.5 text-[11px] leading-relaxed text-rose-900">
+                <p className="flex items-center gap-1.5 font-bold text-rose-950">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-rose-600" />
+                  <span>
+                    Perhatian: BAST Dinas memiliki {result.sequenceAnomalies.length} kekeliruan nomor
+                    urut!
+                  </span>
+                </p>
+                <p>
+                  {result.sequenceAnomalies[0].message} Jika tetap Apply, posisi slot di Proposal akan
+                  mengikuti urutan BAST tersebut.
+                </p>
+              </div>
+            )}
 
             {result.totals.dikeluarkan > 0 && (
               <div className="space-y-1.5 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-[11px] leading-relaxed text-sky-900">
@@ -2839,57 +3072,6 @@ export function TroubleshootingView({
           </div>
         );
       })()}
-
-      {/* MODAL KONFIRMASI UNDO APPLY TERAKHIR */}
-      {pendingUndoSnapshot && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Konfirmasi Undo Apply Terakhir"
-          onClick={() => !undoBusy && setPendingUndoSnapshot(null)}
-          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-xs sm:items-center sm:p-4"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md space-y-4 rounded-t-3xl border border-slate-200 bg-white p-5 shadow-2xl sm:rounded-3xl"
-          >
-            <div className="mx-auto h-1.5 w-10 rounded-full bg-slate-300 sm:hidden" />
-            <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-800">
-                <RotateCcw className="h-5 w-5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <h3 className="text-sm font-bold text-slate-900">Batalkan Apply Terakhir?</h3>
-                <p className="mt-1 text-xs leading-relaxed text-slate-600">
-                  Batalkan perubahan Apply terakhir dan kembalikan susunan Proposal{' '}
-                  <strong>{pendingUndoSnapshot.proposalName}</strong> &amp; Database ke kondisi
-                  sebelum Apply?
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2.5">
-              <button
-                type="button"
-                disabled={undoBusy}
-                onClick={() => setPendingUndoSnapshot(null)}
-                className="inline-flex min-h-[42px] flex-1 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-              >
-                Tutup
-              </button>
-              <button
-                type="button"
-                disabled={undoBusy}
-                onClick={() => void handleConfirmUndo()}
-                className="inline-flex min-h-[42px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-amber-600 px-4 text-xs font-bold text-white hover:bg-amber-700 disabled:opacity-60"
-              >
-                {undoBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                <span>{undoBusy ? 'Mengembalikan...' : 'Ya, Batalkan Apply'}</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

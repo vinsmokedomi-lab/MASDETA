@@ -88,7 +88,9 @@ import {
   formatScheduleDateTimeForCoupon,
   formatSptjmFullDate,
   getSptjmAutoDayFromIso,
+  getTodayLocalIsoDate,
   isKecamatanScopedProposalForCoupon,
+  normalizeIsoDateInput,
   normalizePejabatNipNumber,
   resolveCouponScheduleForRecord,
   resolveEffectiveBastConfig,
@@ -111,6 +113,74 @@ type DownloadPrintMode =
   | 'cat_nomor'
   | 'absensi';
 
+type AbsensiVariantState = 'daftar_hadir' | 'makan_minum' | 'kegiatan' | 'arsip';
+
+interface PersistedDownloadWorkspace {
+  printMode?: DownloadPrintMode;
+  selectedTahun?: string;
+  selectedProposalTipe?: 'all' | ProposalTipe;
+  selectedProposal?: string;
+  selectedPengelola?: string;
+  couponBookId?: string;
+  absensiBookId?: string;
+  absensiVariant?: AbsensiVariantState;
+}
+
+const DOWNLOAD_WORKSPACE_SESSION_KEY = 'masdeta_download_workspace_v1';
+let cachedDownloadWorkspace: PersistedDownloadWorkspace | null = null;
+
+function readPersistedDownloadWorkspace(): PersistedDownloadWorkspace {
+  if (cachedDownloadWorkspace) return cachedDownloadWorkspace;
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.sessionStorage.getItem(DOWNLOAD_WORKSPACE_SESSION_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as PersistedDownloadWorkspace;
+    if (parsed && typeof parsed === 'object') {
+      cachedDownloadWorkspace = parsed;
+      return parsed;
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return {};
+}
+
+function writePersistedDownloadWorkspace(next: PersistedDownloadWorkspace) {
+  cachedDownloadWorkspace = next;
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(DOWNLOAD_WORKSPACE_SESSION_KEY, JSON.stringify(next));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function normalizeSptjmConfigDraft(raw?: Partial<SptjmTemplateConfig>): SptjmTemplateConfig {
+  const merged = {
+    ...DEFAULT_SPTJM_TEMPLATE,
+    ...(raw ?? {}),
+  };
+  return {
+    ...merged,
+    tempat: merged.tempat ?? DEFAULT_SPTJM_TEMPLATE.tempat,
+    hari: merged.hari ?? '',
+    tanggalIso: normalizeIsoDateInput(merged.tanggalIso) || getTodayLocalIsoDate(),
+    tanggalCustomText: merged.tanggalCustomText ?? '',
+    pejabatJabatan: merged.pejabatJabatan ?? DEFAULT_SPTJM_TEMPLATE.pejabatJabatan,
+    pejabatNama: merged.pejabatNama ?? DEFAULT_SPTJM_TEMPLATE.pejabatNama,
+    pejabatNip: normalizePejabatNipNumber(merged.pejabatNip ?? DEFAULT_SPTJM_TEMPLATE.pejabatNip).trim(),
+  };
+}
+
+function normalizeBastConfigDraft(raw: BastTemplateConfig): BastTemplateConfig {
+  return {
+    ...raw,
+    tanggalSerahTerimaIso: normalizeIsoDateInput(raw.tanggalSerahTerimaIso) || getTodayLocalIsoDate(),
+    pejabatNip: normalizePejabatNipNumber(raw.pejabatNip).trim(),
+  };
+}
+
 interface MenuDownloadViewProps {
   records: KpmRecord[];
   proposals: ProposalRecord[];
@@ -120,19 +190,21 @@ interface MenuDownloadViewProps {
   proposalSlotMap?: ProposalSlotMap;
   schedules?: ScheduleEventItem[];
   scheduleBooks?: ScheduleBook[];
+  scheduleBookMap?: Record<string, string>;
   reportTemplate?: ReportTemplateConfig;
   onSaveReportTemplate?: (next: ReportTemplateConfig) => void;
   couponConfig?: CouponPrintConfig;
-  onSaveCouponConfig?: (next: CouponPrintConfig) => void;
+  onSaveCouponConfig?: (next: CouponPrintConfig, options?: { silent?: boolean }) => void;
   bastTemplate?: BastTemplateConfig;
-  onSaveBastTemplate?: (next: BastTemplateConfig) => void;
+  onSaveBastTemplate?: (next: BastTemplateConfig, options?: { silent?: boolean }) => void;
   sptjmTemplate?: SptjmTemplateConfig;
-  onSaveSptjmTemplate?: (next: SptjmTemplateConfig) => void;
+  onSaveSptjmTemplate?: (next: SptjmTemplateConfig, options?: { silent?: boolean }) => void;
   pejabatList?: PejabatProfile[];
   proposalBastMap?: ProposalBastMap;
   onSaveProposalBastConfig?: (
     proposalId: string,
-    config: Partial<BastTemplateConfig> | null
+    config: Partial<BastTemplateConfig> | null,
+    options?: { silent?: boolean }
   ) => void;
   onBack: () => void;
 }
@@ -181,6 +253,7 @@ export function MenuDownloadView({
   proposalSlotMap = {},
   schedules = [],
   scheduleBooks = DEFAULT_SCHEDULE_BOOKS,
+  scheduleBookMap = {},
   reportTemplate,
   onSaveReportTemplate,
   couponConfig,
@@ -202,6 +275,8 @@ export function MenuDownloadView({
   const kuponKalbarInputRef = useRef<HTMLInputElement | null>(null);
   const kuponGerindraInputRef = useRef<HTMLInputElement | null>(null);
 
+  const initialWorkspace = useMemo(() => readPersistedDownloadWorkspace(), []);
+
   const yearOptions = useMemo(() => {
     const set = new Set<string>(TAHUN_OPTIONS);
     proposals.forEach((p) => {
@@ -213,11 +288,29 @@ export function MenuDownloadView({
     return Array.from(set).sort((a, b) => b.localeCompare(a));
   }, [proposals, records]);
 
-  const [printMode, setPrintMode] = useState<DownloadPrintMode>('kpm');
-  const [selectedTahun, setSelectedTahun] = useState<string>(() => yearOptions[0] || '2026');
-  const [selectedProposalTipe, setSelectedProposalTipe] = useState<'all' | ProposalTipe>('all');
-  const [selectedProposal, setSelectedProposal] = useState<string>('all');
-  const [selectedPengelola, setSelectedPengelola] = useState<string>('all');
+  const effectiveScheduleBooks = useMemo(
+    () => (scheduleBooks && scheduleBooks.length > 0 ? scheduleBooks : DEFAULT_SCHEDULE_BOOKS),
+    [scheduleBooks]
+  );
+
+  const [printMode, setPrintMode] = useState<DownloadPrintMode>(
+    () => initialWorkspace.printMode || 'kpm'
+  );
+  const [selectedTahun, setSelectedTahun] = useState<string>(
+    () => initialWorkspace.selectedTahun || yearOptions[0] || '2026'
+  );
+  const [selectedProposalTipe, setSelectedProposalTipe] = useState<'all' | ProposalTipe>(
+    () => initialWorkspace.selectedProposalTipe || 'all'
+  );
+  const [selectedProposal, setSelectedProposal] = useState<string>(
+    () => initialWorkspace.selectedProposal || 'all'
+  );
+  const [selectedPengelola, setSelectedPengelola] = useState<string>(
+    () => initialWorkspace.selectedPengelola || 'all'
+  );
+  const [couponBookId, setCouponBookId] = useState<string>(
+    () => initialWorkspace.couponBookId || 'all'
+  );
   const [selectedAddonColumns, setSelectedAddonColumns] = useState<PdfColumnKey[]>(() => {
     const initial: PdfColumnKey[] = DEFAULT_ADDON_PDF_COLUMN_KEYS.includes('kelurahan')
       ? [...DEFAULT_ADDON_PDF_COLUMN_KEYS]
@@ -309,42 +402,63 @@ export function MenuDownloadView({
   );
   const [couponManualOverride, setCouponManualOverride] = useState(false);
   const [couponSavedNotice, setCouponSavedNotice] = useState(false);
+  const couponDirtyRef = useRef(false);
+  const couponLastSavedRef = useRef<string>(
+    JSON.stringify(couponConfig ?? DEFAULT_COUPON_CONFIG)
+  );
 
-  const [bastDraft, setBastDraft] = useState<BastTemplateConfig>(() => ({
-    ...(bastTemplate ?? DEFAULT_BAST_TEMPLATE),
-    pejabatNip: normalizePejabatNipNumber(
-      (bastTemplate ?? DEFAULT_BAST_TEMPLATE).pejabatNip
-    ).trim(),
-  }));
+  const [bastDraft, setBastDraft] = useState<BastTemplateConfig>(() =>
+    normalizeBastConfigDraft(bastTemplate ?? DEFAULT_BAST_TEMPLATE)
+  );
   const [bastSavedNotice, setBastSavedNotice] = useState(false);
   const [bastSavedLabel, setBastSavedLabel] = useState<string>(
-    'Template BAST berhasil disimpan sebagai default.'
+    'Tersimpan otomatis'
   );
   const [showBastKopEditor, setShowBastKopEditor] = useState(false);
+  const bastDirtyRef = useRef(false);
+  const bastHydratedScopeRef = useRef<string>('');
+  const bastLastCommittedRef = useRef<string>('');
 
-  const [sptjmDraft, setSptjmDraft] = useState<SptjmTemplateConfig>(() => ({
-    ...(sptjmTemplate ?? DEFAULT_SPTJM_TEMPLATE),
-    pejabatNip: normalizePejabatNipNumber(
-      (sptjmTemplate ?? DEFAULT_SPTJM_TEMPLATE).pejabatNip
-    ).trim(),
-  }));
+  const [sptjmDraft, setSptjmDraft] = useState<SptjmTemplateConfig>(() =>
+    normalizeSptjmConfigDraft(sptjmTemplate)
+  );
   const [sptjmSavedNotice, setSptjmSavedNotice] = useState(false);
+  const sptjmDirtyRef = useRef(false);
+  const sptjmLastCommittedRef = useRef<string>(
+    JSON.stringify(normalizeSptjmConfigDraft(sptjmTemplate))
+  );
 
   useEffect(() => {
     if (reportTemplate) setTemplateDraft(reportTemplate);
   }, [reportTemplate]);
 
   useEffect(() => {
-    if (sptjmTemplate) {
-      setSptjmDraft({
-        ...DEFAULT_SPTJM_TEMPLATE,
-        ...sptjmTemplate,
-        pejabatNip: normalizePejabatNipNumber(
-          sptjmTemplate.pejabatNip ?? DEFAULT_SPTJM_TEMPLATE.pejabatNip
-        ).trim(),
-      });
+    if (!sptjmTemplate) return;
+    const incoming = normalizeSptjmConfigDraft(sptjmTemplate);
+    const incomingJson = JSON.stringify(incoming);
+    if (!sptjmDirtyRef.current && incomingJson !== sptjmLastCommittedRef.current) {
+      sptjmLastCommittedRef.current = incomingJson;
+      setSptjmDraft(incoming);
     }
   }, [sptjmTemplate]);
+
+  useEffect(() => {
+    if (proposals.length > 0 && selectedProposal !== 'all') {
+      const exists = proposals.some((p) => p.namaProposal === selectedProposal);
+      if (!exists) {
+        setSelectedProposal('all');
+      }
+    }
+  }, [proposals, selectedProposal]);
+
+  useEffect(() => {
+    if (
+      couponBookId !== 'all' &&
+      !effectiveScheduleBooks.some((b) => b.id === couponBookId)
+    ) {
+      setCouponBookId('all');
+    }
+  }, [effectiveScheduleBooks, couponBookId]);
 
   const isStandaloneSource =
     selectedTahun === 'database' ||
@@ -422,8 +536,26 @@ export function MenuDownloadView({
       selectedTahun !== 'all'
         ? selectedTahun
         : selectedProposalObj?.tahun;
-    return resolveScheduleForProposal(selectedProposal, yr, schedules);
-  }, [isStandaloneSource, selectedProposal, selectedTahun, selectedProposalObj, schedules]);
+    return couponBookId !== 'all'
+      ? resolveScheduleForProposalInBook(
+          selectedProposal,
+          yr,
+          schedules,
+          couponBookId,
+          effectiveScheduleBooks,
+          scheduleBookMap
+        )
+      : resolveScheduleForProposal(selectedProposal, yr, schedules);
+  }, [
+    isStandaloneSource,
+    selectedProposal,
+    selectedTahun,
+    selectedProposalObj,
+    schedules,
+    couponBookId,
+    effectiveScheduleBooks,
+    scheduleBookMap,
+  ]);
 
   useEffect(() => {
     const baseCoupon = couponConfig ?? DEFAULT_COUPON_CONFIG;
@@ -431,6 +563,7 @@ export function MenuDownloadView({
       logoKalbarUrl: baseCoupon.logoKalbarUrl || '',
       logoGerindraUrl: baseCoupon.logoGerindraUrl || '',
     };
+    couponDirtyRef.current = false;
     if (selectedProposal !== 'all' && matchedProposalSchedule) {
       setCouponDraft({
         jadwal:
@@ -453,7 +586,51 @@ export function MenuDownloadView({
       ...preservedLogos,
     });
     setCouponManualOverride(false);
-  }, [selectedProposal, matchedProposalSchedule, couponConfig]);
+  }, [selectedProposal, couponBookId, matchedProposalSchedule, couponConfig]);
+
+  // Silent auto-save Kupon (hanya ketika user mengubah secara manual agar jadwal proposal tunggal tidak menimpa default global)
+  useEffect(() => {
+    if (!onSaveCouponConfig || isOffline || !couponDirtyRef.current) return;
+    const payloadToSave: CouponPrintConfig =
+      selectedProposal === 'all'
+        ? couponDraft
+        : {
+            ...(couponConfig ?? DEFAULT_COUPON_CONFIG),
+            footerText: couponDraft.footerText,
+            logoKalbarUrl: couponDraft.logoKalbarUrl || '',
+            logoGerindraUrl: couponDraft.logoGerindraUrl || '',
+          };
+    const nextJson = JSON.stringify(payloadToSave);
+    if (nextJson === couponLastSavedRef.current) {
+      couponDirtyRef.current = false;
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      couponDirtyRef.current = false;
+      couponLastSavedRef.current = nextJson;
+      onSaveCouponConfig(payloadToSave, { silent: true });
+      setCouponSavedNotice(true);
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [couponDraft, couponConfig, selectedProposal, onSaveCouponConfig, isOffline]);
+
+  // Silent auto-save SPTJM setiap kali ada perubahan tanggal / hari / pejabat
+  useEffect(() => {
+    if (!onSaveSptjmTemplate || isOffline || !sptjmDirtyRef.current) return;
+    const normalized = normalizeSptjmConfigDraft(sptjmDraft);
+    const nextJson = JSON.stringify(normalized);
+    if (nextJson === sptjmLastCommittedRef.current) {
+      sptjmDirtyRef.current = false;
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      sptjmDirtyRef.current = false;
+      sptjmLastCommittedRef.current = nextJson;
+      onSaveSptjmTemplate(normalized, { silent: true });
+      setSptjmSavedNotice(true);
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [sptjmDraft, onSaveSptjmTemplate, isOffline]);
 
   const handleKuponLogoUpload = async (
     slot: 'kalbar' | 'gerindra',
@@ -464,6 +641,7 @@ export function MenuDownloadView({
     if (!file) return;
     try {
       const dataUrl = await compressKopLogoFile(file);
+      couponDirtyRef.current = true;
       setCouponSavedNotice(false);
       setCouponDraft((prev) => ({
         ...prev,
@@ -478,7 +656,8 @@ export function MenuDownloadView({
   };
 
   useEffect(() => {
-    setBastDraft(
+    const scopeKey = selectedProposalObj?.id || '__default__';
+    const resolved = normalizeBastConfigDraft(
       resolveEffectiveBastConfig(
         bastTemplate,
         proposalBastMap,
@@ -486,7 +665,45 @@ export function MenuDownloadView({
         reportTemplate
       )
     );
+    const resolvedJson = JSON.stringify(resolved);
+    if (bastHydratedScopeRef.current !== scopeKey) {
+      bastHydratedScopeRef.current = scopeKey;
+      bastDirtyRef.current = false;
+      bastLastCommittedRef.current = resolvedJson;
+      setBastSavedNotice(false);
+      setBastDraft(resolved);
+      return;
+    }
+    if (!bastDirtyRef.current && resolvedJson !== bastLastCommittedRef.current) {
+      bastLastCommittedRef.current = resolvedJson;
+      setBastDraft(resolved);
+    }
   }, [bastTemplate, proposalBastMap, selectedProposalObj?.id, reportTemplate]);
+
+  // Silent auto-save BAST (otomatis ke proposal aktif atau template default)
+  useEffect(() => {
+    if (isOffline || !bastDirtyRef.current) return;
+    const normalized = normalizeBastConfigDraft(bastDraft);
+    const nextJson = JSON.stringify(normalized);
+    if (nextJson === bastLastCommittedRef.current) {
+      bastDirtyRef.current = false;
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      bastDirtyRef.current = false;
+      bastLastCommittedRef.current = nextJson;
+      if (selectedProposalObj && onSaveProposalBastConfig) {
+        onSaveProposalBastConfig(selectedProposalObj.id, normalized, { silent: true });
+        setBastSavedLabel(`Tersimpan otomatis untuk "${selectedProposalObj.namaProposal}"`);
+        setBastSavedNotice(true);
+      } else if (onSaveBastTemplate) {
+        onSaveBastTemplate(normalized, { silent: true });
+        setBastSavedLabel('Template BAST default tersimpan otomatis');
+        setBastSavedNotice(true);
+      }
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [bastDraft, selectedProposalObj, onSaveProposalBastConfig, onSaveBastTemplate, isOffline]);
 
   const availableProposalItems = useMemo(() => {
     const map = new Map<string, { name: string; kecamatanGroup: string; tipe?: string }>();
@@ -708,6 +925,15 @@ export function MenuDownloadView({
         proposals
       );
 
+  const couponBookOptionsArg = useMemo(
+    () => ({
+      scheduleBookId: couponBookId,
+      scheduleBooks: effectiveScheduleBooks,
+      scheduleBookMap,
+    }),
+    [couponBookId, effectiveScheduleBooks, scheduleBookMap]
+  );
+
   const previewKuponConfig = useMemo(() => {
     if (
       previewKuponSample &&
@@ -718,25 +944,42 @@ export function MenuDownloadView({
         previewKuponSample,
         schedules,
         proposals,
-        couponDraft
+        couponDraft,
+        couponBookOptionsArg
       );
     }
     return couponDraft;
-  }, [previewKuponSample, schedules, proposals, selectedProposal, couponManualOverride, couponDraft]);
+  }, [
+    previewKuponSample,
+    schedules,
+    proposals,
+    selectedProposal,
+    couponManualOverride,
+    couponDraft,
+    couponBookOptionsArg,
+  ]);
 
   const scheduledKuponCount = useMemo(() => {
     if (schedules.length === 0) return 0;
     return eligibleKuponRecords.filter((rec) =>
-      Boolean(resolveCouponScheduleForRecord(rec, schedules, proposals, couponDraft).matchedSchedule)
+      Boolean(
+        resolveCouponScheduleForRecord(
+          rec,
+          schedules,
+          proposals,
+          couponDraft,
+          couponBookOptionsArg
+        ).matchedSchedule
+      )
     ).length;
-  }, [eligibleKuponRecords, schedules, proposals, couponDraft]);
+  }, [eligibleKuponRecords, schedules, proposals, couponDraft, couponBookOptionsArg]);
 
   const bastDatePreviewText = useMemo(() => {
     if (bastDraft.tanggalSerahTerimaCustomText?.trim()) {
       return bastDraft.tanggalSerahTerimaCustomText.trim();
     }
     return formatIndonesianDateWords(
-      bastDraft.tanggalSerahTerimaIso?.trim() || new Date().toISOString().slice(0, 10)
+      bastDraft.tanggalSerahTerimaIso?.trim() || getTodayLocalIsoDate()
     );
   }, [bastDraft.tanggalSerahTerimaCustomText, bastDraft.tanggalSerahTerimaIso]);
 
@@ -1382,6 +1625,9 @@ export function MenuDownloadView({
         wilayahList,
         proposalSlotMap,
         schedules,
+        scheduleBookId: couponBookId,
+        scheduleBooks: effectiveScheduleBooks,
+        scheduleBookMap,
         couponConfig: couponDraft,
         resolvePerProposalSchedule: selectedProposal === 'all' || !couponManualOverride,
         mode: 'bulk',
@@ -1510,18 +1756,17 @@ export function MenuDownloadView({
   };
 
   // --- Mode 8: Absensi Dinas Sosial (Absen Dinas Daftar Hadir / Makan Minum + Absensi Kegiatan) ---
-  const effectiveScheduleBooks = useMemo(
-    () => (scheduleBooks && scheduleBooks.length > 0 ? scheduleBooks : DEFAULT_SCHEDULE_BOOKS),
-    [scheduleBooks]
+  const [absensiVariant, setAbsensiVariant] = useState<AbsensiVariantState>(
+    () => initialWorkspace.absensiVariant || 'daftar_hadir'
   );
-  const [absensiVariant, setAbsensiVariant] = useState<
-    'daftar_hadir' | 'makan_minum' | 'kegiatan' | 'arsip'
-  >('daftar_hadir');
   const [absensiExtraBlankRows, setAbsensiExtraBlankRows] = useState('0');
   const [absensiHandoverName, setAbsensiHandoverName] = useState('');
   const [absensiHandoverNip, setAbsensiHandoverNip] = useState('');
   const [absensiBookId, setAbsensiBookId] = useState<string>(
-    () => (scheduleBooks && scheduleBooks[0]?.id) || DEFAULT_SCHEDULE_BOOKS[0].id
+    () =>
+      initialWorkspace.absensiBookId ||
+      (scheduleBooks && scheduleBooks[0]?.id) ||
+      DEFAULT_SCHEDULE_BOOKS[0].id
   );
   const [absensiFallbackTanggal, setAbsensiFallbackTanggal] = useState('');
   const [absensiFallbackHari, setAbsensiFallbackHari] = useState('');
@@ -1533,6 +1778,28 @@ export function MenuDownloadView({
     type: 'success' | 'error';
     message: string;
   } | null>(null);
+
+  useEffect(() => {
+    writePersistedDownloadWorkspace({
+      printMode,
+      selectedTahun,
+      selectedProposalTipe,
+      selectedProposal,
+      selectedPengelola,
+      couponBookId,
+      absensiBookId,
+      absensiVariant,
+    });
+  }, [
+    printMode,
+    selectedTahun,
+    selectedProposalTipe,
+    selectedProposal,
+    selectedPengelola,
+    couponBookId,
+    absensiBookId,
+    absensiVariant,
+  ]);
 
   useEffect(() => {
     if (
@@ -1566,7 +1833,8 @@ export function MenuDownloadView({
         prop.tahun,
         schedules,
         absensiBookId,
-        effectiveScheduleBooks
+        effectiveScheduleBooks,
+        scheduleBookMap
       );
       if (ev) matchedCount += 1;
     }
@@ -1578,7 +1846,8 @@ export function MenuDownloadView({
           firstProp.tahun,
           schedules,
           absensiBookId,
-          effectiveScheduleBooks
+          effectiveScheduleBooks,
+          scheduleBookMap
         )
       : undefined;
     const firstFields = formatAbsensiScheduleFields(firstEv);
@@ -1912,6 +2181,7 @@ export function MenuDownloadView({
     if (!file) return;
     try {
       const compressed = await compressKopLogoFile(file);
+      bastDirtyRef.current = true;
       setBastSavedNotice(false);
       setTemplateSavedNotice(false);
       setBastDraft((prev) => ({ ...prev, kopLogoDataUrl: compressed }));
@@ -3153,64 +3423,130 @@ export function MenuDownloadView({
                 );
               })()}
 
-              {selectedProposal !== 'all' && matchedProposalSchedule ? (
-                <div className="rounded-xl border border-teal-200 bg-teal-50/70 px-3 py-2 text-[11px] leading-relaxed text-teal-900">
-                  Terisi otomatis dari jadwal proposal <strong>{selectedProposal}</strong>
-                  {couponManualOverride ? ' (telah disesuaikan manual di bawah).' : '.'}
-                </div>
-              ) : selectedProposal === 'all' && scheduledKuponCount > 0 ? (
-                <div className="rounded-xl border border-teal-200 bg-teal-50/70 px-3 py-2 text-[11px] leading-relaxed text-teal-900">
-                  <strong>{scheduledKuponCount} dari {eligibleKuponRecords.length} KPM</strong> akan otomatis mengisi Jadwal &amp; Lokasi dari jadwal masing-masing proposal. Kolom di bawah menjadi cadangan bila proposal belum dijadwalkan.
-                </div>
-              ) : (
-                <div className="rounded-xl border border-teal-200 bg-teal-50/60 px-3 py-2 text-[11px] leading-relaxed text-teal-900">
-                  Jenis item bantuan disembunyikan dari tampilan kupon fisik. Informasi Jadwal, Lokasi, dan Catatan Kaki dapat disesuaikan pada kolom di bawah.
+              {/* Pilihan Buku Jadwal Kupon */}
+              {effectiveScheduleBooks.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[11px] font-bold text-slate-700">
+                      Sumber Buku Jadwal &amp; Lokasi
+                    </span>
+                    <span className="text-[11px] font-medium text-teal-700 tabular-nums">
+                      {scheduledKuponCount}/{eligibleKuponRecords.length} KPM cocok jadwal
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCouponBookId('all');
+                        setKuponFeedback(null);
+                      }}
+                      className={`min-h-[34px] rounded-xl border px-3 text-[11px] font-semibold transition-colors ${
+                        couponBookId === 'all'
+                          ? 'border-teal-700 bg-teal-700 text-white'
+                          : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      Otomatis (Semua Buku)
+                    </button>
+                    {effectiveScheduleBooks.map((book) => {
+                      const active = couponBookId === book.id;
+                      const matchCount = absensiTargetProposals.filter((prop) =>
+                        Boolean(
+                          resolveScheduleForProposalInBook(
+                            prop.namaProposal,
+                            prop.tahun,
+                            schedules,
+                            book.id,
+                            effectiveScheduleBooks,
+                            scheduleBookMap
+                          )
+                        )
+                      ).length;
+                      return (
+                        <button
+                          key={book.id}
+                          type="button"
+                          onClick={() => {
+                            setCouponBookId(book.id);
+                            setKuponFeedback(null);
+                          }}
+                          className={`inline-flex min-h-[34px] items-center gap-1.5 rounded-xl border px-3 text-[11px] font-semibold transition-colors ${
+                            active
+                              ? 'border-teal-700 bg-teal-50 text-teal-950 ring-1 ring-teal-700/20'
+                              : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                          }`}
+                        >
+                          <span>{book.title}</span>
+                          {book.subtitle && (
+                            <span className="text-[10px] font-normal text-slate-500">
+                              · {book.subtitle}
+                            </span>
+                          )}
+                          <span
+                            className={`rounded px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${
+                              matchCount > 0
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-slate-100 text-slate-500'
+                            }`}
+                          >
+                            {matchCount}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
 
               <div className="space-y-2.5">
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600">
-                    Jadwal Pembagian {selectedProposal === 'all' ? '(Cadangan / Default)' : ''}
-                  </label>
-                  <input
-                    type="text"
-                    value={couponDraft.jadwal}
-                    onChange={(e) => {
-                      setCouponSavedNotice(false);
-                      setCouponManualOverride(true);
-                      setCouponDraft((prev) => ({ ...prev, jadwal: e.target.value }));
-                    }}
-                    placeholder="Contoh: Senin, 12 Oktober 2026 - Pukul : 08.00"
-                    className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                  />
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600">
+                      Jadwal Pembagian {selectedProposal === 'all' ? '(Cadangan)' : ''}
+                    </label>
+                    <input
+                      type="text"
+                      value={couponDraft.jadwal}
+                      onChange={(e) => {
+                        couponDirtyRef.current = true;
+                        setCouponSavedNotice(false);
+                        setCouponManualOverride(true);
+                        setCouponDraft((prev) => ({ ...prev, jadwal: e.target.value }));
+                      }}
+                      placeholder="Contoh: Senin, 12 Oktober 2026 - Pukul : 08.00"
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600">
+                      Lokasi Penyaluran {selectedProposal === 'all' ? '(Cadangan)' : ''}
+                    </label>
+                    <input
+                      type="text"
+                      value={couponDraft.lokasi}
+                      onChange={(e) => {
+                        couponDirtyRef.current = true;
+                        setCouponSavedNotice(false);
+                        setCouponManualOverride(true);
+                        setCouponDraft((prev) => ({ ...prev, lokasi: e.target.value }));
+                      }}
+                      placeholder="Contoh: Aula Kantor Camat Pontianak Barat"
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                    />
+                  </div>
                 </div>
 
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600">
-                    Lokasi Penyaluran {selectedProposal === 'all' ? '(Cadangan / Default)' : ''}
-                  </label>
-                  <input
-                    type="text"
-                    value={couponDraft.lokasi}
-                    onChange={(e) => {
-                      setCouponSavedNotice(false);
-                      setCouponManualOverride(true);
-                      setCouponDraft((prev) => ({ ...prev, lokasi: e.target.value }));
-                    }}
-                    placeholder="Contoh: Aula Kantor Camat Pontianak Barat"
-                    className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600">
-                    Catatan Kaki Kupon {selectedProposal === 'all' ? '(Cadangan / Default)' : ''}
+                    Catatan Kaki Kupon
                   </label>
                   <input
                     type="text"
                     value={couponDraft.footerText}
                     onChange={(e) => {
+                      couponDirtyRef.current = true;
                       setCouponSavedNotice(false);
                       setCouponManualOverride(true);
                       setCouponDraft((prev) => ({ ...prev, footerText: e.target.value }));
@@ -3221,14 +3557,17 @@ export function MenuDownloadView({
                 </div>
 
                 {/* Form Opsional Dual Logo Kupon */}
-                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2.5">
-                  <div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-[11px] font-bold text-slate-800">
                       Logo Header Kupon (Opsional)
                     </p>
-                    <p className="mt-0.5 text-[10px] leading-relaxed text-slate-500">
-                      Jika ada logo yang diunggah, teks judul otomatis berada di tengah. Jika tanpa logo sama sekali, font judul kupon diperbesar dan ditebalkan.
-                    </p>
+                    {couponSavedNotice && (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-teal-700">
+                        <Check className="h-3 w-3" />
+                        <span>Tersimpan otomatis</span>
+                      </span>
+                    )}
                   </div>
 
                   <input
@@ -3279,6 +3618,7 @@ export function MenuDownloadView({
                               type="button"
                               disabled={isOffline}
                               onClick={() => {
+                                couponDirtyRef.current = true;
                                 setCouponSavedNotice(false);
                                 setCouponDraft((prev) => ({ ...prev, logoKalbarUrl: '' }));
                               }}
@@ -3324,6 +3664,7 @@ export function MenuDownloadView({
                               type="button"
                               disabled={isOffline}
                               onClick={() => {
+                                couponDirtyRef.current = true;
                                 setCouponSavedNotice(false);
                                 setCouponDraft((prev) => ({ ...prev, logoGerindraUrl: '' }));
                               }}
@@ -3339,29 +3680,6 @@ export function MenuDownloadView({
                   </div>
                 </div>
               </div>
-
-              {couponSavedNotice && (
-                <p className="flex items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-medium text-teal-900">
-                  <Check className="h-3.5 w-3.5 shrink-0 text-teal-700" />
-                  <span>Pengaturan kupon berhasil disimpan sebagai default.</span>
-                </p>
-              )}
-
-              {onSaveCouponConfig && (
-                <button
-                  type="button"
-                  disabled={isOffline}
-                  onClick={() => {
-                    if (isOffline) return;
-                    onSaveCouponConfig(couponDraft);
-                    setCouponSavedNotice(true);
-                  }}
-                  className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-slate-300 bg-slate-50 px-4 text-xs font-semibold text-slate-800 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <Check className="h-3.5 w-3.5" />
-                  <span>{isOffline ? 'Simpan Pengaturan Default (Offline)' : 'Simpan Pengaturan Kupon Default'}</span>
-                </button>
-              )}
 
               {kuponFeedback && (
                 <div
@@ -3408,39 +3726,37 @@ export function MenuDownloadView({
 
           {/* MODE 3: BAST ELEKTRONIK MASSAL (FORMAT RESMI DINAS SOSIAL PROV. KALBAR) */}
           {printMode === 'bast' && (
-            <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-3.5 md:p-5">
+            <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-3 md:p-5">
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <h2 className="text-sm font-bold text-slate-900">
-                    Berita Acara Serah Terima Barang (BAST) Massal
+                    Berita Acara Serah Terima Barang (BAST)
                   </h2>
                   <p className="mt-0.5 text-[11px] text-slate-500">
-                    1 halaman F4 per KPM · Otomatis menyesuaikan Lokasi Proposal, Nomor Bantuan &amp; Rincian Sub-Item KPM.
+                    {selectedProposalObj
+                      ? `Pengaturan untuk "${selectedProposalObj.namaProposal}"`
+                      : 'Template BAST default · 1 halaman F4 per KPM'}
                   </p>
                 </div>
-                <span className="shrink-0 text-xs font-bold text-teal-700 tabular-nums">
-                  {eligibleBastRecords.length} KPM
-                </span>
+                <div className="flex items-center gap-2 shrink-0">
+                  {bastSavedNotice && (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-teal-700">
+                      <Check className="h-3 w-3" />
+                      <span>{bastSavedLabel}</span>
+                    </span>
+                  )}
+                  <span className="rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-bold text-teal-700 tabular-nums">
+                    {eligibleBastRecords.length} KPM
+                  </span>
+                </div>
               </div>
-
-              {selectedProposalObj ? (
-                <div className="rounded-xl border border-teal-200 bg-teal-50/70 px-3 py-2 text-[11px] leading-relaxed text-teal-900">
-                  {proposalBastMap?.[selectedProposalObj.id]
-                    ? `Menampilkan pengaturan BAST khusus untuk proposal "${selectedProposalObj.namaProposal}".`
-                    : `Proposal "${selectedProposalObj.namaProposal}" saat ini menggunakan template BAST default (dapat disesuaikan per proposal di halaman Proposal atau di bawah ini).`}
-                </div>
-              ) : (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-700">
-                  Cetak massal otomatis memakai pengaturan BAST masing-masing proposal (bila diatur di halaman Proposal) dan fallback ke template default di bawah.
-                </div>
-              )}
 
               {/* Pengaturan Kop & Logo Dinas BAST */}
               <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50/70">
                 <button
                   type="button"
                   onClick={() => setShowBastKopEditor((p) => !p)}
-                  className="flex min-h-[44px] w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs font-bold text-slate-800 hover:bg-slate-100"
+                  className="flex min-h-[42px] w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs font-bold text-slate-800 hover:bg-slate-100"
                 >
                   <span className="flex items-center gap-2">
                     <img
@@ -3487,6 +3803,7 @@ export function MenuDownloadView({
                             type="button"
                             disabled={isOffline}
                             onClick={() => {
+                              bastDirtyRef.current = true;
                               setBastSavedNotice(false);
                               setBastDraft((prev) => ({
                                 ...prev,
@@ -3510,6 +3827,7 @@ export function MenuDownloadView({
                           type="text"
                           value={bastDraft.orgHeaderLine1}
                           onChange={(e) => {
+                            bastDirtyRef.current = true;
                             setBastSavedNotice(false);
                             setBastDraft((prev) => ({ ...prev, orgHeaderLine1: e.target.value }));
                           }}
@@ -3524,6 +3842,7 @@ export function MenuDownloadView({
                           type="text"
                           value={bastDraft.orgHeaderLine2}
                           onChange={(e) => {
+                            bastDirtyRef.current = true;
                             setBastSavedNotice(false);
                             setBastDraft((prev) => ({ ...prev, orgHeaderLine2: e.target.value }));
                           }}
@@ -3540,6 +3859,7 @@ export function MenuDownloadView({
                         type="text"
                         value={bastDraft.orgAddress1}
                         onChange={(e) => {
+                          bastDirtyRef.current = true;
                           setBastSavedNotice(false);
                           setBastDraft((prev) => ({ ...prev, orgAddress1: e.target.value }));
                         }}
@@ -3555,6 +3875,7 @@ export function MenuDownloadView({
                           type="text"
                           value={bastDraft.orgAddress2}
                           onChange={(e) => {
+                            bastDirtyRef.current = true;
                             setBastSavedNotice(false);
                             setBastDraft((prev) => ({ ...prev, orgAddress2: e.target.value }));
                           }}
@@ -3569,6 +3890,7 @@ export function MenuDownloadView({
                           type="text"
                           value={bastDraft.orgAddress3}
                           onChange={(e) => {
+                            bastDirtyRef.current = true;
                             setBastSavedNotice(false);
                             setBastDraft((prev) => ({ ...prev, orgAddress3: e.target.value }));
                           }}
@@ -3580,7 +3902,7 @@ export function MenuDownloadView({
                 )}
               </div>
 
-              {/* Field Dinamis BAST (#1 - #12) */}
+              {/* Field Dinamis BAST */}
               <div className="space-y-2.5">
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600">
@@ -3591,6 +3913,7 @@ export function MenuDownloadView({
                     value={bastDraft.nomorBast}
                     placeholder="Kosongkan agar baris nomor di PDF tetap kosong (tulis tangan)"
                     onChange={(e) => {
+                      bastDirtyRef.current = true;
                       setBastSavedNotice(false);
                       setBastDraft((prev) => ({ ...prev, nomorBast: e.target.value }));
                     }}
@@ -3607,6 +3930,7 @@ export function MenuDownloadView({
                       type="date"
                       value={bastDraft.tanggalSerahTerimaIso}
                       onChange={(e) => {
+                        bastDirtyRef.current = true;
                         setBastSavedNotice(false);
                         setBastDraft((prev) => ({
                           ...prev,
@@ -3624,6 +3948,7 @@ export function MenuDownloadView({
                       type="text"
                       value={bastDraft.tanggalSerahTerimaCustomText || ''}
                       onChange={(e) => {
+                        bastDirtyRef.current = true;
                         setBastSavedNotice(false);
                         setBastDraft((prev) => ({
                           ...prev,
@@ -3637,7 +3962,7 @@ export function MenuDownloadView({
                 </div>
 
                 <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
-                  <span className="font-semibold text-slate-900">Pratinjau Hari &amp; Tanggal:</span>{' '}
+                  <span className="font-semibold text-slate-900">Pratinjau Tanggal:</span>{' '}
                   {bastDatePreviewText}
                 </div>
 
@@ -3649,6 +3974,7 @@ export function MenuDownloadView({
                     type="text"
                     value={bastDraft.nomorSk}
                     onChange={(e) => {
+                      bastDirtyRef.current = true;
                       setBastSavedNotice(false);
                       setBastDraft((prev) => ({ ...prev, nomorSk: e.target.value }));
                     }}
@@ -3665,6 +3991,7 @@ export function MenuDownloadView({
                       type="text"
                       value={bastDraft.nomorPesanan}
                       onChange={(e) => {
+                        bastDirtyRef.current = true;
                         setBastSavedNotice(false);
                         setBastDraft((prev) => ({ ...prev, nomorPesanan: e.target.value }));
                       }}
@@ -3679,6 +4006,7 @@ export function MenuDownloadView({
                       type="text"
                       value={bastDraft.tanggalPemesanan}
                       onChange={(e) => {
+                        bastDirtyRef.current = true;
                         setBastSavedNotice(false);
                         setBastDraft((prev) => ({ ...prev, tanggalPemesanan: e.target.value }));
                       }}
@@ -3689,7 +4017,7 @@ export function MenuDownloadView({
 
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600">
-                    Pilih Pejabat Dinas Default (Otomatis Isi Nama, Kelas, Jabatan &amp; NIP)
+                    Pilih Pejabat Dinas
                   </label>
                   <select
                     value={
@@ -3702,6 +4030,7 @@ export function MenuDownloadView({
                     onChange={(e) => {
                       const picked = pejabatList.find((p) => p.id === e.target.value);
                       if (!picked) return;
+                      bastDirtyRef.current = true;
                       setBastSavedNotice(false);
                       setBastDraft((prev) => ({
                         ...prev,
@@ -3732,6 +4061,7 @@ export function MenuDownloadView({
                       type="text"
                       value={bastDraft.pejabatNama}
                       onChange={(e) => {
+                        bastDirtyRef.current = true;
                         setBastSavedNotice(false);
                         setBastDraft((prev) => ({ ...prev, pejabatNama: e.target.value }));
                       }}
@@ -3746,6 +4076,7 @@ export function MenuDownloadView({
                       type="text"
                       value={bastDraft.pejabatJabatan}
                       onChange={(e) => {
+                        bastDirtyRef.current = true;
                         setBastSavedNotice(false);
                         setBastDraft((prev) => ({ ...prev, pejabatJabatan: e.target.value }));
                       }}
@@ -3763,6 +4094,7 @@ export function MenuDownloadView({
                       type="text"
                       value={bastDraft.pejabatPangkat}
                       onChange={(e) => {
+                        bastDirtyRef.current = true;
                         setBastSavedNotice(false);
                         setBastDraft((prev) => ({ ...prev, pejabatPangkat: e.target.value }));
                       }}
@@ -3772,7 +4104,7 @@ export function MenuDownloadView({
                   </div>
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-600">
-                      NIP Pejabat (tanpa &ldquo;NIP.&rdquo;, otomatis tercetak)
+                      NIP Pejabat (otomatis &ldquo;NIP.&rdquo;)
                     </label>
                     <div className="mt-1 flex min-h-[40px] w-full items-center overflow-hidden rounded-xl border border-slate-300 bg-white focus-within:border-teal-700">
                       <span className="shrink-0 border-r border-slate-200 bg-slate-50 px-2.5 py-2 text-xs font-semibold text-slate-500">
@@ -3782,6 +4114,7 @@ export function MenuDownloadView({
                         type="text"
                         value={normalizePejabatNipNumber(bastDraft.pejabatNip)}
                         onChange={(e) => {
+                          bastDirtyRef.current = true;
                           setBastSavedNotice(false);
                           setBastDraft((prev) => ({
                             ...prev,
@@ -3794,68 +4127,6 @@ export function MenuDownloadView({
                     </div>
                   </div>
                 </div>
-
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600">
-                    Nilai Nominal BAST (Titik-titik untuk tulis tangan atau isi Rp ...)
-                  </label>
-                  <input
-                    type="text"
-                    value={bastDraft.nilaiNominalText}
-                    onChange={(e) => {
-                      setBastSavedNotice(false);
-                      setBastDraft((prev) => ({ ...prev, nilaiNominalText: e.target.value }));
-                    }}
-                    className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              {bastSavedNotice && (
-                <p className="flex items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-medium text-teal-900">
-                  <Check className="h-3.5 w-3.5 shrink-0 text-teal-700" />
-                  <span>{bastSavedLabel}</span>
-                </p>
-              )}
-
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                {selectedProposalObj && onSaveProposalBastConfig && (
-                  <button
-                    type="button"
-                    disabled={isOffline}
-                    onClick={() => {
-                      if (isOffline) return;
-                      onSaveProposalBastConfig(selectedProposalObj.id, bastDraft);
-                      setBastSavedLabel(
-                        `Pengaturan BAST khusus "${selectedProposalObj.namaProposal}" berhasil disimpan.`
-                      );
-                      setBastSavedNotice(true);
-                    }}
-                    className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-teal-700/40 bg-teal-50 px-3 text-xs font-semibold text-teal-900 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <Check className="h-3.5 w-3.5 shrink-0" />
-                    <span className="truncate">Simpan Khusus Proposal Ini</span>
-                  </button>
-                )}
-
-                {onSaveBastTemplate && (
-                  <button
-                    type="button"
-                    disabled={isOffline}
-                    onClick={() => {
-                      if (isOffline) return;
-                      onSaveBastTemplate(bastDraft);
-                      setBastSavedLabel('Template BAST berhasil disimpan sebagai default.');
-                      setBastSavedNotice(true);
-                    }}
-                    className={`inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-slate-300 bg-slate-50 px-3 text-xs font-semibold text-slate-800 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 ${
-                      !(selectedProposalObj && onSaveProposalBastConfig) ? 'sm:col-span-2' : ''
-                    }`}
-                  >
-                    <Check className="h-3.5 w-3.5 shrink-0" />
-                    <span>Simpan Template BAST Default</span>
-                  </button>
-                )}
               </div>
 
               {bastFeedback && (
@@ -3896,26 +4167,34 @@ export function MenuDownloadView({
               </button>
 
               <p className="text-center text-[11px] leading-relaxed text-slate-500">
-                Kertas F4 Portrait (216 × 310 mm) · Margin Kiri 2 cm · Kanan 1,5 cm · Atas &amp; Bawah 1 cm · 1 KPM / Halaman
+                Kertas F4 Portrait (216 × 310 mm) · 1 KPM / Halaman
               </p>
             </section>
           )}
 
           {/* MODE 4: SPTJM MINIMALIS MASSAL (SURAT PERNYATAAN TANGGUNG JAWAB MUTLAK) */}
           {printMode === 'sptjm' && (
-            <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-3.5 md:p-5">
+            <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-3 md:p-5">
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <h2 className="text-sm font-bold text-slate-900">
                     Surat Pernyataan Tanggung Jawab Mutlak (SPTJM)
                   </h2>
                   <p className="mt-0.5 text-[11px] text-slate-500">
-                    1 halaman F4 per KPM · Sesuai template SPTJM Dinas Sosial (Kop atas &amp; TTD mengikuti baris akhir).
+                    1 halaman F4 per KPM · Perubahan otomatis tersimpan
                   </p>
                 </div>
-                <span className="shrink-0 text-xs font-bold text-teal-700 tabular-nums">
-                  {eligibleBastRecords.length} KPM
-                </span>
+                <div className="flex items-center gap-2 shrink-0">
+                  {sptjmSavedNotice && (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-teal-700">
+                      <Check className="h-3 w-3" />
+                      <span>Tersimpan otomatis</span>
+                    </span>
+                  )}
+                  <span className="rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-bold text-teal-700 tabular-nums">
+                    {eligibleBastRecords.length} KPM
+                  </span>
+                </div>
               </div>
 
               <div className="space-y-2.5">
@@ -3927,6 +4206,7 @@ export function MenuDownloadView({
                     type="text"
                     value={sptjmDraft.tempat}
                     onChange={(e) => {
+                      sptjmDirtyRef.current = true;
                       setSptjmSavedNotice(false);
                       setSptjmDraft((prev) => ({ ...prev, tempat: e.target.value }));
                     }}
@@ -3943,6 +4223,7 @@ export function MenuDownloadView({
                     <select
                       value={sptjmDraft.hari || ''}
                       onChange={(e) => {
+                        sptjmDirtyRef.current = true;
                         setSptjmSavedNotice(false);
                         setSptjmDraft((prev) => ({
                           ...prev,
@@ -3964,12 +4245,13 @@ export function MenuDownloadView({
                   </div>
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-600">
-                      2. Pilih Tanggal (00 Bulan 0000)
+                      2. Pilih Tanggal
                     </label>
                     <input
                       type="date"
                       value={sptjmDraft.tanggalIso}
                       onChange={(e) => {
+                        sptjmDirtyRef.current = true;
                         setSptjmSavedNotice(false);
                         setSptjmDraft((prev) => ({
                           ...prev,
@@ -3992,7 +4274,7 @@ export function MenuDownloadView({
 
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600">
-                    Pilih Pejabat Penandatangan Default (Otomatis Isi Jabatan, Nama &amp; NIP)
+                    Pilih Pejabat Penandatangan
                   </label>
                   <select
                     value={
@@ -4005,6 +4287,7 @@ export function MenuDownloadView({
                     onChange={(e) => {
                       const picked = pejabatList.find((p) => p.id === e.target.value);
                       if (!picked) return;
+                      sptjmDirtyRef.current = true;
                       setSptjmSavedNotice(false);
                       setSptjmDraft((prev) => ({
                         ...prev,
@@ -4033,6 +4316,7 @@ export function MenuDownloadView({
                     type="text"
                     value={sptjmDraft.pejabatJabatan}
                     onChange={(e) => {
+                      sptjmDirtyRef.current = true;
                       setSptjmSavedNotice(false);
                       setSptjmDraft((prev) => ({ ...prev, pejabatJabatan: e.target.value }));
                     }}
@@ -4049,6 +4333,7 @@ export function MenuDownloadView({
                       type="text"
                       value={sptjmDraft.pejabatNama}
                       onChange={(e) => {
+                        sptjmDirtyRef.current = true;
                         setSptjmSavedNotice(false);
                         setSptjmDraft((prev) => ({ ...prev, pejabatNama: e.target.value }));
                       }}
@@ -4057,7 +4342,7 @@ export function MenuDownloadView({
                   </div>
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-600">
-                      NIP Pejabat (tanpa &ldquo;NIP.&rdquo;, otomatis tercetak)
+                      NIP Pejabat (otomatis &ldquo;NIP.&rdquo;)
                     </label>
                     <div className="mt-1 flex min-h-[40px] w-full items-center overflow-hidden rounded-xl border border-slate-300 bg-white focus-within:border-teal-700">
                       <span className="shrink-0 border-r border-slate-200 bg-slate-50 px-2.5 py-2 text-xs font-semibold text-slate-500">
@@ -4067,6 +4352,7 @@ export function MenuDownloadView({
                         type="text"
                         value={normalizePejabatNipNumber(sptjmDraft.pejabatNip)}
                         onChange={(e) => {
+                          sptjmDirtyRef.current = true;
                           setSptjmSavedNotice(false);
                           setSptjmDraft((prev) => ({
                             ...prev,
@@ -4080,29 +4366,6 @@ export function MenuDownloadView({
                   </div>
                 </div>
               </div>
-
-              {sptjmSavedNotice && (
-                <p className="flex items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-medium text-teal-900">
-                  <Check className="h-3.5 w-3.5 shrink-0 text-teal-700" />
-                  <span>Template SPTJM berhasil disimpan sebagai default.</span>
-                </p>
-              )}
-
-              {onSaveSptjmTemplate && (
-                <button
-                  type="button"
-                  disabled={isOffline}
-                  onClick={() => {
-                    if (isOffline) return;
-                    onSaveSptjmTemplate(sptjmDraft);
-                    setSptjmSavedNotice(true);
-                  }}
-                  className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-slate-300 bg-slate-50 px-3 text-xs font-semibold text-slate-800 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <Check className="h-3.5 w-3.5 shrink-0" />
-                  <span>{isOffline ? 'Simpan Template Default (Offline)' : 'Simpan Template SPTJM Default'}</span>
-                </button>
-              )}
 
               {sptjmFeedback && (
                 <div
@@ -5335,7 +5598,8 @@ export function MenuDownloadView({
                               prop.tahun,
                               schedules,
                               book.id,
-                              effectiveScheduleBooks
+                              effectiveScheduleBooks,
+                              scheduleBookMap
                             )
                           )
                         ).length;
