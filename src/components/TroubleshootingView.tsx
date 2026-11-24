@@ -58,7 +58,7 @@ import {
   getTroubleshootingItemBadgeClass,
   reconcileProposalWithBast,
 } from '../utils/troubleshootingReconciler';
-import { exportTroubleshootingToPdf } from '../utils/pdfExporter';
+
 import {
   buildMergedProposalSlots,
   resolveProposalSlotStateForGroup,
@@ -765,6 +765,7 @@ export function TroubleshootingView({
     setErrorMessage(null);
     setExportSuccessNotice(null);
     try {
+      const { exportTroubleshootingToPdf } = await import('../utils/pdfExporter');
       const res = await exportTroubleshootingToPdf(result, { reportTemplate });
       setExportSuccessNotice(
         res.openedNative

@@ -70,16 +70,6 @@ import {
   SPTJM_DAY_OPTIONS,
   buildCatNomorBarangMatrix,
   doesKpmRecordMatchCheckedColumns,
-  exportAbsenArsipToPdf,
-  exportAbsenDinasPesertaToPdf,
-  exportAbsensiDinsosToPdf,
-  exportCatNomorBarangToPdf,
-  exportKpmBastBulkToPdf,
-  exportKpmSptjmBulkToPdf,
-  exportKpmSubItemChecklistToPdf,
-  exportKpmTableToPdf,
-  exportKuponPdf,
-  exportNomorDinsosToPdf,
   formatAbsenDinasLocationText,
   formatAbsensiScheduleFields,
   formatIndonesianDDMonthYYYY,
@@ -97,8 +87,7 @@ import {
   resolveScheduleForProposal,
   resolveScheduleForProposalInBook,
   shouldAutoIncludeKelurahanColumn,
-} from '../utils/pdfExporter';
-import { exportKpmTableToXlsx } from '../utils/xlsxExporter';
+} from '../utils/pdfFormatHelpers';
 import { SelectionPickerModal, SelectionPickerOption } from './SelectionPickerModal';
 import { useIsDesktopWeb } from '../utils/platform';
 import { useOfflineStatus } from '../contexts/OfflineContext';
@@ -1501,6 +1490,7 @@ export function MenuDownloadView({
             )
           : undefined;
       const effectiveFileName = splitByPengelola ? `${fileName}_Per_Pengelola` : fileName;
+      const { exportKpmTableToPdf } = await import('../utils/pdfExporter');
       const res = await exportKpmTableToPdf({
         records: pdfPrintRecords,
         allRecords: records,
@@ -1573,7 +1563,7 @@ export function MenuDownloadView({
             )
           : undefined;
       const effectiveFileName = splitByPengelola ? `${fileName}_Per_Pengelola` : fileName;
-
+      const { exportKpmTableToXlsx } = await import('../utils/xlsxExporter');
       const res = await exportKpmTableToXlsx({
         records: pdfPrintRecords,
         allRecords: records,
@@ -1617,6 +1607,7 @@ export function MenuDownloadView({
     setIsGeneratingKupon(true);
     try {
       const { fileName } = buildScopeTitleAndFileName('Kupon');
+      const { exportKuponPdf } = await import('../utils/pdfExporter');
       const res = await exportKuponPdf({
         records: eligibleKuponRecords,
         allRecords: records,
@@ -1658,6 +1649,7 @@ export function MenuDownloadView({
       const effectiveBulkMap: ProposalBastMap = selectedProposalObj
         ? { ...proposalBastMap, [selectedProposalObj.id]: bastDraft }
         : proposalBastMap;
+      const { exportKpmBastBulkToPdf } = await import('../utils/pdfExporter');
       const res = await exportKpmBastBulkToPdf({
         records: eligibleBastRecords,
         allRecords: records,
@@ -1692,6 +1684,7 @@ export function MenuDownloadView({
     setIsGeneratingSptjm(true);
     try {
       const { fileName } = buildScopeTitleAndFileName('SPTJM');
+      const { exportKpmSptjmBulkToPdf } = await import('../utils/pdfExporter');
       const res = await exportKpmSptjmBulkToPdf({
         records: eligibleBastRecords,
         allRecords: records,
@@ -1726,6 +1719,7 @@ export function MenuDownloadView({
     setIsGeneratingDinsos(true);
     try {
       const { fileName } = buildScopeTitleAndFileName('Nomor_DINSOS');
+      const { exportNomorDinsosToPdf } = await import('../utils/pdfExporter');
       const res = await exportNomorDinsosToPdf({
         records: eligibleKuponRecords,
         allRecords: records,
@@ -1897,6 +1891,7 @@ export function MenuDownloadView({
       if (absensiVariant === 'daftar_hadir' || absensiVariant === 'makan_minum') {
         const prefix = absensiVariant === 'makan_minum' ? 'Daftar_Makan_Minum' : 'Daftar_Hadir';
         const { fileName } = buildScopeTitleAndFileName(prefix);
+        const { exportAbsenDinasPesertaToPdf } = await import('../utils/pdfExporter');
         const res = await exportAbsenDinasPesertaToPdf({
           variant: absensiVariant as AbsenDinasVariant,
           records: eligibleKuponRecords,
@@ -1920,6 +1915,7 @@ export function MenuDownloadView({
         });
       } else if (absensiVariant === 'arsip') {
         const { fileName } = buildScopeTitleAndFileName('Absen_Arsip');
+        const { exportAbsenArsipToPdf } = await import('../utils/pdfExporter');
         const res = await exportAbsenArsipToPdf({
           records: eligibleKuponRecords,
           allRecords: records,
@@ -1948,6 +1944,7 @@ export function MenuDownloadView({
         });
       } else {
         const { fileName } = buildScopeTitleAndFileName('Absensi_DINSOS');
+        const { exportAbsensiDinsosToPdf } = await import('../utils/pdfExporter');
         const res = await exportAbsensiDinsosToPdf({
           records: eligibleKuponRecords,
           allRecords: records,
@@ -2080,6 +2077,7 @@ export function MenuDownloadView({
     try {
       const orientText = catNomorOrientation === 'landscape' ? 'Landscape' : 'Portrait';
       const paperText = catNomorPaperSize.toUpperCase();
+      const { exportCatNomorBarangToPdf } = await import('../utils/pdfExporter');
       const res = await exportCatNomorBarangToPdf({
         records,
         proposals,
@@ -2136,6 +2134,7 @@ export function MenuDownloadView({
         selectedTahun !== 'database' &&
         selectedTahun !== 'arsip';
       const shouldSplit = canSplit && subItemSplitByProposal;
+      const { exportKpmSubItemChecklistToPdf } = await import('../utils/pdfExporter');
 
       const res = await exportKpmSubItemChecklistToPdf({
         records: targetRecs,

@@ -31,10 +31,7 @@ import {
   CatNomorOrientation,
   CatNomorPaperSize,
   buildCatNomorBarangMatrix,
-  exportCatNomorBarangToPdf,
-  exportKpmSubItemChecklistToPdf,
-  exportSubItemRecapToPdf,
-} from '../utils/pdfExporter';
+} from '../utils/pdfFormatHelpers';
 import { SegmentedTabs } from './FormControls';
 import { useIsDesktopWeb } from '../utils/platform';
 
@@ -285,6 +282,7 @@ export function SubItemRecapView({
     setExportingPdf(true);
     setPdfNotice(null);
     try {
+      const { exportSubItemRecapToPdf } = await import('../utils/pdfExporter');
       const res = await exportSubItemRecapToPdf({
         records: filtered,
         items,
@@ -321,6 +319,7 @@ export function SubItemRecapView({
       const tipeLabel = tipeFilter === 'all' ? 'Semua' : tipeFilter;
       const tipeSuffixSlug = tipeFilter === 'all' ? '' : `-${tipeFilter.toLowerCase()}`;
       const tipeTitleSuffix = tipeFilter === 'all' ? '' : ` · ${tipeFilter}`;
+      const { exportKpmSubItemChecklistToPdf } = await import('../utils/pdfExporter');
       const res = await exportKpmSubItemChecklistToPdf({
         records: filtered,
         proposals,
@@ -519,6 +518,7 @@ export function SubItemRecapView({
     try {
       const orientText = catNomorOrientation === 'landscape' ? 'Landscape' : 'Portrait';
       const paperText = catNomorPaperSize.toUpperCase();
+      const { exportCatNomorBarangToPdf } = await import('../utils/pdfExporter');
       const res = await exportCatNomorBarangToPdf({
         records,
         proposals,

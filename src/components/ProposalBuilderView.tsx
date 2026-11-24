@@ -44,10 +44,7 @@ import {
   WilayahKabKota,
 } from '../types/kpm';
 import { formatRupiahCurrency } from '../utils/rabCalculator';
-import {
-  OpdKetSourceMode,
-  exportProposalDocumentToPdf,
-} from '../utils/proposalPdfExporter';
+import type { OpdKetSourceMode } from '../utils/proposalPdfExporter';
 import { ProposalCoverRenderer } from './ProposalCoverRenderer';
 
 interface ProposalBuilderViewProps {
@@ -384,6 +381,7 @@ export function ProposalBuilderView({
     setIsExportingPdf(true);
     setStatusNotice(null);
     try {
+      const { exportProposalDocumentToPdf } = await import('../utils/proposalPdfExporter');
       const saved = await exportProposalDocumentToPdf({
         styleTemplate: activeStyle,
         context: destinationContext,

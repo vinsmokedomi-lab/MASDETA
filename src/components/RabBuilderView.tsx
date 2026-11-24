@@ -42,7 +42,7 @@ import {
   rebalanceAllPackages,
   rebalancePackage,
 } from '../utils/rabCalculator';
-import { exportRabToPdf } from '../utils/pdfExporter';
+
 
 interface RabBuilderViewProps {
   proposals: ProposalRecord[];
@@ -646,6 +646,7 @@ export function RabBuilderView({
     setIsExportingPdf(true);
     setStatusNotice(null);
     try {
+      const { exportRabToPdf } = await import('../utils/pdfExporter');
       const saved = await exportRabToPdf({
         judul: judulRab,
         summary,

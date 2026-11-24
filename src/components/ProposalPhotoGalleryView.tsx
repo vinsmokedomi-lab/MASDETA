@@ -55,12 +55,7 @@ import {
   PhotoCaptureSource,
   PhotoDocCategory,
 } from '../utils/photoUploadManager';
-import { exportProposalPhotoLpjPdf } from '../utils/pdfExporter';
-import {
-  exportProposalPhotosZip,
-  triggerIosShareZipFile,
-  ZipPhotoCategory,
-} from '../utils/photoZipExporter';
+import type { ZipPhotoCategory } from '../utils/photoZipExporter';
 import { useIsDesktopWeb } from '../utils/platform';
 import { DocumentLightbox } from './DocumentLightbox';
 import { DriveImage } from './DriveImage';
@@ -899,6 +894,7 @@ export function ProposalPhotoGalleryView({
         categoryFilter === 'survey' || categoryFilter === 'ktp' || categoryFilter === 'kk'
           ? categoryFilter
           : 'penerima';
+      const { exportProposalPhotoLpjPdf } = await import('../utils/pdfExporter');
       const res = await exportProposalPhotoLpjPdf({
         proposal: activeProposal,
         mergedSlots: exportTargetEntries,
@@ -945,6 +941,7 @@ export function ProposalPhotoGalleryView({
         categoryFilter === 'lainnya'
           ? categoryFilter
           : 'penerima';
+      const { exportProposalPhotosZip } = await import('../utils/photoZipExporter');
       const res = await exportProposalPhotosZip({
         proposalName: activeProposal.namaProposal,
         tahun: activeProposal.tahun,
@@ -1377,7 +1374,9 @@ export function ProposalPhotoGalleryView({
                       type="button"
                       onClick={() => {
                         const f = exportNotice.pendingIosFile!;
-                        void triggerIosShareZipFile(f).then(() => setExportNotice(null));
+                        void import('../utils/photoZipExporter').then(({ triggerIosShareZipFile }) =>
+                          triggerIosShareZipFile(f).then(() => setExportNotice(null))
+                        );
                       }}
                       className="inline-flex items-center gap-1 rounded-lg bg-teal-700 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-teal-800"
                     >

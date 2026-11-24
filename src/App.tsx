@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -22,10 +22,13 @@ import {
   fetchChatDeliveryWatermarks,
   fetchDocumentTemplateFromSupabase,
   fetchOperationalDataFromSupabase,
+  fetchOperationalLogsFromSupabase,
   fetchProposalRabConfigsFromSupabase,
   fetchProposalStyleHistoryFromSupabase,
   fetchSchedulesFromSupabase,
+  fetchScopedOperationalDataFromSupabase,
   isSchemaMissingError,
+  OperationalSyncScope,
   recordProposalStyleUsageInSupabase,
   runAdminDataActionInSupabase,
   saveAppStateSlice,
@@ -131,7 +134,7 @@ import {
   resolveScheduleBookId,
 } from './types/kpm';
 import { TroubleshootingReconcileResult } from './utils/troubleshootingReconciler';
-import { getTodayLocalIsoDate, normalizePejabatNipNumber } from './utils/pdfExporter';
+import { getTodayLocalIsoDate, normalizePejabatNipNumber } from './utils/pdfFormatHelpers';
 import {
   assignKpmToProposalSlot,
   clearSampleRecordsOnce,
@@ -188,14 +191,32 @@ import {
 } from './utils/offlineQueue';
 import { TAHUN_OPTIONS } from './data/kpmOptions';
 import { importProposalKpmFromCsv } from './utils/csvImporter';
-import { KpmRegistrationForm } from './components/KpmRegistrationForm';
-import { KpmDetailView } from './components/KpmDetailView';
-import { RecapDrillTarget, SubItemRecapView } from './components/SubItemRecapView';
-import { AddProposalForm } from './components/AddProposalForm';
-import { ProposalForm } from './components/ProposalForm';
-import { ProposalDetailView } from './components/ProposalDetailView';
-import { ProposalPhotoGalleryView } from './components/ProposalPhotoGalleryView';
-import { DocumentLightbox } from './components/DocumentLightbox';
+import { LazyViewFallback } from './components/LazyViewFallback';
+import type { RecapDrillTarget } from './components/SubItemRecapView';
+const KpmRegistrationForm = lazy(() =>
+  import('./components/KpmRegistrationForm').then((m) => ({ default: m.KpmRegistrationForm }))
+);
+const KpmDetailView = lazy(() =>
+  import('./components/KpmDetailView').then((m) => ({ default: m.KpmDetailView }))
+);
+const SubItemRecapView = lazy(() =>
+  import('./components/SubItemRecapView').then((m) => ({ default: m.SubItemRecapView }))
+);
+const AddProposalForm = lazy(() =>
+  import('./components/AddProposalForm').then((m) => ({ default: m.AddProposalForm }))
+);
+const ProposalForm = lazy(() =>
+  import('./components/ProposalForm').then((m) => ({ default: m.ProposalForm }))
+);
+const ProposalDetailView = lazy(() =>
+  import('./components/ProposalDetailView').then((m) => ({ default: m.ProposalDetailView }))
+);
+const ProposalPhotoGalleryView = lazy(() =>
+  import('./components/ProposalPhotoGalleryView').then((m) => ({ default: m.ProposalPhotoGalleryView }))
+);
+const DocumentLightbox = lazy(() =>
+  import('./components/DocumentLightbox').then((m) => ({ default: m.DocumentLightbox }))
+);
 import { OfflineIndicator } from './components/PWAInstallButton';
 import { PhotoUploadQueueBar } from './components/PhotoUploadQueueBar';
 import {
@@ -219,18 +240,33 @@ import { useOnlineStatus } from './hooks/usePWAInstall';
 import { OfflineProvider } from './contexts/OfflineContext';
 import { BottomNavBar, MainTab, QuickAddSheet } from './components/BottomNavBar';
 import { DashboardView } from './components/DashboardView';
-import { KpmListView } from './components/KpmListView';
-import { ProposalListView } from './components/ProposalListView';
-import { AdminDataActionType, MenuHubView, MenuSection } from './components/MenuHubView';
-import { HistoryDetailView } from './components/HistoryDetailView';
+import type { AdminDataActionType, MenuSection } from './components/MenuHubView';
+const KpmListView = lazy(() =>
+  import('./components/KpmListView').then((m) => ({ default: m.KpmListView }))
+);
+const ProposalListView = lazy(() =>
+  import('./components/ProposalListView').then((m) => ({ default: m.ProposalListView }))
+);
+const MenuHubView = lazy(() =>
+  import('./components/MenuHubView').then((m) => ({ default: m.MenuHubView }))
+);
+const HistoryDetailView = lazy(() =>
+  import('./components/HistoryDetailView').then((m) => ({ default: m.HistoryDetailView }))
+);
 import { ScrollToTopButton } from './components/ScrollToTopButton';
 import { AuthView } from './components/AuthView';
 import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
 import { LocalNotifications } from '@capacitor/local-notifications';
-import { ChatView } from './components/ChatView';
-import { UserProfileView } from './components/UserProfileView';
-import { AppUpdateModal } from './components/AppUpdateModal';
+const ChatView = lazy(() =>
+  import('./components/ChatView').then((m) => ({ default: m.ChatView }))
+);
+const UserProfileView = lazy(() =>
+  import('./components/UserProfileView').then((m) => ({ default: m.UserProfileView }))
+);
+const AppUpdateModal = lazy(() =>
+  import('./components/AppUpdateModal').then((m) => ({ default: m.AppUpdateModal }))
+);
 import { PullToRefresh } from './components/PullToRefresh';
 import {
   AppUpdateInfo,
@@ -251,7 +287,9 @@ import {
 } from './services/nativeChatNotifier';
 import { APP_VERSION } from './config/appVersion';
 import { DesktopSidebar } from './components/DesktopSidebar';
-import { NotificationPageView } from './components/NotificationPageView';
+const NotificationPageView = lazy(() =>
+  import('./components/NotificationPageView').then((m) => ({ default: m.NotificationPageView }))
+);
 import { isNativeAppPlatform, useIsDesktopWeb } from './utils/platform';
 import { withEffectiveUserPresence } from './utils/presence';
 import {
@@ -670,6 +708,16 @@ export default function App() {
   const isNativeApp = isNativeAppPlatform();
   const isDesktopWeb = useIsDesktopWeb();
   const [activeTab, setActiveTab] = useState<MainTab>('dashboard');
+  const [mountedTabs, setMountedTabs] = useState<{
+    kpm: boolean;
+    proposal: boolean;
+    menu: boolean;
+  }>({ kpm: false, proposal: false, menu: false });
+  useEffect(() => {
+    if (activeTab === 'kpm' || activeTab === 'proposal' || activeTab === 'menu') {
+      setMountedTabs((prev) => (prev[activeTab] ? prev : { ...prev, [activeTab]: true }));
+    }
+  }, [activeTab]);
   const [subView, setSubView] = useState<SubView>('none');
   const [returnToTab, setReturnToTab] = useState<MainTab>('dashboard');
   const [kpmFormReturnToDetail, setKpmFormReturnToDetail] = useState(false);
@@ -2231,7 +2279,8 @@ export default function App() {
       try {
         if (useSupabase) {
           try {
-            const snapshot = await fetchOperationalDataFromSupabase();
+            const logFetchStartedAt = Date.now();
+            const snapshot = await fetchOperationalDataFromSupabase({ includeLogs: false });
             const upgradedCatalog = upgradeCatalogTendaKursi(snapshot.items);
             applyRemoteOperationalState({
               records: snapshot.records,
@@ -2243,9 +2292,33 @@ export default function App() {
                   ? snapshot.wilayahList
                   : latestDataRef.current.wilayahList,
               pengelolaList: snapshot.pengelolaList,
-              proposalHistory: snapshot.proposalHistory,
-              kpmAuditLogs: snapshot.kpmAuditLogs,
             });
+            void fetchOperationalLogsFromSupabase()
+              .then((logs) => {
+                const fetchedHistIds = new Set(logs.proposalHistory.map((h) => h.id));
+                const fetchedAuditIds = new Set(logs.kpmAuditLogs.map((a) => a.id));
+                setProposalHistory((prev) => {
+                  const localNew = prev.filter(
+                    (h) =>
+                      !fetchedHistIds.has(h.id) &&
+                      new Date(h.timestamp).getTime() >= logFetchStartedAt
+                  );
+                  return localNew.length > 0
+                    ? [...localNew, ...logs.proposalHistory]
+                    : logs.proposalHistory;
+                });
+                setKpmAuditLogs((prev) => {
+                  const localNew = prev.filter(
+                    (a) =>
+                      !fetchedAuditIds.has(a.id) &&
+                      new Date(a.timestamp).getTime() >= logFetchStartedAt
+                  );
+                  return localNew.length > 0
+                    ? [...localNew, ...logs.kpmAuditLogs]
+                    : logs.kpmAuditLogs;
+                });
+              })
+              .catch(() => {});
             const canAutoPersist =
               currentUserRoleRef.current === 'SuperAdmin' ||
               Boolean(
@@ -2788,41 +2861,46 @@ export default function App() {
 
     let refreshTimer: number | undefined;
     let toastTimer: number | undefined;
+    const pendingScopes = new Set<OperationalSyncScope>();
 
-    const scheduleOperationalRefresh = () => {
+    const scheduleOperationalRefresh = (scope: OperationalSyncScope) => {
+      pendingScopes.add(scope);
       if (activeLocalSyncCountRef.current > 0 || Date.now() - lastLocalSyncAtRef.current < 4000) {
         return;
       }
       if (refreshTimer) window.clearTimeout(refreshTimer);
       refreshTimer = window.setTimeout(async () => {
+        const scopesSnapshot = new Set(pendingScopes);
+        pendingScopes.clear();
+        if (scopesSnapshot.size === 0) return;
         if (activeLocalSyncCountRef.current > 0 || Date.now() - lastLocalSyncAtRef.current < 4000) {
           return;
         }
         try {
-          const snapshot = await fetchOperationalDataFromSupabase();
+          const snapshot = await fetchScopedOperationalDataFromSupabase(scopesSnapshot, {
+            proposals: latestDataRef.current.proposals,
+          });
           if (activeLocalSyncCountRef.current > 0 || Date.now() - lastLocalSyncAtRef.current < 4000) {
             return;
           }
           applyRemoteOperationalState({
-            records: snapshot.records,
-            proposals: snapshot.proposals,
-            items: snapshot.items.length > 0 ? snapshot.items : latestDataRef.current.items,
-            pekerjaanList:
-              snapshot.pekerjaanList.length > 0
-                ? snapshot.pekerjaanList
-                : latestDataRef.current.pekerjaanList,
-            wilayahList:
-              snapshot.wilayahList.length > 0
-                ? snapshot.wilayahList
-                : latestDataRef.current.wilayahList,
-            pengelolaList: snapshot.pengelolaList,
-            proposalHistory: snapshot.proposalHistory,
-            kpmAuditLogs: snapshot.kpmAuditLogs,
+            ...(snapshot.records ? { records: snapshot.records } : {}),
+            ...(snapshot.proposals ? { proposals: snapshot.proposals } : {}),
+            ...(snapshot.items && snapshot.items.length > 0 ? { items: snapshot.items } : {}),
+            ...(snapshot.pekerjaanList && snapshot.pekerjaanList.length > 0
+              ? { pekerjaanList: snapshot.pekerjaanList }
+              : {}),
+            ...(snapshot.wilayahList && snapshot.wilayahList.length > 0
+              ? { wilayahList: snapshot.wilayahList }
+              : {}),
+            ...(snapshot.pengelolaList ? { pengelolaList: snapshot.pengelolaList } : {}),
+            ...(snapshot.proposalHistory ? { proposalHistory: snapshot.proposalHistory } : {}),
+            ...(snapshot.kpmAuditLogs ? { kpmAuditLogs: snapshot.kpmAuditLogs } : {}),
           });
         } catch {
           // Abaikan gangguan jaringan sementara
         }
-      }, 600);
+      }, 900);
     };
 
     let disposed = false;
@@ -3026,22 +3104,27 @@ export default function App() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'kpm_records' },
-        scheduleOperationalRefresh
+        () => scheduleOperationalRefresh('kpm')
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'kpm_documents' },
-        scheduleOperationalRefresh
+        () => scheduleOperationalRefresh('kpm')
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'kpm_sub_item_deliveries' },
+        () => scheduleOperationalRefresh('kpm')
       )
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'proposals' },
-        scheduleOperationalRefresh
+        () => scheduleOperationalRefresh('proposals')
       )
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'proposals' },
-        scheduleOperationalRefresh
+        () => scheduleOperationalRefresh('proposals')
       )
       .on(
         'postgres_changes',
@@ -3069,33 +3152,33 @@ export default function App() {
               });
             }, 350);
           }
-          scheduleOperationalRefresh();
+          scheduleOperationalRefresh('proposals');
         }
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'proposal_documents' },
-        scheduleOperationalRefresh
+        () => scheduleOperationalRefresh('proposals')
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'pengelola' },
-        scheduleOperationalRefresh
+        () => scheduleOperationalRefresh('pengelola')
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'item_bantuan' },
-        scheduleOperationalRefresh
+        () => scheduleOperationalRefresh('items')
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'proposal_kpm_history' },
-        scheduleOperationalRefresh
+        () => scheduleOperationalRefresh('history')
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'kpm_audit_logs' },
-        scheduleOperationalRefresh
+        () => scheduleOperationalRefresh('audit')
       )
       .on(
         'postgres_changes',
@@ -3147,7 +3230,7 @@ export default function App() {
       if (document.visibilityState === 'visible') {
         void syncMessagesFromSupabase();
       }
-    }, 12_000);
+    }, 45_000);
 
     return () => {
       disposed = true;
@@ -12711,108 +12794,115 @@ export default function App() {
               subView === 'kpm-history' ||
               subView === 'kpm-form'))) && (
           <div className={subView === 'chat' ? '' : 'hidden'}>
-            <ChatView
-              currentUser={currentUser}
-              users={effectiveInternalUsers}
-              userAliases={currentUserAliases}
-              onSaveUserAlias={handleSaveUserAlias}
-              messages={messagesWithDelivery}
-              records={records}
-              activePeerId={activeChatPeerId}
-              onSelectPeer={(peerId) => {
-                if (peerId) {
-                  navigateForwardScroll();
-                } else {
+            <Suspense fallback={<LazyViewFallback label="Memuat obrolan..." />}>
+              <ChatView
+                currentUser={currentUser}
+                users={effectiveInternalUsers}
+                userAliases={currentUserAliases}
+                onSaveUserAlias={handleSaveUserAlias}
+                messages={messagesWithDelivery}
+                records={records}
+                activePeerId={activeChatPeerId}
+                onSelectPeer={(peerId) => {
+                  if (peerId) {
+                    navigateForwardScroll();
+                  } else {
+                    navigateRestoreScroll();
+                  }
+                  setActiveChatPeerId(peerId);
+                  if (peerId) {
+                    void handleMarkChatRead(peerId);
+                  }
+                }}
+                onSendMessage={handleSendChatMessage}
+                onMarkConversationRead={handleMarkChatRead}
+                onOpenSharedKpm={(kpmId) => {
+                  const found = records.find((r) => r.id === kpmId);
+                  if (found) {
+                    openKpmDetail(found, returnToTab, false, activeChatPeerId || '__list__');
+                  } else {
+                    setFeedback({
+                      type: 'error',
+                      message: 'Data KPM ini sudah tidak tersedia atau telah dihapus.',
+                    });
+                  }
+                }}
+                pushPermission={pushPermission}
+                onRequestPushPermission={handleRequestPushPermission}
+                onBack={() => {
                   navigateRestoreScroll();
-                }
-                setActiveChatPeerId(peerId);
-                if (peerId) {
-                  void handleMarkChatRead(peerId);
-                }
-              }}
-              onSendMessage={handleSendChatMessage}
-              onMarkConversationRead={handleMarkChatRead}
-              onOpenSharedKpm={(kpmId) => {
-                const found = records.find((r) => r.id === kpmId);
-                if (found) {
-                  openKpmDetail(found, returnToTab, false, activeChatPeerId || '__list__');
-                } else {
-                  setFeedback({
-                    type: 'error',
-                    message: 'Data KPM ini sudah tidak tersedia atau telah dihapus.',
-                  });
-                }
-              }}
-              pushPermission={pushPermission}
-              onRequestPushPermission={handleRequestPushPermission}
-              onBack={() => {
-                navigateRestoreScroll();
-                setActiveChatPeerId(null);
-                setSubView('none');
-                setActiveTab(returnToTab);
-              }}
-            />
+                  setActiveChatPeerId(null);
+                  setSubView('none');
+                  setActiveTab(returnToTab);
+                }}
+              />
+            </Suspense>
           </div>
         )}
 
         {subView === 'notifications' && (
-          <NotificationPageView
-            currentUser={currentUser}
-            unreadChatCount={unreadChatCount}
-            pendingUsersCount={currentUser.role === 'SuperAdmin' ? pendingUsersCount : 0}
-            appNotifications={appNotifications}
-            onMarkNotificationsRead={() => {
-              if (!isOnlineRef.current) return;
-              setAppNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
-            }}
-            onDismissNotification={(id) => {
-              if (!isOnlineRef.current) return;
-              setAppNotifications((prev) => prev.filter((n) => n.id !== id));
-            }}
-            onClearNotifications={() => {
-              if (!isOnlineRef.current) return;
-              setBellAckChatCount(unreadChatCount);
-              setAppNotifications([]);
-              setAppAlertToast(null);
-            }}
-            onOpenChat={() => openChatView()}
-            onOpenUserApproval={() => {
-              navigateForwardScroll();
-              setSubView('none');
-              setMenuOpenedFromDashboard(false);
-              setMenuSection('users');
-              setActiveTab('menu');
-            }}
-            onOpenProposalList={() => {
-              navigateForwardScroll();
-              setSubView('none');
-              setActiveTab('proposal');
-            }}
-          />
+          <Suspense fallback={<LazyViewFallback label="Memuat notifikasi..." />}>
+            <NotificationPageView
+              currentUser={currentUser}
+              unreadChatCount={unreadChatCount}
+              pendingUsersCount={currentUser.role === 'SuperAdmin' ? pendingUsersCount : 0}
+              appNotifications={appNotifications}
+              onMarkNotificationsRead={() => {
+                if (!isOnlineRef.current) return;
+                setAppNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+              }}
+              onDismissNotification={(id) => {
+                if (!isOnlineRef.current) return;
+                setAppNotifications((prev) => prev.filter((n) => n.id !== id));
+              }}
+              onClearNotifications={() => {
+                if (!isOnlineRef.current) return;
+                setBellAckChatCount(unreadChatCount);
+                setAppNotifications([]);
+                setAppAlertToast(null);
+              }}
+              onOpenChat={() => openChatView()}
+              onOpenUserApproval={() => {
+                navigateForwardScroll();
+                setSubView('none');
+                setMenuOpenedFromDashboard(false);
+                setMenuSection('users');
+                setActiveTab('menu');
+              }}
+              onOpenProposalList={() => {
+                navigateForwardScroll();
+                setSubView('none');
+                setActiveTab('proposal');
+              }}
+            />
+          </Suspense>
         )}
 
         {subView === 'profile' && (
-          <UserProfileView
-            user={currentUser}
-            appVersion={effectiveAppVersion}
-            pushEnabled={pushEnabled}
-            pushPermission={pushPermission}
-            onRequestPushPermission={handleRequestPushPermission}
-            onTogglePushEnabled={handleTogglePushEnabled}
-            onUpdateProfile={handleUpdateProfile}
-            onLogout={handleLogout}
-            onCheckAppUpdate={isNativeApp ? () => void handleManualCheckAppUpdate() : undefined}
-            checkingAppUpdate={checkingAppUpdate}
-            onBack={() => {
-              navigateRestoreScroll();
-              setSubView('none');
-              setActiveTab(returnToTab);
-            }}
-          />
+          <Suspense fallback={<LazyViewFallback label="Memuat profil..." />}>
+            <UserProfileView
+              user={currentUser}
+              appVersion={effectiveAppVersion}
+              pushEnabled={pushEnabled}
+              pushPermission={pushPermission}
+              onRequestPushPermission={handleRequestPushPermission}
+              onTogglePushEnabled={handleTogglePushEnabled}
+              onUpdateProfile={handleUpdateProfile}
+              onLogout={handleLogout}
+              onCheckAppUpdate={isNativeApp ? () => void handleManualCheckAppUpdate() : undefined}
+              checkingAppUpdate={checkingAppUpdate}
+              onBack={() => {
+                navigateRestoreScroll();
+                setSubView('none');
+                setActiveTab(returnToTab);
+              }}
+            />
+          </Suspense>
         )}
 
         {subView === 'kpm-detail' && activeKpmRecord && (
-          <KpmDetailView
+          <Suspense fallback={<LazyViewFallback label="Memuat detail KPM..." />}>
+            <KpmDetailView
             record={activeKpmRecord}
             allRecords={records}
             proposals={proposals}
@@ -12888,19 +12978,22 @@ export default function App() {
             proposalBastMap={proposalBastMap}
             onSaveProposalBastConfig={handleSaveProposalBastConfig}
             onSaveBast={handleSaveKpmBast}
-          />
+            />
+          </Suspense>
         )}
 
         {subView === 'kpm-history' && activeKpmRecord && (
-          <HistoryDetailView
-            mode="kpm"
-            record={activeKpmRecord}
-            kpmAuditLogs={kpmAuditLogs.filter((l) => l.kpmId === activeKpmRecord.id)}
-            onBack={() => {
-              navigateRestoreScroll();
-              setSubView('kpm-detail');
-            }}
-          />
+          <Suspense fallback={<LazyViewFallback label="Memuat riwayat KPM..." />}>
+            <HistoryDetailView
+              mode="kpm"
+              record={activeKpmRecord}
+              kpmAuditLogs={kpmAuditLogs.filter((l) => l.kpmId === activeKpmRecord.id)}
+              onBack={() => {
+                navigateRestoreScroll();
+                setSubView('kpm-detail');
+              }}
+            />
+          </Suspense>
         )}
 
         {(subView === 'subitem-recap' ||
@@ -12909,120 +13002,126 @@ export default function App() {
               subView === 'kpm-history' ||
               subView === 'kpm-form'))) && (
           <div className={subView === 'subitem-recap' ? '' : 'hidden'}>
-            <SubItemRecapView
-              records={records}
-              proposals={proposals}
-              items={items}
-              wilayahList={wilayahList}
-              proposalSlotMap={proposalSlotMap}
-              selectedYear={selectedYear}
-              reportTemplate={reportTemplate}
-              onChangeYear={setSelectedYear}
-              drillTarget={recapDrillTarget}
-              onChangeDrillTarget={(next) => {
-                if (next) {
-                  navigateForwardScroll();
-                } else {
+            <Suspense fallback={<LazyViewFallback label="Memuat rekap sub-item..." />}>
+              <SubItemRecapView
+                records={records}
+                proposals={proposals}
+                items={items}
+                wilayahList={wilayahList}
+                proposalSlotMap={proposalSlotMap}
+                selectedYear={selectedYear}
+                reportTemplate={reportTemplate}
+                onChangeYear={setSelectedYear}
+                drillTarget={recapDrillTarget}
+                onChangeDrillTarget={(next) => {
+                  if (next) {
+                    navigateForwardScroll();
+                  } else {
+                    navigateRestoreScroll();
+                  }
+                  setRecapDrillTarget(next);
+                }}
+                onBack={() => {
                   navigateRestoreScroll();
-                }
-                setRecapDrillTarget(next);
-              }}
-              onBack={() => {
-                navigateRestoreScroll();
-                setRecapDrillTarget(null);
-                setFeedback(null);
-                setSubView('none');
-                setActiveTab(returnToTab);
-              }}
-              onSelectKpm={(rec) => openKpmDetail(rec, returnToTab, true)}
-            />
+                  setRecapDrillTarget(null);
+                  setFeedback(null);
+                  setSubView('none');
+                  setActiveTab(returnToTab);
+                }}
+                onSelectKpm={(rec) => openKpmDetail(rec, returnToTab, true)}
+              />
+            </Suspense>
           </div>
         )}
 
         {(subView === 'kpm-form' || (subView === 'add-proposal' && addProposalFromKpmForm)) && (
           <div className={subView === 'kpm-form' ? '' : 'hidden'}>
-            <KpmRegistrationForm
-              editingRecord={editingKpmRecord}
-              existingRecords={records}
-              pengelolaList={pengelolaList}
-              proposals={proposals}
-              itemOptions={items}
-              pekerjaanOptions={pekerjaanList}
-              yearOptions={allKnownYears}
-              wilayahList={wilayahList}
-              feedback={feedback}
-              onDismissFeedback={() => setFeedback(null)}
-              preselectedProposal={pendingSelectedProposal}
-              lockedProposalScope={lockedKpmProposalScope}
-              initialStandaloneStatus={kpmFormInitialStandaloneStatus}
-              proposalSlotMap={proposalSlotMap}
-              targetSlot={targetKpmFormSlot}
-              onClearPreselectedProposal={() => setPendingSelectedProposal(null)}
-              onBack={() => {
-                navigateRestoreScroll();
-                setFeedback(null);
-                setEditingKpmRecord(null);
-                setLockedKpmProposalScope(null);
-                setKpmFormInitialStandaloneStatus(null);
-                setTargetKpmFormSlot(null);
-                if (kpmFormReturnToDetail && activeKpmId) {
-                  setKpmFormReturnToDetail(false);
-                  setSubView('kpm-detail');
-                } else if (kpmFormReturnToProposalDetail && activeProposal) {
-                  setKpmFormReturnToProposalDetail(false);
-                  setSubView('proposal-detail');
-                } else {
-                  setSubView('none');
-                  setActiveTab(returnToTab);
-                }
-              }}
-              onOpenAddProposal={(selectedYr) => openAddProposalForm('kpm', true, selectedYr)}
-              onCreatePengelola={handleCreatePengelola}
-              onAddPekerjaan={handleAddPekerjaanFromForm}
-              onAddYear={handleAddCustomYear}
-              onSave={handleSaveKpm}
-              onQuickSyncKpmDocuments={handleQuickSyncKpmDocuments}
-              onCancelEdit={() => {
-                navigateRestoreScroll();
-                setEditingKpmRecord(null);
-                setLockedKpmProposalScope(null);
-                setKpmFormInitialStandaloneStatus(null);
-                setTargetKpmFormSlot(null);
-                if (kpmFormReturnToDetail && activeKpmId) {
-                  setKpmFormReturnToDetail(false);
-                  setSubView('kpm-detail');
-                } else if (kpmFormReturnToProposalDetail && activeProposal) {
-                  setKpmFormReturnToProposalDetail(false);
-                  setSubView('proposal-detail');
-                } else {
-                  setSubView('none');
-                  setActiveTab(returnToTab);
-                }
-              }}
-              onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
-            />
+            <Suspense fallback={<LazyViewFallback label="Memuat formulir KPM..." />}>
+              <KpmRegistrationForm
+                editingRecord={editingKpmRecord}
+                existingRecords={records}
+                pengelolaList={pengelolaList}
+                proposals={proposals}
+                itemOptions={items}
+                pekerjaanOptions={pekerjaanList}
+                yearOptions={allKnownYears}
+                wilayahList={wilayahList}
+                feedback={feedback}
+                onDismissFeedback={() => setFeedback(null)}
+                preselectedProposal={pendingSelectedProposal}
+                lockedProposalScope={lockedKpmProposalScope}
+                initialStandaloneStatus={kpmFormInitialStandaloneStatus}
+                proposalSlotMap={proposalSlotMap}
+                targetSlot={targetKpmFormSlot}
+                onClearPreselectedProposal={() => setPendingSelectedProposal(null)}
+                onBack={() => {
+                  navigateRestoreScroll();
+                  setFeedback(null);
+                  setEditingKpmRecord(null);
+                  setLockedKpmProposalScope(null);
+                  setKpmFormInitialStandaloneStatus(null);
+                  setTargetKpmFormSlot(null);
+                  if (kpmFormReturnToDetail && activeKpmId) {
+                    setKpmFormReturnToDetail(false);
+                    setSubView('kpm-detail');
+                  } else if (kpmFormReturnToProposalDetail && activeProposal) {
+                    setKpmFormReturnToProposalDetail(false);
+                    setSubView('proposal-detail');
+                  } else {
+                    setSubView('none');
+                    setActiveTab(returnToTab);
+                  }
+                }}
+                onOpenAddProposal={(selectedYr) => openAddProposalForm('kpm', true, selectedYr)}
+                onCreatePengelola={handleCreatePengelola}
+                onAddPekerjaan={handleAddPekerjaanFromForm}
+                onAddYear={handleAddCustomYear}
+                onSave={handleSaveKpm}
+                onQuickSyncKpmDocuments={handleQuickSyncKpmDocuments}
+                onCancelEdit={() => {
+                  navigateRestoreScroll();
+                  setEditingKpmRecord(null);
+                  setLockedKpmProposalScope(null);
+                  setKpmFormInitialStandaloneStatus(null);
+                  setTargetKpmFormSlot(null);
+                  if (kpmFormReturnToDetail && activeKpmId) {
+                    setKpmFormReturnToDetail(false);
+                    setSubView('kpm-detail');
+                  } else if (kpmFormReturnToProposalDetail && activeProposal) {
+                    setKpmFormReturnToProposalDetail(false);
+                    setSubView('proposal-detail');
+                  } else {
+                    setSubView('none');
+                    setActiveTab(returnToTab);
+                  }
+                }}
+                onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
+              />
+            </Suspense>
           </div>
         )}
 
         {subView === 'add-proposal' && (
-          <AddProposalForm
-            existingProposals={proposals}
-            wilayahList={wilayahList}
-            yearOptions={allKnownYears}
-            initialTahun={addProposalInitialYear}
-            onBack={() => {
-              navigateRestoreScroll();
-              setFeedback(null);
-              if (addProposalFromKpmForm) {
-                setAddProposalFromKpmForm(false);
-                setSubView('kpm-form');
-              } else {
-                setSubView('none');
-                setActiveTab(returnToTab);
-              }
-            }}
-            onSaveNewProposal={handleCreateProposal}
-          />
+          <Suspense fallback={<LazyViewFallback label="Memuat formulir proposal..." />}>
+            <AddProposalForm
+              existingProposals={proposals}
+              wilayahList={wilayahList}
+              yearOptions={allKnownYears}
+              initialTahun={addProposalInitialYear}
+              onBack={() => {
+                navigateRestoreScroll();
+                setFeedback(null);
+                if (addProposalFromKpmForm) {
+                  setAddProposalFromKpmForm(false);
+                  setSubView('kpm-form');
+                } else {
+                  setSubView('none');
+                  setActiveTab(returnToTab);
+                }
+              }}
+              onSaveNewProposal={handleCreateProposal}
+            />
+          </Suspense>
         )}
 
         {activeProposal &&
@@ -13033,7 +13132,8 @@ export default function App() {
             (subView === 'kpm-form' && kpmFormReturnToProposalDetail) ||
             (subView === 'none' && activeTab === 'kpm' && kpmOpenedFromProposalDetail)) && (
           <div className={subView === 'proposal-detail' ? '' : 'hidden'}>
-            <ProposalDetailView
+            <Suspense fallback={<LazyViewFallback label="Memuat detail proposal..." />}>
+              <ProposalDetailView
               proposal={activeProposal}
               allProposals={proposals}
               records={records}
@@ -13121,46 +13221,51 @@ export default function App() {
               onAddManualProposalChange={handleAddManualProposalChange}
               onUpdateProposalChangeReason={handleUpdateProposalChangeReason}
               onDeleteProposalChange={handleDeleteProposalChange}
-            />
+              />
+            </Suspense>
           </div>
         )}
 
         {subView === 'proposal-history' && activeProposal && (
-          <HistoryDetailView
-            mode="proposal"
-            proposal={activeProposal}
-            proposalHistory={proposalHistory.filter(
-              (h) =>
-                h.proposalName === activeProposal.namaProposal &&
-                (!h.tahun || h.tahun === activeProposal.tahun)
-            )}
-            activeReconcileSnapshot={reconcileSnapshots[activeProposal.id] ?? null}
-            onUndoReconcileSnapshot={handleUndoTroubleshootingSnapshot}
-            canUpdate={hasPermission('update')}
-            onBack={() => {
-              navigateRestoreScroll();
-              setSubView('proposal-detail');
-            }}
-          />
+          <Suspense fallback={<LazyViewFallback label="Memuat riwayat proposal..." />}>
+            <HistoryDetailView
+              mode="proposal"
+              proposal={activeProposal}
+              proposalHistory={proposalHistory.filter(
+                (h) =>
+                  h.proposalName === activeProposal.namaProposal &&
+                  (!h.tahun || h.tahun === activeProposal.tahun)
+              )}
+              activeReconcileSnapshot={reconcileSnapshots[activeProposal.id] ?? null}
+              onUndoReconcileSnapshot={handleUndoTroubleshootingSnapshot}
+              canUpdate={hasPermission('update')}
+              onBack={() => {
+                navigateRestoreScroll();
+                setSubView('proposal-detail');
+              }}
+            />
+          </Suspense>
         )}
 
         {subView === 'edit-proposal' && activeProposal && (
-          <ProposalForm
-            proposal={activeProposal}
-            existingProposals={proposals}
-            yearOptions={allKnownYears}
-            feedback={feedback}
-            onDismissFeedback={() => setFeedback(null)}
-            onBack={() => {
-              navigateRestoreScroll();
-              setFeedback(null);
-              setSubView('proposal-detail');
-            }}
-            onSaveProposal={handleUpdateProposal}
-            onQuickSyncProposalDocuments={handleQuickSyncProposalDocuments}
-            onToggleProposalLock={handleToggleProposalLock}
-            onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
-          />
+          <Suspense fallback={<LazyViewFallback label="Memuat editor proposal..." />}>
+            <ProposalForm
+              proposal={activeProposal}
+              existingProposals={proposals}
+              yearOptions={allKnownYears}
+              feedback={feedback}
+              onDismissFeedback={() => setFeedback(null)}
+              onBack={() => {
+                navigateRestoreScroll();
+                setFeedback(null);
+                setSubView('proposal-detail');
+              }}
+              onSaveProposal={handleUpdateProposal}
+              onQuickSyncProposalDocuments={handleQuickSyncProposalDocuments}
+              onToggleProposalLock={handleToggleProposalLock}
+              onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
+            />
+          </Suspense>
         )}
 
         {(subView === 'proposal-photo-gallery' ||
@@ -13169,37 +13274,39 @@ export default function App() {
               subView === 'kpm-history' ||
               subView === 'kpm-form'))) && (
           <div className={subView === 'proposal-photo-gallery' ? '' : 'hidden'}>
-            <ProposalPhotoGalleryView
-              proposals={proposals}
-              records={records}
-              items={items}
-              wilayahList={wilayahList}
-              proposalSlotMap={proposalSlotMap}
-              initialProposalId={photoGalleryProposalId}
-              selectedYear={selectedYear}
-              canUpdate={hasPermission('update')}
-              reportTemplate={reportTemplate}
-              onBack={() => {
-                navigateRestoreScroll();
-                setFeedback(null);
-                if (photoGalleryReturnTarget === 'proposal-detail' && activeProposal) {
-                  setSubView('proposal-detail');
-                } else if (photoGalleryReturnTarget === 'menu') {
-                  setSubView('none');
-                  setActiveTab('menu');
-                } else {
-                  setSubView('none');
-                  setActiveTab('proposal');
+            <Suspense fallback={<LazyViewFallback label="Memuat galeri foto..." />}>
+              <ProposalPhotoGalleryView
+                proposals={proposals}
+                records={records}
+                items={items}
+                wilayahList={wilayahList}
+                proposalSlotMap={proposalSlotMap}
+                initialProposalId={photoGalleryProposalId}
+                selectedYear={selectedYear}
+                canUpdate={hasPermission('update')}
+                reportTemplate={reportTemplate}
+                onBack={() => {
+                  navigateRestoreScroll();
+                  setFeedback(null);
+                  if (photoGalleryReturnTarget === 'proposal-detail' && activeProposal) {
+                    setSubView('proposal-detail');
+                  } else if (photoGalleryReturnTarget === 'menu') {
+                    setSubView('none');
+                    setActiveTab('menu');
+                  } else {
+                    setSubView('none');
+                    setActiveTab('proposal');
+                  }
+                }}
+                onSelectKpm={(rec) =>
+                  openKpmDetail(rec, returnToTab, false, null, false, true)
                 }
-              }}
-              onSelectKpm={(rec) =>
-                openKpmDetail(rec, returnToTab, false, null, false, true)
-              }
-              onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
-              onOpenProposalDetail={(proposalId) => openProposalDetailById(proposalId, 'proposal')}
-              onEnqueuePhoto={handleEnqueueKpmDetailPhoto}
-              onSwapPenerimaPhoto={handleSwapPenerimaPhoto}
-            />
+                onPreviewDocument={(file, title) => setLightboxDoc({ file, title })}
+                onOpenProposalDetail={(proposalId) => openProposalDetailById(proposalId, 'proposal')}
+                onEnqueuePhoto={handleEnqueueKpmDetailPhoto}
+                onSwapPenerimaPhoto={handleSwapPenerimaPhoto}
+              />
+            </Suspense>
           </div>
         )}
 
@@ -13311,94 +13418,104 @@ export default function App() {
           />
         </div>
 
-        <div className={subView === 'none' && activeTab === 'kpm' ? '' : 'hidden'}>
-          <KpmListView
-            records={records}
-            proposals={proposals}
-            items={items}
-            wilayahList={wilayahList}
-            proposalSlotMap={proposalSlotMap}
-            selectedYear={selectedYear}
-            onChangeYear={setSelectedYear}
-            statusFilter={kpmStatusFilter}
-            onChangeStatusFilter={setKpmStatusFilter}
-            itemFilter={kpmItemFilter}
-            onChangeItemFilter={setKpmItemFilter}
-            proposalFilter={kpmProposalFilter}
-            onChangeProposalFilter={setKpmProposalFilter}
-            canUpdate={hasPermission('update')}
-            canDelete={hasPermission('delete')}
-            isLoading={isOperationalLoading}
-            openedFromProposalDetail={kpmOpenedFromProposalDetail && Boolean(activeProposal)}
-            onOpenProposalDetail={(proposalId) => openProposalDetailById(proposalId, 'proposal')}
-            onBack={() => {
-              navigateRestoreScroll();
-              if (kpmOpenedFromProposalDetail && activeProposal) {
-                setKpmOpenedFromProposalDetail(false);
-                setSubView('proposal-detail');
-              } else {
-                setActiveTab('dashboard');
-              }
-            }}
-            onCreateNew={() => openKpmForm(null, 'kpm')}
-            onCreateForEmptySlot={(proposalId, proposalName, tahun, slotNumber, item) =>
-              openKpmForm(
-                null,
-                'kpm',
-                false,
-                false,
-                { namaProposal: proposalName, tahun },
-                null,
-                { proposalId, proposalName, tahun, slotNumber, item }
-              )
-            }
-            onMoveSlot={(proposalName, tahun, target, direction) =>
-              void handleMoveKpmSlot(proposalName, tahun, target, direction)
-            }
-            onRemoveEmptySlot={(proposalName, tahun, slotNumber) =>
-              void handleRemoveEmptySlot(proposalName, tahun, slotNumber)
-            }
-            onFillEmptySlotFromDatabase={(kpmId, proposalName, tahun, slotNumber, slotItem) =>
-              void handleFillEmptySlotFromDatabase(
-                kpmId,
-                proposalName,
-                tahun,
-                slotNumber,
-                slotItem
-              )
-            }
-            onSelectRecord={(rec) => openKpmDetail(rec, 'kpm')}
-            onEditRecord={(rec) => openKpmForm(rec, 'kpm', false)}
-            onDeleteRecord={handleDeleteKpm}
-            onToggleAttendance={handleToggleKpmAttendance}
-            onBulkUpdateKpms={handleBulkUpdateKpms}
-            onBulkPermanentDeleteKpms={handleBulkPermanentDeleteKpms}
-          />
-        </div>
+        {mountedTabs.kpm && (
+          <div className={subView === 'none' && activeTab === 'kpm' ? '' : 'hidden'}>
+            <Suspense fallback={<LazyViewFallback label="Memuat daftar KPM..." />}>
+              <KpmListView
+                records={records}
+                proposals={proposals}
+                items={items}
+                wilayahList={wilayahList}
+                proposalSlotMap={proposalSlotMap}
+                selectedYear={selectedYear}
+                onChangeYear={setSelectedYear}
+                statusFilter={kpmStatusFilter}
+                onChangeStatusFilter={setKpmStatusFilter}
+                itemFilter={kpmItemFilter}
+                onChangeItemFilter={setKpmItemFilter}
+                proposalFilter={kpmProposalFilter}
+                onChangeProposalFilter={setKpmProposalFilter}
+                canUpdate={hasPermission('update')}
+                canDelete={hasPermission('delete')}
+                isLoading={isOperationalLoading}
+                openedFromProposalDetail={kpmOpenedFromProposalDetail && Boolean(activeProposal)}
+                onOpenProposalDetail={(proposalId) => openProposalDetailById(proposalId, 'proposal')}
+                onBack={() => {
+                  navigateRestoreScroll();
+                  if (kpmOpenedFromProposalDetail && activeProposal) {
+                    setKpmOpenedFromProposalDetail(false);
+                    setSubView('proposal-detail');
+                  } else {
+                    setActiveTab('dashboard');
+                  }
+                }}
+                onCreateNew={() => openKpmForm(null, 'kpm')}
+                onCreateForEmptySlot={(proposalId, proposalName, tahun, slotNumber, item) =>
+                  openKpmForm(
+                    null,
+                    'kpm',
+                    false,
+                    false,
+                    { namaProposal: proposalName, tahun },
+                    null,
+                    { proposalId, proposalName, tahun, slotNumber, item }
+                  )
+                }
+                onMoveSlot={(proposalName, tahun, target, direction) =>
+                  void handleMoveKpmSlot(proposalName, tahun, target, direction)
+                }
+                onRemoveEmptySlot={(proposalName, tahun, slotNumber) =>
+                  void handleRemoveEmptySlot(proposalName, tahun, slotNumber)
+                }
+                onFillEmptySlotFromDatabase={(kpmId, proposalName, tahun, slotNumber, slotItem) =>
+                  void handleFillEmptySlotFromDatabase(
+                    kpmId,
+                    proposalName,
+                    tahun,
+                    slotNumber,
+                    slotItem
+                  )
+                }
+                onSelectRecord={(rec) => openKpmDetail(rec, 'kpm')}
+                onEditRecord={(rec) => openKpmForm(rec, 'kpm', false)}
+                onDeleteRecord={handleDeleteKpm}
+                onToggleAttendance={handleToggleKpmAttendance}
+                onBulkUpdateKpms={handleBulkUpdateKpms}
+                onBulkPermanentDeleteKpms={handleBulkPermanentDeleteKpms}
+              />
+            </Suspense>
+          </div>
+        )}
 
-        <div className={subView === 'none' && activeTab === 'proposal' ? '' : 'hidden'}>
-          <ProposalListView
-            proposals={proposals}
-            records={records}
-            items={items}
-            wilayahList={wilayahList}
-            proposalSlotMap={proposalSlotMap}
-            yearOptions={allKnownYears}
-            selectedYear={selectedYear}
-            onChangeYear={setSelectedYear}
-            canUpdate={hasPermission('update')}
-            canDelete={hasPermission('delete')}
-            onOpenProposalDetail={(id) => openProposalDetailById(id, 'proposal')}
-            onOpenPhotoGallery={(id) => openPhotoGallery(id, 'proposal-list')}
-            onSelectKpm={(rec) => openKpmDetail(rec, 'proposal')}
-            onToggleProposalLock={handleToggleProposalLock}
-            onBulkSetProposalLock={handleBulkSetProposalLock}
-            onDeleteProposal={handleDeleteProposal}
-          />
-        </div>
+        {mountedTabs.proposal && (
+          <div className={subView === 'none' && activeTab === 'proposal' ? '' : 'hidden'}>
+            <Suspense fallback={<LazyViewFallback label="Memuat daftar proposal..." />}>
+              <ProposalListView
+                proposals={proposals}
+                records={records}
+                items={items}
+                wilayahList={wilayahList}
+                proposalSlotMap={proposalSlotMap}
+                yearOptions={allKnownYears}
+                selectedYear={selectedYear}
+                onChangeYear={setSelectedYear}
+                canUpdate={hasPermission('update')}
+                canDelete={hasPermission('delete')}
+                onOpenProposalDetail={(id) => openProposalDetailById(id, 'proposal')}
+                onOpenPhotoGallery={(id) => openPhotoGallery(id, 'proposal-list')}
+                onSelectKpm={(rec) => openKpmDetail(rec, 'proposal')}
+                onToggleProposalLock={handleToggleProposalLock}
+                onBulkSetProposalLock={handleBulkSetProposalLock}
+                onDeleteProposal={handleDeleteProposal}
+              />
+            </Suspense>
+          </div>
+        )}
 
-        <div className={subView === 'none' && activeTab === 'menu' ? '' : 'hidden'}>
-          <MenuHubView
+        {mountedTabs.menu && (
+          <div className={subView === 'none' && activeTab === 'menu' ? '' : 'hidden'}>
+            <Suspense fallback={<LazyViewFallback label="Memuat menu..." />}>
+              <MenuHubView
             activeSection={menuSection}
             onChangeSection={(section) => {
               if (section === 'root') {
@@ -13628,8 +13745,10 @@ export default function App() {
             onRecordProposalStyleUsage={handleRecordProposalStyleUsage}
             onDeleteProposalStyleUsage={handleDeleteProposalStyleUsage}
             proposalSchemaMissingNotice={proposalSchemaMissingNotice}
-          />
-        </div>
+              />
+            </Suspense>
+          </div>
+        )}
         </div>
       </PullToRefresh>
 
@@ -13777,20 +13896,28 @@ export default function App() {
       />
 
       {/* Fullscreen Document & PDF Lightbox */}
-      <DocumentLightbox
-        documentFile={lightboxDoc?.file ?? null}
-        title={lightboxDoc?.title ?? ''}
-        onClose={() => setLightboxDoc(null)}
-      />
+      {lightboxDoc && (
+        <Suspense fallback={null}>
+          <DocumentLightbox
+            documentFile={lightboxDoc.file}
+            title={lightboxDoc.title}
+            onClose={() => setLightboxDoc(null)}
+          />
+        </Suspense>
+      )}
 
       {/* In-App Android APK Auto-Updater Modal (Update Wajib / Patch Opsional) */}
-      <AppUpdateModal
-        updateInfo={appUpdateInfo}
-        open={isNativeApp && isUpdateModalOpen}
-        onDismissLater={
-          appUpdateInfo && !appUpdateInfo.isMandatory ? handleDismissUpdateLater : undefined
-        }
-      />
+      {isNativeApp && isUpdateModalOpen && (
+        <Suspense fallback={null}>
+          <AppUpdateModal
+            updateInfo={appUpdateInfo}
+            open={isNativeApp && isUpdateModalOpen}
+            onDismissLater={
+              appUpdateInfo && !appUpdateInfo.isMandatory ? handleDismissUpdateLater : undefined
+            }
+          />
+        </Suspense>
+      )}
       </div>
     </OfflineProvider>
   );

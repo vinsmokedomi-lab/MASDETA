@@ -91,10 +91,6 @@ import {
 } from '../utils/imageProcessor';
 import {
   SPTJM_DAY_OPTIONS,
-  exportKpmBastToPdf,
-  exportKpmSptjmToPdf,
-  exportKuponPdf,
-  exportSingleKpmToPdf,
   formatBastProposalLocation,
   formatIndonesianDDMonthYYYY,
   formatIndonesianDateWords,
@@ -104,7 +100,7 @@ import {
   normalizePejabatNipNumber,
   resolveCouponScheduleForRecord,
   resolveEffectiveBastConfig,
-} from '../utils/pdfExporter';
+} from '../utils/pdfFormatHelpers';
 import { openCekBansosWithNik } from '../services/cekBansos';
 import { isNativeAppPlatform, useIsDesktopWeb } from '../utils/platform';
 import { useOfflineStatus } from '../contexts/OfflineContext';
@@ -875,6 +871,7 @@ export function KpmDetailView({
     setPdfNotice(null);
     setIsDownloadingPdf(true);
     try {
+      const { exportSingleKpmToPdf } = await import('../utils/pdfExporter');
       const res = await exportSingleKpmToPdf({
         record,
         proposals,
@@ -941,6 +938,7 @@ export function KpmDetailView({
       if (saveCouponDefault && !isOffline && onSaveCouponConfig) {
         onSaveCouponConfig(couponDraft);
       }
+      const { exportKuponPdf } = await import('../utils/pdfExporter');
       const res = await exportKuponPdf({
         records: [record],
         allRecords,
@@ -990,6 +988,7 @@ export function KpmDetailView({
           onSaveBastTemplate(bastDraft);
         }
       }
+      const { exportKpmBastToPdf } = await import('../utils/pdfExporter');
       const res = await exportKpmBastToPdf({
         record,
         allRecords,
@@ -1046,6 +1045,7 @@ export function KpmDetailView({
         matchingProposal?.id,
         reportTemplate
       );
+      const { exportKpmSptjmToPdf } = await import('../utils/pdfExporter');
       const res = await exportKpmSptjmToPdf({
         record,
         allRecords,

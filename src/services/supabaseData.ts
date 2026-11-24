@@ -373,9 +373,93 @@ export async function checkSupabaseSchemaReady(): Promise<{
 }
 
 // ============================================================================
-// OPERATIONAL DATA: FETCH RELATIONAL SNAPSHOT
+// OPERATIONAL DATA: FETCH RELATIONAL SNAPSHOT (Full, Scoped & Background Logs)
 // ============================================================================
-export async function fetchOperationalDataFromSupabase(): Promise<SupabaseOperationalSnapshot> {
+export type OperationalSyncScope =
+  | 'kpm'
+  | 'proposals'
+  | 'items'
+  | 'pengelola'
+  | 'wilayah'
+  | 'pekerjaan'
+  | 'history'
+  | 'audit';
+
+export interface FetchOperationalOptions {
+  includeLogs?: boolean;
+}
+
+const DEFAULT_HISTORY_FETCH_LIMIT = 1000;
+const DEFAULT_AUDIT_FETCH_LIMIT = 1500;
+
+function mapProposalHistoryRows(rows: Record<string, unknown>[]): ProposalKpmHistoryEntry[] {
+  return rows.map((h) => ({
+    id: String(h.id),
+    tahun: String(h.tahun || ''),
+    proposalName: String(h.proposal_name || ''),
+    kpmId: String(h.kpm_id || ''),
+    kpmName: String(h.kpm_name || ''),
+    registerCode: String(h.register_code || ''),
+    action: (h.action as ProposalKpmHistoryEntry['action']) || 'entered',
+    fromProposal: h.from_proposal ? String(h.from_proposal) : undefined,
+    toProposal: h.to_proposal ? String(h.to_proposal) : undefined,
+    actorName: String(h.actor_name || 'Admin'),
+    timestamp: String(h.timestamp || new Date().toISOString()),
+  }));
+}
+
+function mapKpmAuditRows(rows: Record<string, unknown>[]): KpmAuditLogEntry[] {
+  return rows.map((a) => ({
+    id: String(a.id),
+    kpmId: String(a.kpm_id),
+    action: (a.action as KpmAuditLogEntry['action']) || 'updated',
+    actorName: String(a.actor_name || 'Admin'),
+    actorEmail: a.actor_email ? String(a.actor_email) : undefined,
+    timestamp: String(a.timestamp || new Date().toISOString()),
+    proposal: String(a.proposal || ''),
+    tahun: String(a.tahun || ''),
+    changes: Array.isArray(a.changes) ? (a.changes as KpmAuditLogEntry['changes']) : [],
+  }));
+}
+
+export async function fetchOperationalLogsFromSupabase(): Promise<{
+  proposalHistory: ProposalKpmHistoryEntry[];
+  kpmAuditLogs: KpmAuditLogEntry[];
+}> {
+  const [historyData, auditData] = await Promise.all([
+    fetchAllPages(
+      (from, to) =>
+        supabase
+          .from('proposal_kpm_history')
+          .select('*')
+          .order('timestamp', { ascending: false })
+          .order('id', { ascending: true })
+          .range(from, to),
+      DEFAULT_HISTORY_FETCH_LIMIT
+    ),
+    fetchAllPages(
+      (from, to) =>
+        supabase
+          .from('kpm_audit_logs')
+          .select('*')
+          .order('timestamp', { ascending: false })
+          .order('id', { ascending: true })
+          .range(from, to),
+      DEFAULT_AUDIT_FETCH_LIMIT
+    ),
+  ]);
+  return {
+    proposalHistory: mapProposalHistoryRows(historyData),
+    kpmAuditLogs: mapKpmAuditRows(auditData),
+  };
+}
+
+export async function fetchOperationalDataFromSupabase(
+  options: FetchOperationalOptions = {}
+): Promise<SupabaseOperationalSnapshot> {
+  const { includeLogs = true } = options;
+  const emptyRows = Promise.resolve([] as Record<string, unknown>[]);
+
   const [
     kabData,
     kecData,
@@ -483,26 +567,30 @@ export async function fetchOperationalDataFromSupabase(): Promise<SupabaseOperat
         .order('id', { ascending: true })
         .range(from, to)
     ),
-    fetchAllPages(
-      (from, to) =>
-        supabase
-          .from('proposal_kpm_history')
-          .select('*')
-          .order('timestamp', { ascending: false })
-          .order('id', { ascending: true })
-          .range(from, to),
-      3000
-    ),
-    fetchAllPages(
-      (from, to) =>
-        supabase
-          .from('kpm_audit_logs')
-          .select('*')
-          .order('timestamp', { ascending: false })
-          .order('id', { ascending: true })
-          .range(from, to),
-      5000
-    ),
+    includeLogs
+      ? fetchAllPages(
+          (from, to) =>
+            supabase
+              .from('proposal_kpm_history')
+              .select('*')
+              .order('timestamp', { ascending: false })
+              .order('id', { ascending: true })
+              .range(from, to),
+          DEFAULT_HISTORY_FETCH_LIMIT
+        )
+      : emptyRows,
+    includeLogs
+      ? fetchAllPages(
+          (from, to) =>
+            supabase
+              .from('kpm_audit_logs')
+              .select('*')
+              .order('timestamp', { ascending: false })
+              .order('id', { ascending: true })
+              .range(from, to),
+          DEFAULT_AUDIT_FETCH_LIMIT
+        )
+      : emptyRows,
   ]);
 
   const kabRes = { data: kabData };
@@ -517,8 +605,6 @@ export async function fetchOperationalDataFromSupabase(): Promise<SupabaseOperat
   const kpmRes = { data: kpmData };
   const kpmDocsRes = { data: kpmDocsData };
   const deliveriesRes = { data: deliveriesData };
-  const historyRes = { data: historyData };
-  const auditRes = { data: auditData };
 
   // 1. Reconstruct Wilayah hierarchy
   const kelByKec = new Map<string, string[]>();
@@ -813,31 +899,8 @@ export async function fetchOperationalDataFromSupabase(): Promise<SupabaseOperat
   });
 
   // 7. History & Audit Logs
-  const proposalHistory: ProposalKpmHistoryEntry[] = (historyRes.data || []).map((h) => ({
-    id: String(h.id),
-    tahun: String(h.tahun || ''),
-    proposalName: String(h.proposal_name || ''),
-    kpmId: String(h.kpm_id || ''),
-    kpmName: String(h.kpm_name || ''),
-    registerCode: String(h.register_code || ''),
-    action: (h.action as ProposalKpmHistoryEntry['action']) || 'entered',
-    fromProposal: h.from_proposal ? String(h.from_proposal) : undefined,
-    toProposal: h.to_proposal ? String(h.to_proposal) : undefined,
-    actorName: String(h.actor_name || 'Admin'),
-    timestamp: String(h.timestamp || new Date().toISOString()),
-  }));
-
-  const kpmAuditLogs: KpmAuditLogEntry[] = (auditRes.data || []).map((a) => ({
-    id: String(a.id),
-    kpmId: String(a.kpm_id),
-    action: (a.action as KpmAuditLogEntry['action']) || 'updated',
-    actorName: String(a.actor_name || 'Admin'),
-    actorEmail: a.actor_email ? String(a.actor_email) : undefined,
-    timestamp: String(a.timestamp || new Date().toISOString()),
-    proposal: String(a.proposal || ''),
-    tahun: String(a.tahun || ''),
-    changes: Array.isArray(a.changes) ? (a.changes as KpmAuditLogEntry['changes']) : [],
-  }));
+  const proposalHistory = mapProposalHistoryRows(historyData);
+  const kpmAuditLogs = mapKpmAuditRows(auditData);
 
   return {
     records,
@@ -849,6 +912,489 @@ export async function fetchOperationalDataFromSupabase(): Promise<SupabaseOperat
     proposalHistory,
     kpmAuditLogs,
   };
+}
+
+export async function fetchScopedOperationalDataFromSupabase(
+  scopes: Set<OperationalSyncScope>,
+  fallback?: Partial<SupabaseOperationalSnapshot>
+): Promise<Partial<SupabaseOperationalSnapshot>> {
+  const needWilayah = scopes.has('wilayah');
+  const needPekerjaan = scopes.has('pekerjaan');
+  const needItems = scopes.has('items');
+  const needPengelola = scopes.has('pengelola');
+  const needProposals = scopes.has('proposals');
+  const needKpm = scopes.has('kpm');
+  const needHistory = scopes.has('history');
+  const needAudit = scopes.has('audit');
+
+  const empty = Promise.resolve([] as Record<string, unknown>[]);
+
+  const [
+    kabData,
+    kecData,
+    kelData,
+    pekerjaanData,
+    itemsData,
+    subItemsData,
+    pengelolaData,
+    proposalsData,
+    proposalDocsData,
+    kpmData,
+    kpmDocsData,
+    deliveriesData,
+    historyData,
+    auditData,
+  ] = await Promise.all([
+    needWilayah
+      ? fetchAllPages((from, to) =>
+          supabase
+            .from('wilayah_kabkota')
+            .select('*')
+            .order('sort_order', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to)
+        )
+      : empty,
+    needWilayah
+      ? fetchAllPages((from, to) =>
+          supabase
+            .from('wilayah_kecamatan')
+            .select('*')
+            .order('sort_order', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to)
+        )
+      : empty,
+    needWilayah
+      ? fetchAllPages((from, to) =>
+          supabase
+            .from('wilayah_kelurahan')
+            .select('*')
+            .order('sort_order', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to)
+        )
+      : empty,
+    needPekerjaan
+      ? fetchAllPages((from, to) =>
+          supabase
+            .from('pekerjaan_master')
+            .select('*')
+            .order('sort_order', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to)
+        )
+      : empty,
+    needItems
+      ? fetchAllPages((from, to) =>
+          supabase
+            .from('item_bantuan')
+            .select('*')
+            .order('tahun', { ascending: true })
+            .order('sort_order', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to)
+        )
+      : empty,
+    needItems
+      ? fetchAllPages((from, to) =>
+          supabase
+            .from('item_sub_items')
+            .select('*')
+            .order('sort_order', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to)
+        )
+      : empty,
+    needPengelola
+      ? fetchAllPages((from, to) =>
+          supabase
+            .from('pengelola')
+            .select('*')
+            .order('display_name', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to)
+        )
+      : empty,
+    needProposals
+      ? fetchAllPages((from, to) =>
+          supabase
+            .from('proposals')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .order('id', { ascending: true })
+            .range(from, to)
+        )
+      : empty,
+    needProposals
+      ? fetchAllPages((from, to) =>
+          supabase.from('proposal_documents').select('*').order('id', { ascending: true }).range(from, to)
+        )
+      : empty,
+    needKpm
+      ? fetchAllPages((from, to) =>
+          supabase
+            .from('kpm_records')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .order('id', { ascending: true })
+            .range(from, to)
+        )
+      : empty,
+    needKpm
+      ? fetchAllPages((from, to) =>
+          supabase
+            .from('kpm_documents')
+            .select('*')
+            .order('sort_order', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to)
+        )
+      : empty,
+    needKpm
+      ? fetchAllPages((from, to) =>
+          supabase
+            .from('kpm_sub_item_deliveries')
+            .select('*')
+            .order('id', { ascending: true })
+            .range(from, to)
+        )
+      : empty,
+    needHistory
+      ? fetchAllPages(
+          (from, to) =>
+            supabase
+              .from('proposal_kpm_history')
+              .select('*')
+              .order('timestamp', { ascending: false })
+              .order('id', { ascending: true })
+              .range(from, to),
+          DEFAULT_HISTORY_FETCH_LIMIT
+        )
+      : empty,
+    needAudit
+      ? fetchAllPages(
+          (from, to) =>
+            supabase
+              .from('kpm_audit_logs')
+              .select('*')
+              .order('timestamp', { ascending: false })
+              .order('id', { ascending: true })
+              .range(from, to),
+          DEFAULT_AUDIT_FETCH_LIMIT
+        )
+      : empty,
+  ]);
+
+  const result: Partial<SupabaseOperationalSnapshot> = {};
+
+  if (needWilayah) {
+    const kelByKec = new Map<string, string[]>();
+    for (const kel of kelData) {
+      const kecId = String(kel.kecamatan_id);
+      const arr = kelByKec.get(kecId) || [];
+      arr.push(String(kel.nama));
+      kelByKec.set(kecId, arr);
+    }
+    const kecByKab = new Map<string, WilayahKabKota['kecamatanList']>();
+    for (const kec of kecData) {
+      const kabId = String(kec.kabkota_id);
+      const arr = kecByKab.get(kabId) || [];
+      arr.push({
+        id: String(kec.id),
+        nama: String(kec.nama),
+        kelurahanList: kelByKec.get(String(kec.id)) || [],
+      });
+      kecByKab.set(kabId, arr);
+    }
+    result.wilayahList = kabData.map((kab) => ({
+      id: String(kab.id),
+      nama: String(kab.nama),
+      kecamatanList: kecByKab.get(String(kab.id)) || [],
+    }));
+  }
+
+  if (needPekerjaan) {
+    result.pekerjaanList = pekerjaanData.map((p) => String(p.nama));
+  }
+
+  if (needItems) {
+    const subByItem = new Map<string, string[]>();
+    for (const sub of subItemsData) {
+      const itemId = String(sub.item_id);
+      const arr = subByItem.get(itemId) || [];
+      arr.push(String(sub.sub_item_name));
+      subByItem.set(itemId, arr);
+    }
+    result.items = itemsData.map((it) => ({
+      id: String(it.id),
+      tahun: String(it.tahun),
+      code: String(it.code),
+      name: String(it.name),
+      subItems: subByItem.get(String(it.id)) || [],
+    }));
+  }
+
+  if (needPengelola) {
+    result.pengelolaList = pengelolaData.map((p) => {
+      const fotoUrl = sanitizeMediaUrl(p.foto_url as string | null);
+      const meta = (p.foto_meta as Record<string, unknown> | null) || {};
+      const foto: KpmDocumentFile | undefined = fotoUrl
+        ? {
+            id: String(meta.id || `pengelola-foto-${p.id}`),
+            dataUrl: fotoUrl,
+            fileId:
+              (typeof p.foto_file_id === 'string' && p.foto_file_id) ||
+              extractDriveFileId(fotoUrl) ||
+              undefined,
+            directUrl: fotoUrl,
+            thumbnailUrl:
+              sanitizeMediaUrl(p.foto_thumb_url as string | null) ||
+              buildDriveFallbackThumbnailUrl(fotoUrl) ||
+              undefined,
+            viewUrl: sanitizeMediaUrl(p.foto_view_url as string | null) || undefined,
+            fileName: String(p.foto_file_name || 'foto-pengelola.jpg'),
+            originalSize: Number(meta.originalSize || 0),
+            compressedSize: Number(meta.compressedSize || 0),
+            width: Number(meta.width || 0),
+            height: Number(meta.height || 0),
+            mimeType: String(meta.mimeType || 'image/jpeg'),
+            uploadedAt: String(meta.uploadedAt || p.updated_at || new Date().toISOString()),
+          }
+        : undefined;
+      return {
+        id: String(p.id),
+        title: String(p.title || 'Bapak'),
+        nama: String(p.nama || ''),
+        displayName: String(p.display_name || ''),
+        kabKota: String(p.kab_kota || ''),
+        kecamatan: String(p.kecamatan || ''),
+        kelurahan: String(p.kelurahan || ''),
+        alamat: String(p.alamat || ''),
+        kontak: String(p.kontak || ''),
+        foto,
+        createdAt: String(p.created_at || new Date().toISOString()),
+      };
+    });
+  }
+
+  const removedDummyPropIds = new Set<string>();
+  const removedDummyPropNames = new Set<string>();
+  let effectiveProposals: ProposalRecord[] = fallback?.proposals || [];
+
+  if (needProposals) {
+    const docsByProposal = new Map<string, ProposalDocuments>();
+    for (const docRow of proposalDocsData) {
+      const propId = String(docRow.proposal_id);
+      const slot = String(docRow.doc_slot) as keyof ProposalDocuments;
+      const parsed = buildDocFileFromRow(docRow);
+      if (!parsed) continue;
+      const existing = docsByProposal.get(propId) || {};
+      existing[slot] = parsed;
+      docsByProposal.set(propId, existing);
+    }
+
+    effectiveProposals = proposalsData
+      .filter((p) => {
+        const tipeRaw = String(p.tipe || '').trim();
+        if (tipeRaw !== 'Murni' && tipeRaw !== 'Perubahan') {
+          removedDummyPropIds.add(String(p.id));
+          const nameLower = String(p.nama_proposal || '').trim().toLowerCase();
+          if (nameLower) removedDummyPropNames.add(nameLower);
+          return false;
+        }
+        return true;
+      })
+      .map((p) => {
+        const propId = String(p.id);
+        const docMap = docsByProposal.get(propId) || {};
+        const documents: ProposalDocuments = {
+          proposalOpd:
+            docMap.proposalOpd ||
+            buildDocFileFromUrlFallback(p.proposal_opd_url as string | null, null, `${propId}-opd`, 'Proposal OPD'),
+          proposalLurahCamat:
+            docMap.proposalLurahCamat ||
+            buildDocFileFromUrlFallback(
+              p.proposal_lurah_camat_url as string | null,
+              null,
+              `${propId}-lc`,
+              'Proposal Lurah & Camat'
+            ),
+          rab: docMap.rab || buildDocFileFromUrlFallback(p.rab_url as string | null, null, `${propId}-rab`, 'RAB'),
+          capRt: docMap.capRt || buildDocFileFromUrlFallback(p.cap_rt_url as string | null, null, `${propId}-rt`, 'Cap RT'),
+          capRw: docMap.capRw || buildDocFileFromUrlFallback(p.cap_rw_url as string | null, null, `${propId}-rw`, 'Cap RW'),
+          capLurah:
+            docMap.capLurah ||
+            buildDocFileFromUrlFallback(p.cap_lurah_url as string | null, null, `${propId}-lurah`, 'Cap Lurah'),
+          capCamat:
+            docMap.capCamat ||
+            buildDocFileFromUrlFallback(p.cap_camat_url as string | null, null, `${propId}-camat`, 'Cap Camat'),
+        };
+        const rawChecklist = (p.checklist as Partial<ProposalChecklist> | null) || {};
+        return {
+          id: propId,
+          tahun: String(p.tahun),
+          tipe: String(p.tipe) === 'Perubahan' ? 'Perubahan' : 'Murni',
+          kabKota: String(p.kab_kota || ''),
+          kecamatan: String(p.kecamatan || ''),
+          kelurahan: String(p.kelurahan || ''),
+          jalan: String(p.jalan || ''),
+          namaProposal: String(p.nama_proposal || ''),
+          jumlahKpm: Number(p.jumlah_kpm ?? 66),
+          status: (p.status as ProposalRecord['status']) || 'unlocked',
+          checklist: {
+            docx: Boolean(documents.proposalOpd || documents.proposalLurahCamat),
+            dinas: Boolean(rawChecklist.dinas),
+            dinasAt: rawChecklist.dinasAt,
+            rab: Boolean(documents.rab),
+            rt: Boolean(documents.capRt),
+            rw: Boolean(documents.capRw),
+            lurah: Boolean(documents.capLurah),
+            camat: Boolean(documents.capCamat),
+          },
+          catatan: String(p.catatan || ''),
+          documents,
+          createdAt: String(p.created_at || new Date().toISOString()),
+          updatedAt: String(p.updated_at || new Date().toISOString()),
+        };
+      });
+    result.proposals = effectiveProposals;
+  }
+
+  if (needKpm) {
+    const docsByKpm = new Map<string, KpmDocuments>();
+    for (const row of kpmDocsData) {
+      const kpmId = String(row.kpm_id);
+      const cat = String(row.doc_category);
+      const doc = buildDocFileFromRow(row);
+      if (!doc) continue;
+      const bag = docsByKpm.get(kpmId) || { rumah: [], lainnya: [] };
+      if (cat === 'ktp' || cat === 'kk' || cat === 'penerima' || cat === 'survey') {
+        bag[cat] = doc;
+      } else if (cat === 'rumah') {
+        bag.rumah.push(doc);
+      } else if (cat === 'lainnya') {
+        bag.lainnya.push(doc);
+      }
+      docsByKpm.set(kpmId, bag);
+    }
+
+    const deliveriesByKpm = new Map<string, Record<string, SubItemDeliveryState>>();
+    for (const row of deliveriesData) {
+      const kpmId = String(row.kpm_id);
+      const subName = String(row.sub_item_name);
+      const bag = deliveriesByKpm.get(kpmId) || {};
+      bag[subName] = {
+        delivered: Boolean(row.delivered),
+        updatedAt: row.updated_at ? String(row.updated_at) : undefined,
+        updatedBy: row.updated_by ? String(row.updated_by) : undefined,
+      };
+      deliveriesByKpm.set(kpmId, bag);
+    }
+
+    result.records = kpmData.map((r) => {
+      const kpmId = String(r.id);
+      const bag = docsByKpm.get(kpmId) || { rumah: [], lainnya: [] };
+      const documents: KpmDocuments = {
+        ktp:
+          bag.ktp ||
+          buildDocFileFromUrlFallback(
+            r.foto_ktp_url as string | null,
+            r.foto_ktp_thumb_url as string | null,
+            `${kpmId}-ktp`,
+            'Foto KTP'
+          ),
+        kk:
+          bag.kk ||
+          buildDocFileFromUrlFallback(
+            r.foto_kk_url as string | null,
+            r.foto_kk_thumb_url as string | null,
+            `${kpmId}-kk`,
+            'Foto KK'
+          ),
+        penerima:
+          bag.penerima ||
+          buildDocFileFromUrlFallback(
+            r.foto_penerima_url as string | null,
+            r.foto_penerima_thumb_url as string | null,
+            `${kpmId}-penerima`,
+            'Foto Penerima'
+          ),
+        survey:
+          bag.survey ||
+          buildDocFileFromUrlFallback(
+            r.foto_survey_url as string | null,
+            r.foto_survey_thumb_url as string | null,
+            `${kpmId}-survey`,
+            'Foto Survey'
+          ),
+        rumah: bag.rumah,
+        lainnya: bag.lainnya,
+      };
+
+      const rawValidasi = (r.validasi as KpmRecord['validasi']) || 'pending';
+      const rawPropId = r.proposal_id ? String(r.proposal_id) : null;
+      const rawPropName = r.proposal ? String(r.proposal).trim() : '';
+      const isPhantomArsip = !rawPropId && /^arsip\b/i.test(rawPropName);
+      const isDetached =
+        rawValidasi !== 'accepted' ||
+        isPhantomArsip ||
+        Boolean(rawPropId && removedDummyPropIds.has(rawPropId)) ||
+        Boolean(rawPropName && removedDummyPropNames.has(rawPropName.toLowerCase()));
+      const effectiveValidasi: KpmRecord['validasi'] =
+        rawValidasi === 'accepted' && isDetached ? 'pending' : rawValidasi;
+      const matchedProp = !isDetached
+        ? (rawPropId ? effectiveProposals.find((p) => p.id === rawPropId) : undefined) ??
+          effectiveProposals.find((p) => p.namaProposal === rawPropName && p.tahun === String(r.tahun || '')) ??
+          effectiveProposals.find((p) => p.namaProposal === rawPropName)
+        : undefined;
+
+      return {
+        id: kpmId,
+        registerCode: isDetached ? '' : String(r.register_code || ''),
+        tahun: isDetached ? '' : sanitizeYearValue(r.tahun ? String(r.tahun) : ''),
+        proposalId: isDetached ? null : matchedProp?.id ?? rawPropId,
+        proposal: isDetached ? '' : matchedProp?.namaProposal ?? rawPropName,
+        kabKota: matchedProp?.kabKota || '',
+        kecamatan: String(r.kecamatan || '') || matchedProp?.kecamatan || '',
+        kelurahan: String(r.kelurahan || '') || matchedProp?.kelurahan || '',
+        item: String(r.item || ''),
+        nama: String(r.nama || ''),
+        alamat: String(r.alamat || ''),
+        rt: String(r.rt || ''),
+        rw: String(r.rw || ''),
+        nikKk: String(r.nik_kk || ''),
+        nikKtp: String(r.nik_ktp || ''),
+        dtsen: String(r.dtsen || ''),
+        validasi: effectiveValidasi,
+        kontak: String(r.kontak || ''),
+        pekerjaan: String(r.pekerjaan || ''),
+        pengelola: String(r.pengelola || ''),
+        catatan: String(r.catatan || ''),
+        payment: Number(r.payment || 0),
+        documents,
+        subItemDeliveries: deliveriesByKpm.get(kpmId),
+        berkasDikembalikan: Boolean(r.berkas_dikembalikan),
+        berkasDikembalikanAt: r.berkas_dikembalikan_at
+          ? String(r.berkas_dikembalikan_at)
+          : undefined,
+        berkasDikembalikanBy: r.berkas_dikembalikan_by
+          ? String(r.berkas_dikembalikan_by)
+          : undefined,
+        createdAt: String(r.created_at || new Date().toISOString()),
+        updatedAt: String(r.updated_at || new Date().toISOString()),
+      };
+    });
+  }
+
+  if (needHistory) {
+    result.proposalHistory = mapProposalHistoryRows(historyData);
+  }
+  if (needAudit) {
+    result.kpmAuditLogs = mapKpmAuditRows(auditData);
+  }
+
+  return result;
 }
 
 // ============================================================================

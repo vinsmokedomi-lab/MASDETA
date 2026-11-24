@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Archive,
@@ -50,28 +50,43 @@ import {
 } from 'lucide-react';
 import { DriveImage } from './DriveImage';
 import { FilterSelect, SegmentedTabs } from './FormControls';
-import { ItemManagerView } from './ItemManagerView';
-import { MenuDownloadView } from './MenuDownloadView';
-import { ProposalBuilderView } from './ProposalBuilderView';
-import { RabBuilderView } from './RabBuilderView';
-import { TroubleshootingView } from './TroubleshootingView';
+import { LazyViewFallback } from './LazyViewFallback';
 import { AddPengelolaModal } from './PengelolaSelectorModal';
 import { PresenceDot, getPresenceMeta } from './PresenceDot';
 import { SwipeAction, SwipeableRow } from './SwipeableRow';
 import { APP_VERSION } from '../config/appVersion';
 import { APP_CHANGELOG, ChangelogRelease } from '../data/changelogData';
 import { fetchGithubReleasesChangelog } from '../services/appUpdater';
-import { CorrespondentKpmListPanel } from './CorrespondentKpmListPanel';
-import { StandaloneKpmView } from './StandaloneKpmView';
 import { DTSEN_OPTION_ITEMS, TAHUN_OPTIONS } from '../data/kpmOptions';
 import {
   SPTJM_DAY_OPTIONS,
-  exportSchedulesToPdf,
   formatScheduleIndonesianDate,
   getSptjmAutoDayFromIso,
   getTodayLocalIsoDate,
   normalizePejabatNipNumber,
-} from '../utils/pdfExporter';
+} from '../utils/pdfFormatHelpers';
+
+const ItemManagerView = lazy(() =>
+  import('./ItemManagerView').then((m) => ({ default: m.ItemManagerView }))
+);
+const MenuDownloadView = lazy(() =>
+  import('./MenuDownloadView').then((m) => ({ default: m.MenuDownloadView }))
+);
+const ProposalBuilderView = lazy(() =>
+  import('./ProposalBuilderView').then((m) => ({ default: m.ProposalBuilderView }))
+);
+const RabBuilderView = lazy(() =>
+  import('./RabBuilderView').then((m) => ({ default: m.RabBuilderView }))
+);
+const TroubleshootingView = lazy(() =>
+  import('./TroubleshootingView').then((m) => ({ default: m.TroubleshootingView }))
+);
+const CorrespondentKpmListPanel = lazy(() =>
+  import('./CorrespondentKpmListPanel').then((m) => ({ default: m.CorrespondentKpmListPanel }))
+);
+const StandaloneKpmView = lazy(() =>
+  import('./StandaloneKpmView').then((m) => ({ default: m.StandaloneKpmView }))
+);
 import {
   BastTemplateConfig,
   CouponPrintConfig,
@@ -3340,19 +3355,21 @@ export function MenuHubView({
   // 3A. KELOLA ITEM & SUB-ITEM
   if (activeSection === 'items') {
     return (
-      <ItemManagerView
-        items={items}
-        records={records}
-        canAdd={canAdd}
-        canUpdate={canUpdate}
-        canDelete={canDelete}
-        onBack={() => onChangeSection('root')}
-        onSaveItem={onSaveItem}
-        onDeleteItem={onDeleteItem}
-        onMoveItemOrder={onMoveItemOrder}
-        onUpdateItemSubItems={onUpdateItemSubItems}
-        onCopyItemsFromYear={onCopyItemsFromYear}
-      />
+      <Suspense fallback={<LazyViewFallback label="Memuat pengelola item..." />}>
+        <ItemManagerView
+          items={items}
+          records={records}
+          canAdd={canAdd}
+          canUpdate={canUpdate}
+          canDelete={canDelete}
+          onBack={() => onChangeSection('root')}
+          onSaveItem={onSaveItem}
+          onDeleteItem={onDeleteItem}
+          onMoveItemOrder={onMoveItemOrder}
+          onUpdateItemSubItems={onUpdateItemSubItems}
+          onCopyItemsFromYear={onCopyItemsFromYear}
+        />
+      </Suspense>
     );
   }
 
@@ -3804,44 +3821,48 @@ export function MenuHubView({
   // 4A. DATABASE KPM STANDALONE (Status Menunggu, Tanpa Proposal)
   if (activeSection === 'database-kpm') {
     return (
-      <StandaloneKpmView
-        mode="database"
-        records={databaseKpmRecords}
-        proposals={proposals}
-        items={items}
-        pengelolaList={pengelolaList}
-        wilayahList={wilayahList}
-        canAdd={canAdd}
-        canUpdate={canUpdate}
-        canDelete={canDelete}
-        onBack={() => onChangeSection('root')}
-        onSelectKpm={(rec) => onSelectKpm?.(rec)}
-        onCreateNewStandalone={onOpenCreateStandaloneDatabaseKpm}
-        onBulkAssignToProposal={onBulkAssignToProposal}
-        onBulkRejectToArsip={onBulkRejectToArsip}
-        onBulkPermanentDelete={onBulkPermanentDeleteKpms}
-      />
+      <Suspense fallback={<LazyViewFallback label="Memuat database KPM..." />}>
+        <StandaloneKpmView
+          mode="database"
+          records={databaseKpmRecords}
+          proposals={proposals}
+          items={items}
+          pengelolaList={pengelolaList}
+          wilayahList={wilayahList}
+          canAdd={canAdd}
+          canUpdate={canUpdate}
+          canDelete={canDelete}
+          onBack={() => onChangeSection('root')}
+          onSelectKpm={(rec) => onSelectKpm?.(rec)}
+          onCreateNewStandalone={onOpenCreateStandaloneDatabaseKpm}
+          onBulkAssignToProposal={onBulkAssignToProposal}
+          onBulkRejectToArsip={onBulkRejectToArsip}
+          onBulkPermanentDelete={onBulkPermanentDeleteKpms}
+        />
+      </Suspense>
     );
   }
 
   // 4B. ARSIP BERKAS DITOLAK STANDALONE (Status Ditolak, Tanpa Proposal)
   if (activeSection === 'arsip') {
     return (
-      <StandaloneKpmView
-        mode="arsip"
-        records={archivedRecords}
-        proposals={proposals}
-        items={items}
-        pengelolaList={pengelolaList}
-        wilayahList={wilayahList}
-        canAdd={false}
-        canUpdate={canUpdate}
-        canDelete={canDelete}
-        onBack={() => onChangeSection('root')}
-        onSelectKpm={(rec) => onSelectKpm?.(rec)}
-        onBulkRecoverToDatabase={onBulkRecoverToDatabase}
-        onBulkPermanentDelete={onBulkPermanentDeleteKpms}
-      />
+      <Suspense fallback={<LazyViewFallback label="Memuat arsip..." />}>
+        <StandaloneKpmView
+          mode="arsip"
+          records={archivedRecords}
+          proposals={proposals}
+          items={items}
+          pengelolaList={pengelolaList}
+          wilayahList={wilayahList}
+          canAdd={false}
+          canUpdate={canUpdate}
+          canDelete={canDelete}
+          onBack={() => onChangeSection('root')}
+          onSelectKpm={(rec) => onSelectKpm?.(rec)}
+          onBulkRecoverToDatabase={onBulkRecoverToDatabase}
+          onBulkPermanentDelete={onBulkPermanentDeleteKpms}
+        />
+      </Suspense>
     );
   }
 
@@ -4101,16 +4122,18 @@ export function MenuHubView({
               !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''
             }`}
           >
-            <CorrespondentKpmListPanel
-              key={dtsenDrill}
-              records={drillRecords}
-              items={items}
-              proposals={proposals}
-              wilayahList={wilayahList}
-              emptyTitle={`Belum ada KPM di kategori ${drillLabel}`}
-              emptySubtitle={`Tidak ada data KPM dengan status klasifikasi ${drillLabel}.`}
-              onSelectRecord={onSelectKpm}
-            />
+            <Suspense fallback={<LazyViewFallback />}>
+              <CorrespondentKpmListPanel
+                key={dtsenDrill}
+                records={drillRecords}
+                items={items}
+                proposals={proposals}
+                wilayahList={wilayahList}
+                emptyTitle={`Belum ada KPM di kategori ${drillLabel}`}
+                emptySubtitle={`Tidak ada data KPM dengan status klasifikasi ${drillLabel}.`}
+                onSelectRecord={onSelectKpm}
+              />
+            </Suspense>
           </div>
         </div>
       );
@@ -4200,60 +4223,62 @@ export function MenuHubView({
               !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''
             }`}
           >
-            <CorrespondentKpmListPanel
-              key={pengelolaTitle}
-              records={correspondentRecords}
-              items={items}
-              proposals={proposals}
-              wilayahList={wilayahList}
-              emptyTitle="Belum ada KPM untuk pengelola ini"
-              emptySubtitle={`Pengelola ${pengelolaTitle} belum memiliki data KPM yang terdaftar.`}
-              onSelectRecord={onSelectKpm}
-              headerCard={
-                <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-3.5">
-                  <div className="flex min-w-0 items-center gap-3">
-                    {matchedPengelola?.foto ? (
-                      <button
-                        type="button"
-                        onClick={() => onPreviewDocument(matchedPengelola.foto!, pengelolaTitle)}
-                        className="h-11 w-11 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100"
-                        aria-label={`Lihat foto ${pengelolaTitle}`}
-                      >
-                        <DriveImage
-                          doc={matchedPengelola.foto}
-                          alt={pengelolaTitle}
-                          className="h-full w-full object-cover"
-                        />
-                      </button>
-                    ) : (
-                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
-                        <User className="h-5 w-5" />
-                      </div>
-                    )}
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-bold text-slate-900">{pengelolaTitle}</p>
-                      {domicileText && (
-                        <p className="truncate text-xs text-slate-500">{domicileText}</p>
-                      )}
-                      {waUrl && matchedPengelola?.kontak && (
-                        <a
-                          href={waUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="mt-0.5 inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:underline"
+            <Suspense fallback={<LazyViewFallback />}>
+              <CorrespondentKpmListPanel
+                key={pengelolaTitle}
+                records={correspondentRecords}
+                items={items}
+                proposals={proposals}
+                wilayahList={wilayahList}
+                emptyTitle="Belum ada KPM untuk pengelola ini"
+                emptySubtitle={`Pengelola ${pengelolaTitle} belum memiliki data KPM yang terdaftar.`}
+                onSelectRecord={onSelectKpm}
+                headerCard={
+                  <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-3.5">
+                    <div className="flex min-w-0 items-center gap-3">
+                      {matchedPengelola?.foto ? (
+                        <button
+                          type="button"
+                          onClick={() => onPreviewDocument(matchedPengelola.foto!, pengelolaTitle)}
+                          className="h-11 w-11 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100"
+                          aria-label={`Lihat foto ${pengelolaTitle}`}
                         >
-                          <MessageCircle className="h-3 w-3 shrink-0" />
-                          <span>{matchedPengelola.kontak}</span>
-                        </a>
+                          <DriveImage
+                            doc={matchedPengelola.foto}
+                            alt={pengelolaTitle}
+                            className="h-full w-full object-cover"
+                          />
+                        </button>
+                      ) : (
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
+                          <User className="h-5 w-5" />
+                        </div>
                       )}
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-bold text-slate-900">{pengelolaTitle}</p>
+                        {domicileText && (
+                          <p className="truncate text-xs text-slate-500">{domicileText}</p>
+                        )}
+                        {waUrl && matchedPengelola?.kontak && (
+                          <a
+                            href={waUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mt-0.5 inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:underline"
+                          >
+                            <MessageCircle className="h-3 w-3 shrink-0" />
+                            <span>{matchedPengelola.kontak}</span>
+                          </a>
+                        )}
+                      </div>
                     </div>
+                    <span className="shrink-0 rounded-lg bg-teal-50 px-2.5 py-1 text-xs font-bold text-teal-800 tabular-nums">
+                      {correspondentRecords.length} KPM
+                    </span>
                   </div>
-                  <span className="shrink-0 rounded-lg bg-teal-50 px-2.5 py-1 text-xs font-bold text-teal-800 tabular-nums">
-                    {correspondentRecords.length} KPM
-                  </span>
-                </div>
-              }
-            />
+                }
+              />
+            </Suspense>
           </div>
         </div>
       );
@@ -4726,34 +4751,36 @@ export function MenuHubView({
               !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''
             }`}
           >
-            <CorrespondentKpmListPanel
-              key={activePekerjaanDrill}
-              records={correspondentRecords}
-              items={items}
-              proposals={proposals}
-              wilayahList={wilayahList}
-              emptyTitle="Belum ada KPM untuk pekerjaan ini"
-              emptySubtitle={`Belum ada KPM dengan profesi/pekerjaan ${activePekerjaanDrill}.`}
-              onSelectRecord={onSelectKpm}
-              headerCard={
-                <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-3.5">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-teal-700">
-                      <Briefcase className="h-4 w-4" />
+            <Suspense fallback={<LazyViewFallback />}>
+              <CorrespondentKpmListPanel
+                key={activePekerjaanDrill}
+                records={correspondentRecords}
+                items={items}
+                proposals={proposals}
+                wilayahList={wilayahList}
+                emptyTitle="Belum ada KPM untuk pekerjaan ini"
+                emptySubtitle={`Belum ada KPM dengan profesi/pekerjaan ${activePekerjaanDrill}.`}
+                onSelectRecord={onSelectKpm}
+                headerCard={
+                  <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-3.5">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-teal-700">
+                        <Briefcase className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-bold text-slate-900">
+                          {activePekerjaanDrill}
+                        </p>
+                        <p className="text-xs text-slate-500">Daftar KPM Koresponden</p>
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-bold text-slate-900">
-                        {activePekerjaanDrill}
-                      </p>
-                      <p className="text-xs text-slate-500">Daftar KPM Koresponden</p>
-                    </div>
+                    <span className="shrink-0 rounded-lg bg-teal-50 px-2.5 py-1 text-xs font-bold text-teal-800 tabular-nums">
+                      {correspondentRecords.length} KPM
+                    </span>
                   </div>
-                  <span className="shrink-0 rounded-lg bg-teal-50 px-2.5 py-1 text-xs font-bold text-teal-800 tabular-nums">
-                    {correspondentRecords.length} KPM
-                  </span>
-                </div>
-              }
-            />
+                }
+              />
+            </Suspense>
           </div>
         </div>
       );
@@ -6328,6 +6355,7 @@ export function MenuHubView({
             ? `${activeBookObj.title} — ${activeBookObj.subtitle}`
             : activeBookObj.title
           : 'Semua Buku Agenda';
+        const { exportSchedulesToPdf } = await import('../utils/pdfExporter');
         await exportSchedulesToPdf({
           schedules: sortedSchedules,
           title: activeBookObj
@@ -7160,114 +7188,122 @@ export function MenuHubView({
   // 12. DOWNLOAD DATA (PDF F4, KUPON, BAST & EXCEL)
   if (activeSection === 'download') {
     return (
-      <MenuDownloadView
-        records={records}
-        proposals={proposals}
-        items={items}
-        wilayahList={wilayahList}
-        pengelolaList={pengelolaList}
-        proposalSlotMap={proposalSlotMap}
-        schedules={schedules}
-        scheduleBooks={scheduleBooks}
-        scheduleBookMap={scheduleBookMap}
-        reportTemplate={reportTemplate}
-        onSaveReportTemplate={onSaveReportTemplate}
-        couponConfig={couponConfig}
-        onSaveCouponConfig={onSaveCouponConfig}
-        bastTemplate={bastTemplate}
-        onSaveBastTemplate={onSaveBastTemplate}
-        sptjmTemplate={sptjmTemplate}
-        onSaveSptjmTemplate={onSaveSptjmTemplate}
-        pejabatList={pejabatList}
-        proposalBastMap={proposalBastMap}
-        onSaveProposalBastConfig={onSaveProposalBastConfig}
-        onBack={() => onChangeSection('root')}
-      />
+      <Suspense fallback={<LazyViewFallback label="Memuat pusat cetak & download..." />}>
+        <MenuDownloadView
+          records={records}
+          proposals={proposals}
+          items={items}
+          wilayahList={wilayahList}
+          pengelolaList={pengelolaList}
+          proposalSlotMap={proposalSlotMap}
+          schedules={schedules}
+          scheduleBooks={scheduleBooks}
+          scheduleBookMap={scheduleBookMap}
+          reportTemplate={reportTemplate}
+          onSaveReportTemplate={onSaveReportTemplate}
+          couponConfig={couponConfig}
+          onSaveCouponConfig={onSaveCouponConfig}
+          bastTemplate={bastTemplate}
+          onSaveBastTemplate={onSaveBastTemplate}
+          sptjmTemplate={sptjmTemplate}
+          onSaveSptjmTemplate={onSaveSptjmTemplate}
+          pejabatList={pejabatList}
+          proposalBastMap={proposalBastMap}
+          onSaveProposalBastConfig={onSaveProposalBastConfig}
+          onBack={() => onChangeSection('root')}
+        />
+      </Suspense>
     );
   }
 
   // 12B. TROUBLESHOOTING (REKONSILIASI PROPOSAL VS BAST DINAS)
   if (activeSection === 'troubleshooting') {
     return (
-      <TroubleshootingView
-        records={records}
-        proposals={proposals}
-        items={items}
-        wilayahList={wilayahList}
-        proposalSlotMap={proposalSlotMap}
-        reportTemplate={reportTemplate}
-        canUpdate={canUpdate}
-        onApplyReconciliation={onApplyTroubleshootingReconciliation}
-        onOpenProposalDetail={onOpenProposalDetailFromTroubleshooting}
-        onBack={() => onChangeSection('root')}
-      />
+      <Suspense fallback={<LazyViewFallback label="Memuat alat troubleshooting BAST..." />}>
+        <TroubleshootingView
+          records={records}
+          proposals={proposals}
+          items={items}
+          wilayahList={wilayahList}
+          proposalSlotMap={proposalSlotMap}
+          reportTemplate={reportTemplate}
+          canUpdate={canUpdate}
+          onApplyReconciliation={onApplyTroubleshootingReconciliation}
+          onOpenProposalDetail={onOpenProposalDetailFromTroubleshooting}
+          onBack={() => onChangeSection('root')}
+        />
+      </Suspense>
     );
   }
 
   // 12C. RAB (RENCANA ANGGARAN BIAYA OTOMATIS & TERSIMPAN PER PROPOSAL)
   if (activeSection === 'rab') {
     return (
-      <RabBuilderView
-        proposals={proposals}
-        records={records}
-        items={items}
-        initialProposalId={rabInitialProposalId}
-        savedRabMap={proposalRabMap}
-        canUpdate={canUpdate}
-        returnToProposalBuilder={rabReturnToProposalBuilder}
-        onSaveProposalRab={onSaveProposalRab}
-        onReturnToProposalBuilder={onReturnFromRabToProposalBuilder}
-        onBack={() => {
-          if (rabReturnToProposalBuilder && onReturnFromRabToProposalBuilder && rabInitialProposalId) {
-            onReturnFromRabToProposalBuilder(rabInitialProposalId);
-          } else {
-            onChangeSection('root');
-          }
-        }}
-      />
+      <Suspense fallback={<LazyViewFallback label="Memuat kalkulator RAB..." />}>
+        <RabBuilderView
+          proposals={proposals}
+          records={records}
+          items={items}
+          initialProposalId={rabInitialProposalId}
+          savedRabMap={proposalRabMap}
+          canUpdate={canUpdate}
+          returnToProposalBuilder={rabReturnToProposalBuilder}
+          onSaveProposalRab={onSaveProposalRab}
+          onReturnToProposalBuilder={onReturnFromRabToProposalBuilder}
+          onBack={() => {
+            if (rabReturnToProposalBuilder && onReturnFromRabToProposalBuilder && rabInitialProposalId) {
+              onReturnFromRabToProposalBuilder(rabInitialProposalId);
+            } else {
+              onChangeSection('root');
+            }
+          }}
+        />
+      </Suspense>
     );
   }
 
   // 12D. BUAT PROPOSAL (GENERATOR DOKUMEN F4 216x330mm · 15 TEMPLATE TETAP)
   if (activeSection === 'buat-proposal') {
     return (
-      <ProposalBuilderView
-        proposals={proposals}
-        records={records}
-        items={items}
-        wilayahList={wilayahList}
-        proposalSlotMap={proposalSlotMap}
-        savedRabMap={proposalRabMap}
-        styleHistory={proposalStyleHistory}
-        initialProposalId={proposalBuilderInitialId}
-        backLabel={proposalBuilderBackLabel}
-        schemaMissingNotice={proposalSchemaMissingNotice}
-        canUpdate={canUpdate}
-        onBack={() => {
-          if (onBackFromProposalBuilder) {
-            onBackFromProposalBuilder();
-          } else {
-            onChangeSection('root');
-          }
-        }}
-        onOpenRabForProposal={(proposalId) => {
-          if (onOpenRabForProposal) {
-            onOpenRabForProposal(proposalId);
-          } else {
-            onChangeSection('rab');
-          }
-        }}
-        onRecordStyleUsage={(params) => {
-          if (onRecordProposalStyleUsage) {
-            return onRecordProposalStyleUsage(params);
-          }
-        }}
-        onDeleteStyleUsage={(id) => {
-          if (onDeleteProposalStyleUsage) {
-            return onDeleteProposalStyleUsage(id);
-          }
-        }}
-      />
+      <Suspense fallback={<LazyViewFallback label="Memuat generator proposal..." />}>
+        <ProposalBuilderView
+          proposals={proposals}
+          records={records}
+          items={items}
+          wilayahList={wilayahList}
+          proposalSlotMap={proposalSlotMap}
+          savedRabMap={proposalRabMap}
+          styleHistory={proposalStyleHistory}
+          initialProposalId={proposalBuilderInitialId}
+          backLabel={proposalBuilderBackLabel}
+          schemaMissingNotice={proposalSchemaMissingNotice}
+          canUpdate={canUpdate}
+          onBack={() => {
+            if (onBackFromProposalBuilder) {
+              onBackFromProposalBuilder();
+            } else {
+              onChangeSection('root');
+            }
+          }}
+          onOpenRabForProposal={(proposalId) => {
+            if (onOpenRabForProposal) {
+              onOpenRabForProposal(proposalId);
+            } else {
+              onChangeSection('rab');
+            }
+          }}
+          onRecordStyleUsage={(params) => {
+            if (onRecordProposalStyleUsage) {
+              return onRecordProposalStyleUsage(params);
+            }
+          }}
+          onDeleteStyleUsage={(id) => {
+            if (onDeleteProposalStyleUsage) {
+              return onDeleteProposalStyleUsage(id);
+            }
+          }}
+        />
+      </Suspense>
     );
   }
 

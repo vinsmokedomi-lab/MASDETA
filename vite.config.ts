@@ -53,8 +53,9 @@ export default defineConfig(() => {
           cleanupOutdatedCaches: true,
           clientsClaim: true,
           skipWaiting: true,
-          maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
+          maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
           globPatterns: ['**/*.{js,mjs,css,html,ico,png,svg,woff,woff2}'],
+          globIgnores: ['**/assets/aistudio/**', '**/pdf.worker.min*'],
           navigateFallbackDenylist: [/^\/api\//],
           runtimeCaching: [
             {
@@ -93,6 +94,40 @@ export default defineConfig(() => {
         },
       }),
     ],
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return undefined;
+            if (id.includes('/react/') || id.includes('/react-dom/') || id.includes('/scheduler/')) {
+              return 'vendor-react';
+            }
+            if (id.includes('@supabase/')) {
+              return 'vendor-supabase';
+            }
+            if (id.includes('lucide-react')) {
+              return 'vendor-icons';
+            }
+            if (id.includes('jspdf') || id.includes('html2canvas')) {
+              return 'vendor-pdf';
+            }
+            if (id.includes('pdfjs-dist')) {
+              return 'vendor-pdfjs';
+            }
+            if (id.includes('/xlsx/')) {
+              return 'vendor-xlsx';
+            }
+            if (id.includes('jszip')) {
+              return 'vendor-zip';
+            }
+            if (id.includes('/d3')) {
+              return 'vendor-d3';
+            }
+            return undefined;
+          },
+        },
+      },
+    },
     resolve: {
       alias: {
         '@': path.resolve(import.meta.dirname, '.'),

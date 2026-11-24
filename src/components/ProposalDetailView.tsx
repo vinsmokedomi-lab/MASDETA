@@ -85,14 +85,6 @@ import {
 import {
   AbsenDinasVariant,
   DEFAULT_PDF_COLUMN_KEYS,
-  exportAbsenArsipToPdf,
-  exportAbsenDinasPesertaToPdf,
-  exportAbsensiDinsosToPdf,
-  exportKpmBastBulkToPdf,
-  exportKpmSptjmBulkToPdf,
-  exportKpmTableToPdf,
-  exportNomorDinsosToPdf,
-  exportProposalChangeRecapToPdf,
   formatAbsenDinasLocationText,
   formatAbsensiScheduleFields,
   formatBastProposalLocation,
@@ -103,8 +95,7 @@ import {
   resolveScheduleForProposal,
   resolveScheduleForProposalInBook,
   shouldAutoIncludeKelurahanColumn,
-} from '../utils/pdfExporter';
-import { exportKpmTableToXlsx } from '../utils/xlsxExporter';
+} from '../utils/pdfFormatHelpers';
 import { DriveImage } from './DriveImage';
 import { isNativeAppPlatform, useIsDesktopWeb } from '../utils/platform';
 import { useOfflineStatus } from '../contexts/OfflineContext';
@@ -416,6 +407,7 @@ export function ProposalDetailView({
         ...proposalBastMap,
         [proposal.id]: cfg,
       };
+      const { exportKpmBastBulkToPdf } = await import('../utils/pdfExporter');
       const result = await exportKpmBastBulkToPdf({
         records: proposalRecords,
         allRecords: records,
@@ -446,6 +438,7 @@ export function ProposalDetailView({
     setSptjmBusy(true);
     setBastFeedback(null);
     try {
+      const { exportKpmSptjmBulkToPdf } = await import('../utils/pdfExporter');
       const result = await exportKpmSptjmBulkToPdf({
         records: proposalRecords,
         allRecords: records,
@@ -477,6 +470,7 @@ export function ProposalDetailView({
     setDinsosBusy(true);
     setBastFeedback(null);
     try {
+      const { exportNomorDinsosToPdf } = await import('../utils/pdfExporter');
       const result = await exportNomorDinsosToPdf({
         records: proposalRecords,
         allRecords: records,
@@ -515,6 +509,7 @@ export function ProposalDetailView({
         `Total: ${proposalRecords.length} KPM`,
         emptySlotsCount > 0 ? `${emptySlotsCount} Baris Kosong` : '',
       ].filter(Boolean);
+      const { exportKpmTableToPdf } = await import('../utils/pdfExporter');
       const result = await exportKpmTableToPdf({
         records: proposalRecords,
         allRecords: records,
@@ -562,6 +557,7 @@ export function ProposalDetailView({
         `Total: ${proposalRecords.length} KPM`,
         emptySlotsCount > 0 ? `${emptySlotsCount} Baris Kosong` : '',
       ].filter(Boolean);
+      const { exportKpmTableToXlsx } = await import('../utils/xlsxExporter');
       const result = await exportKpmTableToXlsx({
         records: proposalRecords,
         allRecords: records,
@@ -666,6 +662,7 @@ export function ProposalDetailView({
         const parsedExtra = Math.max(0, Math.min(30, Math.floor(Number(absensiExtraBlankRows) || 0)));
         const variantPrefix =
           absensiVariant === 'makan_minum' ? 'Daftar_Makan_Minum' : 'Daftar_Hadir';
+        const { exportAbsenDinasPesertaToPdf } = await import('../utils/pdfExporter');
         const result = await exportAbsenDinasPesertaToPdf({
           variant: absensiVariant as AbsenDinasVariant,
           records: proposalRecords,
@@ -690,6 +687,7 @@ export function ProposalDetailView({
         });
       } else if (absensiVariant === 'arsip') {
         const parsedExtra = Math.max(0, Math.min(30, Math.floor(Number(absensiExtraBlankRows) || 0)));
+        const { exportAbsenArsipToPdf } = await import('../utils/pdfExporter');
         const result = await exportAbsenArsipToPdf({
           records: proposalRecords,
           allRecords: records,
@@ -718,6 +716,7 @@ export function ProposalDetailView({
           text: `PDF Absen Arsip (${result.totalRows} baris · F4 DPRD) disimpan: ${result.savedFileName}`,
         });
       } else {
+        const { exportAbsensiDinsosToPdf } = await import('../utils/pdfExporter');
         const result = await exportAbsensiDinsosToPdf({
           records: proposalRecords,
           allRecords: records,
@@ -1581,6 +1580,7 @@ export function ProposalDetailView({
     setRecapPdfBusy(true);
     setRecapFeedback(null);
     try {
+      const { exportProposalChangeRecapToPdf } = await import('../utils/pdfExporter');
       const res = await exportProposalChangeRecapToPdf({
         proposal,
         changes: entriesToExport,

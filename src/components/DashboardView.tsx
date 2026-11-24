@@ -40,7 +40,7 @@ import {
   getItemHierarchyRank,
   resolvePackageForKpm,
 } from '../utils/imageProcessor';
-import { formatScheduleIndonesianDate, getTodayLocalIsoDate } from '../utils/pdfExporter';
+import { formatScheduleIndonesianDate, getTodayLocalIsoDate } from '../utils/pdfFormatHelpers';
 import { useIsDesktopWeb } from '../utils/platform';
 import { DriveImage } from './DriveImage';
 import { PresenceDot } from './PresenceDot';
