@@ -608,6 +608,7 @@ export function MenuHubView({
     }
 
     const itemsList: ActivityTimelineItem[] = [];
+    if (activeSection !== 'activity') return itemsList;
     const kpmNameById = new Map<string, string>();
     records.forEach((r) => kpmNameById.set(r.id, r.nama));
     const activeSnapshotIds = new Set(
@@ -732,7 +733,7 @@ export function MenuHubView({
     }
 
     return itemsList.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
-  }, [proposalHistory, kpmAuditLogs, records, reconcileSnapshots]);
+  }, [activeSection, proposalHistory, kpmAuditLogs, records, reconcileSnapshots]);
 
   // Re-lock Kontrol Super Admin whenever navigating away from SuperAdmin flow
   useEffect(() => {

@@ -8,7 +8,6 @@ import {
   Images,
   Lock,
   MapPin,
-  PackageCheck,
   Search,
   Settings,
   Trash2,
@@ -17,17 +16,13 @@ import {
 } from 'lucide-react';
 import { INITIAL_WILAYAH_LIST, PROPOSAL_TIPE_OPTIONS, TAHUN_OPTIONS } from '../data/kpmOptions';
 import {
-  ItemBantuan,
   KpmRecord,
   ProposalLockStatus,
   ProposalRecord,
-  ProposalSlotMap,
   ProposalTipe,
   WilayahKabKota,
 } from '../types/kpm';
 import {
-  getKpmSlotNumberInProposal,
-  getKpmSubItemStatusList,
   hasRenderableMedia,
   resolveProposalKecamatanCategory,
   sortKecamatanCategoryNames,
@@ -41,9 +36,7 @@ import { useOfflineStatus } from '../contexts/OfflineContext';
 interface ProposalListViewProps {
   proposals: ProposalRecord[];
   records: KpmRecord[];
-  items?: ItemBantuan[];
   wilayahList?: WilayahKabKota[];
-  proposalSlotMap?: ProposalSlotMap;
   yearOptions?: string[];
   selectedYear: string;
   onChangeYear: (year: string) => void;
@@ -51,7 +44,6 @@ interface ProposalListViewProps {
   canDelete?: boolean;
   onOpenProposalDetail: (proposalId: string) => void;
   onOpenPhotoGallery?: (proposalId?: string) => void;
-  onSelectKpm?: (record: KpmRecord) => void;
   onToggleProposalLock: (proposalId: string) => void;
   onBulkSetProposalLock?: (proposalIds: string[], nextStatus: ProposalLockStatus) => void;
   onDeleteProposal: (proposalId: string) => void;
@@ -60,9 +52,7 @@ interface ProposalListViewProps {
 export function ProposalListView({
   proposals,
   records,
-  items = [],
   wilayahList = INITIAL_WILAYAH_LIST,
-  proposalSlotMap = {},
   yearOptions: extraYearOptions,
   selectedYear,
   onChangeYear,
@@ -70,7 +60,6 @@ export function ProposalListView({
   canDelete = true,
   onOpenProposalDetail,
   onOpenPhotoGallery,
-  onSelectKpm,
   onToggleProposalLock,
   onBulkSetProposalLock,
   onDeleteProposal,
@@ -79,12 +68,6 @@ export function ProposalListView({
   const [query, setQuery] = useState('');
   const [tipeFilter, setTipeFilter] = useState<'all' | ProposalTipe>('all');
   const [dinasFilter, setDinasFilter] = useState<'all' | 'sent' | 'unsent'>('all');
-  const [subItemTrackerStatusFilter, setSubItemTrackerStatusFilter] = useState<
-    'incomplete' | 'partial' | 'not_taken' | 'complete' | 'all'
-  >('incomplete');
-  const [subItemTrackerProposalFilter, setSubItemTrackerProposalFilter] = useState<string>('all');
-  const [subItemTrackerQuery, setSubItemTrackerQuery] = useState<string>('');
-  const [subItemTrackerExpanded, setSubItemTrackerExpanded] = useState<boolean>(true);
   const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
   const [collapsedKecamatans, setCollapsedKecamatans] = useState<Record<string, boolean>>({});
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -119,30 +102,32 @@ export function ProposalListView({
     return proposals.filter((p) => p.tahun === selectedYear);
   }, [proposals, selectedYear]);
 
-  const isKpmInProposal = (r: KpmRecord, prop: ProposalRecord, matchSelectedYear = false) =>
-    r.validasi === 'accepted' &&
-    (r.proposalId
-      ? r.proposalId === prop.id
-      : r.proposal === prop.namaProposal &&
-        (matchSelectedYear && selectedYear !== 'all'
-          ? r.tahun === selectedYear
-          : r.tahun === prop.tahun));
-
-  // Precompute KPM & Foto Penerima counts per proposal
+  // Precompute KPM & Foto Penerima counts per proposal in a single O(N) pass
   const proposalStatsById = useMemo(() => {
     const map = new Map<string, { kpmCount: number; penerimaPhotoCount: number }>();
+    const propIds = new Set<string>();
+    const propIdByNameYear = new Map<string, string>();
     for (const prop of yearScopedProposals) {
-      let kpmCount = 0;
-      let penerimaPhotoCount = 0;
-      for (const r of records) {
-        if (isKpmInProposal(r, prop, true)) {
-          kpmCount += 1;
-          if (hasRenderableMedia(r.documents.penerima)) {
-            penerimaPhotoCount += 1;
-          }
-        }
+      map.set(prop.id, { kpmCount: 0, penerimaPhotoCount: 0 });
+      propIds.add(prop.id);
+      propIdByNameYear.set(`${prop.tahun}::${prop.namaProposal}`, prop.id);
+    }
+    for (const r of records) {
+      if (r.validasi !== 'accepted') continue;
+      let targetPropId: string | undefined;
+      if (r.proposalId) {
+        if (propIds.has(r.proposalId)) targetPropId = r.proposalId;
+      } else if (r.proposal) {
+        if (selectedYear !== 'all' && r.tahun !== selectedYear) continue;
+        targetPropId = propIdByNameYear.get(`${r.tahun}::${r.proposal}`);
       }
-      map.set(prop.id, { kpmCount, penerimaPhotoCount });
+      if (!targetPropId) continue;
+      const entry = map.get(targetPropId);
+      if (!entry) continue;
+      entry.kpmCount += 1;
+      if (hasRenderableMedia(r.documents.penerima)) {
+        entry.penerimaPhotoCount += 1;
+      }
     }
     return map;
   }, [yearScopedProposals, records, selectedYear]);
@@ -278,154 +263,6 @@ export function ProposalListView({
 
   const isDesktopWeb = useIsDesktopWeb();
   const isNativeApp = !isDesktopWeb;
-
-  // Pantauan Pengambilan Item & Sub-Item KPM (khusus Web Desktop)
-  const subItemTrackerData = useMemo(() => {
-    if (isNativeApp || items.length === 0) {
-      return {
-        rows: [] as {
-          record: KpmRecord;
-          proposalId: string;
-          proposalName: string;
-          tahun: string;
-          slotNumber: number | null;
-          takenNames: string[];
-          pendingNames: string[];
-          takenCount: number;
-          totalCount: number;
-          statusCategory: 'not_taken' | 'partial' | 'complete';
-        }[],
-        counts: { incomplete: 0, partial: 0, notTaken: 0, complete: 0, total: 0 },
-      };
-    }
-
-    const proposalById = new Map<string, ProposalRecord>();
-    const proposalByYearName = new Map<string, ProposalRecord>();
-    for (const p of yearScopedProposals) {
-      proposalById.set(p.id, p);
-      proposalByYearName.set(`${p.tahun}::${p.namaProposal}`, p);
-    }
-
-    const rows: {
-      record: KpmRecord;
-      proposalId: string;
-      proposalName: string;
-      tahun: string;
-      slotNumber: number | null;
-      takenNames: string[];
-      pendingNames: string[];
-      takenCount: number;
-      totalCount: number;
-      statusCategory: 'not_taken' | 'partial' | 'complete';
-    }[] = [];
-
-    let partial = 0;
-    let notTaken = 0;
-    let complete = 0;
-
-    for (const r of records) {
-      if (r.validasi !== 'accepted') continue;
-      const matchedProp =
-        (r.proposalId ? proposalById.get(r.proposalId) : undefined) ??
-        proposalByYearName.get(`${r.tahun}::${r.proposal}`);
-      if (!matchedProp) continue;
-
-      const subList = getKpmSubItemStatusList(r, items);
-      if (subList.length === 0) continue;
-
-      const takenNames = subList.filter((s) => s.delivered).map((s) => s.baseName || s.name);
-      const pendingNames = subList.filter((s) => !s.delivered).map((s) => s.baseName || s.name);
-      const takenCount = takenNames.length;
-      const totalCount = subList.length;
-
-      const statusCategory: 'not_taken' | 'partial' | 'complete' =
-        takenCount === 0 ? 'not_taken' : takenCount >= totalCount ? 'complete' : 'partial';
-
-      if (statusCategory === 'partial') partial += 1;
-      else if (statusCategory === 'not_taken') notTaken += 1;
-      else complete += 1;
-
-      const slotNumber = getKpmSlotNumberInProposal(
-        r,
-        records,
-        proposals,
-        items,
-        wilayahList,
-        proposalSlotMap
-      );
-
-      rows.push({
-        record: r,
-        proposalId: matchedProp.id,
-        proposalName: matchedProp.namaProposal,
-        tahun: matchedProp.tahun,
-        slotNumber,
-        takenNames,
-        pendingNames,
-        takenCount,
-        totalCount,
-        statusCategory,
-      });
-    }
-
-    rows.sort((a, b) => {
-      const rankStatus = (s: 'partial' | 'not_taken' | 'complete') =>
-        s === 'partial' ? 0 : s === 'not_taken' ? 1 : 2;
-      const rDiff = rankStatus(a.statusCategory) - rankStatus(b.statusCategory);
-      if (rDiff !== 0) return rDiff;
-      const propDiff = a.proposalName.localeCompare(b.proposalName, 'id');
-      if (propDiff !== 0) return propDiff;
-      return (a.slotNumber ?? 9999) - (b.slotNumber ?? 9999);
-    });
-
-    return {
-      rows,
-      counts: {
-        incomplete: partial + notTaken,
-        partial,
-        notTaken,
-        complete,
-        total: rows.length,
-      },
-    };
-  }, [isNativeApp, items, yearScopedProposals, records, proposals, wilayahList, proposalSlotMap]);
-
-  const filteredSubItemTrackerRows = useMemo(() => {
-    const q = subItemTrackerQuery.trim().toLowerCase();
-    return subItemTrackerData.rows.filter((row) => {
-      if (
-        subItemTrackerProposalFilter !== 'all' &&
-        row.proposalId !== subItemTrackerProposalFilter
-      ) {
-        return false;
-      }
-      if (subItemTrackerStatusFilter === 'incomplete' && row.statusCategory === 'complete') {
-        return false;
-      }
-      if (subItemTrackerStatusFilter === 'partial' && row.statusCategory !== 'partial') {
-        return false;
-      }
-      if (subItemTrackerStatusFilter === 'not_taken' && row.statusCategory !== 'not_taken') {
-        return false;
-      }
-      if (subItemTrackerStatusFilter === 'complete' && row.statusCategory !== 'complete') {
-        return false;
-      }
-      if (!q) return true;
-      return (
-        row.record.nama.toLowerCase().includes(q) ||
-        row.record.item.toLowerCase().includes(q) ||
-        row.proposalName.toLowerCase().includes(q) ||
-        row.takenNames.some((n) => n.toLowerCase().includes(q)) ||
-        row.pendingNames.some((n) => n.toLowerCase().includes(q))
-      );
-    });
-  }, [
-    subItemTrackerData.rows,
-    subItemTrackerProposalFilter,
-    subItemTrackerStatusFilter,
-    subItemTrackerQuery,
-  ]);
 
   return (
     <div className={`min-h-screen pb-24 ${!isNativeApp ? 'md:pb-12' : ''}`}>
@@ -633,233 +470,6 @@ export function ProposalListView({
             )}
           </div>
         </div>
-
-        {/* Web Desktop ONLY: Container Pantauan Pengambilan Item & Sub-Item KPM */}
-        {!isNativeApp && subItemTrackerData.counts.total > 0 && (
-          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-            <div
-              className={`flex flex-wrap items-center justify-between gap-3 px-4 py-3 ${
-                subItemTrackerExpanded ? 'border-b border-slate-100' : ''
-              }`}
-            >
-              <button
-                type="button"
-                aria-expanded={subItemTrackerExpanded}
-                onClick={() => setSubItemTrackerExpanded((v) => !v)}
-                className="flex min-w-0 flex-1 items-center gap-2.5 text-left transition-opacity hover:opacity-80"
-              >
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
-                  <PackageCheck className="h-4 w-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="text-sm font-bold text-slate-900">
-                      Pantauan Pengambilan Item &amp; Sub-Item KPM
-                    </h2>
-                    <span className="text-xs font-medium text-slate-500 tabular-nums">
-                      · {subItemTrackerData.counts.incomplete} Belum Lengkap ·{' '}
-                      {subItemTrackerData.counts.complete} Lengkap
-                    </span>
-                  </div>
-                  <p className="mt-0.5 text-[11px] text-slate-500">
-                    Cek cepat siapa KPM yang sudah mengambil item/sub-item dan sub-item apa yang
-                    masih tertinggal tanpa membuka proposal satu per satu
-                  </p>
-                </div>
-                <ChevronDown
-                  className={`ml-auto h-4 w-4 shrink-0 text-slate-400 transition-transform ${
-                    subItemTrackerExpanded ? 'rotate-180' : ''
-                  }`}
-                />
-              </button>
-            </div>
-
-            {subItemTrackerExpanded && (
-              <div className="space-y-3 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2.5">
-                  <div className="flex flex-wrap items-center gap-1 rounded-xl bg-slate-100 p-1 text-xs">
-                    {(
-                      [
-                        {
-                          key: 'incomplete',
-                          label: `Belum Lengkap (${subItemTrackerData.counts.incomplete})`,
-                        },
-                        {
-                          key: 'partial',
-                          label: `Sebagian (${subItemTrackerData.counts.partial})`,
-                        },
-                        {
-                          key: 'not_taken',
-                          label: `Belum Ambil (${subItemTrackerData.counts.notTaken})`,
-                        },
-                        {
-                          key: 'complete',
-                          label: `Lengkap (${subItemTrackerData.counts.complete})`,
-                        },
-                        { key: 'all', label: `Semua (${subItemTrackerData.counts.total})` },
-                      ] as const
-                    ).map((tab) => (
-                      <button
-                        key={tab.key}
-                        type="button"
-                        onClick={() => setSubItemTrackerStatusFilter(tab.key)}
-                        className={`rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition-colors whitespace-nowrap tabular-nums ${
-                          subItemTrackerStatusFilter === tab.key
-                            ? 'bg-white text-slate-900 shadow-xs'
-                            : 'text-slate-600 hover:text-slate-900'
-                        }`}
-                      >
-                        {tab.label}
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <select
-                      aria-label="Filter Proposal pada Pantauan Sub-Item"
-                      value={subItemTrackerProposalFilter}
-                      onChange={(e) => setSubItemTrackerProposalFilter(e.target.value)}
-                      className="h-9 max-w-[230px] rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 focus:border-teal-700 focus:outline-none"
-                    >
-                      <option value="all">
-                        Semua Proposal ({yearScopedProposals.length})
-                      </option>
-                      {sortProposalsWithinKecamatan(yearScopedProposals, (p) => p.namaProposal).map(
-                        (p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.namaProposal} ({p.tahun})
-                          </option>
-                        )
-                      )}
-                    </select>
-
-                    <div className="relative w-56">
-                      <Search className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
-                      <input
-                        type="search"
-                        value={subItemTrackerQuery}
-                        onChange={(e) => setSubItemTrackerQuery(e.target.value)}
-                        placeholder="Cari nama KPM / sub-item..."
-                        className="h-9 w-full rounded-xl border border-slate-200 bg-slate-50 pr-3 pl-8 text-xs text-slate-800 placeholder:text-slate-400 focus:border-teal-700 focus:bg-white focus:outline-none"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {filteredSubItemTrackerRows.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/70 px-4 py-6 text-center text-xs text-slate-500">
-                    Tidak ada KPM pada filter status pengambilan item saat ini.
-                  </div>
-                ) : (
-                  <div className="max-h-[380px] overflow-auto rounded-xl border border-slate-200">
-                    <table className="w-full min-w-[820px] border-collapse text-left text-xs">
-                      <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500">
-                        <tr>
-                          <th className="w-16 px-3 py-2 text-center">No.</th>
-                          <th className="w-48 px-3 py-2">Nama KPM · Item</th>
-                          <th className="w-44 px-3 py-2">Proposal</th>
-                          <th className="px-3 py-2">Sudah Diambil</th>
-                          <th className="px-3 py-2">Belum Diambil</th>
-                          <th className="w-24 px-3 py-2 text-right">Progres</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {filteredSubItemTrackerRows.slice(0, 120).map((row) => (
-                          <tr
-                            key={`tracker-${row.record.id}`}
-                            onClick={() =>
-                              onSelectKpm
-                                ? onSelectKpm(row.record)
-                                : onOpenProposalDetail(row.proposalId)
-                            }
-                            className="cursor-pointer bg-white transition-colors hover:bg-teal-50/40"
-                          >
-                            <td className="px-3 py-2.5 text-center font-mono font-semibold text-slate-600 tabular-nums">
-                              {row.slotNumber
-                                ? `#${String(row.slotNumber).padStart(2, '0')}`
-                                : '-'}
-                            </td>
-                            <td className="px-3 py-2.5">
-                              <p className="truncate font-semibold text-slate-900">
-                                {row.record.nama}
-                              </p>
-                              <p className="mt-0.5 text-[11px] font-medium text-slate-500">
-                                {row.record.item || '-'}
-                              </p>
-                            </td>
-                            <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
-                              <button
-                                type="button"
-                                onClick={() => onOpenProposalDetail(row.proposalId)}
-                                className="max-w-[168px] truncate text-left font-medium text-teal-700 hover:underline"
-                                title={`Buka Proposal ${row.proposalName}`}
-                              >
-                                {row.proposalName}
-                              </button>
-                            </td>
-                            <td className="px-3 py-2.5">
-                              {row.takenNames.length === 0 ? (
-                                <span className="text-[11px] text-slate-400">Belum ada</span>
-                              ) : (
-                                <div className="flex flex-wrap gap-1">
-                                  {row.takenNames.map((name, i) => (
-                                    <span
-                                      key={`${row.record.id}-tk-${i}`}
-                                      className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-800"
-                                    >
-                                      {name}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-                            </td>
-                            <td className="px-3 py-2.5">
-                              {row.pendingNames.length === 0 ? (
-                                <span className="text-[11px] font-semibold text-emerald-700">
-                                  Sudah semua
-                                </span>
-                              ) : (
-                                <div className="flex flex-wrap gap-1">
-                                  {row.pendingNames.map((name, i) => (
-                                    <span
-                                      key={`${row.record.id}-pd-${i}`}
-                                      className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-900"
-                                    >
-                                      {name}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-                            </td>
-                            <td className="px-3 py-2.5 text-right font-bold tabular-nums">
-                              <span
-                                className={
-                                  row.statusCategory === 'complete'
-                                    ? 'text-emerald-700'
-                                    : row.statusCategory === 'partial'
-                                      ? 'text-teal-700'
-                                      : 'text-amber-700'
-                                }
-                              >
-                                {row.takenCount}/{row.totalCount}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    {filteredSubItemTrackerRows.length > 120 && (
-                      <div className="border-t border-slate-100 bg-slate-50 px-3 py-2 text-center text-[11px] text-slate-500">
-                        Menampilkan 120 dari {filteredSubItemTrackerRows.length} KPM. Gunakan
-                        filter Proposal atau kolom pencarian untuk mempersempit hasil.
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </section>
-        )}
 
         {/* Proposal Directory Grouped by Kecamatan */}
         {filteredProposals.length === 0 ? (

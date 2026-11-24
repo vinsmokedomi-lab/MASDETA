@@ -73,7 +73,6 @@ import {
   getAbsenSeq,
   getDocumentDownloadHref,
   getItemHierarchyRank,
-  getKpmSlotNumberInProposal,
   getKpmSubItemStatusList,
   removeDocumentFromDrive,
   resolveKpmDomicile,
@@ -982,17 +981,33 @@ export function ProposalDetailView({
     });
   }, [proposalRecords, items, proposal.tahun]);
 
+  const mergedProposalSlots = useMemo(() => {
+    const { state: slotState } = resolveProposalSlotStateForGroup(
+      proposalSlotMap,
+      proposal.id,
+      proposal.namaProposal,
+      proposal.tahun,
+      allProposals
+    );
+    return buildMergedProposalSlots({
+      groupRecords: proposalRecords,
+      slotState,
+      proposals: allProposals,
+      catalog: items,
+      wilayahList,
+    });
+  }, [proposalSlotMap, proposal.id, proposal.namaProposal, proposal.tahun, allProposals, proposalRecords, items, wilayahList]);
+
   const orderedProposalRecords = useMemo(() => {
+    const slotNumberByRecordId = new Map<string, number>();
+    for (const slot of mergedProposalSlots) {
+      if (slot.kind === 'kpm') {
+        slotNumberByRecordId.set(slot.record.id, slot.slotNumber);
+      }
+    }
     return [...proposalRecords]
       .map((rec) => {
-        const slotNumber = getKpmSlotNumberInProposal(
-          rec,
-          records,
-          allProposals,
-          items,
-          wilayahList,
-          proposalSlotMap
-        );
+        const slotNumber = slotNumberByRecordId.get(rec.id);
         const absen = getAbsenSeq(rec.registerCode);
         return {
           record: rec,
@@ -1003,7 +1018,7 @@ export function ProposalDetailView({
         if (a.displaySeq !== b.displaySeq) return a.displaySeq - b.displaySeq;
         return a.record.nama.localeCompare(b.record.nama, 'id');
       });
-  }, [proposalRecords, records, allProposals, items, wilayahList, proposalSlotMap]);
+  }, [proposalRecords, mergedProposalSlots]);
 
   const drillFilteredRecords = useMemo(() => {
     if (!kpmFilterDrill) return [];
@@ -1047,23 +1062,6 @@ export function ProposalDetailView({
       );
     });
   }, [orderedProposalRecords, kpmListQuery, kpmListItemFilter]);
-
-  const mergedProposalSlots = useMemo(() => {
-    const { state: slotState } = resolveProposalSlotStateForGroup(
-      proposalSlotMap,
-      proposal.id,
-      proposal.namaProposal,
-      proposal.tahun,
-      allProposals
-    );
-    return buildMergedProposalSlots({
-      groupRecords: proposalRecords,
-      slotState,
-      proposals: allProposals,
-      catalog: items,
-      wilayahList,
-    });
-  }, [proposalSlotMap, proposal.id, proposal.namaProposal, proposal.tahun, allProposals, proposalRecords, items, wilayahList]);
 
   const filteredProposalSlots = useMemo(() => {
     const q = kpmListQuery.trim().toLowerCase();

@@ -290,13 +290,21 @@ export function DashboardView({
 
   // Detailed proposal breakdown (smart-sorted: needing attention first, then newest update)
   const proposalSummaryList = useMemo(() => {
+    const countByPropId = new Map<string, number>();
+    const countByNameYear = new Map<string, number>();
+    for (const r of acceptedYearRecords) {
+      if (r.proposalId) {
+        countByPropId.set(r.proposalId, (countByPropId.get(r.proposalId) ?? 0) + 1);
+      } else if (r.proposal) {
+        const key = `${r.tahun}::${r.proposal}`;
+        countByNameYear.set(key, (countByNameYear.get(key) ?? 0) + 1);
+      }
+    }
+
     const mapped = filteredProposals.map((prop) => {
-      const propRecords = filteredRecords.filter((r) => {
-        if (r.validasi !== 'accepted') return false;
-        if (r.proposalId) return r.proposalId === prop.id;
-        return r.proposal === prop.namaProposal && r.tahun === prop.tahun;
-      });
-      const acceptedCount = propRecords.length;
+      const acceptedCount =
+        (countByPropId.get(prop.id) ?? 0) +
+        (countByNameYear.get(`${prop.tahun}::${prop.namaProposal}`) ?? 0);
       const activeKpmCount = acceptedCount;
       const pendingCount = 0;
       const target = prop.jumlahKpm ?? 66;
@@ -327,7 +335,7 @@ export function DashboardView({
       if (aNeedsAttn !== bNeedsAttn) return aNeedsAttn ? -1 : 1;
       return (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt);
     });
-  }, [filteredProposals, filteredRecords]);
+  }, [filteredProposals, acceptedYearRecords]);
 
   const visibleProposals = useMemo(
     () => proposalSummaryList.slice(0, 6),
@@ -395,7 +403,7 @@ export function DashboardView({
       totalCoordinators: sorted.length,
       maxCount,
     };
-  }, [filteredRecords]);
+  }, [acceptedYearRecords]);
 
   const recentActivityRecords = useMemo(() => {
     return [...filteredRecords]

@@ -1,4 +1,15 @@
-import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  ReactNode,
+  Suspense,
+  lazy,
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -703,6 +714,17 @@ export function MasdetaLogo() {
     </svg>
   );
 }
+
+/**
+ * Menjaga state/scroll tab tetap hidup saat tersembunyi,
+ * namun sepenuhnya melewatkan re-render React selama tab dalam keadaan hidden.
+ */
+const KeepAlivePane = memo(
+  function KeepAlivePane({ active, children }: { active: boolean; children: ReactNode }) {
+    return <div className={active ? '' : 'hidden'}>{children}</div>;
+  },
+  (prev, next) => !prev.active && !next.active
+);
 
 export default function App() {
   const isNativeApp = isNativeAppPlatform();
@@ -1702,83 +1724,135 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const savedLocal = saveKpmRecords(records);
-    if (idbHydrated) {
-      void saveIdbValue('records', records).then((savedIdb) => {
-        if (!savedLocal && !savedIdb) {
+    const timer = window.setTimeout(() => {
+      if (idbHydrated) {
+        void saveIdbValue('records', records).then((savedIdb) => {
+          // Hindari JSON.stringify sinkron ber-megabyte ke localStorage saat IndexedDB aktif dan data besar
+          if (!savedIdb || records.length <= 500) {
+            const savedLocal = saveKpmRecords(records);
+            if (!savedLocal && !savedIdb) {
+              setFeedback({
+                type: 'error',
+                message: 'Penyimpanan lokal penuh. Hapus beberapa data lama untuk menyimpan berkas baru.',
+              });
+            }
+          }
+        });
+      } else {
+        const savedLocal = records.length <= 500 ? saveKpmRecords(records) : true;
+        if (!savedLocal && typeof window !== 'undefined' && !('indexedDB' in window)) {
           setFeedback({
             type: 'error',
             message: 'Penyimpanan lokal penuh. Hapus beberapa data lama untuk menyimpan berkas baru.',
           });
         }
-      });
-    } else if (!savedLocal && typeof window !== 'undefined' && !('indexedDB' in window)) {
-      setFeedback({
-        type: 'error',
-        message: 'Penyimpanan lokal penuh. Hapus beberapa data lama untuk menyimpan berkas baru.',
-      });
-    }
+      }
+    }, 650);
+    return () => window.clearTimeout(timer);
   }, [records, idbHydrated]);
 
   useEffect(() => {
-    savePengelolaList(pengelolaList);
-    if (idbHydrated) void saveIdbValue('pengelolaList', pengelolaList);
+    const timer = window.setTimeout(() => {
+      savePengelolaList(pengelolaList);
+      if (idbHydrated) void saveIdbValue('pengelolaList', pengelolaList);
+    }, 500);
+    return () => window.clearTimeout(timer);
   }, [pengelolaList, idbHydrated]);
 
   useEffect(() => {
-    const savedLocal = saveProposals(proposals);
-    if (idbHydrated) {
-      void saveIdbValue('proposals', proposals).then((savedIdb) => {
-        if (!savedLocal && !savedIdb) {
-          setFeedback({
-            type: 'error',
-            message:
-              'Penyimpanan lokal penuh saat menyimpan data proposal. Gunakan file berukuran lebih ringkas.',
-          });
-        }
-      });
-    }
+    const timer = window.setTimeout(() => {
+      const savedLocal = saveProposals(proposals);
+      if (idbHydrated) {
+        void saveIdbValue('proposals', proposals).then((savedIdb) => {
+          if (!savedLocal && !savedIdb) {
+            setFeedback({
+              type: 'error',
+              message:
+                'Penyimpanan lokal penuh saat menyimpan data proposal. Gunakan file berukuran lebih ringkas.',
+            });
+          }
+        });
+      }
+    }, 500);
+    return () => window.clearTimeout(timer);
   }, [proposals, idbHydrated]);
 
   useEffect(() => {
-    saveProposalHistory(proposalHistory);
-    if (idbHydrated) void saveIdbValue('proposalHistory', proposalHistory);
+    const timer = window.setTimeout(() => {
+      if (idbHydrated) {
+        void saveIdbValue('proposalHistory', proposalHistory).then((savedIdb) => {
+          if (!savedIdb || proposalHistory.length <= 500) {
+            saveProposalHistory(proposalHistory);
+          }
+        });
+      } else if (proposalHistory.length <= 500) {
+        saveProposalHistory(proposalHistory);
+      }
+    }, 650);
+    return () => window.clearTimeout(timer);
   }, [proposalHistory, idbHydrated]);
 
   useEffect(() => {
-    saveKpmAuditLogs(kpmAuditLogs);
-    if (idbHydrated) void saveIdbValue('kpmAuditLogs', kpmAuditLogs);
+    const timer = window.setTimeout(() => {
+      if (idbHydrated) {
+        void saveIdbValue('kpmAuditLogs', kpmAuditLogs).then((savedIdb) => {
+          if (!savedIdb || kpmAuditLogs.length <= 500) {
+            saveKpmAuditLogs(kpmAuditLogs);
+          }
+        });
+      } else if (kpmAuditLogs.length <= 500) {
+        saveKpmAuditLogs(kpmAuditLogs);
+      }
+    }, 650);
+    return () => window.clearTimeout(timer);
   }, [kpmAuditLogs, idbHydrated]);
 
   useEffect(() => {
-    saveItemList(items);
-    if (idbHydrated) void saveIdbValue('items', items);
+    const timer = window.setTimeout(() => {
+      saveItemList(items);
+      if (idbHydrated) void saveIdbValue('items', items);
+    }, 500);
+    return () => window.clearTimeout(timer);
   }, [items, idbHydrated]);
 
   useEffect(() => {
-    savePekerjaanList(pekerjaanList);
-    if (idbHydrated) void saveIdbValue('pekerjaanList', pekerjaanList);
+    const timer = window.setTimeout(() => {
+      savePekerjaanList(pekerjaanList);
+      if (idbHydrated) void saveIdbValue('pekerjaanList', pekerjaanList);
+    }, 500);
+    return () => window.clearTimeout(timer);
   }, [pekerjaanList, idbHydrated]);
 
   useEffect(() => {
-    saveWilayahList(wilayahList);
-    if (idbHydrated) void saveIdbValue('wilayahList', wilayahList);
+    const timer = window.setTimeout(() => {
+      saveWilayahList(wilayahList);
+      if (idbHydrated) void saveIdbValue('wilayahList', wilayahList);
+    }, 500);
+    return () => window.clearTimeout(timer);
   }, [wilayahList, idbHydrated]);
 
   useEffect(() => {
-    saveInternalUsers(internalUsers);
-    if (idbHydrated) void saveIdbValue('internalUsers', internalUsers);
+    const timer = window.setTimeout(() => {
+      saveInternalUsers(internalUsers);
+      if (idbHydrated) void saveIdbValue('internalUsers', internalUsers);
+    }, 500);
+    return () => window.clearTimeout(timer);
   }, [internalUsers, idbHydrated]);
 
   useEffect(() => {
-    saveCustomYears(customYears);
-    if (idbHydrated) void saveIdbValue('customYears', customYears);
+    const timer = window.setTimeout(() => {
+      saveCustomYears(customYears);
+      if (idbHydrated) void saveIdbValue('customYears', customYears);
+    }, 500);
+    return () => window.clearTimeout(timer);
   }, [customYears, idbHydrated]);
 
   useEffect(() => {
-    if (idbHydrated && directMessages.length > 0) {
+    if (!idbHydrated || directMessages.length === 0) return;
+    const timer = window.setTimeout(() => {
       void saveIdbValue('directMessages', directMessages);
-    }
+    }, 650);
+    return () => window.clearTimeout(timer);
   }, [directMessages, idbHydrated]);
 
   useEffect(() => {
@@ -11738,6 +11812,15 @@ export default function App() {
 
     const keptKpmIdsOrdered: string[] = [];
     const newEmptySlots: ProposalEmptySlot[] = [];
+    const createdFromBastRecords: KpmRecord[] = [];
+    const createdFromBastKpmIds: string[] = [];
+    const newAuditLogs: KpmAuditLogEntry[] = [];
+    const propDomicile = resolveProposalDomicile(
+      prop.namaProposal,
+      proposals,
+      prop.tahun,
+      wilayahList
+    );
 
     for (const row of params.result.mainRows) {
       if (row.isEmpty) {
@@ -11745,6 +11828,58 @@ export default function App() {
           slotNumber: row.noUrut,
           item: row.kodeItem,
           vacatedAt: now,
+        });
+      } else if (row.isFilledFromBast) {
+        const newKpmId = `kpm-bast-${Date.now()}-${row.noUrut}-${Math.random().toString(36).slice(2, 6)}`;
+        const cleanNik = (row.nik || '').replace(/\D/g, '');
+        const cleanAlamat = row.alamat && row.alamat !== '-' ? row.alamat : '';
+        const bastNoText = String(row.filledFromBastNo ?? row.noUrut).padStart(2, '0');
+        const createdRec: KpmRecord = {
+          id: newKpmId,
+          registerCode: '',
+          tahun: prop.tahun,
+          proposalId: prop.id,
+          proposal: prop.namaProposal,
+          kabKota: prop.kabKota?.trim() || propDomicile.kabKota || '',
+          kecamatan: prop.kecamatan?.trim() || propDomicile.kecamatan || '',
+          kelurahan: prop.kelurahan?.trim() || propDomicile.kelurahan || '',
+          item: row.kodeItem,
+          nama: (row.nama || '').trim(),
+          alamat: cleanAlamat,
+          rt: '',
+          rw: '',
+          nikKk: '',
+          nikKtp: cleanNik,
+          dtsen: '',
+          validasi: 'accepted',
+          kontak: '',
+          pekerjaan: '',
+          pengelola: '',
+          catatan: `Input baru dari Nama BAST Tanpa Pasangan (BAST No. ${bastNoText} · ${row.bastOriginalItemCode || row.kodeItem}) saat Rekonsiliasi Troubleshooting.`,
+          payment: 0,
+          documents: {},
+          createdAt: now,
+          updatedAt: now,
+        };
+        createdFromBastRecords.push(createdRec);
+        createdFromBastKpmIds.push(newKpmId);
+        keptKpmIdsOrdered.push(newKpmId);
+        newAuditLogs.push({
+          id: `audit-reconcile-bastin-${newKpmId}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+          kpmId: newKpmId,
+          action: 'created',
+          actorName: currentActor.nama,
+          actorEmail: currentActor.email,
+          timestamp: now,
+          proposal: prop.namaProposal,
+          tahun: prop.tahun,
+          changes: [
+            {
+              field: 'Input Baru dari BAST',
+              before: `Baris Kosong No. ${row.noUrutText} (${row.kodeItem})`,
+              after: `${createdRec.nama} (BAST No. ${bastNoText}) dimasukkan ke ${prop.namaProposal}`,
+            },
+          ],
         });
       } else if (row.sourceKpmId) {
         keptKpmIdsOrdered.push(row.sourceKpmId);
@@ -11763,45 +11898,46 @@ export default function App() {
       }
     }
 
-    const newAuditLogs: KpmAuditLogEntry[] = [];
+    const mappedRecords = [
+      ...records.map((rec) => {
+        const excludedRow = excludedByKpmId.get(rec.id);
+        if (excludedRow) {
+          const tag = `Eks Proposal ${prop.namaProposal} — Over Kuota BAST ${excludedRow.kodeItem}`;
+          const prevNote = (rec.catatan || '').trim();
+          const nextCatatan = prevNote ? `${tag}\n${prevNote}` : tag;
+          newAuditLogs.push({
+            id: `audit-reconcile-out-${rec.id}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+            kpmId: rec.id,
+            action: 'status_changed',
+            actorName: currentActor.nama,
+            actorEmail: currentActor.email,
+            timestamp: now,
+            proposal: prop.namaProposal,
+            tahun: prop.tahun,
+            changes: [
+              {
+                field: 'Rekonsiliasi BAST',
+                before: `${prop.namaProposal} (${rec.item})`,
+                after: `Dipindahkan ke Database KPM (${tag})`,
+              },
+            ],
+          });
+          return {
+            ...rec,
+            validasi: 'pending' as ValidationStatus,
+            proposalId: null,
+            proposal: '',
+            tahun: '',
+            registerCode: '',
+            catatan: nextCatatan,
+            updatedAt: now,
+          };
+        }
 
-    const mappedRecords = records.map((rec) => {
-      const excludedRow = excludedByKpmId.get(rec.id);
-      if (excludedRow) {
-        const tag = `Eks Proposal ${prop.namaProposal} — Over Kuota BAST ${excludedRow.kodeItem}`;
-        const prevNote = (rec.catatan || '').trim();
-        const nextCatatan = prevNote ? `${tag}\n${prevNote}` : tag;
-        newAuditLogs.push({
-          id: `audit-reconcile-out-${rec.id}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-          kpmId: rec.id,
-          action: 'status_changed',
-          actorName: currentActor.nama,
-          actorEmail: currentActor.email,
-          timestamp: now,
-          proposal: prop.namaProposal,
-          tahun: prop.tahun,
-          changes: [
-            {
-              field: 'Rekonsiliasi BAST',
-              before: `${prop.namaProposal} (${rec.item})`,
-              after: `Dipindahkan ke Database KPM (${tag})`,
-            },
-          ],
-        });
-        return {
-          ...rec,
-          validasi: 'pending' as ValidationStatus,
-          proposalId: null,
-          proposal: '',
-          tahun: '',
-          registerCode: '',
-          catatan: nextCatatan,
-          updatedAt: now,
-        };
-      }
-
-      return rec;
-    });
+        return rec;
+      }),
+      ...createdFromBastRecords,
+    ];
 
     const nextSlotMap: ProposalSlotMap = {
       ...proposalSlotMapRef.current,
@@ -11830,6 +11966,7 @@ export default function App() {
         emptySlotsCount: newEmptySlots.length,
         movedToDatabaseCount: movedOverQuotaKpmIds.length,
         addressUpdatedCount: 0,
+        createdFromBastCount: createdFromBastKpmIds.length,
       },
       slotKey,
       hadPreviousSlotState,
@@ -11837,6 +11974,7 @@ export default function App() {
       previousKpmStates,
       movedOverQuotaKpmIds,
       filledFromDatabaseKpmIds: [],
+      createdFromBastKpmIds,
     };
 
     const actDetailParts = [
@@ -11844,6 +11982,9 @@ export default function App() {
       `${params.result.totals.shiftedCount} KPM bergeser urutan`,
       `${newEmptySlots.length} baris kosong`,
       `${movedOverQuotaKpmIds.length} KPM over-kuota dipindah ke Database`,
+      ...(createdFromBastKpmIds.length > 0
+        ? [`${createdFromBastKpmIds.length} KPM baru ditambahkan dari Nama BAST`]
+        : []),
     ];
 
     const actEntry = createActivityHistoryEntry('reconcile_apply', {
@@ -11857,7 +11998,7 @@ export default function App() {
     const prevById = new Map(records.map((r) => [r.id, r]));
     const changedRecords = nextRecords.filter((r) => {
       const prev = prevById.get(r.id);
-      if (!prev) return false;
+      if (!prev) return true;
       return (
         prev.validasi !== r.validasi ||
         (prev.proposalId ?? null) !== (r.proposalId ?? null) ||
@@ -11918,7 +12059,11 @@ export default function App() {
 
     setFeedback({
       type: 'success',
-      message: `Hasil rekonsiliasi BAST berhasil diterapkan ke "${prop.namaProposal}" (${movedOverQuotaKpmIds.length} ke Database, ${newEmptySlots.length} baris kosong).`,
+      message: `Hasil rekonsiliasi BAST berhasil diterapkan ke "${prop.namaProposal}" (${movedOverQuotaKpmIds.length} ke Database, ${newEmptySlots.length} baris kosong${
+        createdFromBastKpmIds.length > 0
+          ? `, ${createdFromBastKpmIds.length} KPM baru dari BAST`
+          : ''
+      }).`,
     });
 
     return { ok: true, snapshot };
@@ -11955,10 +12100,13 @@ export default function App() {
     );
     const overQuotaSet = new Set(snapshot.movedOverQuotaKpmIds);
     const filledFromDbSet = new Set(snapshot.filledFromDatabaseKpmIds);
+    const createdFromBastSet = new Set(snapshot.createdFromBastKpmIds || []);
     const conflictNames: string[] = [];
     const newAuditLogs: KpmAuditLogEntry[] = [];
 
-    const mappedRecords = records.map((rec) => {
+    const mappedRecords = records
+      .filter((rec) => !createdFromBastSet.has(rec.id))
+      .map((rec) => {
       // 1. Cek KPM yang diisi melalui Option 2 ("Apply & Isi dari Database") -> kembalikan ke Database
       if (filledFromDbSet.has(rec.id)) {
         const stillInSameProp =
@@ -12105,17 +12253,26 @@ export default function App() {
     const nextAuditLogs = [...newAuditLogs, ...kpmAuditLogs];
     const nextHistory = [actEntry, ...proposalHistory];
 
+    const createdIdsToDelete = Array.from(createdFromBastSet);
     const ok = supabaseReadyRef.current
       ? await runSupabaseMutation(
-          () =>
-            upsertKpmRecordsBatchInSupabase({
+          async () => {
+            if (createdIdsToDelete.length > 0) {
+              await deleteKpmsBatchInSupabase({
+                kpmIds: createdIdsToDelete,
+                proposals,
+                pengelolaList,
+              });
+            }
+            await upsertKpmRecordsBatchInSupabase({
               records: changedRecords,
               proposals,
               pengelolaList,
               auditLogs: newAuditLogs,
               historyEntries: [actEntry],
               includeDeliveries: false,
-            }),
+            });
+          },
           'Gagal membatalkan rekonsiliasi BAST ke Supabase'
         )
       : await syncOperationalData(
@@ -13131,7 +13288,7 @@ export default function App() {
             (subView === 'kpm-detail' && kpmDetailReturnToProposalDetail) ||
             (subView === 'kpm-form' && kpmFormReturnToProposalDetail) ||
             (subView === 'none' && activeTab === 'kpm' && kpmOpenedFromProposalDetail)) && (
-          <div className={subView === 'proposal-detail' ? '' : 'hidden'}>
+          <KeepAlivePane active={subView === 'proposal-detail'}>
             <Suspense fallback={<LazyViewFallback label="Memuat detail proposal..." />}>
               <ProposalDetailView
               proposal={activeProposal}
@@ -13223,7 +13380,7 @@ export default function App() {
               onDeleteProposalChange={handleDeleteProposalChange}
               />
             </Suspense>
-          </div>
+          </KeepAlivePane>
         )}
 
         {subView === 'proposal-history' && activeProposal && (
@@ -13273,7 +13430,7 @@ export default function App() {
             (subView === 'kpm-detail' ||
               subView === 'kpm-history' ||
               subView === 'kpm-form'))) && (
-          <div className={subView === 'proposal-photo-gallery' ? '' : 'hidden'}>
+          <KeepAlivePane active={subView === 'proposal-photo-gallery'}>
             <Suspense fallback={<LazyViewFallback label="Memuat galeri foto..." />}>
               <ProposalPhotoGalleryView
                 proposals={proposals}
@@ -13307,11 +13464,11 @@ export default function App() {
                 onSwapPenerimaPhoto={handleSwapPenerimaPhoto}
               />
             </Suspense>
-          </div>
+          </KeepAlivePane>
         )}
 
         {/* Top-Level Main Tabs (kept mounted so scroll position, pagination & local filters persist across sub-views) */}
-        <div className={subView === 'none' && activeTab === 'dashboard' ? '' : 'hidden'}>
+        <KeepAlivePane active={subView === 'none' && activeTab === 'dashboard'}>
           <DashboardView
             logo={<MasdetaLogo />}
             currentUser={currentUser}
@@ -13416,10 +13573,10 @@ export default function App() {
               setActiveTab('menu');
             }}
           />
-        </div>
+        </KeepAlivePane>
 
         {mountedTabs.kpm && (
-          <div className={subView === 'none' && activeTab === 'kpm' ? '' : 'hidden'}>
+          <KeepAlivePane active={subView === 'none' && activeTab === 'kpm'}>
             <Suspense fallback={<LazyViewFallback label="Memuat daftar KPM..." />}>
               <KpmListView
                 records={records}
@@ -13484,18 +13641,16 @@ export default function App() {
                 onBulkPermanentDeleteKpms={handleBulkPermanentDeleteKpms}
               />
             </Suspense>
-          </div>
+          </KeepAlivePane>
         )}
 
         {mountedTabs.proposal && (
-          <div className={subView === 'none' && activeTab === 'proposal' ? '' : 'hidden'}>
+          <KeepAlivePane active={subView === 'none' && activeTab === 'proposal'}>
             <Suspense fallback={<LazyViewFallback label="Memuat daftar proposal..." />}>
               <ProposalListView
                 proposals={proposals}
                 records={records}
-                items={items}
                 wilayahList={wilayahList}
-                proposalSlotMap={proposalSlotMap}
                 yearOptions={allKnownYears}
                 selectedYear={selectedYear}
                 onChangeYear={setSelectedYear}
@@ -13503,17 +13658,16 @@ export default function App() {
                 canDelete={hasPermission('delete')}
                 onOpenProposalDetail={(id) => openProposalDetailById(id, 'proposal')}
                 onOpenPhotoGallery={(id) => openPhotoGallery(id, 'proposal-list')}
-                onSelectKpm={(rec) => openKpmDetail(rec, 'proposal')}
                 onToggleProposalLock={handleToggleProposalLock}
                 onBulkSetProposalLock={handleBulkSetProposalLock}
                 onDeleteProposal={handleDeleteProposal}
               />
             </Suspense>
-          </div>
+          </KeepAlivePane>
         )}
 
         {mountedTabs.menu && (
-          <div className={subView === 'none' && activeTab === 'menu' ? '' : 'hidden'}>
+          <KeepAlivePane active={subView === 'none' && activeTab === 'menu'}>
             <Suspense fallback={<LazyViewFallback label="Memuat menu..." />}>
               <MenuHubView
             activeSection={menuSection}
@@ -13747,7 +13901,7 @@ export default function App() {
             proposalSchemaMissingNotice={proposalSchemaMissingNotice}
               />
             </Suspense>
-          </div>
+          </KeepAlivePane>
         )}
         </div>
       </PullToRefresh>

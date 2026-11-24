@@ -324,7 +324,12 @@ export function formatProposalAddressFull(row: ProposalExtractedRow): string {
   return parts.join(', ').trim();
 }
 
-export type ReconciledRowStatus = 'unchanged' | 'shifted' | 'new_in_proposal' | 'empty_slot';
+export type ReconciledRowStatus =
+  | 'unchanged'
+  | 'shifted'
+  | 'new_in_proposal'
+  | 'filled_from_bast'
+  | 'empty_slot';
 export type SlotPlacementStrategy = 'proposal_order' | 'preserve_bast_number';
 
 export interface TroubleshootingManualOverrides {
@@ -334,6 +339,8 @@ export interface TroubleshootingManualOverrides {
   orderedIncludedKeysByItem?: Record<string, string[]>;
   /** Map proposal rowKey -> bastNo untuk pencocokan manual beda ejaan / typo nama */
   manualBastLinkByRowKey?: Record<string, number>;
+  /** Map noUrut slot baris kosong -> bastNo dari Nama BAST Tanpa Pasangan (input baru ke proposal) */
+  filledEmptySlotByBastNo?: Record<number, number>;
   /** Strategi penempatan slot dalam blok BAST */
   placementStrategy?: SlotPlacementStrategy;
 }
@@ -348,6 +355,8 @@ export interface ReconciledMainRow {
   nama: string;
   nik: string;
   isManuallyLinked?: boolean;
+  isFilledFromBast?: boolean;
+  filledFromBastNo?: number | null;
   alamat: string;
   pengelola: string;
   isEmpty: boolean;
@@ -496,6 +505,7 @@ export interface TroubleshootingReconcileResult {
     unchangedCount: number;
     shiftedCount: number;
     newInProposalCount: number;
+    filledFromBastCount: number;
   };
   matchMetrics: TroubleshootingMatchMetrics;
   hasProposalPengelolaData: boolean;
@@ -1201,7 +1211,9 @@ export function reconcileProposalWithBast(params: {
   let unchangedCount = 0;
   let shiftedCount = 0;
   let newInProposalCount = 0;
+  let filledFromBastCount = 0;
   let emptyCount = 0;
+  const filledEmptySlotMap = overrides?.filledEmptySlotByBastNo || {};
 
   for (const block of bastBlocks) {
     const code = block.itemCode;
@@ -1269,28 +1281,63 @@ export function reconcileProposalWithBast(params: {
           sequenceWarningReason,
         });
       } else {
-        emptyCount += 1;
-        const baseKeterangan = `BARIS KOSONG (Sisa kuota BAST item ${code} - ${itemName} belum terisi; usulan Proposal ${totalPropForItem} KPM dari kuota ${totalBastForItem} unit).`;
-        mainRows.push({
-          noUrut: slot.bastNo,
-          noUrutText: pad2(slot.bastNo),
-          kodeItem: code,
-          namaItem: itemName,
-          nama: '-',
-          nik: '-',
-          alamat: '-',
-          pengelola: '-',
-          isEmpty: true,
-          status: 'empty_slot',
-          bastOriginalNo: null,
-          bastOriginalItemCode: null,
-          proposalOriginalNo: null,
-          keterangan: sequenceWarningReason
-            ? `${baseKeterangan} [${sequenceWarningReason}]`
-            : baseKeterangan,
-          hasSequenceWarning,
-          sequenceWarningReason,
-        });
+        const chosenBastNo = filledEmptySlotMap[slot.bastNo];
+        const chosenBastSlot =
+          typeof chosenBastNo === 'number' ? bastSlotByNo.get(chosenBastNo) : undefined;
+
+        if (chosenBastSlot && !usedBastSlotMap.get(chosenBastSlot)) {
+          usedBastSlotMap.set(chosenBastSlot, true);
+          filledFromBastCount += 1;
+          consumedCountByItem.set(code, (consumedCountByItem.get(code) ?? 0) + 1);
+          const bastOrigName = getTroubleshootingItemName(chosenBastSlot.itemCode, catalog);
+          const baseFilledNote = `Input baru dari Nama BAST Tanpa Pasangan (BAST No. ${pad2(chosenBastSlot.bastNo)} · ${chosenBastSlot.itemCode} - ${bastOrigName}); mengisi Baris Kosong No. Urut ${pad2(slot.bastNo)} (${code} - ${itemName}).`;
+          mainRows.push({
+            rowKey: `bast-fill:${chosenBastSlot.bastNo}`,
+            noUrut: slot.bastNo,
+            noUrutText: pad2(slot.bastNo),
+            kodeItem: code,
+            namaItem: itemName,
+            nama: chosenBastSlot.nama || '-',
+            nik: (chosenBastSlot.nik || '').replace(/\D/g, '') || '-',
+            alamat: chosenBastSlot.alamat || '-',
+            pengelola: '-',
+            isEmpty: false,
+            isFilledFromBast: true,
+            filledFromBastNo: chosenBastSlot.bastNo,
+            status: 'filled_from_bast',
+            bastOriginalNo: chosenBastSlot.bastNo,
+            bastOriginalItemCode: chosenBastSlot.itemCode,
+            proposalOriginalNo: null,
+            keterangan: sequenceWarningReason
+              ? `${baseFilledNote} [${sequenceWarningReason}]`
+              : baseFilledNote,
+            hasSequenceWarning,
+            sequenceWarningReason,
+          });
+        } else {
+          emptyCount += 1;
+          const baseKeterangan = `BARIS KOSONG (Sisa kuota BAST item ${code} - ${itemName} belum terisi; usulan Proposal ${totalPropForItem} KPM dari kuota ${totalBastForItem} unit).`;
+          mainRows.push({
+            noUrut: slot.bastNo,
+            noUrutText: pad2(slot.bastNo),
+            kodeItem: code,
+            namaItem: itemName,
+            nama: '-',
+            nik: '-',
+            alamat: '-',
+            pengelola: '-',
+            isEmpty: true,
+            status: 'empty_slot',
+            bastOriginalNo: null,
+            bastOriginalItemCode: null,
+            proposalOriginalNo: null,
+            keterangan: sequenceWarningReason
+              ? `${baseKeterangan} [${sequenceWarningReason}]`
+              : baseKeterangan,
+            hasSequenceWarning,
+            sequenceWarningReason,
+          });
+        }
       }
     }
   }
@@ -1395,7 +1442,7 @@ export function reconcileProposalWithBast(params: {
     const usulanKpm = proposalTotalByItem.get(code) ?? 0;
     const terisi = consumedCountByItem.get(code) ?? 0;
     const barisKosong = Math.max(0, kuotaBast - terisi);
-    const dikeluarkan = Math.max(0, usulanKpm - terisi);
+    const dikeluarkan = (excludedQueueByItem.get(code) || []).length;
 
     const detectedItems = Array.from(bastBarangSetByItem.get(code) || []);
     const rincianBarangBast =
@@ -1427,6 +1474,7 @@ export function reconcileProposalWithBast(params: {
     unchangedCount,
     shiftedCount,
     newInProposalCount,
+    filledFromBastCount,
   };
 
   let matchedBastCount = 0;
@@ -1502,7 +1550,11 @@ export function buildWhatsAppReconcileSummary(result: TroubleshootingReconcileRe
   lines.push(`• Kuota BAST: ${result.totals.kuotaBast} unit`);
   lines.push(`• Usulan Proposal: ${result.totals.usulanKpm} KPM`);
   lines.push(
-    `• Terisi (Masuk): ${result.totals.terisi} KPM (${result.totals.unchangedCount} tetap, ${result.totals.shiftedCount} bergeser, ${result.totals.newInProposalCount} usulan baru)`
+    `• Terisi (Masuk): ${result.totals.terisi} KPM (${result.totals.unchangedCount} tetap, ${result.totals.shiftedCount} bergeser, ${result.totals.newInProposalCount} usulan baru${
+      result.totals.filledFromBastCount > 0
+        ? `, ${result.totals.filledFromBastCount} input baru dari BAST`
+        : ''
+    })`
   );
   lines.push(`• Baris Kosong: ${result.totals.barisKosong} slot`);
   lines.push(`• Dikeluarkan (Over Kuota): ${result.totals.dikeluarkan} KPM`);

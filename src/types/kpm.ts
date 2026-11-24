@@ -621,6 +621,7 @@ export interface TroubleshootingReconcileSnapshot {
     emptySlotsCount: number;
     movedToDatabaseCount: number;
     addressUpdatedCount: number;
+    createdFromBastCount?: number;
   };
   slotKey: string;
   hadPreviousSlotState: boolean;
@@ -629,6 +630,7 @@ export interface TroubleshootingReconcileSnapshot {
   movedOverQuotaKpmIds: string[];
   filledFromDatabaseKpmIds: string[];
   filledFromDatabaseOriginalItems?: Record<string, string>;
+  createdFromBastKpmIds?: string[];
 }
 
 export type ProposalDestinationType = 'OPD' | 'Kecamatan' | 'Kelurahan';

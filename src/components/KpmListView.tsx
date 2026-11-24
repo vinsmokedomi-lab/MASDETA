@@ -201,13 +201,31 @@ export function KpmListView({
     sortBy,
   ]);
 
+  const proposalLockIndex = useMemo(() => {
+    const byId = new Map<string, boolean>();
+    const byNameYear = new Map<string, boolean>();
+    const byName = new Map<string, boolean>();
+    for (const p of proposals) {
+      const isLocked = p.status === 'locked';
+      byId.set(p.id, isLocked);
+      byNameYear.set(`${p.tahun}::${p.namaProposal}`, isLocked);
+      if (!byName.has(p.namaProposal)) byName.set(p.namaProposal, isLocked);
+    }
+    return { byId, byNameYear, byName };
+  }, [proposals]);
+
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+
   const isRecordProposalLocked = (rec: KpmRecord) => {
     if (!rec.proposal?.trim() && !rec.proposalId) return false;
-    const match =
-      (rec.proposalId ? proposals.find((p) => p.id === rec.proposalId) : undefined) ??
-      proposals.find((p) => p.namaProposal === rec.proposal && p.tahun === rec.tahun) ??
-      proposals.find((p) => p.namaProposal === rec.proposal);
-    return match?.status === 'locked';
+    if (rec.proposalId && proposalLockIndex.byId.has(rec.proposalId)) {
+      return Boolean(proposalLockIndex.byId.get(rec.proposalId));
+    }
+    const nameYearKey = `${rec.tahun}::${rec.proposal}`;
+    if (proposalLockIndex.byNameYear.has(nameYearKey)) {
+      return Boolean(proposalLockIndex.byNameYear.get(nameYearKey));
+    }
+    return Boolean(proposalLockIndex.byName.get(rec.proposal));
   };
 
   const getRecordKelurahan = (rec: KpmRecord) => {
@@ -565,7 +583,7 @@ export function KpmListView({
   const handleSelectAllUnlocked = () => {
     if (
       unlockedFilteredIds.length > 0 &&
-      unlockedFilteredIds.every((id) => selectedIds.includes(id))
+      unlockedFilteredIds.every((id) => selectedIdSet.has(id))
     ) {
       setSelectedIds([]);
     } else {
@@ -992,7 +1010,7 @@ export function KpmListView({
                 onClick={handleSelectAllUnlocked}
                 className="font-bold text-teal-700 hover:underline"
               >
-                {unlockedFilteredIds.every((id) => selectedIds.includes(id))
+                {unlockedFilteredIds.every((id) => selectedIdSet.has(id))
                   ? 'Batal Semua'
                   : 'Pilih Semua'}
               </button>
@@ -1024,8 +1042,8 @@ export function KpmListView({
         ) : (
           <>
           {/* Desktop SaaS High-Density Data Table */}
-          {!isNativeApp && (
-            <div className="hidden md:block overflow-hidden rounded-2xl border border-slate-200 bg-white">
+          {!isNativeApp ? (
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
               <div className="overflow-x-auto">
                 <table className="w-full table-fixed border-collapse text-left text-xs">
                   <thead>
@@ -1209,7 +1227,7 @@ export function KpmListView({
                       const desktopYearText = isStandalone
                         ? rec.tahun?.trim() || ''
                         : rec.tahun || 'Tanpa Tahun';
-                      const isSelected = selectedIds.includes(rec.id);
+                      const isSelected = selectedIdSet.has(rec.id);
                       const isAttending = Boolean(rec.attendance?.present);
 
                       return (
@@ -1467,10 +1485,9 @@ export function KpmListView({
                 </div>
               )}
             </div>
-          )}
-
-          {/* Mobile & Native APK Swipeable Cards */}
-          <div className={`overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100 ${!isNativeApp ? 'md:hidden' : ''}`}>
+          ) : (
+            /* Mobile & Native APK Swipeable Cards */
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
             {renderedEntries.slice(0, visibleLimit).map((entry, entryIdx) => {
               const canMoveUp = entryIdx > 0;
               const canMoveDown = entryIdx < renderedEntries.length - 1;
@@ -1891,6 +1908,7 @@ export function KpmListView({
               </div>
             )}
           </div>
+          )}
           </>
         )}
       </div>

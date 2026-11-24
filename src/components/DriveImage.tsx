@@ -1,4 +1,4 @@
-import { ImgHTMLAttributes, useEffect, useState } from 'react';
+import { ImgHTMLAttributes, memo, useEffect, useState } from 'react';
 import {
   buildDriveFallbackThumbnailUrl,
   extractDriveFileId,
@@ -25,13 +25,15 @@ interface DriveImageProps
  * Render gambar dari Google Drive menggunakan directUrl terlebih dahulu,
  * serta mendukung preview lokal instan (local-pending://) dari brankas IndexedDB.
  */
-export function DriveImage({
+export const DriveImage = memo(function DriveImage({
   doc,
   src,
   thumbnailUrl,
   fallbackWidth = 1000,
   onBothFailed,
   referrerPolicy = 'no-referrer',
+  loading = 'lazy',
+  decoding = 'async',
   alt = '',
   ...rest
 }: DriveImageProps) {
@@ -92,6 +94,8 @@ export function DriveImage({
       {...rest}
       src={currentSrc}
       alt={alt}
+      loading={loading}
+      decoding={decoding}
       referrerPolicy={referrerPolicy}
       onError={() => {
         if (isLocalPending) {
@@ -130,4 +134,4 @@ export function DriveImage({
       }}
     />
   );
-}
+});

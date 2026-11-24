@@ -99,6 +99,107 @@ export function getKelurahanOptionsForProposal(
   return matchedFallback ? KELURAHAN_BY_KECAMATAN[matchedFallback] : [];
 }
 
+interface WilayahLookupIndex {
+  flatVillages: {
+    kabKota: string;
+    kecamatan: string;
+    kelurahan: string;
+    lower: string;
+    bare: string;
+  }[];
+  allKecamatans: {
+    kabKota: string;
+    kecamatan: string;
+    lower: string;
+  }[];
+  byKelLower: Map<string, { kabKota: string; kecamatan: string }>;
+  byKelBare: Map<string, { kabKota: string; kecamatan: string }>;
+  byKecBare: Map<string, string>;
+}
+
+const wilayahIndexCache = new WeakMap<WilayahKabKota[], WilayahLookupIndex>();
+
+function getWilayahIndex(wilayahList: WilayahKabKota[]): WilayahLookupIndex {
+  const cached = wilayahIndexCache.get(wilayahList);
+  if (cached) return cached;
+
+  const flatVillages: WilayahLookupIndex['flatVillages'] = [];
+  const allKecamatans: WilayahLookupIndex['allKecamatans'] = [];
+  const byKelLower = new Map<string, { kabKota: string; kecamatan: string }>();
+  const byKelBare = new Map<string, { kabKota: string; kecamatan: string }>();
+  const byKecBare = new Map<string, string>();
+
+  for (const kab of wilayahList) {
+    for (const kec of kab.kecamatanList) {
+      const kecLower = kec.nama.toLowerCase();
+      allKecamatans.push({ kabKota: kab.nama, kecamatan: kec.nama, lower: kecLower });
+      if (!byKecBare.has(kecLower)) {
+        byKecBare.set(kecLower, kab.nama);
+      }
+      for (const kel of kec.kelurahanList) {
+        const lower = kel.toLowerCase();
+        const bare = lower.replace(/^(kelurahan|desa)\s+/i, '').trim();
+        flatVillages.push({ kabKota: kab.nama, kecamatan: kec.nama, kelurahan: kel, lower, bare });
+        if (!byKelLower.has(lower)) {
+          byKelLower.set(lower, { kabKota: kab.nama, kecamatan: kec.nama });
+        }
+        if (bare && !byKelBare.has(bare)) {
+          byKelBare.set(bare, { kabKota: kab.nama, kecamatan: kec.nama });
+        }
+      }
+    }
+  }
+  flatVillages.sort((a, b) => b.kelurahan.length - a.kelurahan.length);
+  allKecamatans.sort((a, b) => b.kecamatan.length - a.kecamatan.length);
+
+  const idx: WilayahLookupIndex = {
+    flatVillages,
+    allKecamatans,
+    byKelLower,
+    byKelBare,
+    byKecBare,
+  };
+  wilayahIndexCache.set(wilayahList, idx);
+  return idx;
+}
+
+interface ProposalLookupIndex {
+  byId: Map<string, ProposalRecord>;
+  byNameTahun: Map<string, ProposalRecord>;
+  byName: Map<string, ProposalRecord>;
+  domicileByWilayah: WeakMap<
+    WilayahKabKota[],
+    Map<string, { kabKota: string; kecamatan: string; kelurahan: string }>
+  >;
+  kecCategoryByWilayah: WeakMap<WilayahKabKota[], Map<string, string>>;
+}
+
+const proposalIndexCache = new WeakMap<ProposalRecord[], ProposalLookupIndex>();
+
+function getProposalIndex(proposals: ProposalRecord[]): ProposalLookupIndex {
+  const cached = proposalIndexCache.get(proposals);
+  if (cached) return cached;
+
+  const byId = new Map<string, ProposalRecord>();
+  const byNameTahun = new Map<string, ProposalRecord>();
+  const byName = new Map<string, ProposalRecord>();
+  for (const p of proposals) {
+    if (!byId.has(p.id)) byId.set(p.id, p);
+    const ntKey = `${p.tahun}::${p.namaProposal}`;
+    if (!byNameTahun.has(ntKey)) byNameTahun.set(ntKey, p);
+    if (!byName.has(p.namaProposal)) byName.set(p.namaProposal, p);
+  }
+  const idx: ProposalLookupIndex = {
+    byId,
+    byNameTahun,
+    byName,
+    domicileByWilayah: new WeakMap(),
+    kecCategoryByWilayah: new WeakMap(),
+  };
+  proposalIndexCache.set(proposals, idx);
+  return idx;
+}
+
 export function resolveProposalDomicile(
   proposalName: string,
   proposals: ProposalRecord[],
@@ -106,10 +207,19 @@ export function resolveProposalDomicile(
   wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST
 ): { kabKota: string; kecamatan: string; kelurahan: string } {
   const trimmedName = proposalName.trim();
+  const propIdx = getProposalIndex(proposals);
+  let domCache = propIdx.domicileByWilayah.get(wilayahList);
+  if (!domCache) {
+    domCache = new Map();
+    propIdx.domicileByWilayah.set(wilayahList, domCache);
+  }
+  const cacheKey = `${tahun || ''}::${trimmedName}`;
+  const cachedDom = domCache.get(cacheKey);
+  if (cachedDom) return cachedDom;
+
   const matchedProposal =
-    (tahun
-      ? proposals.find((p) => p.namaProposal === trimmedName && p.tahun === tahun)
-      : undefined) ?? proposals.find((p) => p.namaProposal === trimmedName);
+    (tahun ? propIdx.byNameTahun.get(`${tahun}::${trimmedName}`) : undefined) ??
+    propIdx.byName.get(trimmedName);
 
   let kabKota = matchedProposal?.kabKota?.trim() || '';
   let kecamatan = matchedProposal?.kecamatan?.trim() || '';
@@ -120,29 +230,18 @@ export function resolveProposalDomicile(
   }
 
   const lower = trimmedName.toLowerCase();
+  const wIdx = getWilayahIndex(wilayahList);
 
   if (!isKecamatanProposal(trimmedName)) {
     // Find matching kelurahan/desa across wilayahList if kelurahan or kecamatan is still missing
     if (!kelurahan || !kecamatan) {
-      const flatVillages: { kabKota: string; kecamatan: string; kelurahan: string }[] = [];
-      for (const kab of wilayahList) {
-        for (const kec of kab.kecamatanList) {
-          for (const kel of kec.kelurahanList) {
-            flatVillages.push({ kabKota: kab.nama, kecamatan: kec.nama, kelurahan: kel });
-          }
-        }
-      }
-      flatVillages.sort((a, b) => b.kelurahan.length - a.kelurahan.length);
-
-      const villageMatch = flatVillages.find((v) => {
-        const vLower = v.kelurahan.toLowerCase();
-        const bare = vLower.replace(/^(kelurahan|desa)\s+/i, '').trim();
-        return (
-          lower.includes(vLower) ||
-          (kelurahan && vLower === kelurahan.toLowerCase()) ||
-          (bare && (lower.includes(`kelurahan ${bare}`) || lower.includes(`desa ${bare}`)))
-        );
-      });
+      const kelLowerCheck = kelurahan ? kelurahan.toLowerCase() : '';
+      const villageMatch = wIdx.flatVillages.find(
+        (v) =>
+          lower.includes(v.lower) ||
+          (kelLowerCheck && v.lower === kelLowerCheck) ||
+          (v.bare && (lower.includes(`kelurahan ${v.bare}`) || lower.includes(`desa ${v.bare}`)))
+      );
 
       if (villageMatch) {
         if (!kabKota) kabKota = villageMatch.kabKota;
@@ -156,11 +255,8 @@ export function resolveProposalDomicile(
       }
     }
   } else if (!kecamatan) {
-    const allKecamatans = wilayahList
-      .flatMap((kab) => kab.kecamatanList.map((kec) => ({ kabKota: kab.nama, kecamatan: kec.nama })))
-      .sort((a, b) => b.kecamatan.length - a.kecamatan.length);
-    const kecMatch = allKecamatans.find((item) =>
-      lower.includes(`kecamatan ${item.kecamatan.toLowerCase()}`)
+    const kecMatch = wIdx.allKecamatans.find((item) =>
+      lower.includes(`kecamatan ${item.lower}`)
     );
     if (kecMatch) {
       if (!kabKota) kabKota = kecMatch.kabKota;
@@ -173,7 +269,9 @@ export function resolveProposalDomicile(
     }
   }
 
-  return { kabKota, kecamatan, kelurahan };
+  const result = { kabKota, kecamatan, kelurahan };
+  domCache.set(cacheKey, result);
+  return result;
 }
 
 export function normalizeWilayahToken(
@@ -273,47 +371,49 @@ export function resolveKpmDomicile(
   let kecamatan = (record.kecamatan || '').trim();
   let kelurahan = (record.kelurahan || '').trim();
 
+  // Fast path: all domicile fields already present on record
+  if (kabKota && kecamatan && kelurahan) {
+    return { kabKota, kecamatan, kelurahan };
+  }
+
   const propName = (record.proposal || '').trim();
   if (propName) {
-    const matchedProp =
-      (record.proposalId ? proposals.find((p) => p.id === record.proposalId) : undefined) ??
-      resolveProposalDomicile(propName, proposals, record.tahun, wilayahList);
-    if ('namaProposal' in matchedProp) {
-      const dom = resolveProposalDomicile(matchedProp.namaProposal, proposals, matchedProp.tahun, wilayahList);
+    const propIdx = getProposalIndex(proposals);
+    const matchedProp = record.proposalId ? propIdx.byId.get(record.proposalId) : undefined;
+    if (matchedProp) {
+      const dom = resolveProposalDomicile(
+        matchedProp.namaProposal,
+        proposals,
+        matchedProp.tahun,
+        wilayahList
+      );
       if (!kabKota) kabKota = matchedProp.kabKota?.trim() || dom.kabKota;
       if (!kecamatan) kecamatan = matchedProp.kecamatan?.trim() || dom.kecamatan;
       if (!kelurahan) kelurahan = matchedProp.kelurahan?.trim() || dom.kelurahan;
     } else {
-      if (!kabKota) kabKota = matchedProp.kabKota;
-      if (!kecamatan) kecamatan = matchedProp.kecamatan;
-      if (!kelurahan) kelurahan = matchedProp.kelurahan;
+      const dom = resolveProposalDomicile(propName, proposals, record.tahun, wilayahList);
+      if (!kabKota) kabKota = dom.kabKota;
+      if (!kecamatan) kecamatan = dom.kecamatan;
+      if (!kelurahan) kelurahan = dom.kelurahan;
     }
   }
 
   if ((!kabKota || !kecamatan) && kelurahan) {
+    const wIdx = getWilayahIndex(wilayahList);
     const kelLower = kelurahan.toLowerCase();
     const bareKel = kelLower.replace(/^(kelurahan|desa)\s+/i, '').trim();
-    outer: for (const w of wilayahList) {
-      for (const kec of w.kecamatanList) {
-        const hit = kec.kelurahanList.some((k) => {
-          const kLow = k.toLowerCase();
-          return kLow === kelLower || kLow.replace(/^(kelurahan|desa)\s+/i, '').trim() === bareKel;
-        });
-        if (hit) {
-          if (!kabKota) kabKota = w.nama;
-          if (!kecamatan) kecamatan = kec.nama;
-          break outer;
-        }
-      }
+    const hit = wIdx.byKelLower.get(kelLower) ?? (bareKel ? wIdx.byKelBare.get(bareKel) : undefined);
+    if (hit) {
+      if (!kabKota) kabKota = hit.kabKota;
+      if (!kecamatan) kecamatan = hit.kecamatan;
     }
   }
 
   if (!kabKota && kecamatan) {
+    const wIdx = getWilayahIndex(wilayahList);
     const kecBare = kecamatan.replace(/^kecamatan\s+/i, '').trim().toLowerCase();
-    const matchedKab = wilayahList.find((w) =>
-      w.kecamatanList.some((k) => k.nama.toLowerCase() === kecBare)
-    );
-    if (matchedKab) kabKota = matchedKab.nama;
+    const matchedKab = wIdx.byKecBare.get(kecBare);
+    if (matchedKab) kabKota = matchedKab;
   }
 
   return { kabKota, kecamatan, kelurahan };
@@ -387,26 +487,36 @@ export function resolveProposalKecamatanCategory(
   tahun?: string,
   wilayahList: WilayahKabKota[] = INITIAL_WILAYAH_LIST
 ): string {
+  const propIdx = getProposalIndex(proposals);
+  let catCache = propIdx.kecCategoryByWilayah.get(wilayahList);
+  if (!catCache) {
+    catCache = new Map();
+    propIdx.kecCategoryByWilayah.set(wilayahList, catCache);
+  }
+  const cacheKey = `${tahun || ''}::${proposalName}`;
+  const cached = catCache.get(cacheKey);
+  if (cached) return cached;
+
+  let result = 'Wilayah Lainnya';
   const domicile = resolveProposalDomicile(proposalName, proposals, tahun, wilayahList);
   if (domicile.kecamatan) {
-    return formatKecamatanCategoryLabel(domicile.kecamatan);
+    result = formatKecamatanCategoryLabel(domicile.kecamatan);
+  } else {
+    const lower = proposalName.trim().toLowerCase();
+    const wIdx = getWilayahIndex(wilayahList);
+    const directKec = wIdx.allKecamatans.find((kec) => lower.includes(kec.lower));
+    if (directKec) {
+      result = formatKecamatanCategoryLabel(directKec.kecamatan);
+    } else {
+      const regexMatch = proposalName.match(/Kecamatan\s+([^,/-]+)/i);
+      if (regexMatch) {
+        result = formatKecamatanCategoryLabel(regexMatch[1]);
+      }
+    }
   }
 
-  const lower = proposalName.trim().toLowerCase();
-  const allKecamatans = wilayahList
-    .flatMap((w) => w.kecamatanList.map((k) => k.nama))
-    .sort((a, b) => b.length - a.length);
-  const directKec = allKecamatans.find((kec) => lower.includes(kec.toLowerCase()));
-  if (directKec) {
-    return formatKecamatanCategoryLabel(directKec);
-  }
-
-  const regexMatch = proposalName.match(/Kecamatan\s+([^,/-]+)/i);
-  if (regexMatch) {
-    return formatKecamatanCategoryLabel(regexMatch[1]);
-  }
-
-  return 'Wilayah Lainnya';
+  catCache.set(cacheKey, result);
+  return result;
 }
 
 export function sortProposalsWithinKecamatan<T>(
@@ -2284,20 +2394,95 @@ export function getItemsForYear(catalog: ItemBantuan[], tahun: string): ItemBant
   return catalog.filter((item) => item.tahun === tahun);
 }
 
+interface ParsedSubItemEntry {
+  subName: string;
+  key: string;
+  normalizedSubName: string;
+  baseName: string;
+  formatted: string;
+  volume: number;
+  satuan: string;
+}
+
+interface CatalogLookupIndex {
+  exact: Map<string, ItemBantuan>;
+  latestByCode: Map<string, ItemBantuan>;
+  parsedSubItems: WeakMap<ItemBantuan, ParsedSubItemEntry[]>;
+}
+
+const catalogIndexCache = new WeakMap<ItemBantuan[], CatalogLookupIndex>();
+const initialCatalogByCode = new Map<string, ItemBantuan>();
+for (const item of INITIAL_ITEM_LIST) {
+  if (!initialCatalogByCode.has(item.code)) {
+    initialCatalogByCode.set(item.code, item);
+  }
+}
+
+function getCatalogIndex(catalog: ItemBantuan[]): CatalogLookupIndex {
+  const cached = catalogIndexCache.get(catalog);
+  if (cached) return cached;
+
+  const exact = new Map<string, ItemBantuan>();
+  const latestByCode = new Map<string, ItemBantuan>();
+
+  for (const item of catalog) {
+    const exactKey = `${item.tahun}::${item.code}`;
+    if (!exact.has(exactKey)) {
+      exact.set(exactKey, item);
+    }
+    const prev = latestByCode.get(item.code);
+    if (!prev || item.tahun.localeCompare(prev.tahun) > 0) {
+      latestByCode.set(item.code, item);
+    }
+  }
+
+  const idx: CatalogLookupIndex = {
+    exact,
+    latestByCode,
+    parsedSubItems: new WeakMap(),
+  };
+  catalogIndexCache.set(catalog, idx);
+  return idx;
+}
+
+function getParsedSubItemsForPackage(
+  catalog: ItemBantuan[],
+  pkg: ItemBantuan
+): ParsedSubItemEntry[] {
+  const idx = getCatalogIndex(catalog);
+  const cached = idx.parsedSubItems.get(pkg);
+  if (cached) return cached;
+
+  const parsedList = pkg.subItems.map((subName) => {
+    const parsed = parseSubItemSpec(subName, { itemCode: pkg.code, itemName: pkg.name });
+    return {
+      subName,
+      key: normalizeSubItemKey(parsed.baseName || subName),
+      normalizedSubName: normalizeSubItemKey(subName),
+      baseName: parsed.baseName,
+      formatted: parsed.formatted || subName,
+      volume: parsed.volume,
+      satuan: parsed.satuan,
+    };
+  });
+
+  idx.parsedSubItems.set(pkg, parsedList);
+  return parsedList;
+}
+
 export function resolvePackageForKpm(
   catalog: ItemBantuan[],
   tahun: string,
   code: string
 ): ItemBantuan {
-  const exact = catalog.find((item) => item.tahun === tahun && item.code === code);
+  const idx = getCatalogIndex(catalog);
+  const exact = idx.exact.get(`${tahun}::${code}`);
   if (exact) return exact;
 
-  const fallbackMatch = [...catalog]
-    .filter((item) => item.code === code)
-    .sort((a, b) => b.tahun.localeCompare(a.tahun))[0];
+  const fallbackMatch = idx.latestByCode.get(code);
   if (fallbackMatch) return fallbackMatch;
 
-  const initialMatch = INITIAL_ITEM_LIST.find((item) => item.code === code);
+  const initialMatch = initialCatalogByCode.get(code);
   if (initialMatch) return initialMatch;
 
   return {
@@ -2324,16 +2509,17 @@ export function getKpmSubItemStatusList(
   catalog: ItemBantuan[]
 ): ResolvedKpmSubItem[] {
   const pkg = resolvePackageForKpm(catalog, record.tahun, record.item);
+  if (pkg.subItems.length === 0) return [];
   const deliveries = record.subItemDeliveries || {};
+  const parsedEntries = getParsedSubItemsForPackage(catalog, pkg);
 
-  return pkg.subItems.map((subName) => {
-    const parsed = parseSubItemSpec(subName, { itemCode: pkg.code, itemName: pkg.name });
-    const key = normalizeSubItemKey(parsed.baseName || subName);
+  return parsedEntries.map((entry) => {
+    const { key, subName, normalizedSubName, baseName, formatted, volume, satuan } = entry;
     let state =
       deliveries[key] ??
-      deliveries[normalizeSubItemKey(subName)] ??
+      deliveries[normalizedSubName] ??
       deliveries[subName] ??
-      deliveries[parsed.baseName];
+      deliveries[baseName];
     if (!state && key === 'selang gas & regulator') {
       const legacyCombo =
         deliveries['selang & regulator'] ??
@@ -2352,10 +2538,10 @@ export function getKpmSubItemStatusList(
     }
     return {
       key,
-      name: parsed.formatted || subName,
-      baseName: parsed.baseName,
-      volume: parsed.volume,
-      satuan: parsed.satuan,
+      name: formatted,
+      baseName,
+      volume,
+      satuan,
       delivered: Boolean(state?.delivered),
       updatedAt: state?.updatedAt,
       updatedBy: state?.updatedBy,
