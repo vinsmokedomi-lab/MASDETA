@@ -15,11 +15,13 @@ import {
   isLocalPendingDocument,
 } from './photoUploadManager';
 
+export type ZipPhotoCategory = SingleDocumentKey | 'rumah' | 'lainnya';
+
 export interface ExportProposalPhotosZipOptions {
   proposalName: string;
   tahun?: string;
   mergedSlots: MergedProposalSlot[];
-  category?: SingleDocumentKey;
+  category?: ZipPhotoCategory;
   kelurahanFilter?: string;
   onProgress?: (done: number, total: number) => void;
 }
@@ -212,12 +214,29 @@ export async function exportProposalPhotosZip({
 }: ExportProposalPhotosZipOptions): Promise<ExportProposalPhotosZipResult> {
   const entriesWithDoc = mergedSlots
     .filter((entry): entry is Extract<MergedProposalSlot, { kind: 'kpm' }> => entry.kind === 'kpm')
-    .map((entry) => ({
-      slotNumber: entry.slotNumber,
-      record: entry.record,
-      doc: entry.record.documents[category],
-    }))
-    .filter((item) => Boolean(item.doc && hasRenderableMedia(item.doc)));
+    .flatMap((entry) => {
+      if (category === 'rumah' || category === 'lainnya') {
+        const arr = entry.record.documents[category] || [];
+        return arr
+          .filter((d) => hasRenderableMedia(d))
+          .map((doc, idx) => ({
+            slotNumber: entry.slotNumber,
+            record: entry.record,
+            doc,
+            suffix: arr.length > 1 ? `_${idx + 1}` : '',
+          }));
+      }
+      const singleDoc = entry.record.documents[category];
+      if (!singleDoc || !hasRenderableMedia(singleDoc)) return [];
+      return [
+        {
+          slotNumber: entry.slotNumber,
+          record: entry.record,
+          doc: singleDoc,
+          suffix: '',
+        },
+      ];
+    });
 
   if (entriesWithDoc.length === 0) {
     throw new Error('Tidak ada foto pada daftar KPM yang terpilih untuk diunduh sebagai ZIP.');
@@ -242,7 +261,7 @@ export async function exportProposalPhotosZip({
       const seqLabel = String(item.slotNumber).padStart(2, '0');
       const safeName = sanitizeZipSegment(item.record.nama, 36) || `KPM_${seqLabel}`;
       if (resolved) {
-        const fileName = `${seqLabel}_${safeName}.${resolved.ext}`;
+        const fileName = `${seqLabel}_${safeName}${item.suffix}.${resolved.ext}`;
         zip.file(fileName, resolved.bytes);
         exportedCount += 1;
       } else {
@@ -280,7 +299,11 @@ export async function exportProposalPhotosZip({
         ? 'Foto_Survey'
         : category === 'ktp'
           ? 'Foto_KTP'
-          : 'Foto_KK';
+          : category === 'kk'
+            ? 'Foto_KK'
+            : category === 'rumah'
+              ? 'Foto_Rumah'
+              : 'Foto_Lainnya';
   const kelSuffix =
     kelurahanFilter && kelurahanFilter !== 'all' ? `_${kelurahanFilter}` : '';
   const zipFileName = sanitizeZipFileName(

@@ -25,6 +25,7 @@ import {
   SCHEDULE_CATEGORY_LABELS,
   ScheduleBook,
   ScheduleEventItem,
+  SingleDocumentKey,
   SptjmTemplateConfig,
   WilayahKabKota,
   resolveScheduleBookId,
@@ -9748,6 +9749,7 @@ export interface ExportProposalPhotoLpjOptions {
   wilayahList?: WilayahKabKota[];
   reportTemplate?: ReportTemplateConfig;
   layoutMode?: '4up' | '6up';
+  photoCategory?: SingleDocumentKey;
   kelurahanFilter?: string;
   statusFilterLabel?: string;
   fileName?: string;
@@ -9761,6 +9763,7 @@ export async function exportProposalPhotoLpjPdf({
   wilayahList = INITIAL_WILAYAH_LIST,
   reportTemplate,
   layoutMode = '4up',
+  photoCategory = 'penerima',
   kelurahanFilter,
   statusFilterLabel,
   fileName,
@@ -9779,7 +9782,7 @@ export async function exportProposalPhotoLpjPdf({
     throw new Error('Tidak ada data KPM pada daftar untuk dicetak ke PDF LPJ Foto.');
   }
 
-  // Load foto penerima secara paralel bertahap (batch 4) agar cepat dan aman memori
+  // Load foto secara paralel bertahap (batch 4) agar cepat dan aman memori
   const loadedImages = new Map<string, LoadedPdfImage | null>();
   let photoLoadedCount = 0;
   const BATCH_SIZE = 4;
@@ -9787,7 +9790,7 @@ export async function exportProposalPhotoLpjPdf({
     const batch = kpmEntries.slice(i, i + BATCH_SIZE);
     const res = await Promise.all(
       batch.map(async (entry) => {
-        const docFile = entry.record.documents.penerima;
+        const docFile = entry.record.documents[photoCategory];
         if (!docFile || !hasRenderableMedia(docFile)) return { id: entry.record.id, img: null };
         const img = await resolveKpmPortraitForPdf(docFile);
         return { id: entry.record.id, img };
@@ -9821,13 +9824,26 @@ export async function exportProposalPhotoLpjPdf({
   const rowGap = 4.5;
   const cardW = (contentW - colGap) / cols;
 
+  const categoryTitleLabel =
+    photoCategory === 'penerima'
+      ? 'FOTO PENERIMA'
+      : photoCategory === 'survey'
+        ? 'FOTO SURVEY'
+        : photoCategory === 'ktp'
+          ? 'FOTO KTP'
+          : 'FOTO KK';
+
   const institutionName = (
-    reportTemplate?.institutionLine1 || 'DOKUMENTASI PENYALURAN BANTUAN PERALATAN KERJA'
+    (reportTemplate?.enabled ? reportTemplate.orgHeaderLine1 : '') ||
+    'DOKUMENTASI PENYALURAN BANTUAN PERALATAN KERJA'
   ).trim();
-  const subInstName = (reportTemplate?.institutionLine2 || 'LAPORAN PERTANGGUNGJAWABAN (LPJ) FOTO PENERIMA').trim();
+  const subInstName = (
+    (reportTemplate?.enabled ? reportTemplate.orgHeaderLine2 : '') ||
+    `LAPORAN PERTANGGUNGJAWABAN (LPJ) ${categoryTitleLabel}`
+  ).trim();
 
   const attendedCount = kpmEntries.filter((e) => Boolean(e.record.attendance?.present)).length;
-  const withPhotoCount = kpmEntries.filter((e) => hasRenderableMedia(e.record.documents.penerima)).length;
+  const withPhotoCount = kpmEntries.filter((e) => hasRenderableMedia(e.record.documents[photoCategory])).length;
 
   const drawPageHeader = (pageIndex: number) => {
     doc.setTextColor(15, 23, 42);
@@ -9960,12 +9976,12 @@ export async function exportProposalPhotoLpjPdf({
           // leave box cleanly drawn
         }
       } else {
-        const hasDoc = hasRenderableMedia(rec.documents.penerima);
+        const hasDoc = hasRenderableMedia(rec.documents[photoCategory]);
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(8.5);
         doc.setTextColor(148, 163, 184);
         doc.text(
-          hasDoc ? 'Foto tidak dapat dimuat (Offline/CORS)' : 'Belum ada Foto Penerima',
+          hasDoc ? 'Foto tidak dapat dimuat (Offline/CORS)' : `Belum ada ${categoryTitleLabel}`,
           px + pw / 2,
           py + ph / 2,
           { align: 'center', maxWidth: pw - 6 }

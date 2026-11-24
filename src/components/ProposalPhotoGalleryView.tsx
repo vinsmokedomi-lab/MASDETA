@@ -1,11 +1,15 @@
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowLeft,
   ArrowLeftRight,
   Camera,
+  Check,
   CheckCircle2,
   ChevronRight,
   Clock,
+  Crosshair,
+  Expand,
   FileDown,
   FolderArchive,
   Image as ImageIcon,
@@ -15,12 +19,14 @@ import {
   Loader2,
   Lock,
   RotateCcw,
+  ScanSearch,
   Search,
   Share2,
   Upload,
   UserCheck,
   Users,
   X,
+  ZoomIn,
 } from 'lucide-react';
 import { INITIAL_WILAYAH_LIST } from '../data/kpmOptions';
 import {
@@ -37,6 +43,7 @@ import {
   buildMergedProposalSlots,
   formatNikDisplay,
   hasRenderableMedia,
+  MergedProposalSlot,
   resolveKpmDomicile,
   resolveProposalKecamatanCategory,
   resolveProposalSlotStateForGroup,
@@ -55,6 +62,7 @@ import {
   ZipPhotoCategory,
 } from '../utils/photoZipExporter';
 import { useIsDesktopWeb } from '../utils/platform';
+import { DocumentLightbox } from './DocumentLightbox';
 import { DriveImage } from './DriveImage';
 import { FilterSelect, SegmentedTabs } from './FormControls';
 import { SwapPenerimaPhotoModal } from './SwapPenerimaPhotoModal';
@@ -70,7 +78,9 @@ type GalleryPhotoCategoryFilter =
 
 type GalleryStatusFilter = 'all' | 'has_penerima' | 'missing_penerima';
 type GalleryAttendanceFilter = 'all' | 'present' | 'absent';
-type GalleryLayoutMode = 'list' | 'grid';
+type GalleryLayoutMode = 'list' | 'grid' | 'dinsos_audit';
+type DinsosAuditMark = 'verified' | 'mismatch';
+type DinsosAuditFilter = 'all' | 'unchecked' | 'verified' | 'mismatch';
 
 interface ProposalPhotoGalleryViewProps {
   proposals: ProposalRecord[];
@@ -154,10 +164,12 @@ function GalleryThumb({
   doc,
   alt,
   className,
+  fallbackWidth = 720,
 }: {
   doc: KpmDocumentFile;
   alt: string;
   className?: string;
+  fallbackWidth?: number;
 }) {
   const [failed, setFailed] = useState(false);
 
@@ -179,10 +191,129 @@ function GalleryThumb({
       doc={doc}
       alt={alt}
       loading="lazy"
-      fallbackWidth={480}
+      fallbackWidth={fallbackWidth}
       onBothFailed={() => setFailed(true)}
       className={className}
     />
+  );
+}
+
+function AuditPhotoCanvas({
+  doc,
+  alt,
+  zoom,
+  focalPoint,
+  isCalibratingFocus,
+  onSetFocalPoint,
+  onOpenLightbox,
+}: {
+  doc: KpmDocumentFile;
+  alt: string;
+  zoom: number;
+  focalPoint: { x: number; y: number };
+  isCalibratingFocus: boolean;
+  onSetFocalPoint: (next: { x: number; y: number }) => void;
+  onOpenLightbox: () => void;
+}) {
+  const [hoverPos, setHoverPos] = useState<{ x: number; y: number } | null>(null);
+  const effectiveZoom = isCalibratingFocus ? 1 : zoom;
+
+  const computePercent = (e: MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return { x: 50, y: 50 };
+    const x = Math.max(5, Math.min(95, ((e.clientX - rect.left) / rect.width) * 100));
+    const y = Math.max(5, Math.min(95, ((e.clientY - rect.top) / rect.height) * 100));
+    return { x: Number(x.toFixed(1)), y: Number(y.toFixed(1)) };
+  };
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={(e) => {
+        if (isCalibratingFocus) {
+          onSetFocalPoint(computePercent(e));
+        } else {
+          onOpenLightbox();
+        }
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpenLightbox();
+        }
+      }}
+      onMouseMove={(e) => {
+        if (effectiveZoom <= 1.05 || isCalibratingFocus) {
+          setHoverPos(computePercent(e));
+        } else if (hoverPos) {
+          setHoverPos(null);
+        }
+      }}
+      onMouseLeave={() => setHoverPos(null)}
+      className={`group relative aspect-[4/3] w-full overflow-hidden bg-slate-900/5 focus:outline-none focus:ring-2 focus:ring-teal-700 ${
+        isCalibratingFocus ? 'cursor-crosshair' : 'cursor-zoom-in'
+      }`}
+    >
+      <div
+        className="h-full w-full transition-transform duration-200 ease-out"
+        style={{
+          transform: effectiveZoom > 1 ? `scale(${effectiveZoom})` : undefined,
+          transformOrigin: `${focalPoint.x}% ${focalPoint.y}%`,
+        }}
+      >
+        <GalleryThumb
+          doc={doc}
+          alt={alt}
+          fallbackWidth={1000}
+          className="h-full w-full object-contain bg-slate-950/90"
+        />
+      </div>
+
+      {/* Focal calibration guide */}
+      {isCalibratingFocus && (
+        <>
+          <div
+            className="pointer-events-none absolute h-7 w-7 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-amber-400 bg-amber-400/20 shadow-md"
+            style={{ left: `${focalPoint.x}%`, top: `${focalPoint.y}%` }}
+          />
+          <div className="pointer-events-none absolute inset-x-3 bottom-3 rounded-xl bg-amber-600/95 px-3 py-1.5 text-center text-[11px] font-bold text-white shadow-lg">
+            Klik tepat pada kertas DINSOS di foto ini untuk atur fokus semua kartu
+          </div>
+        </>
+      )}
+
+      {/* Hover magnifier loupe when viewing full 1x photo on desktop */}
+      {!isCalibratingFocus && effectiveZoom <= 1.05 && hoverPos && (
+        <div
+          className="pointer-events-none hidden md:block absolute z-10 h-40 w-40 overflow-hidden rounded-2xl border-2 border-amber-400 bg-slate-950 shadow-2xl ring-2 ring-black/40"
+          style={{
+            left: hoverPos.x > 62 ? '10px' : 'auto',
+            right: hoverPos.x > 62 ? 'auto' : '10px',
+            top: hoverPos.y > 55 ? '10px' : 'auto',
+            bottom: hoverPos.y > 55 ? 'auto' : '10px',
+          }}
+        >
+          <div
+            className="h-full w-full"
+            style={{
+              transform: 'scale(3.4)',
+              transformOrigin: `${hoverPos.x}% ${hoverPos.y}%`,
+            }}
+          >
+            <GalleryThumb
+              doc={doc}
+              alt=""
+              fallbackWidth={1200}
+              className="h-full w-full object-contain"
+            />
+          </div>
+          <span className="absolute top-1.5 left-1.5 rounded bg-amber-500/95 px-1.5 py-0.5 font-mono text-[9px] font-bold text-slate-950">
+            3.4× Kaca Pembesar
+          </span>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -224,6 +355,16 @@ export function ProposalPhotoGalleryView({
   const [layoutMode, setLayoutMode] = useState<GalleryLayoutMode>('list');
   const [showEmptySlots, setShowEmptySlots] = useState<boolean>(true);
   const [query, setQuery] = useState('');
+  const [dinsosAuditMarks, setDinsosAuditMarks] = useState<Record<string, DinsosAuditMark>>({});
+  const [dinsosAuditFilter, setDinsosAuditFilter] = useState<DinsosAuditFilter>('all');
+  const [auditZoom, setAuditZoom] = useState<1 | 2.4 | 3.2>(2.4);
+  const [auditFocalPoint, setAuditFocalPoint] = useState<{ x: number; y: number }>({
+    x: 56,
+    y: 56,
+  });
+  const [isCalibratingFocus, setIsCalibratingFocus] = useState(false);
+  const [cardFullViewMap, setCardFullViewMap] = useState<Record<string, boolean>>({});
+  const [activePreviewKey, setActivePreviewKey] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [busyKpmId, setBusyKpmId] = useState<string | null>(null);
   const [swapTarget, setSwapTarget] = useState<{
@@ -298,6 +439,58 @@ export function ProposalPhotoGalleryView({
       null,
     [scopedProposals, proposals, selectedProposalId]
   );
+
+  // Load & persist DINSOS audit marks per proposal in localStorage
+  useEffect(() => {
+    if (!activeProposal?.id) {
+      setDinsosAuditMarks({});
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(`masdeta_dinsos_audit_v1_${activeProposal.id}`);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Record<string, DinsosAuditMark>;
+        setDinsosAuditMarks(parsed && typeof parsed === 'object' ? parsed : {});
+      } else {
+        setDinsosAuditMarks({});
+      }
+    } catch {
+      setDinsosAuditMarks({});
+    }
+  }, [activeProposal?.id]);
+
+  const setKpmAuditMark = (kpmId: string, nextMark: DinsosAuditMark | null) => {
+    setDinsosAuditMarks((prev) => {
+      const next = { ...prev };
+      if (nextMark) {
+        next[kpmId] = nextMark;
+      } else {
+        delete next[kpmId];
+      }
+      if (activeProposal?.id) {
+        try {
+          window.localStorage.setItem(
+            `masdeta_dinsos_audit_v1_${activeProposal.id}`,
+            JSON.stringify(next)
+          );
+        } catch {
+          // ignore storage quota errors
+        }
+      }
+      return next;
+    });
+  };
+
+  const clearProposalAuditMarks = () => {
+    setDinsosAuditMarks({});
+    if (activeProposal?.id) {
+      try {
+        window.localStorage.removeItem(`masdeta_dinsos_audit_v1_${activeProposal.id}`);
+      } catch {
+        // ignore
+      }
+    }
+  };
 
   // Hitung ringkasan foto per proposal untuk label dropdown
   const proposalPhotoCountMap = useMemo(() => {
@@ -510,6 +703,131 @@ export function ProposalPhotoGalleryView({
     return cards;
   }, [layoutMode, filteredSlots, categoryFilter, proposals, wilayahList]);
 
+  const dinsosAuditAllCards = useMemo(() => {
+    const cards: {
+      key: string;
+      slotNumber: number;
+      record: KpmRecord;
+      kelurahan: string;
+      photo: KpmPhotoEntry | null;
+      auditStatus?: DinsosAuditMark;
+    }[] = [];
+    for (const entry of filteredSlots) {
+      if (entry.kind !== 'kpm') continue;
+      const rec = entry.record;
+      const dom = resolveKpmDomicile(rec, proposals, wilayahList);
+      const kel = dom.kelurahan?.trim() || rec.kelurahan?.trim() || 'Belum ditentukan';
+      const targetCat: GalleryPhotoCategoryFilter =
+        categoryFilter === 'all' ? 'penerima' : categoryFilter;
+      const primaryPhotos = collectKpmPhotos(rec, targetCat);
+      const photo = primaryPhotos[0] ?? null;
+      cards.push({
+        key: `audit-${rec.id}`,
+        slotNumber: entry.slotNumber,
+        record: rec,
+        kelurahan: kel,
+        photo,
+        auditStatus: dinsosAuditMarks[rec.id],
+      });
+    }
+    return cards;
+  }, [filteredSlots, categoryFilter, proposals, wilayahList, dinsosAuditMarks]);
+
+  const dinsosAuditStats = useMemo(() => {
+    let verified = 0;
+    let mismatch = 0;
+    let unchecked = 0;
+    for (const card of dinsosAuditAllCards) {
+      if (card.auditStatus === 'verified') verified += 1;
+      else if (card.auditStatus === 'mismatch') mismatch += 1;
+      else unchecked += 1;
+    }
+    return {
+      total: dinsosAuditAllCards.length,
+      verified,
+      mismatch,
+      unchecked,
+    };
+  }, [dinsosAuditAllCards]);
+
+  const dinsosAuditCards = useMemo(() => {
+    if (dinsosAuditFilter === 'all') return dinsosAuditAllCards;
+    return dinsosAuditAllCards.filter((card) => {
+      if (dinsosAuditFilter === 'verified') return card.auditStatus === 'verified';
+      if (dinsosAuditFilter === 'mismatch') return card.auditStatus === 'mismatch';
+      return !card.auditStatus;
+    });
+  }, [dinsosAuditAllCards, dinsosAuditFilter]);
+
+  interface GalleryPreviewSequenceItem {
+    previewKey: string;
+    slotNumber: number;
+    seqLabel: string;
+    record: KpmRecord;
+    photo: KpmPhotoEntry;
+  }
+
+  const previewSequence = useMemo<GalleryPreviewSequenceItem[]>(() => {
+    if (layoutMode === 'dinsos_audit') {
+      return dinsosAuditCards
+        .filter((c): c is typeof c & { photo: KpmPhotoEntry } => Boolean(c.photo))
+        .map((c) => ({
+          previewKey: `${c.record.id}::${c.photo.key}`,
+          slotNumber: c.slotNumber,
+          seqLabel: String(c.slotNumber).padStart(2, '0'),
+          record: c.record,
+          photo: c.photo,
+        }));
+    }
+    if (layoutMode === 'grid') {
+      return gridPhotoCards
+        .filter((c): c is typeof c & { photo: KpmPhotoEntry } => Boolean(c.photo))
+        .map((c) => ({
+          previewKey: `${c.record.id}::${c.photo.key}`,
+          slotNumber: c.slotNumber,
+          seqLabel: String(c.slotNumber).padStart(2, '0'),
+          record: c.record,
+          photo: c.photo,
+        }));
+    }
+    const list: GalleryPreviewSequenceItem[] = [];
+    for (const entry of filteredSlots) {
+      if (entry.kind !== 'kpm') continue;
+      const photos = collectKpmPhotos(entry.record, categoryFilter);
+      const seqLabel = String(entry.slotNumber).padStart(2, '0');
+      for (const p of photos) {
+        list.push({
+          previewKey: `${entry.record.id}::${p.key}`,
+          slotNumber: entry.slotNumber,
+          seqLabel,
+          record: entry.record,
+          photo: p,
+        });
+      }
+    }
+    return list;
+  }, [layoutMode, dinsosAuditCards, gridPhotoCards, filteredSlots, categoryFilter]);
+
+  const activePreviewIdx = useMemo(
+    () =>
+      activePreviewKey
+        ? previewSequence.findIndex((item) => item.previewKey === activePreviewKey)
+        : -1,
+    [activePreviewKey, previewSequence]
+  );
+
+  const activePreviewItem =
+    activePreviewIdx >= 0 ? previewSequence[activePreviewIdx] : null;
+
+  const openSequencePreview = (rec: KpmRecord, photo: KpmPhotoEntry) => {
+    const key = `${rec.id}::${photo.key}`;
+    if (previewSequence.some((item) => item.previewKey === key)) {
+      setActivePreviewKey(key);
+    } else {
+      onPreviewDocument(photo.doc, `${rec.nama} — ${photo.categoryLabel}`);
+    }
+  };
+
   const triggerUploadPenerima = (
     rec: KpmRecord,
     source: PhotoCaptureSource
@@ -559,14 +877,14 @@ export function ProposalPhotoGalleryView({
       ? categoryFilter
       : 'penerima';
 
-  const exportTargetEntries = useMemo(() => {
-    const visibleKpm = filteredSlots
-      .filter((entry): entry is Extract<typeof entry, { kind: 'kpm' }> => entry.kind === 'kpm')
-      .map((entry) => ({ slotNumber: entry.slotNumber, record: entry.record }));
+  const exportTargetEntries = useMemo<MergedProposalSlot[]>(() => {
+    const visibleKpm = filteredSlots.filter(
+      (entry): entry is Extract<MergedProposalSlot, { kind: 'kpm' }> => entry.kind === 'kpm'
+    );
     if (visibleKpm.length > 0) return visibleKpm;
-    return mergedSlots
-      .filter((entry): entry is Extract<typeof entry, { kind: 'kpm' }> => entry.kind === 'kpm')
-      .map((entry) => ({ slotNumber: entry.slotNumber, record: entry.record }));
+    return mergedSlots.filter(
+      (entry): entry is Extract<MergedProposalSlot, { kind: 'kpm' }> => entry.kind === 'kpm'
+    );
   }, [filteredSlots, mergedSlots]);
 
   const handleExportLpjPdf = async (layout: '4up' | '6up') => {
@@ -577,19 +895,19 @@ export function ProposalPhotoGalleryView({
     setIsExportingLpj(true);
     setExportProgressLabel(`Menyiapkan PDF LPJ (${layout === '4up' ? '4' : '6'} foto/hal)...`);
     try {
-      const zipCategory: ZipPhotoCategory =
+      const lpjCategory: SingleDocumentKey =
         categoryFilter === 'survey' || categoryFilter === 'ktp' || categoryFilter === 'kk'
           ? categoryFilter
           : 'penerima';
       const res = await exportProposalPhotoLpjPdf({
         proposal: activeProposal,
-        entries: exportTargetEntries,
+        mergedSlots: exportTargetEntries,
         items,
         wilayahList,
-        proposals,
         reportTemplate,
-        layout,
-        photoCategory: zipCategory,
+        layoutMode: layout,
+        photoCategory: lpjCategory,
+        kelurahanFilter,
         onProgress: (done, total) => {
           setExportProgressLabel(`Memuat foto ${done}/${total}...`);
         },
@@ -597,8 +915,8 @@ export function ProposalPhotoGalleryView({
       setExportNotice({
         type: 'success',
         message: res.openedNative
-          ? `PDF LPJ Foto "${res.savedFileName}" (${res.renderedCount} KPM) berhasil dibuat & dibuka.`
-          : `PDF LPJ Foto "${res.savedFileName}" (${res.renderedCount} KPM) berhasil diunduh.`,
+          ? `PDF LPJ Foto "${res.savedFileName}" (${res.count} KPM) berhasil dibuat & dibuka.`
+          : `PDF LPJ Foto "${res.savedFileName}" (${res.count} KPM) berhasil diunduh.`,
       });
     } catch (err) {
       setExportNotice({
@@ -628,9 +946,11 @@ export function ProposalPhotoGalleryView({
           ? categoryFilter
           : 'penerima';
       const res = await exportProposalPhotosZip({
-        proposal: activeProposal,
-        entries: exportTargetEntries,
+        proposalName: activeProposal.namaProposal,
+        tahun: activeProposal.tahun,
+        mergedSlots: exportTargetEntries,
         category: zipCategory,
+        kelurahanFilter,
         onProgress: (done, total) => {
           setExportProgressLabel(`Mengemas foto ${done}/${total}...`);
         },
@@ -642,8 +962,9 @@ export function ProposalPhotoGalleryView({
           pendingIosFile: res.pendingIosFile,
         });
       } else {
+        const skippedCount = Math.max(0, exportTargetEntries.length - res.totalWithPhoto);
         const skippedNote =
-          res.skippedCount > 0 ? ` (${res.skippedCount} KPM belum memiliki foto)` : '';
+          skippedCount > 0 ? ` (${skippedCount} KPM belum memiliki foto)` : '';
         setExportNotice({
           type: 'success',
           message: res.openedNative
@@ -918,6 +1239,18 @@ export function ProposalPhotoGalleryView({
                   <LayoutGrid className="h-3.5 w-3.5" />
                   <span>Grid Galeri</span>
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setLayoutMode('dinsos_audit')}
+                  className={`inline-flex min-h-[32px] items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold transition-colors whitespace-nowrap ${
+                    layoutMode === 'dinsos_audit'
+                      ? 'bg-amber-600 text-white shadow-xs'
+                      : 'text-amber-800 hover:bg-amber-50 hover:text-amber-900'
+                  }`}
+                >
+                  <ScanSearch className="h-3.5 w-3.5" />
+                  <span>Cek DINSOS</span>
+                </button>
               </div>
             </div>
 
@@ -1135,6 +1468,322 @@ export function ProposalPhotoGalleryView({
             <Images className="mx-auto h-9 w-9 text-slate-300" />
             <p className="mt-2 text-sm font-semibold text-slate-900">Belum ada proposal tersedia</p>
           </div>
+        ) : layoutMode === 'dinsos_audit' ? (
+          /* Mode Audit Nomor DINSOS */
+          <div className="space-y-3.5">
+            {/* Toolbar Zoom Serentak, Fokus Kertas, & Filter Audit */}
+            <section className="sticky top-2 z-10 rounded-2xl border border-amber-200 bg-amber-50/95 p-3.5 shadow-sm backdrop-blur-sm space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-xs font-bold text-amber-950">
+                      <ScanSearch className="h-4 w-4 text-amber-700 shrink-0" />
+                      <span>Mode Cek Nomor Kertas DINSOS</span>
+                    </span>
+                    <span className="rounded-md bg-white/90 px-2 py-0.5 text-[11px] font-semibold text-slate-700 border border-amber-200/80 tabular-nums">
+                      {dinsosAuditStats.verified}/{dinsosAuditStats.total} Sesuai
+                      {dinsosAuditStats.mismatch > 0
+                        ? ` · ${dinsosAuditStats.mismatch} Tertukar`
+                        : ''}
+                    </span>
+                  </div>
+                  <p className="mt-0.5 text-[11px] text-amber-900/80">
+                    Gunakan <strong>Zoom Fokus</strong> agar semua foto otomatis menyorot kertas DINSOS, atau gunakan <strong>1× + Kaca Pembesar</strong> lalu klik foto untuk slide cepat (panah ←/→).
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {([1, 2.4, 3.2] as const).map((preset) => {
+                    const active = auditZoom === preset;
+                    const label =
+                      preset === 1 ? '1× Normal' : preset === 2.4 ? '2.4× Fokus Kertas' : '3.2× Dekat';
+                    return (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => {
+                          setAuditZoom(preset);
+                          setIsCalibratingFocus(false);
+                        }}
+                        className={`inline-flex min-h-[32px] items-center gap-1 rounded-lg px-2.5 text-[11px] font-bold transition-colors whitespace-nowrap ${
+                          active
+                            ? 'bg-amber-700 text-white shadow-xs'
+                            : 'border border-amber-300 bg-white text-amber-950 hover:bg-amber-100/70'
+                        }`}
+                      >
+                        <ZoomIn className="h-3 w-3 shrink-0" />
+                        <span>{label}</span>
+                      </button>
+                    );
+                  })}
+
+                  <button
+                    type="button"
+                    onClick={() => setIsCalibratingFocus((v) => !v)}
+                    className={`inline-flex min-h-[32px] items-center gap-1 rounded-lg px-2.5 text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                      isCalibratingFocus
+                        ? 'bg-slate-900 text-white'
+                        : 'border border-amber-300 bg-white text-slate-700 hover:bg-amber-100/60'
+                    }`}
+                    title="Klik posisi kertas DINSOS di salah satu foto untuk menyelaraskan titik fokus zoom semua kartu"
+                  >
+                    <Crosshair className="h-3 w-3 shrink-0" />
+                    <span>{isCalibratingFocus ? 'Batal Atur Fokus' : 'Atur Titik Fokus'}</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-amber-200/70 pt-2.5">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {(
+                    [
+                      { key: 'all', label: `Semua (${dinsosAuditStats.total})` },
+                      { key: 'unchecked', label: `Belum Dicek (${dinsosAuditStats.unchecked})` },
+                      { key: 'verified', label: `Sesuai (${dinsosAuditStats.verified})` },
+                      { key: 'mismatch', label: `Tertukar (${dinsosAuditStats.mismatch})` },
+                    ] as const
+                  ).map((f) => (
+                    <button
+                      key={f.key}
+                      type="button"
+                      onClick={() => setDinsosAuditFilter(f.key)}
+                      className={`min-h-[28px] rounded-lg px-2.5 text-[11px] font-semibold transition-colors whitespace-nowrap ${
+                        dinsosAuditFilter === f.key
+                          ? 'bg-slate-900 text-white'
+                          : 'border border-amber-200 bg-white text-slate-700 hover:bg-amber-100/50'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {(auditFocalPoint.x !== 56 || auditFocalPoint.y !== 56) && (
+                    <button
+                      type="button"
+                      onClick={() => setAuditFocalPoint({ x: 56, y: 56 })}
+                      className="text-[11px] font-semibold text-amber-900 underline hover:text-amber-700"
+                    >
+                      Reset Titik Fokus
+                    </button>
+                  )}
+                  {(dinsosAuditStats.verified > 0 || dinsosAuditStats.mismatch > 0) && (
+                    <button
+                      type="button"
+                      onClick={clearProposalAuditMarks}
+                      className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-amber-100/50"
+                    >
+                      <RotateCcw className="h-3 w-3" />
+                      <span>Reset Tandai</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </section>
+
+            {dinsosAuditCards.length === 0 ? (
+              <div className="rounded-2xl border border-slate-200 bg-white px-6 py-12 text-center">
+                <Users className="mx-auto h-9 w-9 text-slate-300" />
+                <p className="mt-2.5 text-sm font-semibold text-slate-900">
+                  Tidak ada KPM pada filter audit ini
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Ubah filter audit atau kata kunci pencarian di atas.
+                </p>
+              </div>
+            ) : (
+              <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                {dinsosAuditCards.map((card) => {
+                  const seqLabel = String(card.slotNumber).padStart(2, '0');
+                  const isVerified = card.auditStatus === 'verified';
+                  const isMismatch = card.auditStatus === 'mismatch';
+                  const isFullFrameOverride = Boolean(cardFullViewMap[card.record.id]);
+                  const effectiveCardZoom = isFullFrameOverride ? 1 : auditZoom;
+                  const canUploadHere =
+                    Boolean(onEnqueuePhoto) && canUpdate && !isProposalLocked;
+
+                  return (
+                    <article
+                      key={card.key}
+                      className={`overflow-hidden rounded-2xl border bg-white transition-all ${
+                        isMismatch
+                          ? 'border-rose-300 ring-2 ring-rose-500/20'
+                          : isVerified
+                            ? 'border-emerald-300 ring-1 ring-emerald-500/20'
+                            : 'border-slate-200'
+                      }`}
+                    >
+                      {/* Top Header Bar showing target DINSOS number clearly */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-3.5 py-2.5">
+                        <div className="flex min-w-0 items-center gap-2.5">
+                          <span
+                            className={`inline-flex shrink-0 items-center rounded-xl px-2.5 py-1 font-mono text-xs font-extrabold tracking-wide tabular-nums ${
+                              isMismatch
+                                ? 'bg-rose-600 text-white'
+                                : isVerified
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'bg-slate-900 text-white'
+                            }`}
+                          >
+                            DINSOS {seqLabel}
+                          </span>
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-bold text-slate-900">
+                              {card.record.nama}
+                            </p>
+                            <p className="truncate text-[11px] text-slate-500">
+                              {card.record.item || '-'} · {card.kelurahan}
+                              {card.record.pengelola ? ` · ${card.record.pengelola}` : ''}
+                            </p>
+                          </div>
+                        </div>
+
+                        {card.photo && !isCalibratingFocus && (
+                          <div className="flex shrink-0 items-center gap-1">
+                            {auditZoom > 1 && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setCardFullViewMap((prev) => ({
+                                    ...prev,
+                                    [card.record.id]: !prev[card.record.id],
+                                  }))
+                                }
+                                className="inline-flex min-h-[28px] items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 text-[11px] font-semibold text-slate-700 hover:bg-slate-100"
+                              >
+                                <Expand className="h-3 w-3" />
+                                <span>{isFullFrameOverride ? `${auditZoom}× Fokus` : '1× Penuh'}</span>
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => openSequencePreview(card.record, card.photo!)}
+                              className="inline-flex min-h-[28px] items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 text-[11px] font-semibold text-teal-700 hover:bg-teal-50"
+                              title="Buka layar penuh (bisa geser panah ←/→)"
+                            >
+                              <ZoomIn className="h-3 w-3" />
+                              <span>Perbesar</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Large High-Visibility Photo Stage */}
+                      {card.photo ? (
+                        <AuditPhotoCanvas
+                          doc={card.photo.doc}
+                          alt={`${seqLabel}. ${card.record.nama} - ${card.photo.categoryLabel}`}
+                          zoom={effectiveCardZoom}
+                          focalPoint={auditFocalPoint}
+                          isCalibratingFocus={isCalibratingFocus}
+                          onSetFocalPoint={(pt) => {
+                            setAuditFocalPoint(pt);
+                            setIsCalibratingFocus(false);
+                            if (auditZoom === 1) setAuditZoom(2.4);
+                          }}
+                          onOpenLightbox={() => openSequencePreview(card.record, card.photo!)}
+                        />
+                      ) : (
+                        <div className="flex aspect-[4/3] w-full flex-col items-center justify-center gap-2 bg-slate-50 px-4 text-center">
+                          <ImageIcon className="h-8 w-8 text-slate-300" />
+                          <p className="text-xs font-semibold text-slate-500">
+                            Belum ada Foto Penerima
+                          </p>
+                          {canUploadHere && (
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => triggerUploadPenerima(card.record, 'camera')}
+                                className="inline-flex min-h-[32px] items-center gap-1 rounded-lg bg-teal-700 px-3 text-[11px] font-semibold text-white hover:bg-teal-800"
+                              >
+                                <Camera className="h-3.5 w-3.5" />
+                                <span>Kamera</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => triggerUploadPenerima(card.record, 'file')}
+                                className="inline-flex min-h-[32px] items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-[11px] font-semibold text-slate-700 hover:bg-slate-100"
+                              >
+                                <Upload className="h-3.5 w-3.5" />
+                                <span>Galeri</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Audit Action Strip */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 bg-slate-50/70 px-3.5 py-2.5">
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setKpmAuditMark(card.record.id, isVerified ? null : 'verified')
+                            }
+                            className={`inline-flex min-h-[32px] items-center gap-1 rounded-lg px-2.5 text-[11px] font-bold transition-colors ${
+                              isVerified
+                                ? 'bg-emerald-600 text-white shadow-xs'
+                                : 'border border-emerald-200 bg-white text-emerald-800 hover:bg-emerald-50'
+                            }`}
+                          >
+                            <Check className="h-3.5 w-3.5" />
+                            <span>{isVerified ? 'Sesuai ✓' : 'Sesuai'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setKpmAuditMark(card.record.id, isMismatch ? null : 'mismatch')
+                            }
+                            className={`inline-flex min-h-[32px] items-center gap-1 rounded-lg px-2.5 text-[11px] font-bold transition-colors ${
+                              isMismatch
+                                ? 'bg-rose-600 text-white shadow-xs'
+                                : 'border border-rose-200 bg-white text-rose-700 hover:bg-rose-50'
+                            }`}
+                          >
+                            <AlertTriangle className="h-3.5 w-3.5" />
+                            <span>Tertukar</span>
+                          </button>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          {canUpdate && !isProposalLocked && onSwapPenerimaPhoto && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSwapTarget({
+                                  record: card.record,
+                                  category: activeSwapCategory,
+                                })
+                              }
+                              className={`inline-flex min-h-[32px] items-center gap-1 rounded-lg px-2.5 text-[11px] font-semibold whitespace-nowrap ${
+                                isMismatch
+                                  ? 'bg-teal-700 text-white hover:bg-teal-800'
+                                  : 'border border-teal-200 bg-teal-50/80 text-teal-800 hover:bg-teal-100'
+                              }`}
+                            >
+                              <ArrowLeftRight className="h-3.5 w-3.5 shrink-0" />
+                              <span>Tukar / Pindah</span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => onSelectKpm(card.record)}
+                            className="inline-flex min-h-[32px] items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                          >
+                            <span>Detail</span>
+                            <ChevronRight className="h-3.5 w-3.5 text-slate-400" />
+                          </button>
+                        </div>
+                      </div>
+                    </article>
+                  );
+                })}
+              </section>
+            )}
+          </div>
         ) : filteredSlots.length === 0 || (layoutMode === 'grid' && gridPhotoCards.length === 0) ? (
           <div className="rounded-2xl border border-slate-200 bg-white px-6 py-12 text-center">
             <Users className="mx-auto h-9 w-9 text-slate-300" />
@@ -1302,31 +1951,27 @@ export function ProposalPhotoGalleryView({
                       </div>
                     ) : (
                       <div className="space-y-2">
-                        <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
+                        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
                           {photos.map((photo) => (
                             <button
                               key={photo.key}
                               type="button"
-                              onClick={() =>
-                                onPreviewDocument(
-                                  photo.doc,
-                                  `${seqLabel}. ${rec.nama} — ${photo.categoryLabel}`
-                                )
-                              }
-                              className="group relative aspect-square overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-left focus:outline-none focus:ring-2 focus:ring-teal-700"
+                              onClick={() => openSequencePreview(rec, photo)}
+                              className="group relative aspect-[4/3] overflow-hidden rounded-xl border border-slate-200 bg-slate-100 text-left focus:outline-none focus:ring-2 focus:ring-teal-700"
                             >
                               <GalleryThumb
                                 doc={photo.doc}
                                 alt={`${rec.nama} - ${photo.categoryLabel}`}
+                                fallbackWidth={720}
                                 className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
                               />
-                              <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/80 via-slate-950/35 to-transparent px-1.5 pt-4 pb-1">
+                              <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/80 via-slate-950/35 to-transparent px-2 pt-4 pb-1.5">
                                 <p className="truncate text-[10px] font-semibold text-white">
                                   {photo.categoryLabel}
                                 </p>
                               </div>
                               {photo.isPending && (
-                                <span className="pointer-events-none absolute top-1 left-1 rounded bg-amber-500/90 px-1 py-0.5 text-[9px] font-bold text-white">
+                                <span className="pointer-events-none absolute top-1.5 left-1.5 rounded bg-amber-500/90 px-1 py-0.5 text-[9px] font-bold text-white">
                                   Antrean
                                 </span>
                               )}
@@ -1383,12 +2028,7 @@ export function ProposalPhotoGalleryView({
                   {card.photo ? (
                     <button
                       type="button"
-                      onClick={() =>
-                        onPreviewDocument(
-                          card.photo!.doc,
-                          `${seqLabel}. ${card.record.nama} — ${card.photo!.categoryLabel}`
-                        )
-                      }
+                      onClick={() => openSequencePreview(card.record, card.photo!)}
                       className="group relative aspect-[4/3] w-full overflow-hidden bg-slate-100 text-left"
                     >
                       <GalleryThumb
@@ -1502,6 +2142,63 @@ export function ProposalPhotoGalleryView({
           </section>
         )}
       </div>
+
+      <DocumentLightbox
+        documentFile={activePreviewItem?.photo.doc ?? null}
+        title={
+          activePreviewItem
+            ? `${activePreviewItem.seqLabel}. ${activePreviewItem.record.nama} — ${activePreviewItem.photo.categoryLabel}`
+            : ''
+        }
+        positionLabel={
+          activePreviewItem
+            ? `${activePreviewIdx + 1} / ${previewSequence.length}`
+            : undefined
+        }
+        hasPrev={activePreviewIdx > 0}
+        hasNext={activePreviewIdx >= 0 && activePreviewIdx < previewSequence.length - 1}
+        onPrev={() => {
+          if (activePreviewIdx > 0) {
+            setActivePreviewKey(previewSequence[activePreviewIdx - 1].previewKey);
+          }
+        }}
+        onNext={() => {
+          if (activePreviewIdx >= 0 && activePreviewIdx < previewSequence.length - 1) {
+            setActivePreviewKey(previewSequence[activePreviewIdx + 1].previewKey);
+          }
+        }}
+        auditContext={
+          activePreviewItem
+            ? {
+                expectedLabel: `Harus pegang: DINSOS ${activePreviewItem.seqLabel}`,
+                status: dinsosAuditMarks[activePreviewItem.record.id],
+                onMarkStatus: (nextStatus, advanceNext) => {
+                  setKpmAuditMark(activePreviewItem.record.id, nextStatus);
+                  if (
+                    advanceNext &&
+                    activePreviewIdx >= 0 &&
+                    activePreviewIdx < previewSequence.length - 1
+                  ) {
+                    setActivePreviewKey(previewSequence[activePreviewIdx + 1].previewKey);
+                  }
+                },
+                onSwapClick:
+                  canUpdate && !isProposalLocked && onSwapPenerimaPhoto
+                    ? () => {
+                        const cat = activePreviewItem.photo.category;
+                        const swapCat: SingleDocumentKey =
+                          cat === 'survey' || cat === 'ktp' || cat === 'kk' ? cat : 'penerima';
+                        setSwapTarget({
+                          record: activePreviewItem.record,
+                          category: swapCat,
+                        });
+                      }
+                    : undefined,
+              }
+            : undefined
+        }
+        onClose={() => setActivePreviewKey(null)}
+      />
 
       {onSwapPenerimaPhoto && (
         <SwapPenerimaPhotoModal

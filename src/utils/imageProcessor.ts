@@ -1148,6 +1148,8 @@ export type ProposalMergedSlotItem =
       emptySlot: ProposalEmptySlot;
     };
 
+export type MergedProposalSlot = ProposalMergedSlotItem;
+
 function getLegacyProposalSlotKey(
   proposalName: string | undefined,
   tahun: string | undefined

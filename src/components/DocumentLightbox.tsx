@@ -7,7 +7,21 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Download, RotateCcw, RotateCw, X, ZoomIn, ZoomOut } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowLeftRight,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Lock,
+  RotateCcw,
+  RotateCw,
+  Unlock,
+  X,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react';
 import { DriveImage } from './DriveImage';
 import { extractDriveFileId } from '../services/driveManager';
 import { KpmDocumentFile } from '../types/kpm';
@@ -25,10 +39,23 @@ import {
   isLocalPendingDocument,
 } from '../utils/photoUploadManager';
 
+export interface DocumentLightboxAuditContext {
+  expectedLabel?: string;
+  status?: 'verified' | 'mismatch';
+  onMarkStatus?: (nextStatus: 'verified' | 'mismatch' | null, advanceNext?: boolean) => void;
+  onSwapClick?: () => void;
+}
+
 interface DocumentLightboxProps {
   documentFile: KpmDocumentFile | null;
   title: string;
   onClose: () => void;
+  positionLabel?: string;
+  hasPrev?: boolean;
+  hasNext?: boolean;
+  onPrev?: () => void;
+  onNext?: () => void;
+  auditContext?: DocumentLightboxAuditContext;
 }
 
 const MIN_ZOOM = 1;
@@ -38,13 +65,26 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-export function DocumentLightbox({ documentFile, title, onClose }: DocumentLightboxProps) {
+export function DocumentLightbox({
+  documentFile,
+  title,
+  onClose,
+  positionLabel,
+  hasPrev = false,
+  hasNext = false,
+  onPrev,
+  onNext,
+  auditContext,
+}: DocumentLightboxProps) {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [rotation, setRotation] = useState(0);
+  const [keepViewLocked, setKeepViewLocked] = useState(false);
   const [isInteracting, setIsInteracting] = useState(false);
   const [pendingObjectUrl, setPendingObjectUrl] = useState<string>('');
   const [saveToast, setSaveToast] = useState<string | null>(null);
+  const keepViewLockedRef = useRef(keepViewLocked);
+  keepViewLockedRef.current = keepViewLocked;
 
   const stageRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -145,10 +185,21 @@ export function DocumentLightbox({ documentFile, title, onClose }: DocumentLight
     setPan({ x: 0, y: 0 });
   }, []);
 
+  const prevDocOpenRef = useRef(false);
   useEffect(() => {
-    setZoom(1);
-    setPan({ x: 0, y: 0 });
-    setRotation(0);
+    const isOpenNow = Boolean(documentFile);
+    if (isOpenNow && !prevDocOpenRef.current) {
+      setKeepViewLocked(Boolean(auditContext));
+    }
+    prevDocOpenRef.current = isOpenNow;
+  }, [documentFile, auditContext]);
+
+  useEffect(() => {
+    if (!keepViewLockedRef.current || !documentFile) {
+      setZoom(1);
+      setPan({ x: 0, y: 0 });
+      setRotation(0);
+    }
     setIsInteracting(false);
     setSaveToast(null);
     baseSizeRef.current = { width: 0, height: 0 };
@@ -166,11 +217,23 @@ export function DocumentLightbox({ documentFile, title, onClose }: DocumentLight
   useEffect(() => {
     if (!documentFile) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT')) {
+        return;
+      }
+      if (e.key === 'Escape') {
+        onClose();
+      } else if (e.key === 'ArrowLeft' && hasPrev && onPrev) {
+        e.preventDefault();
+        onPrev();
+      } else if (e.key === 'ArrowRight' && hasNext && onNext) {
+        e.preventDefault();
+        onNext();
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [documentFile, onClose]);
+  }, [documentFile, onClose, hasPrev, hasNext, onPrev, onNext]);
 
   useEffect(() => {
     if (!documentFile || !isLocalPendingDocument(documentFile)) {
@@ -495,10 +558,17 @@ export function DocumentLightbox({ documentFile, title, onClose }: DocumentLight
       aria-label={`Pratinjau ${title}`}
     >
       {/* Header Toolbar */}
-      <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2.5 sm:px-6">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3 py-2.5 sm:px-6">
         <div className="min-w-0 flex-1">
-          <h3 className="truncate text-sm font-bold sm:text-base">{title}</h3>
-          <p className="truncate text-[11px] text-slate-400 tabular-nums sm:text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            {positionLabel && (
+              <span className="shrink-0 rounded-lg bg-teal-500/20 px-2 py-0.5 font-mono text-[11px] font-bold text-teal-200 border border-teal-400/30 tabular-nums">
+                {positionLabel}
+              </span>
+            )}
+            <h3 className="truncate text-sm font-bold sm:text-base">{title}</h3>
+          </div>
+          <p className="mt-0.5 truncate text-[11px] text-slate-400 tabular-nums sm:text-xs">
             {documentFile.fileName} ·{' '}
             {isImage && documentFile.width > 0
               ? `${documentFile.width} × ${documentFile.height} px · `
@@ -516,9 +586,52 @@ export function DocumentLightbox({ documentFile, title, onClose }: DocumentLight
           </p>
         </div>
 
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5">
           {isImage && (
             <>
+              <div className="hidden items-center gap-1 rounded-xl border border-white/15 bg-white/5 p-0.5 md:flex">
+                {[1, 2.5, 3.8].map((preset) => {
+                  const active = Math.abs(zoom - preset) < 0.15;
+                  return (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() =>
+                        preset <= 1 ? resetTransform() : applyZoomAroundPoint(preset)
+                      }
+                      className={`h-8 rounded-lg px-2 text-[11px] font-semibold tabular-nums transition-colors ${
+                        active
+                          ? 'bg-teal-600 text-white'
+                          : 'text-slate-300 hover:bg-white/10 hover:text-white'
+                      }`}
+                      title={`Zoom ${Math.round(preset * 100)}%`}
+                    >
+                      {Math.round(preset * 100)}%
+                    </button>
+                  );
+                })}
+              </div>
+
+              {(onPrev || onNext) && (
+                <button
+                  type="button"
+                  onClick={() => setKeepViewLocked((v) => !v)}
+                  className={`inline-flex h-10 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-semibold transition-colors ${
+                    keepViewLocked
+                      ? 'border-amber-400/50 bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'
+                      : 'border-white/15 bg-white/10 text-slate-200 hover:bg-white/20'
+                  }`}
+                  title="Pertahankan posisi & zoom saat geser ke foto berikutnya"
+                >
+                  {keepViewLocked ? (
+                    <Lock className="h-3.5 w-3.5 shrink-0" />
+                  ) : (
+                    <Unlock className="h-3.5 w-3.5 shrink-0" />
+                  )}
+                  <span className="hidden sm:inline">Kunci Zoom</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 disabled={zoom <= MIN_ZOOM}
@@ -691,8 +804,51 @@ export function DocumentLightbox({ documentFile, title, onClose }: DocumentLight
           </div>
         )}
 
-        {/* Bottom Panning Hint / Reset Bar when zoomed */}
-        {isImage && isZoomed && (
+        {/* Floating Previous / Next Photo Navigation Buttons */}
+        {hasPrev && onPrev && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onPrev();
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+            onTouchEnd={(e) => {
+              e.stopPropagation();
+              onPrev();
+            }}
+            aria-label="Foto sebelumnya"
+            title="Sebelumnya (Panah Kiri)"
+            className="absolute top-1/2 left-2.5 z-20 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-slate-900/75 text-white shadow-lg backdrop-blur-sm transition-all hover:bg-slate-800 sm:left-4 sm:h-12 sm:w-12"
+          >
+            <ChevronLeft className="h-6 w-6" />
+          </button>
+        )}
+
+        {hasNext && onNext && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onNext();
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+            onTouchEnd={(e) => {
+              e.stopPropagation();
+              onNext();
+            }}
+            aria-label="Foto berikutnya"
+            title="Berikutnya (Panah Kanan)"
+            className="absolute top-1/2 right-2.5 z-20 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-slate-900/75 text-white shadow-lg backdrop-blur-sm transition-all hover:bg-slate-800 sm:right-4 sm:h-12 sm:w-12"
+          >
+            <ChevronRight className="h-6 w-6" />
+          </button>
+        )}
+
+        {/* Bottom Panning Hint / Reset Bar when zoomed (only when audit footer bar is absent) */}
+        {isImage && isZoomed && !auditContext && (
           <div className="pointer-events-none absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-xl border border-white/15 bg-slate-900/85 px-3 py-1.5 text-[11px] font-medium text-slate-200 shadow-lg backdrop-blur-sm">
             <span className="whitespace-nowrap">Geser foto untuk melihat sisi lain</span>
             <button
@@ -715,6 +871,88 @@ export function DocumentLightbox({ documentFile, title, onClose }: DocumentLight
           </div>
         )}
       </div>
+
+      {/* Bottom Audit & Navigation Bar for DINSOS Verification */}
+      {auditContext && (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10 bg-slate-900/95 px-3 py-2.5 sm:px-6">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
+            {auditContext.expectedLabel && (
+              <span className="rounded-lg border border-amber-400/40 bg-amber-500/20 px-2.5 py-1 font-mono text-xs font-bold text-amber-200">
+                {auditContext.expectedLabel}
+              </span>
+            )}
+            {isImage && isZoomed && (
+              <button
+                type="button"
+                onClick={resetTransform}
+                className="inline-flex items-center gap-1 rounded-lg border border-white/15 bg-white/10 px-2 py-1 text-[11px] font-semibold text-slate-200 hover:bg-white/20"
+              >
+                <RotateCcw className="h-3 w-3" />
+                <span>Reset Zoom</span>
+              </button>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            {auditContext.onMarkStatus && (
+              <>
+                <button
+                  type="button"
+                  onClick={() =>
+                    auditContext.onMarkStatus?.(
+                      auditContext.status === 'verified' ? null : 'verified',
+                      auditContext.status !== 'verified' && hasNext
+                    )
+                  }
+                  className={`inline-flex min-h-[36px] items-center gap-1.5 rounded-xl px-3 text-xs font-semibold transition-colors ${
+                    auditContext.status === 'verified'
+                      ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                      : 'border border-emerald-400/40 bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30'
+                  }`}
+                >
+                  <Check className="h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    {auditContext.status === 'verified'
+                      ? 'Sudah Sesuai'
+                      : hasNext
+                        ? 'Sesuai & Lanjut'
+                        : 'Tandai Sesuai'}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    auditContext.onMarkStatus?.(
+                      auditContext.status === 'mismatch' ? null : 'mismatch',
+                      false
+                    )
+                  }
+                  className={`inline-flex min-h-[36px] items-center gap-1.5 rounded-xl px-3 text-xs font-semibold transition-colors ${
+                    auditContext.status === 'mismatch'
+                      ? 'bg-rose-600 text-white hover:bg-rose-700'
+                      : 'border border-rose-400/40 bg-rose-500/20 text-rose-200 hover:bg-rose-500/30'
+                  }`}
+                >
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                  <span>Tertukar</span>
+                </button>
+              </>
+            )}
+
+            {auditContext.onSwapClick && (
+              <button
+                type="button"
+                onClick={auditContext.onSwapClick}
+                className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl border border-teal-400/40 bg-teal-500/20 px-3 text-xs font-semibold text-teal-100 hover:bg-teal-500/30"
+              >
+                <ArrowLeftRight className="h-3.5 w-3.5 shrink-0" />
+                <span>Tukar / Pindah Foto</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
