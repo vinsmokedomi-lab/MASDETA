@@ -66,6 +66,8 @@ interface DashboardViewProps {
   feedback?: { type: 'success' | 'error'; message: string } | null;
   onDismissFeedback?: () => void;
   isLoading?: boolean;
+  isRefreshing?: boolean;
+  onRefresh?: () => void;
   isOnline?: boolean;
   offlineQueueCount?: number;
   onSyncOfflineQueue?: () => void;
@@ -108,6 +110,8 @@ export function DashboardView({
   feedback,
   onDismissFeedback,
   isLoading = false,
+  isRefreshing = false,
+  onRefresh,
   isOnline = true,
   offlineQueueCount = 0,
   onSyncOfflineQueue,
@@ -471,6 +475,18 @@ export function DashboardView({
         </div>
 
         <div ref={headerActionsRef} className="relative flex shrink-0 items-center gap-2">
+          {onRefresh && (
+            <button
+              type="button"
+              disabled={isOffline || isRefreshing}
+              onClick={onRefresh}
+              aria-label="Segarkan data"
+              title={isOffline ? 'Mode Offline' : 'Segarkan data terbaru'}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin text-teal-700' : ''}`} />
+            </button>
+          )}
           {/* Bell Notification Button */}
           <button
             type="button"
@@ -761,6 +777,18 @@ export function DashboardView({
                 </select>
                 <ChevronDown className="pointer-events-none absolute right-3 h-4 w-4 text-slate-500" />
               </div>
+              {onRefresh && (
+                <button
+                  type="button"
+                  disabled={isOffline || isRefreshing}
+                  onClick={onRefresh}
+                  title={isOffline ? 'Mode Offline' : 'Muat ulang data terbaru dari server'}
+                  className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-xs transition-colors hover:border-teal-200 hover:bg-teal-50 hover:text-teal-800 disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin text-teal-700' : ''}`} />
+                  <span>{isRefreshing ? 'Menyegarkan...' : 'Segarkan'}</span>
+                </button>
+              )}
             </div>
           </div>
         )}

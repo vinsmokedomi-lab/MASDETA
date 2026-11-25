@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -66,7 +66,15 @@ export function ProposalListView({
 }: ProposalListViewProps) {
   const { isOffline } = useOfflineStatus();
   const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [tipeFilter, setTipeFilter] = useState<'all' | ProposalTipe>('all');
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedQuery(query);
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [query]);
   const [dinasFilter, setDinasFilter] = useState<'all' | 'sent' | 'unsent'>('all');
   const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
   const [collapsedKecamatans, setCollapsedKecamatans] = useState<Record<string, boolean>>({});
@@ -133,7 +141,7 @@ export function ProposalListView({
   }, [yearScopedProposals, records, selectedYear]);
 
   const filteredProposals = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = debouncedQuery.trim().toLowerCase();
     return yearScopedProposals.filter((prop) => {
       if (tipeFilter !== 'all' && prop.tipe !== tipeFilter) return false;
       if (dinasFilter === 'sent' && !prop.checklist.dinas) return false;
@@ -153,7 +161,7 @@ export function ProposalListView({
         (prop.kelurahan && prop.kelurahan.toLowerCase().includes(q))
       );
     });
-  }, [yearScopedProposals, tipeFilter, dinasFilter, query, proposals, wilayahList]);
+  }, [yearScopedProposals, tipeFilter, dinasFilter, debouncedQuery, proposals, wilayahList]);
 
   const summaryStats = useMemo(() => {
     let totalKpm = 0;
@@ -219,7 +227,7 @@ export function ProposalListView({
       });
   }, [filteredProposals, proposals, wilayahList, proposalStatsById]);
 
-  const isSearching = query.trim().length > 0;
+  const isSearching = debouncedQuery.trim().length > 0;
   const areAllCollapsed =
     groupedByKecamatan.length > 0 &&
     groupedByKecamatan.every((g) => Boolean(collapsedKecamatans[g.kecamatan]));

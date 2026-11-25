@@ -1,19 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { SUPABASE_URL, isSupabaseConfigured } from '../lib/supabaseClient';
 
 const PROBE_TIMEOUT_MS = 6000;
-const PERIODIC_CHECK_INTERVAL_MS = 15000;
 
 async function probeRemoteInternet(): Promise<boolean> {
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
     return false;
   }
 
-  const probeBase = isSupabaseConfigured
-    ? `${SUPABASE_URL}/rest/v1/`
-    : 'https://www.gstatic.com/generate_204';
-  const separator = probeBase.includes('?') ? '&' : '?';
-  const probeUrl = `${probeBase}${separator}_t=${Date.now()}`;
+  // Never probe Supabase REST API without auth (generates HTTP 401 log spam)
+  const probeUrl = `https://www.gstatic.com/generate_204?_t=${Date.now()}`;
 
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
@@ -132,38 +127,13 @@ export function useOnlineStatus(): OnlineStatusState {
       void runProbe(true);
     };
 
-    const handleResumeCheck = () => {
-      if (document.visibilityState === 'visible') {
-        void runProbe(!isOnlineRef.current);
-      }
-    };
-
-    const handleWindowFocus = () => {
-      void runProbe(!isOnlineRef.current);
-    };
-
     window.addEventListener('offline', handleOffline);
     window.addEventListener('online', handleOnline);
-    window.addEventListener('focus', handleWindowFocus);
-    document.addEventListener('visibilitychange', handleResumeCheck);
-
-    const intervalId = window.setInterval(() => {
-      if (typeof navigator !== 'undefined' && !navigator.onLine) {
-        handleOffline();
-        return;
-      }
-      if (document.visibilityState === 'visible') {
-        void runProbe(!isOnlineRef.current);
-      }
-    }, PERIODIC_CHECK_INTERVAL_MS);
 
     return () => {
       cancelled = true;
       window.removeEventListener('offline', handleOffline);
       window.removeEventListener('online', handleOnline);
-      window.removeEventListener('focus', handleWindowFocus);
-      document.removeEventListener('visibilitychange', handleResumeCheck);
-      window.clearInterval(intervalId);
     };
   }, [runProbe]);
 

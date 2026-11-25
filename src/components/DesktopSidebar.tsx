@@ -7,6 +7,7 @@ import {
   LayoutGrid,
   LogOut,
   Plus,
+  RefreshCw,
   User,
   Users,
 } from 'lucide-react';
@@ -39,6 +40,8 @@ interface DesktopSidebarProps {
   onSelectTab: (tab: MainTab) => void;
   onOpenMenuSection: (section: MenuSection) => void;
   onOpenQuickAdd: () => void;
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
   onOpenProfile: () => void;
   onLogout: () => void;
 }
@@ -64,6 +67,8 @@ export function DesktopSidebar({
   onSelectTab,
   onOpenMenuSection,
   onOpenQuickAdd,
+  onRefresh,
+  isRefreshing = false,
   onOpenProfile,
   onLogout,
 }: DesktopSidebarProps) {
@@ -139,6 +144,24 @@ export function DesktopSidebar({
               <p className="truncate text-[11px] font-medium text-slate-500">Web Workspace</p>
             </div>
           </div>
+          {onRefresh && (
+            <button
+              type="button"
+              disabled={isOffline || isRefreshing}
+              onClick={onRefresh}
+              aria-label="Segarkan data dari server"
+              title={
+                isOffline
+                  ? 'Mode Offline — tidak dapat menyegarkan data'
+                  : isRefreshing
+                    ? 'Menyegarkan data...'
+                    : 'Segarkan data terbaru'
+              }
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin text-teal-700' : ''}`} />
+            </button>
+          )}
         </div>
 
         {/* Primary Quick Add CTA */}

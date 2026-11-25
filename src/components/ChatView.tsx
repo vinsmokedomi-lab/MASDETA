@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Download,
   Edit3,
+  RefreshCw,
   Search,
   Send,
   Smartphone,
@@ -35,6 +36,7 @@ interface ChatViewProps {
   onOpenSharedKpm?: (kpmId: string) => void;
   pushPermission: NotificationPermission | 'unsupported';
   onRequestPushPermission: () => Promise<void>;
+  onRefreshMessages?: () => void;
   onBack: () => void;
 }
 
@@ -80,6 +82,7 @@ export function ChatView({
   onOpenSharedKpm,
   pushPermission,
   onRequestPushPermission,
+  onRefreshMessages,
   onBack,
 }: ChatViewProps) {
   const { isOffline } = useOfflineStatus();
@@ -90,7 +93,15 @@ export function ChatView({
   const [searchQuery, setSearchQuery] = useState('');
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
+  const [refreshingChat, setRefreshingChat] = useState(false);
   const [, setTimeTick] = useState(0);
+
+  const handleManualRefreshChat = () => {
+    if (!onRefreshMessages || isOffline || refreshingChat) return;
+    setRefreshingChat(true);
+    onRefreshMessages();
+    window.setTimeout(() => setRefreshingChat(false), 700);
+  };
   const [renameTargetUser, setRenameTargetUser] = useState<InternalUser | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -641,9 +652,23 @@ export function ChatView({
                 </button>
                 <h1 className="truncate text-base font-bold text-slate-900">Obrolan Tim</h1>
               </div>
-              <span className="rounded-lg bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 tabular-nums">
-                {peers.length}
-              </span>
+              <div className="flex items-center gap-1.5">
+                {onRefreshMessages && (
+                  <button
+                    type="button"
+                    disabled={isOffline || refreshingChat}
+                    onClick={handleManualRefreshChat}
+                    aria-label="Segarkan pesan"
+                    title={isOffline ? 'Mode Offline' : 'Segarkan pesan terbaru'}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-colors hover:border-teal-200 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 ${refreshingChat ? 'animate-spin text-teal-700' : ''}`} />
+                  </button>
+                )}
+                <span className="rounded-lg bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 tabular-nums">
+                  {peers.length}
+                </span>
+              </div>
             </div>
 
             <div className="space-y-3 border-b border-slate-100 p-3.5">
@@ -834,6 +859,18 @@ export function ChatView({
               </p>
             </div>
 
+            {onRefreshMessages && (
+              <button
+                type="button"
+                disabled={isOffline || refreshingChat}
+                onClick={handleManualRefreshChat}
+                aria-label="Segarkan pesan"
+                title={isOffline ? 'Mode Offline' : 'Segarkan pesan terbaru'}
+                className="inline-flex min-h-[40px] min-w-[40px] shrink-0 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <RefreshCw className={`h-4 w-4 ${refreshingChat ? 'animate-spin text-teal-700' : ''}`} />
+              </button>
+            )}
             {onSaveUserAlias && (
               <button
                 type="button"
@@ -953,7 +990,19 @@ export function ChatView({
           >
             <ArrowLeft className="h-5 w-5" />
           </button>
-          <h1 className="truncate text-base font-bold text-slate-900">Obrolan</h1>
+          <h1 className="flex-1 truncate text-base font-bold text-slate-900">Obrolan</h1>
+          {onRefreshMessages && (
+            <button
+              type="button"
+              disabled={isOffline || refreshingChat}
+              onClick={handleManualRefreshChat}
+              aria-label="Segarkan pesan"
+              title={isOffline ? 'Mode Offline' : 'Segarkan pesan terbaru'}
+              className="inline-flex min-h-[40px] min-w-[40px] shrink-0 items-center justify-center rounded-xl text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <RefreshCw className={`h-4 w-4 ${refreshingChat ? 'animate-spin text-teal-700' : ''}`} />
+            </button>
+          )}
         </header>
       )}
 

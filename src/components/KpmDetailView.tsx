@@ -41,6 +41,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { DriveImage } from './DriveImage';
+import { uploadMediaToDrive } from '../services/driveManager';
 import { ProposalPickerModal } from './ProposalPickerModal';
 import { SignaturePadModal } from './SignaturePadModal';
 import { SlotHandlingConfirmModal } from './SlotHandlingConfirmModal';
@@ -211,20 +212,23 @@ interface KpmDetailViewProps {
 }
 
 async function compressKuponLogoFile(file: File): Promise<string> {
-  const objectUrl = typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function'
-    ? URL.createObjectURL(file)
-    : '';
-  const src = objectUrl || (await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Gagal membaca file gambar logo.'));
-    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
-    reader.readAsDataURL(file);
-  }));
+  const objectUrl =
+    typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function'
+      ? URL.createObjectURL(file)
+      : '';
+  const src =
+    objectUrl ||
+    (await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('Gagal membaca file gambar logo.'));
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+      reader.readAsDataURL(file);
+    }));
   if (!src) {
     throw new Error('File gambar tidak valid.');
   }
   try {
-    return await new Promise<string>((resolve, reject) => {
+    const pngBlob = await new Promise<Blob>((resolve, reject) => {
       const img = new Image();
       img.onerror = () => reject(new Error('Format gambar logo tidak didukung.'));
       img.onload = () => {
@@ -245,10 +249,22 @@ async function compressKuponLogoFile(file: File): Promise<string> {
         }
         ctx.clearRect(0, 0, w, h);
         ctx.drawImage(img, 0, 0, w, h);
-        resolve(canvas.toDataURL('image/png'));
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              reject(new Error('Gagal mengompresi file logo.'));
+              return;
+            }
+            resolve(blob);
+          },
+          'image/png'
+        );
       };
       img.src = src;
     });
+    const logoFile = new File([pngBlob], `logo-kupon-${Date.now()}.png`, { type: 'image/png' });
+    const uploaded = await uploadMediaToDrive(logoFile);
+    return uploaded.directUrl || uploaded.thumbnailUrl;
   } finally {
     if (objectUrl) {
       try {

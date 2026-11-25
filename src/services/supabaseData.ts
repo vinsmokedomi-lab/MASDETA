@@ -57,12 +57,164 @@ export interface SupabaseOperationalSnapshot {
 }
 
 const SUPABASE_PAGE_SIZE = 1000;
+const MASTER_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes sessionStorage cache for master/reference data
+const MASTER_CACHE_PREFIX = 'masdeta_master_cache_v1_';
+const SCHEMA_CAP_CACHE_KEY = 'masdeta_schema_caps_v1';
+
+// Explicit column projections — ZERO `.select('*')` allowed anywhere
+const COLS_WILAYAH_KABKOTA = 'id,nama';
+const COLS_WILAYAH_KECAMATAN = 'id,kabkota_id,nama';
+const COLS_WILAYAH_KELURAHAN = 'kecamatan_id,nama';
+const COLS_PEKERJAAN = 'nama';
+const COLS_ITEM_BANTUAN = 'id,tahun,code,name';
+const COLS_ITEM_SUB_ITEMS = 'item_id,sub_item_name';
+const COLS_PENGELOLA =
+  'id,title,nama,display_name,kab_kota,kecamatan,kelurahan,alamat,kontak,foto_url,foto_thumb_url,foto_file_id,foto_view_url,foto_file_name,foto_meta,created_at,updated_at';
+const COLS_PROPOSALS =
+  'id,tahun,tipe,kab_kota,kecamatan,kelurahan,jalan,nama_proposal,jumlah_kpm,status,checklist,catatan,proposal_opd_url,proposal_lurah_camat_url,rab_url,cap_rt_url,cap_rw_url,cap_lurah_url,cap_camat_url,created_at,updated_at';
+const COLS_PROPOSALS_PUBLIC =
+  'id,tahun,tipe,kab_kota,kecamatan,kelurahan,jalan,nama_proposal,jumlah_kpm,status,catatan,created_at,updated_at';
+const COLS_PROPOSAL_DOCUMENTS =
+  'id,proposal_id,doc_slot,drive_file_id,direct_url,thumbnail_url,view_url,file_name,original_size,compressed_size,width,height,mime_type,uploaded_at';
+const COLS_KPM_RECORDS_LIST =
+  'id,register_code,tahun,proposal_id,proposal,kecamatan,kelurahan,item,nama,alamat,rt,rw,nik_kk,nik_ktp,dtsen,validasi,kontak,pekerjaan,pengelola,catatan,payment,foto_ktp_url,foto_ktp_thumb_url,foto_kk_url,foto_kk_thumb_url,foto_penerima_url,foto_penerima_thumb_url,foto_survey_url,foto_survey_thumb_url,berkas_dikembalikan,berkas_dikembalikan_at,berkas_dikembalikan_by,created_at,updated_at';
+const COLS_KPM_RECORDS_PUBLIC =
+  'id,register_code,tahun,proposal_id,proposal,kecamatan,kelurahan,item,nama,alamat,rt,rw,nik_ktp,dtsen,validasi,pekerjaan,pengelola,foto_penerima_url,foto_penerima_thumb_url,foto_survey_url,foto_survey_thumb_url,berkas_dikembalikan,berkas_dikembalikan_at,berkas_dikembalikan_by,created_at,updated_at';
+const COLS_KPM_DOCUMENTS =
+  'id,kpm_id,doc_category,drive_file_id,direct_url,thumbnail_url,view_url,file_name,original_size,compressed_size,width,height,mime_type,uploaded_at';
+const COLS_KPM_DELIVERIES_LEAN = 'kpm_id,sub_item_name,delivered';
+const COLS_KPM_DELIVERIES_DETAIL = 'kpm_id,sub_item_name,delivered,updated_at,updated_by';
+const COLS_PROPOSAL_HISTORY =
+  'id,tahun,proposal_name,kpm_id,kpm_name,register_code,action,from_proposal,to_proposal,actor_name,timestamp';
+const COLS_KPM_AUDIT =
+  'id,kpm_id,action,actor_name,actor_email,timestamp,proposal,tahun,changes';
+const COLS_DIRECT_CHAT_BASE =
+  'id,conversation_key,sender_id,recipient_id,text,shared_kpm_id,shared_kpm_foto_url,shared_kpm_snapshot,created_at,read_at';
+const COLS_DIRECT_CHAT_WITH_DELIVERED =
+  'id,conversation_key,sender_id,recipient_id,text,shared_kpm_id,shared_kpm_foto_url,shared_kpm_snapshot,created_at,delivered_at,read_at';
+const COLS_SCHEDULES_BASE =
+  'id,title,category,target_day,target_date,target_time,tahun,proposal_name,location,notes,completed,completed_at,created_by,created_at';
+const COLS_SCHEDULES_WITH_BOOK =
+  'id,book_id,title,category,target_day,target_date,target_time,tahun,proposal_name,location,notes,completed,completed_at,created_by,created_at';
+const COLS_PROPOSAL_RAB =
+  'proposal_id,proposal_name,tahun,judul_rab,total_anggaran,total_terhitung,pagu_standar_per_kpm,total_kpm_snapshot,item_counts_snapshot,packages_json,updated_at,updated_by';
+const COLS_PROPOSAL_STYLE_HISTORY =
+  'id,style_id,proposal_id,nama_proposal,tahun,jenis_tujuan,created_at,created_by';
 
 const SAFE_INTERNAL_USER_COLUMNS =
   'id,nama,email,jabatan,kontak,role,status,perm_add,perm_update,perm_delete,presence_status,presence_manual,foto_url,foto_thumb_url,foto_file_id,last_active_at,registered_at,updated_at';
 const SAFE_INTERNAL_USER_COLUMNS_WITH_USERNAME =
   'id,nama,username,email,jabatan,kontak,role,status,perm_add,perm_update,perm_delete,presence_status,presence_manual,foto_url,foto_thumb_url,foto_file_id,last_active_at,registered_at,updated_at';
 const USERNAMES_STATE_KEY = 'user_usernames_v1';
+
+type SchemaCapKey =
+  | 'usernameCol'
+  | 'chatDeliveredAtCol'
+  | 'scheduleBookIdCol'
+  | 'schedulesTable'
+  | 'templatesTable'
+  | 'rabTable'
+  | 'styleHistoryTable';
+
+const schemaCapabilities: Partial<Record<SchemaCapKey, boolean>> = (() => {
+  try {
+    if (typeof sessionStorage === 'undefined') return {};
+    const raw = sessionStorage.getItem(SCHEMA_CAP_CACHE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? (parsed as Partial<Record<SchemaCapKey, boolean>>) : {};
+  } catch {
+    return {};
+  }
+})();
+
+function getSchemaCapability(key: SchemaCapKey): boolean | undefined {
+  return schemaCapabilities[key];
+}
+
+function setSchemaCapability(key: SchemaCapKey, supported: boolean): void {
+  if (schemaCapabilities[key] === supported) return;
+  schemaCapabilities[key] = supported;
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem(SCHEMA_CAP_CACHE_KEY, JSON.stringify(schemaCapabilities));
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export type MasterCacheKey = 'wilayah' | 'pekerjaan' | 'items' | 'pengelola' | 'templates';
+
+function readSessionCache<T>(key: string, ttlMs = MASTER_CACHE_TTL_MS): T | null {
+  try {
+    if (typeof sessionStorage === 'undefined') return null;
+    const raw = sessionStorage.getItem(`${MASTER_CACHE_PREFIX}${key}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { savedAt?: number; data?: T };
+    if (!parsed || typeof parsed.savedAt !== 'number') return null;
+    if (Date.now() - parsed.savedAt > ttlMs) {
+      sessionStorage.removeItem(`${MASTER_CACHE_PREFIX}${key}`);
+      return null;
+    }
+    return parsed.data ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSessionCache<T>(key: string, data: T): void {
+  try {
+    if (typeof sessionStorage === 'undefined') return;
+    sessionStorage.setItem(
+      `${MASTER_CACHE_PREFIX}${key}`,
+      JSON.stringify({ savedAt: Date.now(), data })
+    );
+  } catch {
+    // ignore quota errors
+  }
+}
+
+export function invalidateMasterReferenceCache(keys?: MasterCacheKey[]): void {
+  const targets: MasterCacheKey[] = keys || ['wilayah', 'pekerjaan', 'items', 'pengelola', 'templates'];
+  try {
+    if (typeof sessionStorage === 'undefined') return;
+    for (const k of targets) {
+      sessionStorage.removeItem(`${MASTER_CACHE_PREFIX}${k}`);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Hapus seluruh string Base64 (data:image/... atau data:...;base64,...) secara rekursif
+ * sebelum menyimpan objek JSONB ke Supabase agar Egress & ukuran database tidak membengkak.
+ */
+export function stripBase64StringsDeep<T>(value: T): T {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (
+      trimmed.startsWith('data:image/') ||
+      trimmed.startsWith('data:application/') ||
+      (trimmed.startsWith('data:') && trimmed.includes(';base64,'))
+    ) {
+      return '' as unknown as T;
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => stripBase64StringsDeep(item)) as unknown as T;
+  }
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = stripBase64StringsDeep(v);
+    }
+    return out as T;
+  }
+  return value;
+}
 
 function isMissingUsernameColumnError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
@@ -72,6 +224,17 @@ function isMissingUsernameColumnError(error: unknown): boolean {
   return (
     (code === '42703' || code === 'PGRST204' || msg.includes('does not exist') || msg.includes('could not find')) &&
     msg.includes('username')
+  );
+}
+
+function isMissingDeliveredAtColumnError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const err = error as { code?: string; message?: string; details?: string; hint?: string };
+  const code = String(err.code || '');
+  const msg = `${err.message || ''} ${err.details || ''} ${err.hint || ''}`.toLowerCase();
+  return (
+    (code === '42703' || code === 'PGRST204' || msg.includes('does not exist') || msg.includes('could not find')) &&
+    msg.includes('delivered_at')
   );
 }
 
@@ -387,10 +550,12 @@ export type OperationalSyncScope =
 
 export interface FetchOperationalOptions {
   includeLogs?: boolean;
+  includeKpmDocuments?: boolean;
+  forceRefreshMaster?: boolean;
 }
 
-const DEFAULT_HISTORY_FETCH_LIMIT = 1000;
-const DEFAULT_AUDIT_FETCH_LIMIT = 1500;
+const DEFAULT_HISTORY_FETCH_LIMIT = 300;
+const DEFAULT_AUDIT_FETCH_LIMIT = 400;
 
 function mapProposalHistoryRows(rows: Record<string, unknown>[]): ProposalKpmHistoryEntry[] {
   return rows.map((h) => ({
@@ -422,30 +587,35 @@ function mapKpmAuditRows(rows: Record<string, unknown>[]): KpmAuditLogEntry[] {
   }));
 }
 
-export async function fetchOperationalLogsFromSupabase(): Promise<{
+export async function fetchOperationalLogsFromSupabase(options?: {
+  historyLimit?: number;
+  auditLimit?: number;
+}): Promise<{
   proposalHistory: ProposalKpmHistoryEntry[];
   kpmAuditLogs: KpmAuditLogEntry[];
 }> {
+  const historyLimit = options?.historyLimit ?? DEFAULT_HISTORY_FETCH_LIMIT;
+  const auditLimit = options?.auditLimit ?? DEFAULT_AUDIT_FETCH_LIMIT;
   const [historyData, auditData] = await Promise.all([
     fetchAllPages(
       (from, to) =>
         supabase
           .from('proposal_kpm_history')
-          .select('*')
+          .select(COLS_PROPOSAL_HISTORY)
           .order('timestamp', { ascending: false })
           .order('id', { ascending: true })
           .range(from, to),
-      DEFAULT_HISTORY_FETCH_LIMIT
+      historyLimit
     ),
     fetchAllPages(
       (from, to) =>
         supabase
           .from('kpm_audit_logs')
-          .select('*')
+          .select(COLS_KPM_AUDIT)
           .order('timestamp', { ascending: false })
           .order('id', { ascending: true })
           .range(from, to),
-      DEFAULT_AUDIT_FETCH_LIMIT
+      auditLimit
     ),
   ]);
   return {
@@ -454,11 +624,354 @@ export async function fetchOperationalLogsFromSupabase(): Promise<{
   };
 }
 
+/**
+ * On-demand fetch dokumen lengkap (termasuk foto rumah & lainnya) untuk 1 KPM saat membuka detail / edit.
+ */
+export async function fetchKpmDocumentsByKpmId(kpmId: string): Promise<KpmDocuments> {
+  const bag: KpmDocuments = { rumah: [], lainnya: [] };
+  if (!isSupabaseConfigured || !kpmId) return bag;
+  const { data, error } = await supabase
+    .from('kpm_documents')
+    .select(COLS_KPM_DOCUMENTS)
+    .eq('kpm_id', kpmId)
+    .order('sort_order', { ascending: true })
+    .order('id', { ascending: true });
+  if (error || !data) return bag;
+  for (const row of data as Record<string, unknown>[]) {
+    const cat = String(row.doc_category);
+    const doc = buildDocFileFromRow(row);
+    if (!doc) continue;
+    if (cat === 'ktp' || cat === 'kk' || cat === 'penerima' || cat === 'survey') {
+      bag[cat] = doc;
+    } else if (cat === 'rumah') {
+      bag.rumah.push(doc);
+    } else if (cat === 'lainnya') {
+      bag.lainnya.push(doc);
+    }
+  }
+  return bag;
+}
+
+/**
+ * On-demand fetch foto tambahan (rumah & lainnya) untuk sekumpulan KPM (mis. 1 proposal di galeri/ZIP).
+ */
+export async function fetchKpmExtraDocumentsForKpmIds(
+  kpmIds: string[]
+): Promise<Map<string, { rumah: KpmDocumentFile[]; lainnya: KpmDocumentFile[] }>> {
+  const out = new Map<string, { rumah: KpmDocumentFile[]; lainnya: KpmDocumentFile[] }>();
+  if (!isSupabaseConfigured || kpmIds.length === 0) return out;
+  const uniqueIds = Array.from(new Set(kpmIds.filter(Boolean)));
+  const CHUNK_SIZE = 150;
+  for (let i = 0; i < uniqueIds.length; i += CHUNK_SIZE) {
+    const slice = uniqueIds.slice(i, i + CHUNK_SIZE);
+    const { data, error } = await supabase
+      .from('kpm_documents')
+      .select(COLS_KPM_DOCUMENTS)
+      .in('kpm_id', slice)
+      .in('doc_category', ['rumah', 'lainnya'])
+      .order('sort_order', { ascending: true })
+      .order('id', { ascending: true });
+    if (error || !data) continue;
+    for (const row of data as Record<string, unknown>[]) {
+      const kpmId = String(row.kpm_id);
+      const cat = String(row.doc_category);
+      const doc = buildDocFileFromRow(row);
+      if (!doc) continue;
+      const bag = out.get(kpmId) || { rumah: [], lainnya: [] };
+      if (cat === 'rumah') bag.rumah.push(doc);
+      else if (cat === 'lainnya') bag.lainnya.push(doc);
+      out.set(kpmId, bag);
+    }
+  }
+  return out;
+}
+
+/**
+ * On-demand fetch audit log untuk 1 KPM saat membuka KpmDetailView (hemat Egress, maks 50 baris).
+ */
+export async function fetchKpmAuditLogsForKpm(
+  kpmId: string,
+  limit = 50
+): Promise<KpmAuditLogEntry[]> {
+  if (!isSupabaseConfigured || !kpmId) return [];
+  const { data, error } = await supabase
+    .from('kpm_audit_logs')
+    .select(COLS_KPM_AUDIT)
+    .eq('kpm_id', kpmId)
+    .order('timestamp', { ascending: false })
+    .order('id', { ascending: true })
+    .range(0, Math.max(0, limit - 1));
+  if (error || !data) return [];
+  return mapKpmAuditRows(data as Record<string, unknown>[]);
+}
+
+/**
+ * On-demand fetch detail status pengiriman sub-item (termasuk updated_at/updated_by) untuk 1 KPM.
+ */
+export async function fetchKpmSubItemDeliveriesByKpmId(
+  kpmId: string
+): Promise<Record<string, SubItemDeliveryState>> {
+  const out: Record<string, SubItemDeliveryState> = {};
+  if (!isSupabaseConfigured || !kpmId) return out;
+  const { data, error } = await supabase
+    .from('kpm_sub_item_deliveries')
+    .select(COLS_KPM_DELIVERIES_DETAIL)
+    .eq('kpm_id', kpmId);
+  if (error || !data) return out;
+  for (const row of data as Record<string, unknown>[]) {
+    const subName = String(row.sub_item_name || '');
+    if (!subName) continue;
+    out[subName] = {
+      delivered: Boolean(row.delivered),
+      updatedAt: row.updated_at ? String(row.updated_at) : undefined,
+      updatedBy: row.updated_by ? String(row.updated_by) : undefined,
+    };
+  }
+  return out;
+}
+
+export interface KpmServerPageParams {
+  page: number;
+  pageSize?: number;
+  tahun?: string;
+  validasi?: KpmRecord['validasi'] | 'all';
+  proposalName?: string;
+  kecamatan?: string;
+  kelurahan?: string;
+  item?: string;
+  pengelola?: string;
+  pekerjaan?: string;
+  dtsen?: string;
+  search?: string;
+  standaloneOnly?: boolean;
+  proposals?: ProposalRecord[];
+}
+
+export interface KpmServerPageResult {
+  records: KpmRecord[];
+  totalCount: number;
+  page: number;
+  pageSize: number;
+}
+
+/**
+ * Server-side pagination berbasis `.range(start, end)` (maks 30–50 baris per muatan)
+ * + filter server-side (Kecamatan, Kelurahan, Status Validasi, Tahun, Item, Pencarian).
+ */
+export async function fetchKpmPageFromSupabase(
+  params: KpmServerPageParams
+): Promise<KpmServerPageResult> {
+  const pageSize = Math.min(50, Math.max(10, params.pageSize ?? 40));
+  const page = Math.max(1, params.page);
+  const start = (page - 1) * pageSize;
+  const end = start + pageSize - 1;
+
+  if (!isSupabaseConfigured) {
+    return { records: [], totalCount: 0, page, pageSize };
+  }
+
+  let query = supabase
+    .from('kpm_records')
+    .select(COLS_KPM_RECORDS_LIST, { count: 'exact' });
+
+  const isAll = (val?: string) => {
+    const t = (val || '').trim();
+    return !t || t.toLowerCase() === 'all' || t.toLowerCase() === 'semua';
+  };
+
+  if (params.validasi && params.validasi !== 'all') {
+    query = query.eq('validasi', params.validasi);
+  }
+  if (params.standaloneOnly) {
+    query = query.neq('validasi', 'accepted').is('proposal_id', null);
+  }
+  if (params.tahun === '__no_year__') {
+    query = query.eq('tahun', '');
+  } else if (!isAll(params.tahun)) {
+    query = query.eq('tahun', params.tahun!.trim());
+  }
+  if (!isAll(params.proposalName)) {
+    query = query.eq('proposal', params.proposalName!.trim());
+  }
+  if (params.kecamatan === '__no_kecamatan__') {
+    query = query.eq('kecamatan', '');
+  } else if (!isAll(params.kecamatan)) {
+    query = query.ilike('kecamatan', params.kecamatan!.trim());
+  }
+  if (!isAll(params.kelurahan)) {
+    query = query.ilike('kelurahan', params.kelurahan!.trim());
+  }
+  if (params.item === '__missing__') {
+    query = query.eq('item', '');
+  } else if (!isAll(params.item)) {
+    query = query.eq('item', params.item!.trim());
+  }
+  if (!isAll(params.pengelola)) {
+    query = query.ilike('pengelola', params.pengelola!.trim());
+  }
+  if (!isAll(params.pekerjaan)) {
+    query = query.ilike('pekerjaan', params.pekerjaan!.trim());
+  }
+  if (!isAll(params.dtsen)) {
+    query = query.eq('dtsen', params.dtsen!.trim());
+  }
+  const cleanSearch = (params.search || '').trim().replace(/[,()%]/g, ' ').trim();
+  if (cleanSearch) {
+    const pattern = `%${cleanSearch}%`;
+    query = query.or(
+      `nama.ilike.${pattern},nik_ktp.ilike.${pattern},nik_kk.ilike.${pattern},register_code.ilike.${pattern},alamat.ilike.${pattern},kelurahan.ilike.${pattern},kecamatan.ilike.${pattern},pengelola.ilike.${pattern},proposal.ilike.${pattern}`
+    );
+  }
+
+  const { data, error, count } = await query
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: true })
+    .range(start, end);
+
+  if (error) throw error;
+
+  const proposals = params.proposals || [];
+  const rows = (data || []) as Record<string, unknown>[];
+  const records: KpmRecord[] = rows.map((r) => {
+    const kpmId = String(r.id);
+    const documents: KpmDocuments = {
+      ktp: buildDocFileFromUrlFallback(
+        r.foto_ktp_url as string | null,
+        r.foto_ktp_thumb_url as string | null,
+        `${kpmId}-ktp`,
+        'Foto KTP'
+      ),
+      kk: buildDocFileFromUrlFallback(
+        r.foto_kk_url as string | null,
+        r.foto_kk_thumb_url as string | null,
+        `${kpmId}-kk`,
+        'Foto KK'
+      ),
+      penerima: buildDocFileFromUrlFallback(
+        r.foto_penerima_url as string | null,
+        r.foto_penerima_thumb_url as string | null,
+        `${kpmId}-penerima`,
+        'Foto Penerima'
+      ),
+      survey: buildDocFileFromUrlFallback(
+        r.foto_survey_url as string | null,
+        r.foto_survey_thumb_url as string | null,
+        `${kpmId}-survey`,
+        'Foto Survey'
+      ),
+      rumah: [],
+      lainnya: [],
+    };
+
+    const rawValidasi = (r.validasi as KpmRecord['validasi']) || 'pending';
+    const rawPropId = r.proposal_id ? String(r.proposal_id) : null;
+    const rawPropName = r.proposal ? String(r.proposal).trim() : '';
+    const isPhantomArsip = !rawPropId && /^arsip\b/i.test(rawPropName);
+    const isDetached = rawValidasi !== 'accepted' || isPhantomArsip;
+    const effectiveValidasi: KpmRecord['validasi'] =
+      rawValidasi === 'accepted' && isDetached ? 'pending' : rawValidasi;
+    const matchedProp = !isDetached
+      ? (rawPropId ? proposals.find((p) => p.id === rawPropId) : undefined) ??
+        proposals.find((p) => p.namaProposal === rawPropName && p.tahun === String(r.tahun || '')) ??
+        proposals.find((p) => p.namaProposal === rawPropName)
+      : undefined;
+
+    return {
+      id: kpmId,
+      registerCode: isDetached ? '' : String(r.register_code || ''),
+      tahun: isDetached ? '' : sanitizeYearValue(r.tahun ? String(r.tahun) : ''),
+      proposalId: isDetached ? null : matchedProp?.id ?? rawPropId,
+      proposal: isDetached ? '' : matchedProp?.namaProposal ?? rawPropName,
+      kabKota: matchedProp?.kabKota || '',
+      kecamatan: String(r.kecamatan || '') || matchedProp?.kecamatan || '',
+      kelurahan: String(r.kelurahan || '') || matchedProp?.kelurahan || '',
+      item: String(r.item || ''),
+      nama: String(r.nama || ''),
+      alamat: String(r.alamat || ''),
+      rt: String(r.rt || ''),
+      rw: String(r.rw || ''),
+      nikKk: String(r.nik_kk || ''),
+      nikKtp: String(r.nik_ktp || ''),
+      dtsen: String(r.dtsen || ''),
+      validasi: effectiveValidasi,
+      kontak: String(r.kontak || ''),
+      pekerjaan: String(r.pekerjaan || ''),
+      pengelola: String(r.pengelola || ''),
+      catatan: String(r.catatan || ''),
+      payment: Number(r.payment || 0),
+      documents,
+      berkasDikembalikan: Boolean(r.berkas_dikembalikan),
+      berkasDikembalikanAt: r.berkas_dikembalikan_at ? String(r.berkas_dikembalikan_at) : undefined,
+      berkasDikembalikanBy: r.berkas_dikembalikan_by ? String(r.berkas_dikembalikan_by) : undefined,
+      createdAt: String(r.created_at || new Date().toISOString()),
+      updatedAt: String(r.updated_at || new Date().toISOString()),
+    };
+  });
+
+  return {
+    records,
+    totalCount: typeof count === 'number' ? count : records.length,
+    page,
+    pageSize,
+  };
+}
+
+/**
+ * Hitung ringkasan jumlah data di server menggunakan `{ count: 'exact', head: true }` (0 byte row payload).
+ */
+export async function fetchDashboardCountsFromSupabase(tahun?: string): Promise<{
+  acceptedCount: number;
+  pendingCount: number;
+  rejectedCount: number;
+  proposalCount: number;
+}> {
+  if (!isSupabaseConfigured) {
+    return { acceptedCount: 0, pendingCount: 0, rejectedCount: 0, proposalCount: 0 };
+  }
+  const hasYear = Boolean(tahun && tahun !== 'ALL' && tahun !== 'Semua');
+  const acceptedQ = supabase
+    .from('kpm_records')
+    .select('id', { count: 'exact', head: true })
+    .eq('validasi', 'accepted');
+  const pendingQ = supabase
+    .from('kpm_records')
+    .select('id', { count: 'exact', head: true })
+    .eq('validasi', 'pending');
+  const rejectedQ = supabase
+    .from('kpm_records')
+    .select('id', { count: 'exact', head: true })
+    .eq('validasi', 'rejected');
+  const propQ = supabase.from('proposals').select('id', { count: 'exact', head: true });
+
+  const [accRes, penRes, rejRes, propRes] = await Promise.all([
+    hasYear ? acceptedQ.eq('tahun', tahun!) : acceptedQ,
+    pendingQ,
+    rejectedQ,
+    hasYear ? propQ.eq('tahun', tahun!) : propQ,
+  ]);
+
+  return {
+    acceptedCount: accRes.count ?? 0,
+    pendingCount: penRes.count ?? 0,
+    rejectedCount: rejRes.count ?? 0,
+    proposalCount: propRes.count ?? 0,
+  };
+}
+
 export async function fetchOperationalDataFromSupabase(
   options: FetchOperationalOptions = {}
 ): Promise<SupabaseOperationalSnapshot> {
-  const { includeLogs = true } = options;
+  const {
+    includeLogs = false,
+    includeKpmDocuments = false,
+    forceRefreshMaster = false,
+  } = options;
   const emptyRows = Promise.resolve([] as Record<string, unknown>[]);
+
+  const cachedWilayah = !forceRefreshMaster ? readSessionCache<WilayahKabKota[]>('wilayah') : null;
+  const cachedPekerjaan = !forceRefreshMaster ? readSessionCache<string[]>('pekerjaan') : null;
+  const cachedItems = !forceRefreshMaster ? readSessionCache<ItemBantuan[]>('items') : null;
+  const cachedPengelola = !forceRefreshMaster ? readSessionCache<PengelolaProfile[]>('pengelola') : null;
 
   const [
     kabData,
@@ -476,94 +989,116 @@ export async function fetchOperationalDataFromSupabase(
     historyData,
     auditData,
   ] = await Promise.all([
-    fetchAllPages((from, to) =>
-      supabase
-        .from('wilayah_kabkota')
-        .select('*')
-        .order('sort_order', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to)
-    ),
-    fetchAllPages((from, to) =>
-      supabase
-        .from('wilayah_kecamatan')
-        .select('*')
-        .order('sort_order', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to)
-    ),
-    fetchAllPages((from, to) =>
-      supabase
-        .from('wilayah_kelurahan')
-        .select('*')
-        .order('sort_order', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to)
-    ),
-    fetchAllPages((from, to) =>
-      supabase
-        .from('pekerjaan_master')
-        .select('*')
-        .order('sort_order', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to)
-    ),
-    fetchAllPages((from, to) =>
-      supabase
-        .from('item_bantuan')
-        .select('*')
-        .order('tahun', { ascending: true })
-        .order('sort_order', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to)
-    ),
-    fetchAllPages((from, to) =>
-      supabase
-        .from('item_sub_items')
-        .select('*')
-        .order('sort_order', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to)
-    ),
-    fetchAllPages((from, to) =>
-      supabase
-        .from('pengelola')
-        .select('*')
-        .order('display_name', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to)
-    ),
+    cachedWilayah
+      ? emptyRows
+      : fetchAllPages((from, to) =>
+          supabase
+            .from('wilayah_kabkota')
+            .select(COLS_WILAYAH_KABKOTA)
+            .order('sort_order', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to)
+        ),
+    cachedWilayah
+      ? emptyRows
+      : fetchAllPages((from, to) =>
+          supabase
+            .from('wilayah_kecamatan')
+            .select(COLS_WILAYAH_KECAMATAN)
+            .order('sort_order', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to)
+        ),
+    cachedWilayah
+      ? emptyRows
+      : fetchAllPages((from, to) =>
+          supabase
+            .from('wilayah_kelurahan')
+            .select(COLS_WILAYAH_KELURAHAN)
+            .order('sort_order', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to)
+        ),
+    cachedPekerjaan
+      ? emptyRows
+      : fetchAllPages((from, to) =>
+          supabase
+            .from('pekerjaan_master')
+            .select(COLS_PEKERJAAN)
+            .order('sort_order', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to)
+        ),
+    cachedItems
+      ? emptyRows
+      : fetchAllPages((from, to) =>
+          supabase
+            .from('item_bantuan')
+            .select(COLS_ITEM_BANTUAN)
+            .order('tahun', { ascending: true })
+            .order('sort_order', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to)
+        ),
+    cachedItems
+      ? emptyRows
+      : fetchAllPages((from, to) =>
+          supabase
+            .from('item_sub_items')
+            .select(COLS_ITEM_SUB_ITEMS)
+            .order('sort_order', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to)
+        ),
+    cachedPengelola
+      ? emptyRows
+      : fetchAllPages((from, to) =>
+          supabase
+            .from('pengelola')
+            .select(COLS_PENGELOLA)
+            .order('display_name', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to)
+        ),
     fetchAllPages((from, to) =>
       supabase
         .from('proposals')
-        .select('*')
+        .select(COLS_PROPOSALS)
         .order('created_at', { ascending: false })
         .order('id', { ascending: true })
         .range(from, to)
     ),
     fetchAllPages((from, to) =>
-      supabase.from('proposal_documents').select('*').order('id', { ascending: true }).range(from, to)
+      supabase
+        .from('proposal_documents')
+        .select(COLS_PROPOSAL_DOCUMENTS)
+        .order('id', { ascending: true })
+        .range(from, to)
     ),
     fetchAllPages((from, to) =>
       supabase
         .from('kpm_records')
-        .select('*')
+        .select(COLS_KPM_RECORDS_LIST)
         .order('created_at', { ascending: false })
         .order('id', { ascending: true })
         .range(from, to)
     ),
-    fetchAllPages((from, to) =>
-      supabase
-        .from('kpm_documents')
-        .select('*')
-        .order('sort_order', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to)
-    ),
+    includeKpmDocuments
+      ? fetchAllPages((from, to) =>
+          supabase
+            .from('kpm_documents')
+            .select(COLS_KPM_DOCUMENTS)
+            .order('sort_order', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to)
+        )
+      : emptyRows,
+    // Hanya tarik baris sub-item yang sudah diterima (delivered=true) dengan 3 kolom minimal
     fetchAllPages((from, to) =>
       supabase
         .from('kpm_sub_item_deliveries')
-        .select('*')
+        .select(COLS_KPM_DELIVERIES_LEAN)
+        .eq('delivered', true)
         .order('id', { ascending: true })
         .range(from, to)
     ),
@@ -572,7 +1107,7 @@ export async function fetchOperationalDataFromSupabase(
           (from, to) =>
             supabase
               .from('proposal_kpm_history')
-              .select('*')
+              .select(COLS_PROPOSAL_HISTORY)
               .order('timestamp', { ascending: false })
               .order('id', { ascending: true })
               .range(from, to),
@@ -584,7 +1119,7 @@ export async function fetchOperationalDataFromSupabase(
           (from, to) =>
             supabase
               .from('kpm_audit_logs')
-              .select('*')
+              .select(COLS_KPM_AUDIT)
               .order('timestamp', { ascending: false })
               .order('id', { ascending: true })
               .range(from, to),
@@ -606,92 +1141,116 @@ export async function fetchOperationalDataFromSupabase(
   const kpmDocsRes = { data: kpmDocsData };
   const deliveriesRes = { data: deliveriesData };
 
-  // 1. Reconstruct Wilayah hierarchy
-  const kelByKec = new Map<string, string[]>();
-  for (const kel of kelRes.data || []) {
-    const kecId = String(kel.kecamatan_id);
-    const arr = kelByKec.get(kecId) || [];
-    arr.push(String(kel.nama));
-    kelByKec.set(kecId, arr);
+  // 1. Reconstruct Wilayah hierarchy (gunakan cache sessionStorage jika masih segar)
+  let wilayahList: WilayahKabKota[];
+  if (cachedWilayah) {
+    wilayahList = cachedWilayah;
+  } else {
+    const kelByKec = new Map<string, string[]>();
+    for (const kel of kelRes.data || []) {
+      const kecId = String(kel.kecamatan_id);
+      const arr = kelByKec.get(kecId) || [];
+      arr.push(String(kel.nama));
+      kelByKec.set(kecId, arr);
+    }
+    const kecByKab = new Map<string, WilayahKabKota['kecamatanList']>();
+    for (const kec of kecRes.data || []) {
+      const kabId = String(kec.kabkota_id);
+      const arr = kecByKab.get(kabId) || [];
+      arr.push({
+        id: String(kec.id),
+        nama: String(kec.nama),
+        kelurahanList: kelByKec.get(String(kec.id)) || [],
+      });
+      kecByKab.set(kabId, arr);
+    }
+    wilayahList = (kabRes.data || []).map((kab) => ({
+      id: String(kab.id),
+      nama: String(kab.nama),
+      kecamatanList: kecByKab.get(String(kab.id)) || [],
+    }));
+    if (wilayahList.length > 0) writeSessionCache('wilayah', wilayahList);
   }
-  const kecByKab = new Map<string, WilayahKabKota['kecamatanList']>();
-  for (const kec of kecRes.data || []) {
-    const kabId = String(kec.kabkota_id);
-    const arr = kecByKab.get(kabId) || [];
-    arr.push({
-      id: String(kec.id),
-      nama: String(kec.nama),
-      kelurahanList: kelByKec.get(String(kec.id)) || [],
-    });
-    kecByKab.set(kabId, arr);
-  }
-  const wilayahList: WilayahKabKota[] = (kabRes.data || []).map((kab) => ({
-    id: String(kab.id),
-    nama: String(kab.nama),
-    kecamatanList: kecByKab.get(String(kab.id)) || [],
-  }));
 
   // 2. Pekerjaan
-  const pekerjaanList: string[] = (pekerjaanRes.data || []).map((p) => String(p.nama));
+  let pekerjaanList: string[];
+  if (cachedPekerjaan) {
+    pekerjaanList = cachedPekerjaan;
+  } else {
+    pekerjaanList = (pekerjaanRes.data || []).map((p) => String(p.nama));
+    if (pekerjaanList.length > 0) writeSessionCache('pekerjaan', pekerjaanList);
+  }
 
   // 3. Item Bantuan & Sub-Items
-  const subByItem = new Map<string, string[]>();
-  for (const sub of subItemsRes.data || []) {
-    const itemId = String(sub.item_id);
-    const arr = subByItem.get(itemId) || [];
-    arr.push(String(sub.sub_item_name));
-    subByItem.set(itemId, arr);
+  let items: ItemBantuan[];
+  if (cachedItems) {
+    items = cachedItems;
+  } else {
+    const subByItem = new Map<string, string[]>();
+    for (const sub of subItemsRes.data || []) {
+      const itemId = String(sub.item_id);
+      const arr = subByItem.get(itemId) || [];
+      arr.push(String(sub.sub_item_name));
+      subByItem.set(itemId, arr);
+    }
+    items = (itemsRes.data || []).map((it) => ({
+      id: String(it.id),
+      tahun: String(it.tahun),
+      code: String(it.code),
+      name: String(it.name),
+      subItems: subByItem.get(String(it.id)) || [],
+    }));
+    if (items.length > 0) writeSessionCache('items', items);
   }
-  const items: ItemBantuan[] = (itemsRes.data || []).map((it) => ({
-    id: String(it.id),
-    tahun: String(it.tahun),
-    code: String(it.code),
-    name: String(it.name),
-    subItems: subByItem.get(String(it.id)) || [],
-  }));
 
-  // 4. Pengelola
-  const pengelolaList: PengelolaProfile[] = (pengelolaRes.data || []).map((p) => {
-    const fotoUrl = sanitizeMediaUrl(p.foto_url as string | null);
-    const meta = (p.foto_meta as Record<string, unknown> | null) || {};
-    const foto: KpmDocumentFile | undefined = fotoUrl
-      ? {
-          id: String(meta.id || `pengelola-foto-${p.id}`),
-          dataUrl: fotoUrl,
-          fileId:
-            (typeof p.foto_file_id === 'string' && p.foto_file_id) ||
-            extractDriveFileId(fotoUrl) ||
-            undefined,
-          directUrl: fotoUrl,
-          thumbnailUrl:
-            sanitizeMediaUrl(p.foto_thumb_url as string | null) ||
-            buildDriveFallbackThumbnailUrl(fotoUrl) ||
-            undefined,
-          viewUrl: sanitizeMediaUrl(p.foto_view_url as string | null) || undefined,
-          fileName: String(p.foto_file_name || 'foto-pengelola.jpg'),
-          originalSize: Number(meta.originalSize || 0),
-          compressedSize: Number(meta.compressedSize || 0),
-          width: Number(meta.width || 0),
-          height: Number(meta.height || 0),
-          mimeType: String(meta.mimeType || 'image/jpeg'),
-          uploadedAt: String(meta.uploadedAt || p.updated_at || new Date().toISOString()),
-        }
-      : undefined;
+  // 4. Pengelola (gunakan cache sessionStorage jika masih segar)
+  let pengelolaList: PengelolaProfile[];
+  if (cachedPengelola) {
+    pengelolaList = cachedPengelola;
+  } else {
+    pengelolaList = (pengelolaRes.data || []).map((p) => {
+      const fotoUrl = sanitizeMediaUrl(p.foto_url as string | null);
+      const meta = (p.foto_meta as Record<string, unknown> | null) || {};
+      const foto: KpmDocumentFile | undefined = fotoUrl
+        ? {
+            id: String(meta.id || `pengelola-foto-${p.id}`),
+            dataUrl: fotoUrl,
+            fileId:
+              (typeof p.foto_file_id === 'string' && p.foto_file_id) ||
+              extractDriveFileId(fotoUrl) ||
+              undefined,
+            directUrl: fotoUrl,
+            thumbnailUrl:
+              sanitizeMediaUrl(p.foto_thumb_url as string | null) ||
+              buildDriveFallbackThumbnailUrl(fotoUrl) ||
+              undefined,
+            viewUrl: sanitizeMediaUrl(p.foto_view_url as string | null) || undefined,
+            fileName: String(p.foto_file_name || 'foto-pengelola.jpg'),
+            originalSize: Number(meta.originalSize || 0),
+            compressedSize: Number(meta.compressedSize || 0),
+            width: Number(meta.width || 0),
+            height: Number(meta.height || 0),
+            mimeType: String(meta.mimeType || 'image/jpeg'),
+            uploadedAt: String(meta.uploadedAt || p.updated_at || new Date().toISOString()),
+          }
+        : undefined;
 
-    return {
-      id: String(p.id),
-      title: String(p.title || 'Bapak'),
-      nama: String(p.nama || ''),
-      displayName: String(p.display_name || ''),
-      kabKota: String(p.kab_kota || ''),
-      kecamatan: String(p.kecamatan || ''),
-      kelurahan: String(p.kelurahan || ''),
-      alamat: String(p.alamat || ''),
-      kontak: String(p.kontak || ''),
-      foto,
-      createdAt: String(p.created_at || new Date().toISOString()),
-    };
-  });
+      return {
+        id: String(p.id),
+        title: String(p.title || 'Bapak'),
+        nama: String(p.nama || ''),
+        displayName: String(p.display_name || ''),
+        kabKota: String(p.kab_kota || ''),
+        kecamatan: String(p.kecamatan || ''),
+        kelurahan: String(p.kelurahan || ''),
+        alamat: String(p.alamat || ''),
+        kontak: String(p.kontak || ''),
+        foto,
+        createdAt: String(p.created_at || new Date().toISOString()),
+      };
+    });
+    if (pengelolaList.length > 0) writeSessionCache('pengelola', pengelolaList);
+  }
 
   // 5. Proposals & Proposal Documents
   const docsByProposal = new Map<string, ProposalDocuments>();
@@ -792,7 +1351,8 @@ export async function fetchOperationalDataFromSupabase(
   }
 
   const deliveriesByKpm = new Map<string, Record<string, SubItemDeliveryState>>();
-  for (const row of deliveriesRes.data || []) {
+  for (const rawRow of deliveriesRes.data || []) {
+    const row = rawRow as Record<string, unknown>;
     const kpmId = String(row.kpm_id);
     const subName = String(row.sub_item_name);
     const bag = deliveriesByKpm.get(kpmId) || {};
@@ -949,7 +1509,7 @@ export async function fetchScopedOperationalDataFromSupabase(
       ? fetchAllPages((from, to) =>
           supabase
             .from('wilayah_kabkota')
-            .select('*')
+            .select(COLS_WILAYAH_KABKOTA)
             .order('sort_order', { ascending: true })
             .order('id', { ascending: true })
             .range(from, to)
@@ -959,7 +1519,7 @@ export async function fetchScopedOperationalDataFromSupabase(
       ? fetchAllPages((from, to) =>
           supabase
             .from('wilayah_kecamatan')
-            .select('*')
+            .select(COLS_WILAYAH_KECAMATAN)
             .order('sort_order', { ascending: true })
             .order('id', { ascending: true })
             .range(from, to)
@@ -969,7 +1529,7 @@ export async function fetchScopedOperationalDataFromSupabase(
       ? fetchAllPages((from, to) =>
           supabase
             .from('wilayah_kelurahan')
-            .select('*')
+            .select(COLS_WILAYAH_KELURAHAN)
             .order('sort_order', { ascending: true })
             .order('id', { ascending: true })
             .range(from, to)
@@ -979,7 +1539,7 @@ export async function fetchScopedOperationalDataFromSupabase(
       ? fetchAllPages((from, to) =>
           supabase
             .from('pekerjaan_master')
-            .select('*')
+            .select(COLS_PEKERJAAN)
             .order('sort_order', { ascending: true })
             .order('id', { ascending: true })
             .range(from, to)
@@ -989,7 +1549,7 @@ export async function fetchScopedOperationalDataFromSupabase(
       ? fetchAllPages((from, to) =>
           supabase
             .from('item_bantuan')
-            .select('*')
+            .select(COLS_ITEM_BANTUAN)
             .order('tahun', { ascending: true })
             .order('sort_order', { ascending: true })
             .order('id', { ascending: true })
@@ -1000,7 +1560,7 @@ export async function fetchScopedOperationalDataFromSupabase(
       ? fetchAllPages((from, to) =>
           supabase
             .from('item_sub_items')
-            .select('*')
+            .select(COLS_ITEM_SUB_ITEMS)
             .order('sort_order', { ascending: true })
             .order('id', { ascending: true })
             .range(from, to)
@@ -1010,7 +1570,7 @@ export async function fetchScopedOperationalDataFromSupabase(
       ? fetchAllPages((from, to) =>
           supabase
             .from('pengelola')
-            .select('*')
+            .select(COLS_PENGELOLA)
             .order('display_name', { ascending: true })
             .order('id', { ascending: true })
             .range(from, to)
@@ -1020,7 +1580,7 @@ export async function fetchScopedOperationalDataFromSupabase(
       ? fetchAllPages((from, to) =>
           supabase
             .from('proposals')
-            .select('*')
+            .select(COLS_PROPOSALS)
             .order('created_at', { ascending: false })
             .order('id', { ascending: true })
             .range(from, to)
@@ -1028,34 +1588,31 @@ export async function fetchScopedOperationalDataFromSupabase(
       : empty,
     needProposals
       ? fetchAllPages((from, to) =>
-          supabase.from('proposal_documents').select('*').order('id', { ascending: true }).range(from, to)
+          supabase
+            .from('proposal_documents')
+            .select(COLS_PROPOSAL_DOCUMENTS)
+            .order('id', { ascending: true })
+            .range(from, to)
         )
       : empty,
     needKpm
       ? fetchAllPages((from, to) =>
           supabase
             .from('kpm_records')
-            .select('*')
+            .select(COLS_KPM_RECORDS_LIST)
             .order('created_at', { ascending: false })
             .order('id', { ascending: true })
             .range(from, to)
         )
       : empty,
-    needKpm
-      ? fetchAllPages((from, to) =>
-          supabase
-            .from('kpm_documents')
-            .select('*')
-            .order('sort_order', { ascending: true })
-            .order('id', { ascending: true })
-            .range(from, to)
-        )
-      : empty,
+    // Tidak memuat seluruh tabel kpm_documents (dokumen tambahan di-load on-demand per KPM)
+    empty,
     needKpm
       ? fetchAllPages((from, to) =>
           supabase
             .from('kpm_sub_item_deliveries')
-            .select('*')
+            .select(COLS_KPM_DELIVERIES_LEAN)
+            .eq('delivered', true)
             .order('id', { ascending: true })
             .range(from, to)
         )
@@ -1065,7 +1622,7 @@ export async function fetchScopedOperationalDataFromSupabase(
           (from, to) =>
             supabase
               .from('proposal_kpm_history')
-              .select('*')
+              .select(COLS_PROPOSAL_HISTORY)
               .order('timestamp', { ascending: false })
               .order('id', { ascending: true })
               .range(from, to),
@@ -1077,7 +1634,7 @@ export async function fetchScopedOperationalDataFromSupabase(
           (from, to) =>
             supabase
               .from('kpm_audit_logs')
-              .select('*')
+              .select(COLS_KPM_AUDIT)
               .order('timestamp', { ascending: false })
               .order('id', { ascending: true })
               .range(from, to),
@@ -1280,7 +1837,8 @@ export async function fetchScopedOperationalDataFromSupabase(
     }
 
     const deliveriesByKpm = new Map<string, Record<string, SubItemDeliveryState>>();
-    for (const row of deliveriesData) {
+    for (const rawRow of deliveriesData) {
+      const row = rawRow as Record<string, unknown>;
       const kpmId = String(row.kpm_id);
       const subName = String(row.sub_item_name);
       const bag = deliveriesByKpm.get(kpmId) || {};
@@ -2243,6 +2801,7 @@ export async function upsertPengelolaInSupabase(params: {
   if (historyEntries.length > 0) {
     await appendProposalHistoryInSupabase(historyEntries, proposals);
   }
+  invalidateMasterReferenceCache(['pengelola']);
   return resolvedId;
 }
 
@@ -2252,6 +2811,7 @@ export async function deletePengelolaInSupabase(params: {
 }): Promise<void> {
   const { error } = await supabase.from('pengelola').delete().eq('id', params.pengelolaId);
   if (error) throw error;
+  invalidateMasterReferenceCache(['pengelola']);
   if (params.historyEntries && params.historyEntries.length > 0) {
     await appendProposalHistoryInSupabase(params.historyEntries);
   }
@@ -2266,6 +2826,7 @@ export async function upsertCatalogItemsInSupabase(params: {
   pengelolaList?: PengelolaProfile[];
   historyEntries?: ProposalKpmHistoryEntry[];
 }): Promise<void> {
+  invalidateMasterReferenceCache(['items']);
   const nowIso = new Date().toISOString();
   const {
     itemsToSync,
@@ -2480,12 +3041,14 @@ export async function upsertPekerjaanListInSupabase(params: {
   if (historyEntries.length > 0) {
     await appendProposalHistoryInSupabase(historyEntries, proposals);
   }
+  invalidateMasterReferenceCache(['pekerjaan']);
 }
 
 export async function syncWilayahInSupabase(params: {
   wilayahList: WilayahKabKota[];
   historyEntries?: ProposalKpmHistoryEntry[];
 }): Promise<void> {
+  invalidateMasterReferenceCache(['wilayah']);
   const nowIso = new Date().toISOString();
   const [existingKabsData, existingKecData, existingKelData] = await Promise.all([
     fetchAllPages((from, to) =>
@@ -3464,25 +4027,8 @@ export async function runAdminDataActionInSupabase(
 // AUTH, USERS & CHAT (SUPABASE)
 // ============================================================================
 export async function supabaseFetchInternalUsers(): Promise<InternalUser[]> {
-  try {
-    const rows = await fetchAllPages((from, to) =>
-      supabase
-        .from('internal_users')
-        .select(SAFE_INTERNAL_USER_COLUMNS_WITH_USERNAME)
-        .order('registered_at', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to)
-    );
-    const fallbackMap = await fetchFallbackUsernameMap();
-    return rows.map((r) => {
-      const mapped = mapSupabaseUserRow(r as Record<string, unknown>);
-      if (!mapped.username && fallbackMap[mapped.id]) {
-        return { ...mapped, username: fallbackMap[mapped.id] };
-      }
-      return mapped;
-    });
-  } catch (err) {
-    if (!isMissingUsernameColumnError(err)) throw err;
+  const knownUsernameSupport = getSchemaCapability('usernameCol');
+  const fetchWithoutUsername = async (): Promise<InternalUser[]> => {
     const [rows, fallbackMap] = await Promise.all([
       fetchAllPages((from, to) =>
         supabase
@@ -3498,6 +4044,38 @@ export async function supabaseFetchInternalUsers(): Promise<InternalUser[]> {
       const mapped = mapSupabaseUserRow(r as Record<string, unknown>);
       return fallbackMap[mapped.id] ? { ...mapped, username: fallbackMap[mapped.id] } : mapped;
     });
+  };
+
+  if (knownUsernameSupport === false) {
+    return fetchWithoutUsername();
+  }
+
+  try {
+    const rows = await fetchAllPages((from, to) =>
+      supabase
+        .from('internal_users')
+        .select(SAFE_INTERNAL_USER_COLUMNS_WITH_USERNAME)
+        .order('registered_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to)
+    );
+    setSchemaCapability('usernameCol', true);
+    const mappedRows = rows.map((r) => mapSupabaseUserRow(r as Record<string, unknown>));
+    // Hanya tarik fallback username map jika ada user yang belum memiliki username di kolom native
+    const hasMissingUsername = mappedRows.some((u) => !u.username);
+    if (!hasMissingUsername) {
+      return mappedRows;
+    }
+    const fallbackMap = await fetchFallbackUsernameMap();
+    return mappedRows.map((mapped) =>
+      !mapped.username && fallbackMap[mapped.id]
+        ? { ...mapped, username: fallbackMap[mapped.id] }
+        : mapped
+    );
+  } catch (err) {
+    if (!isMissingUsernameColumnError(err)) throw err;
+    setSchemaCapability('usernameCol', false);
+    return fetchWithoutUsername();
   }
 }
 
@@ -3510,7 +4088,7 @@ export async function supabaseLogin(
     return { ok: false, error: 'Username/email dan kata sandi wajib diisi.' };
   }
 
-  let useUsernameCol = true;
+  let useUsernameCol = getSchemaCapability('usernameCol') !== false;
   let data: Record<string, unknown> | null = null;
 
   const findByColumn = async (
@@ -3527,22 +4105,28 @@ export async function supabaseLogin(
     return (res.data as Record<string, unknown> | null) ?? null;
   };
 
-  try {
-    data = await findByColumn(
-      'email',
-      normalized,
-      SAFE_INTERNAL_USER_COLUMNS_WITH_USERNAME
-    );
-    if (!data) {
+  if (useUsernameCol) {
+    try {
       data = await findByColumn(
-        'username',
+        'email',
         normalized,
         SAFE_INTERNAL_USER_COLUMNS_WITH_USERNAME
       );
+      if (!data) {
+        data = await findByColumn(
+          'username',
+          normalized,
+          SAFE_INTERNAL_USER_COLUMNS_WITH_USERNAME
+        );
+      }
+      setSchemaCapability('usernameCol', true);
+    } catch (err) {
+      if (!isMissingUsernameColumnError(err)) throw err;
+      useUsernameCol = false;
+      setSchemaCapability('usernameCol', false);
+      data = await findByColumn('email', normalized, SAFE_INTERNAL_USER_COLUMNS);
     }
-  } catch (err) {
-    if (!isMissingUsernameColumnError(err)) throw err;
-    useUsernameCol = false;
+  } else {
     data = await findByColumn('email', normalized, SAFE_INTERNAL_USER_COLUMNS);
   }
 
@@ -4033,18 +4617,59 @@ export function supabaseMarkOfflineKeepalive(userId: string): void {
   }
 }
 
-export async function supabaseFetchDirectMessages(): Promise<DirectChatMessage[]> {
-  const rows = await fetchAllPages(
-    (from, to) =>
-      supabase
-        .from('direct_chat_messages')
-        .select('*')
-        .order('created_at', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to),
-    20_000
-  );
-  return rows.map((r) => mapSupabaseChatRow(r as Record<string, unknown>));
+/**
+ * Hitung jumlah pesan belum dibaca untuk user aktif menggunakan head: true (0 byte payload).
+ */
+export async function supabaseFetchUnreadChatCount(userId: string): Promise<number> {
+  if (!isSupabaseConfigured || !userId) return 0;
+  try {
+    const { count, error } = await supabase
+      .from('direct_chat_messages')
+      .select('id', { count: 'exact', head: true })
+      .eq('recipient_id', userId)
+      .is('read_at', null);
+    if (error) return 0;
+    return count ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Ambil pesan chat terbaru milik user aktif (terfilter server-side & terpaginasi `.range(0, limit - 1)`).
+ */
+export async function supabaseFetchDirectMessages(
+  userId?: string,
+  limit = 150
+): Promise<DirectChatMessage[]> {
+  if (!isSupabaseConfigured) return [];
+  const safeLimit = Math.min(300, Math.max(20, limit));
+  const cols =
+    getSchemaCapability('chatDeliveredAtCol') === false
+      ? COLS_DIRECT_CHAT_BASE
+      : COLS_DIRECT_CHAT_WITH_DELIVERED;
+
+  const runQuery = async (selectCols: string) => {
+    let q = supabase.from('direct_chat_messages').select(selectCols);
+    if (userId) {
+      q = q.or(`sender_id.eq.${userId},recipient_id.eq.${userId}`);
+    }
+    return q
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(0, safeLimit - 1);
+  };
+
+  let res = await runQuery(cols);
+  if (res.error && isMissingDeliveredAtColumnError(res.error)) {
+    setSchemaCapability('chatDeliveredAtCol', false);
+    res = await runQuery(COLS_DIRECT_CHAT_BASE);
+  } else if (!res.error && cols === COLS_DIRECT_CHAT_WITH_DELIVERED) {
+    setSchemaCapability('chatDeliveredAtCol', true);
+  }
+  if (res.error) throw res.error;
+  const rows = ((res.data || []) as unknown as Record<string, unknown>[]).reverse();
+  return rows.map((r) => mapSupabaseChatRow(r));
 }
 
 export async function supabaseSendDirectMessage(payload: {
@@ -4066,24 +4691,44 @@ export async function supabaseSendDirectMessage(payload: {
       }
     : null;
 
-  const { data, error } = await supabase
+  const selectCols: string =
+    getSchemaCapability('chatDeliveredAtCol') === false
+      ? COLS_DIRECT_CHAT_BASE
+      : COLS_DIRECT_CHAT_WITH_DELIVERED;
+
+  const insertPayload = {
+    id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    conversation_key: conversationKey,
+    sender_id: payload.senderId,
+    recipient_id: payload.recipientId,
+    text: payload.text.trim(),
+    shared_kpm_id: payload.sharedKpm?.kpmId || null,
+    shared_kpm_foto_url: cleanSharedFoto,
+    shared_kpm_snapshot: sanitizedSnapshot,
+    created_at: new Date().toISOString(),
+  };
+
+  let rowData: Record<string, unknown> | null = null;
+  let { data, error } = await supabase
     .from('direct_chat_messages')
-    .insert({
-      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      conversation_key: conversationKey,
-      sender_id: payload.senderId,
-      recipient_id: payload.recipientId,
-      text: payload.text.trim(),
-      shared_kpm_id: payload.sharedKpm?.kpmId || null,
-      shared_kpm_foto_url: cleanSharedFoto,
-      shared_kpm_snapshot: sanitizedSnapshot,
-      created_at: new Date().toISOString(),
-    })
-    .select('*')
+    .insert(insertPayload)
+    .select(selectCols)
     .single();
+  rowData = (data as unknown as Record<string, unknown>) || null;
+
+  if (error && isMissingDeliveredAtColumnError(error)) {
+    setSchemaCapability('chatDeliveredAtCol', false);
+    const retry = await supabase
+      .from('direct_chat_messages')
+      .select(COLS_DIRECT_CHAT_BASE)
+      .eq('id', insertPayload.id)
+      .single();
+    rowData = (retry.data as unknown as Record<string, unknown>) || null;
+    error = retry.error;
+  }
 
   if (error) throw error;
-  return mapSupabaseChatRow(data as Record<string, unknown>);
+  return mapSupabaseChatRow(rowData || {});
 }
 
 export async function supabaseMarkDirectMessagesRead(
@@ -4114,19 +4759,26 @@ export async function supabaseMarkDirectMessagesDelivered(
 ): Promise<Record<string, string>> {
   const now = new Date().toISOString();
 
-  // Attempt native column update if migration has been run; ignore missing-column errors safely
-  try {
-    let query = supabase
-      .from('direct_chat_messages')
-      .update({ delivered_at: now })
-      .eq('recipient_id', recipientId)
-      .is('delivered_at', null);
-    if (messageIds && messageIds.length > 0) {
-      query = query.in('id', messageIds);
+  // Hanya jalankan update kolom delivered_at jika skema mendukung (cegah HTTP 400 berulang)
+  if (getSchemaCapability('chatDeliveredAtCol') !== false) {
+    try {
+      let query = supabase
+        .from('direct_chat_messages')
+        .update({ delivered_at: now })
+        .eq('recipient_id', recipientId)
+        .is('delivered_at', null);
+      if (messageIds && messageIds.length > 0) {
+        query = query.in('id', messageIds);
+      }
+      const { error } = await query;
+      if (error && isMissingDeliveredAtColumnError(error)) {
+        setSchemaCapability('chatDeliveredAtCol', false);
+      } else if (!error) {
+        setSchemaCapability('chatDeliveredAtCol', true);
+      }
+    } catch {
+      // Fallback watermark in masdeta_app_state guarantees cross-device delivery ticks even without column migration
     }
-    await query;
-  } catch {
-    // Fallback watermark in masdeta_app_state guarantees cross-device delivery ticks even without column migration
   }
 
   const current = await fetchChatDeliveryWatermarks();
@@ -4188,10 +4840,47 @@ export async function fetchAppStateSlice<T>(stateKey: string, fallback: T): Prom
   return localValue;
 }
 
+export async function fetchAppStateSlicesBatch(
+  keys: string[]
+): Promise<Record<string, unknown>> {
+  const result: Record<string, unknown> = {};
+  const uniqueKeys = Array.from(new Set(keys.filter(Boolean)));
+  for (const key of uniqueKeys) {
+    try {
+      const raw = localStorage.getItem(`masdeta_slice_${key}`);
+      if (raw) result[key] = JSON.parse(raw);
+    } catch {
+      // ignore storage errors
+    }
+  }
+  if (!isSupabaseConfigured || uniqueKeys.length === 0) return result;
+  try {
+    const { data, error } = await supabase
+      .from('masdeta_app_state')
+      .select('state_key,payload')
+      .in('state_key', uniqueKeys);
+    if (error || !data) return result;
+    for (const row of data as Array<{ state_key: string; payload: unknown }>) {
+      if (row.state_key && row.payload !== undefined && row.payload !== null) {
+        result[row.state_key] = row.payload;
+        try {
+          localStorage.setItem(`masdeta_slice_${row.state_key}`, JSON.stringify(row.payload));
+        } catch {
+          // ignore quota errors
+        }
+      }
+    }
+  } catch {
+    // fallback to local cache
+  }
+  return result;
+}
+
 export async function saveAppStateSlice<T>(stateKey: string, payload: T): Promise<void> {
+  const sanitizedPayload = stripBase64StringsDeep(payload);
   const localKey = `masdeta_slice_${stateKey}`;
   try {
-    localStorage.setItem(localKey, JSON.stringify(payload));
+    localStorage.setItem(localKey, JSON.stringify(sanitizedPayload));
   } catch {
     // ignore storage quota errors
   }
@@ -4200,7 +4889,7 @@ export async function saveAppStateSlice<T>(stateKey: string, payload: T): Promis
     const { error } = await supabase.from('masdeta_app_state').upsert(
       {
         state_key: stateKey,
-        payload: payload as Record<string, unknown>,
+        payload: sanitizedPayload as Record<string, unknown>,
         updated_at: new Date().toISOString(),
       },
       { onConflict: 'state_key' }
@@ -4288,24 +4977,46 @@ export async function fetchSchedulesFromSupabase(): Promise<ScheduleEventItem[]>
   }
 
   if (!isSupabaseConfigured) return localList;
+  if (getSchemaCapability('schedulesTable') === false) {
+    return await fetchAppStateSlice<ScheduleEventItem[]>(SCHEDULES_LEGACY_STATE_KEY, localList);
+  }
 
   try {
     let data: Record<string, unknown>[] = [];
+    const useBookCol = getSchemaCapability('scheduleBookIdCol') !== false;
     try {
       data = await fetchAllPages<Record<string, unknown>>((from, to) =>
-        supabase
-          .from('schedules')
-          .select('*')
+        (useBookCol
+          ? supabase.from('schedules').select(COLS_SCHEDULES_WITH_BOOK)
+          : supabase.from('schedules').select(COLS_SCHEDULES_BASE)
+        )
           .order('target_date', { ascending: true })
           .order('target_time', { ascending: true })
           .order('id', { ascending: true })
           .range(from, to)
       );
-    } catch (error) {
-      if (isSchemaMissingError(error)) {
-        return await fetchAppStateSlice<ScheduleEventItem[]>(SCHEDULES_LEGACY_STATE_KEY, localList);
+      setSchemaCapability('schedulesTable', true);
+      if (useBookCol) {
+        setSchemaCapability('scheduleBookIdCol', true);
       }
-      return localList;
+    } catch (error) {
+      if (isMissingBookIdColumnError(error)) {
+        setSchemaCapability('scheduleBookIdCol', false);
+        data = await fetchAllPages<Record<string, unknown>>((from, to) =>
+          supabase
+            .from('schedules')
+            .select(COLS_SCHEDULES_BASE)
+            .order('target_date', { ascending: true })
+            .order('target_time', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to)
+        );
+      } else if (isSchemaMissingError(error)) {
+        setSchemaCapability('schedulesTable', false);
+        return await fetchAppStateSlice<ScheduleEventItem[]>(SCHEDULES_LEGACY_STATE_KEY, localList);
+      } else {
+        return localList;
+      }
     }
 
     if (data.length > 0) {
@@ -4333,10 +5044,12 @@ export async function fetchSchedulesFromSupabase(): Promise<ScheduleEventItem[]>
     const legacyRemote = await fetchAppStateSlice<ScheduleEventItem[]>(SCHEDULES_LEGACY_STATE_KEY, []);
     const seedSource = legacyRemote.length > 0 ? legacyRemote : localList;
     if (seedSource.length > 0) {
+      const tryBookId = getSchemaCapability('scheduleBookIdCol') !== false;
       let { error: seedErr } = await supabase
         .from('schedules')
-        .upsert(seedSource.map((s) => mapScheduleToRow(s, true)), { onConflict: 'id' });
+        .upsert(seedSource.map((s) => mapScheduleToRow(s, tryBookId)), { onConflict: 'id' });
       if (seedErr && isMissingBookIdColumnError(seedErr)) {
+        setSchemaCapability('scheduleBookIdCol', false);
         const retryRes = await supabase
           .from('schedules')
           .upsert(seedSource.map((s) => mapScheduleToRow(s, false)), { onConflict: 'id' });
@@ -4376,21 +5089,28 @@ export async function upsertScheduleInSupabase(
     }
   }
   if (!isSupabaseConfigured) return;
+  if (getSchemaCapability('schedulesTable') === false) {
+    if (fullNextList) await saveAppStateSlice(SCHEDULES_LEGACY_STATE_KEY, fullNextList);
+    return;
+  }
 
   try {
+    const tryBookId = getSchemaCapability('scheduleBookIdCol') !== false;
     let { error } = await supabase
       .from('schedules')
-      .upsert(mapScheduleToRow(item, true), { onConflict: 'id' });
+      .upsert(mapScheduleToRow(item, tryBookId), { onConflict: 'id' });
     if (error && isMissingBookIdColumnError(error)) {
+      setSchemaCapability('scheduleBookIdCol', false);
       const retry = await supabase
         .from('schedules')
         .upsert(mapScheduleToRow(item, false), { onConflict: 'id' });
       error = retry.error;
     }
     if (error) {
-      if (isSchemaMissingError(error) && fullNextList) {
-        await saveAppStateSlice(SCHEDULES_LEGACY_STATE_KEY, fullNextList);
-      } else if (!isSchemaMissingError(error)) {
+      if (isSchemaMissingError(error)) {
+        setSchemaCapability('schedulesTable', false);
+        if (fullNextList) await saveAppStateSlice(SCHEDULES_LEGACY_STATE_KEY, fullNextList);
+      } else {
         console.warn('Schedule upsert warning:', error.message);
       }
     }
@@ -4412,13 +5132,18 @@ export async function deleteScheduleFromSupabase(
     }
   }
   if (!isSupabaseConfigured) return;
+  if (getSchemaCapability('schedulesTable') === false) {
+    if (fullNextList) await saveAppStateSlice(SCHEDULES_LEGACY_STATE_KEY, fullNextList);
+    return;
+  }
 
   try {
     const { error } = await supabase.from('schedules').delete().eq('id', id);
     if (error) {
-      if (isSchemaMissingError(error) && fullNextList) {
-        await saveAppStateSlice(SCHEDULES_LEGACY_STATE_KEY, fullNextList);
-      } else if (!isSchemaMissingError(error)) {
+      if (isSchemaMissingError(error)) {
+        setSchemaCapability('schedulesTable', false);
+        if (fullNextList) await saveAppStateSlice(SCHEDULES_LEGACY_STATE_KEY, fullNextList);
+      } else {
         console.warn('Schedule delete warning:', error.message);
       }
     }
@@ -4428,6 +5153,96 @@ export async function deleteScheduleFromSupabase(
 }
 
 export type DocumentTemplateKey = 'report' | 'bast' | 'sptjm' | 'kupon' | 'proposal_bast' | 'pejabat';
+
+/**
+ * Ambil seluruh template dokumen sekaligus dalam 1 query `.in('template_key', ...)`
+ * + cache sessionStorage 15 menit (menghemat 5-11 HTTP request setiap login/refresh).
+ */
+export async function fetchDocumentTemplatesBatch(
+  entries: Array<{ templateKey: DocumentTemplateKey; legacyStateKey: string; fallback: unknown }>,
+  forceRefresh = false
+): Promise<Record<DocumentTemplateKey, unknown>> {
+  const out = {} as Record<DocumentTemplateKey, unknown>;
+  const cachedAll = !forceRefresh
+    ? readSessionCache<Record<string, unknown>>('templates')
+    : null;
+
+  if (cachedAll) {
+    let allPresent = true;
+    for (const entry of entries) {
+      if (cachedAll[entry.templateKey] !== undefined) {
+        out[entry.templateKey] = cachedAll[entry.templateKey];
+      } else {
+        allPresent = false;
+      }
+    }
+    if (allPresent) return out;
+  }
+
+  // Isi default dari localStorage terlebih dahulu
+  for (const entry of entries) {
+    let localVal = entry.fallback;
+    try {
+      const raw = localStorage.getItem(`masdeta_slice_${entry.legacyStateKey}`);
+      if (raw) localVal = JSON.parse(raw);
+    } catch {
+      // ignore
+    }
+    out[entry.templateKey] = localVal;
+  }
+
+  if (!isSupabaseConfigured) return out;
+
+  const keys = entries.map((e) => e.templateKey);
+  if (getSchemaCapability('templatesTable') === false) {
+    const legacyBatch = await fetchAppStateSlicesBatch(entries.map((e) => e.legacyStateKey));
+    for (const entry of entries) {
+      if (legacyBatch[entry.legacyStateKey] !== undefined) {
+        out[entry.templateKey] = legacyBatch[entry.legacyStateKey];
+      }
+    }
+    writeSessionCache('templates', out);
+    return out;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('document_templates')
+      .select('template_key,payload')
+      .in('template_key', keys);
+
+    if (error) {
+      if (isSchemaMissingError(error)) {
+        setSchemaCapability('templatesTable', false);
+        const legacyBatch = await fetchAppStateSlicesBatch(entries.map((e) => e.legacyStateKey));
+        for (const entry of entries) {
+          if (legacyBatch[entry.legacyStateKey] !== undefined) {
+            out[entry.templateKey] = legacyBatch[entry.legacyStateKey];
+          }
+        }
+      }
+      return out;
+    }
+
+    setSchemaCapability('templatesTable', true);
+    const entryByKey = new Map(entries.map((e) => [e.templateKey, e]));
+    for (const row of (data || []) as Array<{ template_key: DocumentTemplateKey; payload: unknown }>) {
+      const entry = entryByKey.get(row.template_key);
+      if (entry && row.payload !== undefined && row.payload !== null) {
+        out[row.template_key] = row.payload;
+        try {
+          localStorage.setItem(`masdeta_slice_${entry.legacyStateKey}`, JSON.stringify(row.payload));
+        } catch {
+          // ignore quota errors
+        }
+      }
+    }
+    writeSessionCache('templates', out);
+  } catch {
+    // keep local fallback
+  }
+  return out;
+}
 
 export async function fetchDocumentTemplateFromSupabase<T>(
   templateKey: DocumentTemplateKey,
@@ -4448,6 +5263,9 @@ export async function fetchDocumentTemplateFromSupabase<T>(
   }
 
   if (!isSupabaseConfigured) return localValue;
+  if (getSchemaCapability('templatesTable') === false) {
+    return await fetchAppStateSlice<T>(legacyStateKey, localValue);
+  }
 
   try {
     const { data, error } = await supabase
@@ -4458,10 +5276,12 @@ export async function fetchDocumentTemplateFromSupabase<T>(
 
     if (error) {
       if (isSchemaMissingError(error)) {
+        setSchemaCapability('templatesTable', false);
         return await fetchAppStateSlice<T>(legacyStateKey, localValue);
       }
       return localValue;
     }
+    setSchemaCapability('templatesTable', true);
 
     if (data && data.payload !== undefined && data.payload !== null) {
       const remoteVal = data.payload as T;
@@ -4480,15 +5300,16 @@ export async function fetchDocumentTemplateFromSupabase<T>(
     const hasCustomLocal = hasLocalValue && JSON.stringify(localValue) !== fallbackJson;
     const seedPayload = hasLegacyRemote ? legacyRemote : hasCustomLocal ? localValue : null;
     if (seedPayload !== null) {
+      const sanitizedSeed = stripBase64StringsDeep(seedPayload);
       await supabase.from('document_templates').upsert(
         {
           template_key: templateKey,
-          payload: seedPayload as Record<string, unknown>,
+          payload: sanitizedSeed as Record<string, unknown>,
           updated_at: new Date().toISOString(),
         },
         { onConflict: 'template_key' }
       );
-      return seedPayload;
+      return sanitizedSeed;
     }
   } catch {
     // fallback to local cache
@@ -4501,26 +5322,34 @@ export async function saveDocumentTemplateInSupabase<T>(
   legacyStateKey: string,
   payload: T
 ): Promise<void> {
+  // Pastikan TIDAK ADA Base64 gambar yang disimpan ke Supabase JSONB (hanya URL/ID Google Drive)
+  const sanitizedPayload = stripBase64StringsDeep(payload);
   const localKey = `masdeta_slice_${legacyStateKey}`;
   try {
-    localStorage.setItem(localKey, JSON.stringify(payload));
+    localStorage.setItem(localKey, JSON.stringify(sanitizedPayload));
   } catch {
     // ignore storage quota errors
   }
+  invalidateMasterReferenceCache(['templates']);
   if (!isSupabaseConfigured) return;
+  if (getSchemaCapability('templatesTable') === false) {
+    await saveAppStateSlice(legacyStateKey, sanitizedPayload);
+    return;
+  }
 
   try {
     const { error } = await supabase.from('document_templates').upsert(
       {
         template_key: templateKey,
-        payload: payload as Record<string, unknown>,
+        payload: sanitizedPayload as Record<string, unknown>,
         updated_at: new Date().toISOString(),
       },
       { onConflict: 'template_key' }
     );
     if (error) {
       if (isSchemaMissingError(error)) {
-        await saveAppStateSlice(legacyStateKey, payload);
+        setSchemaCapability('templatesTable', false);
+        await saveAppStateSlice(legacyStateKey, sanitizedPayload);
       } else {
         console.warn(`Document template sync (${templateKey}) warning:`, error.message);
       }
@@ -4548,20 +5377,20 @@ export async function fetchPublicKpmContextFromSupabase(
     let kpmRow: Record<string, unknown> | null = null;
     const byIdRes = await supabase
       .from('kpm_records')
-      .select('*')
+      .select(COLS_KPM_RECORDS_PUBLIC)
       .eq('id', clean)
       .maybeSingle();
 
     if (!byIdRes.error && byIdRes.data) {
-      kpmRow = byIdRes.data as Record<string, unknown>;
+      kpmRow = byIdRes.data as unknown as Record<string, unknown>;
     } else {
       const byCodeRes = await supabase
         .from('kpm_records')
-        .select('*')
+        .select(COLS_KPM_RECORDS_PUBLIC)
         .ilike('register_code', clean)
         .limit(1);
       if (!byCodeRes.error && byCodeRes.data && byCodeRes.data.length > 0) {
-        kpmRow = byCodeRes.data[0] as Record<string, unknown>;
+        kpmRow = byCodeRes.data[0] as unknown as Record<string, unknown>;
       }
     }
 
@@ -4584,33 +5413,33 @@ export async function fetchPublicKpmContextFromSupabase(
     ] = await Promise.all([
       supabase
         .from('kpm_documents')
-        .select('*')
+        .select(COLS_KPM_DOCUMENTS)
         .eq('kpm_id', kpmId)
         .not('doc_category', 'in', '("ktp","kk")')
         .order('sort_order', { ascending: true })
         .order('id', { ascending: true }),
-      supabase.from('kpm_sub_item_deliveries').select('*').eq('kpm_id', kpmId),
+      supabase.from('kpm_sub_item_deliveries').select(COLS_KPM_DELIVERIES_DETAIL).eq('kpm_id', kpmId),
       (async (): Promise<Record<string, unknown>[]> => {
         if (matchedProposalId) {
           const { data, error } = await supabase
             .from('proposals')
-            .select('*')
+            .select(COLS_PROPOSALS_PUBLIC)
             .eq('id', matchedProposalId)
             .limit(1);
           if (!error && Array.isArray(data) && data.length > 0) {
-            return data as Record<string, unknown>[];
+            return data as unknown as Record<string, unknown>[];
           }
         }
         if (matchedProposalName) {
           let q = supabase
             .from('proposals')
-            .select('*')
+            .select(COLS_PROPOSALS_PUBLIC)
             .eq('nama_proposal', matchedProposalName)
             .limit(1);
           if (matchedProposalYear) q = q.eq('tahun', matchedProposalYear);
           const { data, error } = await q;
           if (!error && Array.isArray(data)) {
-            return data as Record<string, unknown>[];
+            return data as unknown as Record<string, unknown>[];
           }
         }
         return [];
@@ -4618,7 +5447,7 @@ export async function fetchPublicKpmContextFromSupabase(
       fetchAllPages<Record<string, unknown>>((from, to) =>
         supabase
           .from('item_bantuan')
-          .select('*')
+          .select(COLS_ITEM_BANTUAN)
           .order('sort_order', { ascending: true })
           .order('id', { ascending: true })
           .range(from, to)
@@ -4626,7 +5455,7 @@ export async function fetchPublicKpmContextFromSupabase(
       fetchAllPages<Record<string, unknown>>((from, to) =>
         supabase
           .from('item_sub_items')
-          .select('*')
+          .select(COLS_ITEM_SUB_ITEMS)
           .order('sort_order', { ascending: true })
           .order('id', { ascending: true })
           .range(from, to)
@@ -4634,7 +5463,7 @@ export async function fetchPublicKpmContextFromSupabase(
       fetchAllPages<Record<string, unknown>>((from, to) =>
         supabase
           .from('wilayah_kabkota')
-          .select('*')
+          .select(COLS_WILAYAH_KABKOTA)
           .order('sort_order', { ascending: true })
           .order('id', { ascending: true })
           .range(from, to)
@@ -4642,7 +5471,7 @@ export async function fetchPublicKpmContextFromSupabase(
       fetchAllPages<Record<string, unknown>>((from, to) =>
         supabase
           .from('wilayah_kecamatan')
-          .select('*')
+          .select(COLS_WILAYAH_KECAMATAN)
           .order('sort_order', { ascending: true })
           .order('id', { ascending: true })
           .range(from, to)
@@ -4650,7 +5479,7 @@ export async function fetchPublicKpmContextFromSupabase(
       fetchAllPages<Record<string, unknown>>((from, to) =>
         supabase
           .from('wilayah_kelurahan')
-          .select('*')
+          .select(COLS_WILAYAH_KELURAHAN)
           .order('sort_order', { ascending: true })
           .order('id', { ascending: true })
           .range(from, to)
@@ -4901,15 +5730,23 @@ export async function fetchProposalRabConfigsFromSupabase(): Promise<{
   if (!isSupabaseConfigured) {
     return { map: localMap, schemaMissing: false };
   }
+  if (getSchemaCapability('rabTable') === false) {
+    const fallbackMap = await fetchAppStateSlice<ProposalRabMap>(
+      PROPOSAL_RAB_FALLBACK_STATE_KEY,
+      localMap
+    );
+    return { map: fallbackMap, schemaMissing: true };
+  }
 
   try {
     const rows = await fetchAllPages((from, to) =>
       supabase
         .from('proposal_rab_configs')
-        .select('*')
+        .select(COLS_PROPOSAL_RAB)
         .order('updated_at', { ascending: false })
         .range(from, to)
     );
+    setSchemaCapability('rabTable', true);
     const map: ProposalRabMap = {};
     for (const row of rows) {
       const cfg = mapRowToSavedProposalRabConfig(row as Record<string, unknown>);
@@ -4925,6 +5762,7 @@ export async function fetchProposalRabConfigsFromSupabase(): Promise<{
     return { map, schemaMissing: false };
   } catch (error) {
     if (isSchemaMissingError(error)) {
+      setSchemaCapability('rabTable', false);
       const fallbackMap = await fetchAppStateSlice<ProposalRabMap>(
         PROPOSAL_RAB_FALLBACK_STATE_KEY,
         localMap
@@ -5028,15 +5866,23 @@ export async function fetchProposalStyleHistoryFromSupabase(): Promise<{
   if (!isSupabaseConfigured) {
     return { items: localItems, schemaMissing: false };
   }
+  if (getSchemaCapability('styleHistoryTable') === false) {
+    const fallbackItems = await fetchAppStateSlice<ProposalStyleUsageRecord[]>(
+      PROPOSAL_STYLE_HISTORY_FALLBACK_STATE_KEY,
+      localItems
+    );
+    return { items: Array.isArray(fallbackItems) ? fallbackItems : [], schemaMissing: true };
+  }
 
   try {
     const rows = await fetchAllPages((from, to) =>
       supabase
         .from('proposal_style_history')
-        .select('*')
+        .select(COLS_PROPOSAL_STYLE_HISTORY)
         .order('created_at', { ascending: false })
         .range(from, to)
     );
+    setSchemaCapability('styleHistoryTable', true);
     const items = rows
       .map((row) => mapRowToStyleUsageRecord(row as Record<string, unknown>))
       .filter((item) => Boolean(item.id));
@@ -5048,6 +5894,7 @@ export async function fetchProposalStyleHistoryFromSupabase(): Promise<{
     return { items, schemaMissing: false };
   } catch (error) {
     if (isSchemaMissingError(error)) {
+      setSchemaCapability('styleHistoryTable', false);
       const fallbackItems = await fetchAppStateSlice<ProposalStyleUsageRecord[]>(
         PROPOSAL_STYLE_HISTORY_FALLBACK_STATE_KEY,
         localItems

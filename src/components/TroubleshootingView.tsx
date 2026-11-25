@@ -2602,9 +2602,9 @@ export function TroubleshootingView({
                                   <div className="flex flex-col items-start gap-1">
                                     <div className="flex flex-wrap items-center gap-1.5">
                                       <span
-                                        className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-bold ${badgeMeta.className}`}
+                                        className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-bold ${badgeMeta?.className ?? ''}`}
                                       >
-                                        {badgeMeta.label}
+                                        {badgeMeta?.label ?? ''}
                                       </span>
                                       {row.hasSequenceWarning && (
                                         <span className="inline-flex items-center gap-1 rounded border border-rose-300 bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-800">

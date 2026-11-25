@@ -19,7 +19,7 @@ import {
   UserPlus,
   X,
 } from 'lucide-react';
-import { isSupabaseConfigured, supabase } from './lib/supabaseClient';
+import { isSupabaseConfigured } from './lib/supabaseClient';
 import {
   appendKpmAuditLogsInSupabase,
   checkSupabaseSchemaReady,
@@ -30,16 +30,20 @@ import {
   deleteProposalStyleUsageInSupabase,
   deleteScheduleFromSupabase,
   fetchAppStateSlice,
+  fetchAppStateSlicesBatch,
   fetchChatDeliveryWatermarks,
-  fetchDocumentTemplateFromSupabase,
+  fetchDocumentTemplatesBatch,
+  fetchKpmAuditLogsForKpm,
+  fetchKpmDocumentsByKpmId,
+  fetchKpmExtraDocumentsForKpmIds,
+  fetchKpmSubItemDeliveriesByKpmId,
   fetchOperationalDataFromSupabase,
   fetchOperationalLogsFromSupabase,
   fetchProposalRabConfigsFromSupabase,
   fetchProposalStyleHistoryFromSupabase,
   fetchSchedulesFromSupabase,
-  fetchScopedOperationalDataFromSupabase,
+  invalidateMasterReferenceCache,
   isSchemaMissingError,
-  OperationalSyncScope,
   recordProposalStyleUsageInSupabase,
   runAdminDataActionInSupabase,
   saveAppStateSlice,
@@ -51,6 +55,7 @@ import {
   supabaseDeleteProposalDirect,
   supabaseFetchDirectMessages,
   supabaseFetchInternalUsers,
+  supabaseFetchUnreadChatCount,
   supabaseLogin,
   supabaseMarkDirectMessagesDelivered,
   supabaseMarkDirectMessagesRead,
@@ -1004,7 +1009,7 @@ export default function App() {
     slotNumber: number;
     item?: string;
   } | null>(null);
-  const [presenceTickNow, setPresenceTickNow] = useState<number>(() => Date.now());
+  const [presenceTickNow] = useState<number>(() => Date.now());
   const [userAliasesByOwner, setUserAliasesByOwner] = useState<
     Record<string, Record<string, string>>
   >({});
@@ -1031,6 +1036,20 @@ export default function App() {
   const syncQueueRef = useRef<Promise<void>>(Promise.resolve());
   const desiredAutoPresenceRef = useRef<UserPresenceStatus>('online');
   const isManualRefreshingRef = useRef<boolean>(false);
+  const [isManualRefreshing, setIsManualRefreshing] = useState<boolean>(false);
+  const [remoteUnreadChatCount, setRemoteUnreadChatCount] = useState<number | null>(null);
+  const bootstrappedSessionKeyRef = useRef<string | null>(null);
+  const hydratedKpmDocsIdsRef = useRef<Set<string>>(new Set());
+  const hydratedProposalExtraDocsRef = useRef<Set<string>>(new Set());
+  const hydratedLogsRef = useRef<boolean>(false);
+  const hydratedLazySlicesRef = useRef<{
+    trash?: boolean;
+    reconcile?: boolean;
+    rab?: boolean;
+    styleHistory?: boolean;
+    proposalChanges?: boolean;
+  }>({});
+  const chatLoadedOnceRef = useRef<boolean>(false);
   const hasAppliedRemoteRef = useRef<boolean>(false);
   const hasSyncedTendaKursiFixRef = useRef<boolean>(false);
   const lastUpdateCheckAtRef = useRef<number>(0);
@@ -1038,7 +1057,6 @@ export default function App() {
   const internalUsersRef = useRef<InternalUser[]>(internalUsers);
   const proposalsRef = useRef<ProposalRecord[]>(proposals);
   const proposalHistoryRef = useRef<ProposalKpmHistoryEntry[]>(proposalHistory);
-  const realtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const knownPendingUserIdsRef = useRef<Set<string> | null>(null);
   const seenNotificationIdsRef = useRef<Set<string>>(new Set());
   const notifiedDeletedProposalIdsRef = useRef<Set<string>>(new Set());
@@ -1048,7 +1066,7 @@ export default function App() {
   const kpmAttendanceMapRef = useRef<Record<string, KpmAttendanceInfo>>(kpmAttendanceMap);
   const proposalSlotMapRef = useRef<ProposalSlotMap>(proposalSlotMap);
   const rawProposalSlotMapRef = useRef<ProposalSlotMap>(proposalSlotMap);
-  const loadAppStateSlicesRef = useRef<() => Promise<void>>(async () => {});
+  const loadAppStateSlicesRef = useRef<(options?: { forceRefresh?: boolean }) => Promise<void>>(async () => {});
   const currentUserAliasesRef = useRef<Record<string, string>>({});
   const isFlushingQueueRef = useRef<boolean>(false);
   const notifiedChatMsgIdsRef = useRef<Set<string>>(new Set());
@@ -1445,8 +1463,11 @@ export default function App() {
 
   const unreadChatCount = useMemo(() => {
     if (!currentUser) return 0;
+    if (!chatLoadedOnceRef.current && remoteUnreadChatCount !== null) {
+      return remoteUnreadChatCount;
+    }
     return directMessages.filter((m) => m.recipientId === currentUser.id && !m.readAt).length;
-  }, [directMessages, currentUser]);
+  }, [directMessages, currentUser, remoteUnreadChatCount]);
 
   useEffect(() => {
     setBellAckChatCount((prev) => (unreadChatCount < prev ? unreadChatCount : prev));
@@ -1940,6 +1961,13 @@ export default function App() {
   );
 
   const clearSessionState = useCallback(() => {
+    bootstrappedSessionKeyRef.current = null;
+    hydratedKpmDocsIdsRef.current.clear();
+    hydratedProposalExtraDocsRef.current.clear();
+    hydratedLogsRef.current = false;
+    hydratedLazySlicesRef.current = {};
+    chatLoadedOnceRef.current = false;
+    setRemoteUnreadChatCount(null);
     setSessionToken(null);
     setSessionUserId(null);
     setDirectMessages([]);
@@ -2031,262 +2059,370 @@ export default function App() {
     []
   );
 
-  const loadAppStateSlices = useCallback(async () => {
-    try {
-      const [
-        fetchedSchedules,
-        fetchedScheduleBooksState,
-        fetchedTrash,
-        fetchedTemplate,
-        fetchedCouponConfig,
-        fetchedBastTemplate,
-        fetchedSptjmTemplate,
-        fetchedBastMap,
-        fetchedAttendanceMap,
-        fetchedWatermarks,
-        fetchedAliases,
-        fetchedSlotMap,
-        fetchedReconcileSnapshots,
-        fetchedProposalBastMap,
-        fetchedPejabatList,
-        fetchedProposalRabRes,
-        fetchedProposalStyleRes,
-        fetchedProposalChanges,
-      ] = await Promise.all([
-        fetchSchedulesFromSupabase(),
-        fetchAppStateSlice<ScheduleBooksState>('masdeta_schedule_books_v1', {
-          books: DEFAULT_SCHEDULE_BOOKS,
-          scheduleBookMap: {},
-        }),
-        fetchAppStateSlice<TrashRecordItem[]>('masdeta_trash_bin_v1', []),
-        fetchDocumentTemplateFromSupabase<ReportTemplateConfig>(
-          'report',
-          'masdeta_report_template_v1',
-          DEFAULT_REPORT_TEMPLATE
-        ),
-        fetchDocumentTemplateFromSupabase<CouponPrintConfig>(
-          'kupon',
-          'masdeta_coupon_config_v1',
-          DEFAULT_COUPON_CONFIG
-        ),
-        fetchDocumentTemplateFromSupabase<BastTemplateConfig>(
-          'bast',
-          'masdeta_bast_template_v1',
-          DEFAULT_BAST_TEMPLATE
-        ),
-        fetchDocumentTemplateFromSupabase<SptjmTemplateConfig>(
-          'sptjm',
-          'masdeta_sptjm_template_v1',
-          DEFAULT_SPTJM_TEMPLATE
-        ),
-        fetchAppStateSlice<Record<string, KpmBastInfo>>('masdeta_kpm_bast_v1', {}),
-        fetchAppStateSlice<Record<string, KpmAttendanceInfo>>('masdeta_kpm_attendance_v1', {}),
-        fetchChatDeliveryWatermarks(),
-        fetchAppStateSlice<Record<string, Record<string, string>>>('masdeta_user_aliases_v1', {}),
-        fetchAppStateSlice<ProposalSlotMap>('masdeta_proposal_slots_v1', {}),
-        fetchAppStateSlice<Record<string, TroubleshootingReconcileSnapshot>>(
-          'masdeta_reconcile_snapshots_v1',
-          {}
-        ),
-        fetchDocumentTemplateFromSupabase<ProposalBastMap>(
-          'proposal_bast',
-          'masdeta_proposal_bast_v1',
-          {}
-        ),
-        fetchDocumentTemplateFromSupabase<PejabatProfile[]>(
-          'pejabat',
-          'masdeta_pejabat_master_v1',
-          DEFAULT_PEJABAT_LIST
-        ),
-        fetchProposalRabConfigsFromSupabase(),
-        fetchProposalStyleHistoryFromSupabase(),
-        fetchAppStateSlice<ProposalChangeLogEntry[]>('masdeta_proposal_changes_v1', []),
-      ]);
+  const loadAppStateSlices = useCallback(
+    async (options?: { forceRefresh?: boolean }) => {
+      const forceRefresh = Boolean(options?.forceRefresh);
+      try {
+        // Konsolidasi 18 HTTP request menjadi hanya 3 request batch yang ringan (+ cache sessionStorage 15 menit untuk template)
+        const [fetchedSchedules, stateBatch, templatesBatch] = await Promise.all([
+          fetchSchedulesFromSupabase(),
+          fetchAppStateSlicesBatch([
+            'masdeta_schedule_books_v1',
+            'masdeta_kpm_bast_v1',
+            'masdeta_kpm_attendance_v1',
+            'chat_delivery_watermarks',
+            'masdeta_user_aliases_v1',
+            'masdeta_proposal_slots_v1',
+          ]),
+          fetchDocumentTemplatesBatch(
+            [
+              { templateKey: 'report', legacyStateKey: 'masdeta_report_template_v1', fallback: DEFAULT_REPORT_TEMPLATE },
+              { templateKey: 'kupon', legacyStateKey: 'masdeta_coupon_config_v1', fallback: DEFAULT_COUPON_CONFIG },
+              { templateKey: 'bast', legacyStateKey: 'masdeta_bast_template_v1', fallback: DEFAULT_BAST_TEMPLATE },
+              { templateKey: 'sptjm', legacyStateKey: 'masdeta_sptjm_template_v1', fallback: DEFAULT_SPTJM_TEMPLATE },
+              { templateKey: 'proposal_bast', legacyStateKey: 'masdeta_proposal_bast_v1', fallback: {} },
+              { templateKey: 'pejabat', legacyStateKey: 'masdeta_pejabat_master_v1', fallback: DEFAULT_PEJABAT_LIST },
+            ],
+            forceRefresh
+          ),
+        ]);
 
-      const nowMs = Date.now();
-      const rawTrash = Array.isArray(fetchedTrash) ? fetchedTrash : [];
-      const expiredTrash = rawTrash.filter((t) => new Date(t.expiresAt).getTime() <= nowMs);
-      const activeTrash = rawTrash.filter((t) => new Date(t.expiresAt).getTime() > nowMs);
+        const fetchedScheduleBooksState = stateBatch['masdeta_schedule_books_v1'] as ScheduleBooksState | undefined;
+        const fetchedBastMap = stateBatch['masdeta_kpm_bast_v1'] as Record<string, KpmBastInfo> | undefined;
+        const fetchedAttendanceMap = stateBatch['masdeta_kpm_attendance_v1'] as
+          | Record<string, KpmAttendanceInfo>
+          | undefined;
+        const fetchedWatermarks = stateBatch['chat_delivery_watermarks'] as Record<string, string> | undefined;
+        const fetchedAliases = stateBatch['masdeta_user_aliases_v1'] as
+          | Record<string, Record<string, string>>
+          | undefined;
+        const fetchedSlotMap = stateBatch['masdeta_proposal_slots_v1'] as ProposalSlotMap | undefined;
 
-      if (expiredTrash.length > 0) {
-        const docsToRemove: KpmDocumentFile[] = [];
-        for (const item of expiredTrash) {
-          if (item.kpmRecord) {
-            const d = item.kpmRecord.documents;
-            if (d.ktp) docsToRemove.push(d.ktp);
-            if (d.kk) docsToRemove.push(d.kk);
-            if (d.penerima) docsToRemove.push(d.penerima);
-            if (d.survey) docsToRemove.push(d.survey);
-            (d.rumah || []).forEach((x) => docsToRemove.push(x));
-            (d.lainnya || []).forEach((x) => docsToRemove.push(x));
-            if (item.kpmRecord.bast?.signatureDoc) {
-              docsToRemove.push(item.kpmRecord.bast.signatureDoc);
-            }
-          }
-          if (item.proposalRecord) {
-            Object.values(item.proposalRecord.documents || {}).forEach((doc) => {
-              if (doc) docsToRemove.push(doc);
-            });
-          }
-        }
-        if (docsToRemove.length > 0) {
-          void Promise.allSettled(docsToRemove.map((doc) => removeDocumentFromDrive(doc)));
-        }
-        void saveAppStateSlice('masdeta_trash_bin_v1', activeTrash);
-      }
+        const fetchedTemplate = templatesBatch.report as ReportTemplateConfig | undefined;
+        const fetchedCouponConfig = templatesBatch.kupon as CouponPrintConfig | undefined;
+        const fetchedBastTemplate = templatesBatch.bast as BastTemplateConfig | undefined;
+        const fetchedSptjmTemplate = templatesBatch.sptjm as SptjmTemplateConfig | undefined;
+        const fetchedProposalBastMap = templatesBatch.proposal_bast as ProposalBastMap | undefined;
+        const fetchedPejabatList = templatesBatch.pejabat as PejabatProfile[] | undefined;
 
-      const safeBastMap =
-        fetchedBastMap && typeof fetchedBastMap === 'object' ? fetchedBastMap : {};
-      const safeAttendanceMap =
-        fetchedAttendanceMap &&
-        typeof fetchedAttendanceMap === 'object' &&
-        !Array.isArray(fetchedAttendanceMap)
-          ? fetchedAttendanceMap
-          : {};
-      const rawSlotMap: ProposalSlotMap =
-        fetchedSlotMap && typeof fetchedSlotMap === 'object' && !Array.isArray(fetchedSlotMap)
-          ? fetchedSlotMap
-          : {};
-      rawProposalSlotMapRef.current = rawSlotMap;
-      const safeSlotMap: ProposalSlotMap =
-        hasAppliedRemoteRef.current &&
-        !isManualRefreshingRef.current &&
-        latestDataRef.current.records.length > 0
-          ? sanitizeProposalSlotMap(rawSlotMap, latestDataRef.current.records, proposalsRef.current)
-          : rawSlotMap;
-      kpmBastMapRef.current = safeBastMap;
-      kpmAttendanceMapRef.current = safeAttendanceMap;
-      proposalSlotMapRef.current = safeSlotMap;
-      setSchedules(Array.isArray(fetchedSchedules) ? fetchedSchedules : []);
-      if (fetchedScheduleBooksState && typeof fetchedScheduleBooksState === 'object') {
-        const nextBooks =
-          Array.isArray(fetchedScheduleBooksState.books) &&
-          fetchedScheduleBooksState.books.length > 0
-            ? fetchedScheduleBooksState.books
-            : DEFAULT_SCHEDULE_BOOKS;
-        const nextBookMap =
-          fetchedScheduleBooksState.scheduleBookMap &&
-          typeof fetchedScheduleBooksState.scheduleBookMap === 'object' &&
-          !Array.isArray(fetchedScheduleBooksState.scheduleBookMap)
-            ? fetchedScheduleBooksState.scheduleBookMap
+        const safeBastMap =
+          fetchedBastMap && typeof fetchedBastMap === 'object' ? fetchedBastMap : {};
+        const safeAttendanceMap =
+          fetchedAttendanceMap &&
+          typeof fetchedAttendanceMap === 'object' &&
+          !Array.isArray(fetchedAttendanceMap)
+            ? fetchedAttendanceMap
             : {};
-        setScheduleBooksState({ books: nextBooks, scheduleBookMap: nextBookMap });
-      }
-      setTrashBin(activeTrash);
-      setReportTemplate(
-        fetchedTemplate && typeof fetchedTemplate === 'object'
-          ? { ...DEFAULT_REPORT_TEMPLATE, ...fetchedTemplate }
-          : DEFAULT_REPORT_TEMPLATE
-      );
-      setCouponConfig(
-        fetchedCouponConfig && typeof fetchedCouponConfig === 'object'
-          ? { ...DEFAULT_COUPON_CONFIG, ...fetchedCouponConfig }
-          : DEFAULT_COUPON_CONFIG
-      );
-      setBastTemplate(
-        fetchedBastTemplate && typeof fetchedBastTemplate === 'object'
-          ? {
-              ...DEFAULT_BAST_TEMPLATE,
-              ...fetchedBastTemplate,
-              pejabatNip: normalizePejabatNipNumber(
-                fetchedBastTemplate.pejabatNip ?? DEFAULT_BAST_TEMPLATE.pejabatNip
-              ).trim(),
-            }
-          : DEFAULT_BAST_TEMPLATE
-      );
-      setSptjmTemplate(
-        fetchedSptjmTemplate && typeof fetchedSptjmTemplate === 'object'
-          ? {
-              ...DEFAULT_SPTJM_TEMPLATE,
-              ...fetchedSptjmTemplate,
-              pejabatNip: normalizePejabatNipNumber(
-                fetchedSptjmTemplate.pejabatNip ?? DEFAULT_SPTJM_TEMPLATE.pejabatNip
-              ).trim(),
-            }
-          : DEFAULT_SPTJM_TEMPLATE
-      );
-      setPejabatList(
-        Array.isArray(fetchedPejabatList) && fetchedPejabatList.length > 0
-          ? fetchedPejabatList
-              .filter((p) => p && typeof p.nama === 'string' && p.nama.trim())
-              .map((p) => ({
-                ...p,
-                nama: p.nama.trim(),
-                kelas: (p.kelas || '').trim(),
-                jabatan: (p.jabatan || '').trim(),
-                nip: normalizePejabatNipNumber(p.nip).trim(),
-              }))
-          : DEFAULT_PEJABAT_LIST
-      );
-      setKpmBastMap(safeBastMap);
-      setKpmAttendanceMap(safeAttendanceMap);
-      setProposalSlotMap(safeSlotMap);
-      const safeSnapshots =
-        fetchedReconcileSnapshots &&
-        typeof fetchedReconcileSnapshots === 'object' &&
-        !Array.isArray(fetchedReconcileSnapshots)
-          ? fetchedReconcileSnapshots
-          : {};
-      reconcileSnapshotsRef.current = safeSnapshots;
-      setReconcileSnapshots(safeSnapshots);
-      const normalizedProposalBastMap: ProposalBastMap = {};
-      if (
-        fetchedProposalBastMap &&
-        typeof fetchedProposalBastMap === 'object' &&
-        !Array.isArray(fetchedProposalBastMap)
-      ) {
-        Object.entries(fetchedProposalBastMap).forEach(([k, v]) => {
-          if (v && typeof v === 'object') {
-            normalizedProposalBastMap[k] = {
-              ...v,
-              ...(v.pejabatNip !== undefined
-                ? { pejabatNip: normalizePejabatNipNumber(v.pejabatNip).trim() }
-                : {}),
-            };
-          }
-        });
-      }
-      setProposalBastMap(normalizedProposalBastMap);
-      if (fetchedProposalRabRes?.map && typeof fetchedProposalRabRes.map === 'object') {
-        setProposalRabMap(fetchedProposalRabRes.map);
-      }
-      if (Array.isArray(fetchedProposalStyleRes?.items)) {
-        setProposalStyleHistory(fetchedProposalStyleRes.items);
-      }
-      if (Array.isArray(fetchedProposalChanges)) {
-        proposalChangeLogsRef.current = fetchedProposalChanges;
-        setProposalChangeLogs(fetchedProposalChanges);
-      }
-      setProposalSchemaMissingNotice(
-        Boolean(fetchedProposalRabRes?.schemaMissing || fetchedProposalStyleRes?.schemaMissing)
-      );
-      if (fetchedWatermarks && typeof fetchedWatermarks === 'object') {
-        setChatDeliveryWatermarks(fetchedWatermarks);
-      }
-      if (fetchedAliases && typeof fetchedAliases === 'object' && !Array.isArray(fetchedAliases)) {
-        setUserAliasesByOwner(fetchedAliases);
-      }
-      if (!isManualRefreshingRef.current) {
-        setRecords((prev) =>
-          mergeBastIntoRecords(
-            recalculateProposalRegisterCodes(
-              prev,
-              proposalsRef.current,
-              latestDataRef.current.items,
-              latestDataRef.current.wilayahList,
-              safeSlotMap
-            ),
-            safeBastMap,
-            safeAttendanceMap
-          )
+        const rawSlotMap: ProposalSlotMap =
+          fetchedSlotMap && typeof fetchedSlotMap === 'object' && !Array.isArray(fetchedSlotMap)
+            ? fetchedSlotMap
+            : {};
+        rawProposalSlotMapRef.current = rawSlotMap;
+        const safeSlotMap: ProposalSlotMap =
+          hasAppliedRemoteRef.current &&
+          !isManualRefreshingRef.current &&
+          latestDataRef.current.records.length > 0
+            ? sanitizeProposalSlotMap(rawSlotMap, latestDataRef.current.records, proposalsRef.current)
+            : rawSlotMap;
+        kpmBastMapRef.current = safeBastMap;
+        kpmAttendanceMapRef.current = safeAttendanceMap;
+        proposalSlotMapRef.current = safeSlotMap;
+        setSchedules(Array.isArray(fetchedSchedules) ? fetchedSchedules : []);
+        if (fetchedScheduleBooksState && typeof fetchedScheduleBooksState === 'object') {
+          const nextBooks =
+            Array.isArray(fetchedScheduleBooksState.books) &&
+            fetchedScheduleBooksState.books.length > 0
+              ? fetchedScheduleBooksState.books
+              : DEFAULT_SCHEDULE_BOOKS;
+          const nextBookMap =
+            fetchedScheduleBooksState.scheduleBookMap &&
+            typeof fetchedScheduleBooksState.scheduleBookMap === 'object' &&
+            !Array.isArray(fetchedScheduleBooksState.scheduleBookMap)
+              ? fetchedScheduleBooksState.scheduleBookMap
+              : {};
+          setScheduleBooksState({ books: nextBooks, scheduleBookMap: nextBookMap });
+        }
+        setReportTemplate(
+          fetchedTemplate && typeof fetchedTemplate === 'object'
+            ? { ...DEFAULT_REPORT_TEMPLATE, ...fetchedTemplate }
+            : DEFAULT_REPORT_TEMPLATE
         );
+        setCouponConfig(
+          fetchedCouponConfig && typeof fetchedCouponConfig === 'object'
+            ? { ...DEFAULT_COUPON_CONFIG, ...fetchedCouponConfig }
+            : DEFAULT_COUPON_CONFIG
+        );
+        setBastTemplate(
+          fetchedBastTemplate && typeof fetchedBastTemplate === 'object'
+            ? {
+                ...DEFAULT_BAST_TEMPLATE,
+                ...fetchedBastTemplate,
+                pejabatNip: normalizePejabatNipNumber(
+                  fetchedBastTemplate.pejabatNip ?? DEFAULT_BAST_TEMPLATE.pejabatNip
+                ).trim(),
+              }
+            : DEFAULT_BAST_TEMPLATE
+        );
+        setSptjmTemplate(
+          fetchedSptjmTemplate && typeof fetchedSptjmTemplate === 'object'
+            ? {
+                ...DEFAULT_SPTJM_TEMPLATE,
+                ...fetchedSptjmTemplate,
+                pejabatNip: normalizePejabatNipNumber(
+                  fetchedSptjmTemplate.pejabatNip ?? DEFAULT_SPTJM_TEMPLATE.pejabatNip
+                ).trim(),
+              }
+            : DEFAULT_SPTJM_TEMPLATE
+        );
+        setPejabatList(
+          Array.isArray(fetchedPejabatList) && fetchedPejabatList.length > 0
+            ? fetchedPejabatList
+                .filter((p) => p && typeof p.nama === 'string' && p.nama.trim())
+                .map((p) => ({
+                  ...p,
+                  nama: p.nama.trim(),
+                  kelas: (p.kelas || '').trim(),
+                  jabatan: (p.jabatan || '').trim(),
+                  nip: normalizePejabatNipNumber(p.nip).trim(),
+                }))
+            : DEFAULT_PEJABAT_LIST
+        );
+        setKpmBastMap(safeBastMap);
+        setKpmAttendanceMap(safeAttendanceMap);
+        setProposalSlotMap(safeSlotMap);
+
+        const normalizedProposalBastMap: ProposalBastMap = {};
+        if (
+          fetchedProposalBastMap &&
+          typeof fetchedProposalBastMap === 'object' &&
+          !Array.isArray(fetchedProposalBastMap)
+        ) {
+          Object.entries(fetchedProposalBastMap).forEach(([k, v]) => {
+            if (v && typeof v === 'object') {
+              normalizedProposalBastMap[k] = {
+                ...v,
+                ...(v.pejabatNip !== undefined
+                  ? { pejabatNip: normalizePejabatNipNumber(v.pejabatNip).trim() }
+                  : {}),
+              };
+            }
+          });
+        }
+        setProposalBastMap(normalizedProposalBastMap);
+
+        if (fetchedWatermarks && typeof fetchedWatermarks === 'object') {
+          setChatDeliveryWatermarks(fetchedWatermarks);
+        }
+        if (fetchedAliases && typeof fetchedAliases === 'object' && !Array.isArray(fetchedAliases)) {
+          setUserAliasesByOwner(fetchedAliases);
+        }
+        if (!isManualRefreshingRef.current) {
+          setRecords((prev) =>
+            mergeBastIntoRecords(
+              recalculateProposalRegisterCodes(
+                prev,
+                proposalsRef.current,
+                latestDataRef.current.items,
+                latestDataRef.current.wilayahList,
+                safeSlotMap
+              ),
+              safeBastMap,
+              safeAttendanceMap
+            )
+          );
+        }
+      } catch {
+        // Abaikan gangguan sementara saat memuat slice tambahan
       }
-    } catch {
-      // Abaikan gangguan sementara saat memuat slice tambahan
-    }
-  }, [mergeBastIntoRecords]);
+    },
+    [mergeBastIntoRecords]
+  );
 
   loadAppStateSlicesRef.current = loadAppStateSlices;
+
+  // Lazy loaders untuk data berat yang hanya dibutuhkan saat halaman/fitur terkait dibuka
+  const ensureLazySliceLoaded = useCallback(
+    async (
+      slice: 'trash' | 'reconcile' | 'rab' | 'styleHistory' | 'proposalChanges',
+      force = false
+    ) => {
+      if (!supabaseReadyRef.current) return;
+      if (!force && hydratedLazySlicesRef.current[slice]) return;
+      hydratedLazySlicesRef.current[slice] = true;
+      try {
+        if (slice === 'trash') {
+          const fetchedTrash = await fetchAppStateSlice<TrashRecordItem[]>('masdeta_trash_bin_v1', []);
+          const nowMs = Date.now();
+          const rawTrash = Array.isArray(fetchedTrash) ? fetchedTrash : [];
+          const expiredTrash = rawTrash.filter((t) => new Date(t.expiresAt).getTime() <= nowMs);
+          const activeTrash = rawTrash.filter((t) => new Date(t.expiresAt).getTime() > nowMs);
+          if (expiredTrash.length > 0) {
+            const docsToRemove: KpmDocumentFile[] = [];
+            for (const item of expiredTrash) {
+              if (item.kpmRecord) {
+                const d = item.kpmRecord.documents;
+                if (d.ktp) docsToRemove.push(d.ktp);
+                if (d.kk) docsToRemove.push(d.kk);
+                if (d.penerima) docsToRemove.push(d.penerima);
+                if (d.survey) docsToRemove.push(d.survey);
+                (d.rumah || []).forEach((x) => docsToRemove.push(x));
+                (d.lainnya || []).forEach((x) => docsToRemove.push(x));
+                if (item.kpmRecord.bast?.signatureDoc) docsToRemove.push(item.kpmRecord.bast.signatureDoc);
+              }
+              if (item.proposalRecord) {
+                Object.values(item.proposalRecord.documents || {}).forEach((doc) => {
+                  if (doc) docsToRemove.push(doc);
+                });
+              }
+            }
+            if (docsToRemove.length > 0) {
+              void Promise.allSettled(docsToRemove.map((doc) => removeDocumentFromDrive(doc)));
+            }
+            void saveAppStateSlice('masdeta_trash_bin_v1', activeTrash);
+          }
+          setTrashBin(activeTrash);
+        } else if (slice === 'reconcile') {
+          const fetched = await fetchAppStateSlice<Record<string, TroubleshootingReconcileSnapshot>>(
+            'masdeta_reconcile_snapshots_v1',
+            {}
+          );
+          const safeSnapshots =
+            fetched && typeof fetched === 'object' && !Array.isArray(fetched) ? fetched : {};
+          reconcileSnapshotsRef.current = safeSnapshots;
+          setReconcileSnapshots(safeSnapshots);
+        } else if (slice === 'rab') {
+          const res = await fetchProposalRabConfigsFromSupabase();
+          if (res?.map && typeof res.map === 'object') setProposalRabMap(res.map);
+          if (res?.schemaMissing) setProposalSchemaMissingNotice(true);
+        } else if (slice === 'styleHistory') {
+          const res = await fetchProposalStyleHistoryFromSupabase();
+          if (Array.isArray(res?.items)) setProposalStyleHistory(res.items);
+          if (res?.schemaMissing) setProposalSchemaMissingNotice(true);
+        } else if (slice === 'proposalChanges') {
+          const fetched = await fetchAppStateSlice<ProposalChangeLogEntry[]>(
+            'masdeta_proposal_changes_v1',
+            []
+          );
+          if (Array.isArray(fetched)) {
+            proposalChangeLogsRef.current = fetched;
+            setProposalChangeLogs(fetched);
+          }
+        }
+      } catch {
+        hydratedLazySlicesRef.current[slice] = false;
+      }
+    },
+    []
+  );
+
+  const ensureOperationalLogsLoaded = useCallback(async (force = false) => {
+    if (!supabaseReadyRef.current) return;
+    if (!force && hydratedLogsRef.current) return;
+    hydratedLogsRef.current = true;
+    const logFetchStartedAt = Date.now();
+    try {
+      const logs = await fetchOperationalLogsFromSupabase();
+      const fetchedHistIds = new Set(logs.proposalHistory.map((h) => h.id));
+      const fetchedAuditIds = new Set(logs.kpmAuditLogs.map((a) => a.id));
+      setProposalHistory((prev) => {
+        const localNew = prev.filter(
+          (h) => !fetchedHistIds.has(h.id) && new Date(h.timestamp).getTime() >= logFetchStartedAt
+        );
+        return localNew.length > 0 ? [...localNew, ...logs.proposalHistory] : logs.proposalHistory;
+      });
+      setKpmAuditLogs((prev) => {
+        const localNew = prev.filter(
+          (a) => !fetchedAuditIds.has(a.id) && new Date(a.timestamp).getTime() >= logFetchStartedAt
+        );
+        return localNew.length > 0 ? [...localNew, ...logs.kpmAuditLogs] : logs.kpmAuditLogs;
+      });
+    } catch {
+      hydratedLogsRef.current = false;
+    }
+  }, []);
+
+  const hydrateKpmDetailOnDemand = useCallback(async (kpmId: string) => {
+    if (!supabaseReadyRef.current || !kpmId) return;
+    if (hydratedKpmDocsIdsRef.current.has(kpmId)) return;
+    hydratedKpmDocsIdsRef.current.add(kpmId);
+    try {
+      const [fullDocs, fullDeliveries, kpmLogs] = await Promise.all([
+        fetchKpmDocumentsByKpmId(kpmId),
+        fetchKpmSubItemDeliveriesByKpmId(kpmId),
+        fetchKpmAuditLogsForKpm(kpmId, 50),
+      ]);
+      setRecords((prev) =>
+        prev.map((r) => {
+          if (r.id !== kpmId) return r;
+          const mergedDocs: KpmDocuments = {
+            ktp: fullDocs.ktp || r.documents.ktp,
+            kk: fullDocs.kk || r.documents.kk,
+            penerima: fullDocs.penerima || r.documents.penerima,
+            survey: fullDocs.survey || r.documents.survey,
+            rumah: fullDocs.rumah.length > 0 ? fullDocs.rumah : r.documents.rumah,
+            lainnya: fullDocs.lainnya.length > 0 ? fullDocs.lainnya : r.documents.lainnya,
+          };
+          const mergedDeliveries =
+            Object.keys(fullDeliveries).length > 0
+              ? { ...(r.subItemDeliveries || {}), ...fullDeliveries }
+              : r.subItemDeliveries;
+          return {
+            ...r,
+            documents: mergedDocs,
+            subItemDeliveries: mergedDeliveries,
+          };
+        })
+      );
+      if (kpmLogs.length > 0) {
+        setKpmAuditLogs((prev) => {
+          const existingIds = new Set(prev.map((a) => a.id));
+          const toAdd = kpmLogs.filter((a) => !existingIds.has(a.id));
+          return toAdd.length > 0 ? [...toAdd, ...prev] : prev;
+        });
+      }
+    } catch {
+      hydratedKpmDocsIdsRef.current.delete(kpmId);
+    }
+  }, []);
+
+  const hydrateProposalExtraDocsOnDemand = useCallback(async (proposalId?: string | null) => {
+    if (!supabaseReadyRef.current) return;
+    const key = proposalId || '__all_gallery__';
+    if (hydratedProposalExtraDocsRef.current.has(key)) return;
+    const targetRecords = proposalId
+      ? latestDataRef.current.records.filter(
+          (r) =>
+            r.validasi === 'accepted' &&
+            (r.proposalId === proposalId ||
+              proposalsRef.current.find((p) => p.id === proposalId)?.namaProposal === r.proposal)
+        )
+      : latestDataRef.current.records.filter((r) => r.validasi === 'accepted').slice(0, 200);
+    const kpmIds = targetRecords
+      .map((r) => r.id)
+      .filter((id) => !hydratedKpmDocsIdsRef.current.has(id));
+    if (kpmIds.length === 0) return;
+    hydratedProposalExtraDocsRef.current.add(key);
+    try {
+      const extraMap = await fetchKpmExtraDocumentsForKpmIds(kpmIds);
+      if (extraMap.size === 0) return;
+      setRecords((prev) =>
+        prev.map((r) => {
+          const extra = extraMap.get(r.id);
+          if (!extra) return r;
+          return {
+            ...r,
+            documents: {
+              ...r.documents,
+              rumah: extra.rumah.length > 0 ? extra.rumah : r.documents.rumah,
+              lainnya: extra.lainnya.length > 0 ? extra.lainnya : r.documents.lainnya,
+            },
+          };
+        })
+      );
+    } catch {
+      hydratedProposalExtraDocsRef.current.delete(key);
+    }
+  }, []);
 
   const applyRemoteOperationalState = useCallback(
     (state: Partial<OperationalDataPayload>) => {
@@ -2353,8 +2489,12 @@ export default function App() {
       try {
         if (useSupabase) {
           try {
-            const logFetchStartedAt = Date.now();
-            const snapshot = await fetchOperationalDataFromSupabase({ includeLogs: false });
+            // Hemat Egress: jangan tarik kpm_documents & tabel log/history pada boot awal (muat on-demand)
+            const snapshot = await fetchOperationalDataFromSupabase({
+              includeLogs: false,
+              includeKpmDocuments: false,
+              forceRefreshMaster: false,
+            });
             const upgradedCatalog = upgradeCatalogTendaKursi(snapshot.items);
             applyRemoteOperationalState({
               records: snapshot.records,
@@ -2367,32 +2507,6 @@ export default function App() {
                   : latestDataRef.current.wilayahList,
               pengelolaList: snapshot.pengelolaList,
             });
-            void fetchOperationalLogsFromSupabase()
-              .then((logs) => {
-                const fetchedHistIds = new Set(logs.proposalHistory.map((h) => h.id));
-                const fetchedAuditIds = new Set(logs.kpmAuditLogs.map((a) => a.id));
-                setProposalHistory((prev) => {
-                  const localNew = prev.filter(
-                    (h) =>
-                      !fetchedHistIds.has(h.id) &&
-                      new Date(h.timestamp).getTime() >= logFetchStartedAt
-                  );
-                  return localNew.length > 0
-                    ? [...localNew, ...logs.proposalHistory]
-                    : logs.proposalHistory;
-                });
-                setKpmAuditLogs((prev) => {
-                  const localNew = prev.filter(
-                    (a) =>
-                      !fetchedAuditIds.has(a.id) &&
-                      new Date(a.timestamp).getTime() >= logFetchStartedAt
-                  );
-                  return localNew.length > 0
-                    ? [...localNew, ...logs.kpmAuditLogs]
-                    : logs.kpmAuditLogs;
-                });
-              })
-              .catch(() => {});
             const canAutoPersist =
               currentUserRoleRef.current === 'SuperAdmin' ||
               Boolean(
@@ -2607,16 +2721,23 @@ export default function App() {
     [authFetch, enqueueOperationalSync]
   );
 
-  // Sinkronisasi awal Supabase / Server: status schema, user, pesan 1-on-1 & data operasional
+  // Sinkronisasi awal Supabase / Server — dibatasi 1x per sesi user (mencegah double-fetch & loop reconnect)
   useEffect(() => {
     let cancelled = false;
+    const targetSessionKey = sessionUserId || '__guest__';
 
     async function bootstrapSession() {
-      if (!isOnline || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+      if (!isOnlineRef.current || (typeof navigator !== 'undefined' && !navigator.onLine)) {
         setIsOperationalLoading(false);
         setAuthReady(true);
         return;
       }
+
+      if (bootstrappedSessionKeyRef.current === targetSessionKey) {
+        setAuthReady(true);
+        return;
+      }
+
       let useSupabase = false;
       if (isSupabaseConfigured) {
         const check = await checkSupabaseSchemaReady();
@@ -2650,6 +2771,7 @@ export default function App() {
           }
 
           if (!sessionUserId) {
+            bootstrappedSessionKeyRef.current = targetSessionKey;
             setIsOperationalLoading(false);
             setAuthReady(true);
             return;
@@ -2663,48 +2785,25 @@ export default function App() {
             return;
           }
 
+          // Tandai sudah dibootstrap SEBELUM setSessionToken agar useEffect tidak terpanggil 2x
+          bootstrappedSessionKeyRef.current = activeUser.id;
+
           if (!activeUser.presenceManual) {
             desiredAutoPresenceRef.current = 'online';
-            await supabaseSetUserPresence(activeUser.id, 'online', false);
+            void supabaseSetUserPresence(activeUser.id, 'online', false);
           }
 
-          const [msgs, watermarks] = await Promise.all([
-            supabaseFetchDirectMessages(),
-            fetchChatDeliveryWatermarks(),
-          ]);
-          if (cancelled) return;
-          const userMsgs = msgs.filter(
-            (m) => m.senderId === activeUser.id || m.recipientId === activeUser.id
-          );
-          seedChatNotificationBaseline(activeUser.id, userMsgs);
-          setChatDeliveryWatermarks(watermarks);
-          setDirectMessages(userMsgs);
+          // Hemat Egress: di boot awal cukup hitung jumlah pesan belum dibaca (head: true, 0 byte)
+          void supabaseFetchUnreadChatCount(activeUser.id)
+            .then((unreadCnt) => {
+              if (!cancelled) setRemoteUnreadChatCount(unreadCnt);
+            })
+            .catch(() => {});
 
-          const incomingForUser = userMsgs.filter((m) => m.recipientId === activeUser.id);
-          if (incomingForUser.length > 0) {
-            const latestIncoming = incomingForUser[incomingForUser.length - 1];
-            const prevWmTs = watermarks[activeUser.id]
-              ? new Date(watermarks[activeUser.id]).getTime()
-              : 0;
-            const latestTs = new Date(latestIncoming.createdAt).getTime();
-            const undeliveredIds = incomingForUser
-              .filter((m) => !m.deliveredAt)
-              .map((m) => m.id);
-            if (undeliveredIds.length > 0 || latestTs > prevWmTs) {
-              void supabaseMarkDirectMessagesDelivered(
-                activeUser.id,
-                latestIncoming.createdAt,
-                undeliveredIds
-              )
-                .then((nextWm) => {
-                  if (!cancelled) setChatDeliveryWatermarks(nextWm);
-                })
-                .catch(() => {});
-            }
-          }
-
-          if (!sessionToken) {
+          const currentTok = sessionTokenRef.current;
+          if (!currentTok) {
             const supaTok = `supabase-session-${activeUser.id}`;
+            sessionTokenRef.current = supaTok;
             setSessionToken(supaTok);
             try {
               localStorage.setItem(SESSION_TOKEN_STORAGE_KEY, supaTok);
@@ -2714,11 +2813,12 @@ export default function App() {
           }
 
           await loadOrBootstrapOperationalData(
-            sessionToken || `supabase-session-${activeUser.id}`,
+            currentTok || `supabase-session-${activeUser.id}`,
             activeUser,
             true
           );
         } catch (err) {
+          bootstrappedSessionKeyRef.current = null;
           console.error('Supabase initial sync error:', err);
           setIsOperationalLoading(false);
         } finally {
@@ -2727,7 +2827,8 @@ export default function App() {
         return;
       }
 
-      if (!sessionToken) {
+      const fallbackTok = sessionTokenRef.current;
+      if (!fallbackTok) {
         if (sessionUserId && isOnlineRef.current && (typeof navigator === 'undefined' || navigator.onLine)) {
           clearSessionState();
         }
@@ -2736,7 +2837,8 @@ export default function App() {
         return;
       }
 
-      authFetch('/api/collab/state', {}, sessionToken)
+      bootstrappedSessionKeyRef.current = targetSessionKey;
+      authFetch('/api/collab/state', {}, fallbackTok)
         .then((res) => (res.ok ? res.json() : Promise.reject(new Error('Sync gagal'))))
         .then(
           async (data: {
@@ -2753,20 +2855,22 @@ export default function App() {
               setInternalUsers(mergeFetchedInternalUsers(data.users));
             }
             if (Array.isArray(data.messages)) {
+              chatLoadedOnceRef.current = true;
               seedChatNotificationBaseline(data.user.id, data.messages);
               setDirectMessages(data.messages);
             }
+            bootstrappedSessionKeyRef.current = data.user.id;
             setSessionUserId(data.user.id);
             try {
               localStorage.setItem(SESSION_STORAGE_KEY, data.user.id);
             } catch {
               // Ignore
             }
-            await loadOrBootstrapOperationalData(sessionToken, data.user, false);
+            await loadOrBootstrapOperationalData(fallbackTok, data.user, false);
           }
         )
         .catch(() => {
-          // Fallback diam-diam jika offline sementara
+          bootstrappedSessionKeyRef.current = null;
         })
         .finally(() => {
           if (!cancelled) setAuthReady(true);
@@ -2779,13 +2883,11 @@ export default function App() {
       cancelled = true;
     };
   }, [
-    sessionToken,
     authFetch,
     clearSessionState,
     loadOrBootstrapOperationalData,
     sessionUserId,
     seedChatNotificationBaseline,
-    isOnline,
   ]);
 
   const handleMarkChatRead = useCallback(
@@ -2841,14 +2943,28 @@ export default function App() {
   const handleManualRefresh = useCallback(async () => {
     if (isManualRefreshingRef.current) return;
     isManualRefreshingRef.current = true;
+    setIsManualRefreshing(true);
     try {
       const uid = currentUserIdRef.current;
       if (supabaseReadyRef.current) {
-        const [snapshot, users, msgs] = await Promise.all([
-          fetchOperationalDataFromSupabase(),
+        invalidateMasterReferenceCache();
+        hydratedKpmDocsIdsRef.current.clear();
+        hydratedProposalExtraDocsRef.current.clear();
+        const shouldRefreshChat = chatLoadedOnceRef.current || subViewRef.current === 'chat';
+
+        const [snapshot, users, chatRes] = await Promise.all([
+          fetchOperationalDataFromSupabase({
+            includeLogs: hydratedLogsRef.current,
+            includeKpmDocuments: false,
+            forceRefreshMaster: true,
+          }),
           supabaseFetchInternalUsers(),
-          supabaseFetchDirectMessages(),
-          loadAppStateSlices(),
+          shouldRefreshChat && uid
+            ? supabaseFetchDirectMessages(uid, 150)
+            : uid
+              ? supabaseFetchUnreadChatCount(uid)
+              : Promise.resolve(0),
+          loadAppStateSlices({ forceRefresh: true }),
         ]);
 
         applyRemoteOperationalState({
@@ -2861,8 +2977,12 @@ export default function App() {
               ? snapshot.wilayahList
               : latestDataRef.current.wilayahList,
           pengelolaList: snapshot.pengelolaList,
-          proposalHistory: snapshot.proposalHistory,
-          kpmAuditLogs: snapshot.kpmAuditLogs,
+          ...(hydratedLogsRef.current
+            ? {
+                proposalHistory: snapshot.proposalHistory,
+                kpmAuditLogs: snapshot.kpmAuditLogs,
+              }
+            : {}),
         });
 
         if (users.length > 0) {
@@ -2877,9 +2997,14 @@ export default function App() {
         }
 
         if (uid) {
-          const userMsgs = msgs.filter((m) => m.senderId === uid || m.recipientId === uid);
-          seedChatNotificationBaseline(uid, userMsgs);
-          setDirectMessages(userMsgs);
+          if (Array.isArray(chatRes)) {
+            chatLoadedOnceRef.current = true;
+            seedChatNotificationBaseline(uid, chatRes);
+            setDirectMessages(chatRes);
+            setRemoteUnreadChatCount(null);
+          } else if (typeof chatRes === 'number') {
+            setRemoteUnreadChatCount(chatRes);
+          }
         }
 
         setFeedback({
@@ -2910,6 +3035,7 @@ export default function App() {
             setInternalUsers(mergeFetchedInternalUsers(collab.users));
           }
           if (Array.isArray(collab.messages)) {
+            chatLoadedOnceRef.current = true;
             setDirectMessages(collab.messages);
           }
         }
@@ -2925,83 +3051,36 @@ export default function App() {
       });
     } finally {
       isManualRefreshingRef.current = false;
+      setIsManualRefreshing(false);
     }
-  }, [applyRemoteOperationalState, authFetch, clearSessionState]);
+  }, [applyRemoteOperationalState, authFetch, clearSessionState, loadAppStateSlices, seedChatNotificationBaseline]);
 
-  // Supabase Realtime Multi-Admin Sync (saat supabaseReady = true)
+  // Sinkronisasi Chat On-Demand (Hemat Egress & Log Ingestion: TANPA 16-table Realtime postgres_changes & TANPA polling 45 detik)
   useEffect(() => {
     const uid = currentUser?.id;
     if (!uid || !supabaseReady) return;
-
-    let refreshTimer: number | undefined;
-    let toastTimer: number | undefined;
-    const pendingScopes = new Set<OperationalSyncScope>();
-
-    const scheduleOperationalRefresh = (scope: OperationalSyncScope) => {
-      pendingScopes.add(scope);
-      if (activeLocalSyncCountRef.current > 0 || Date.now() - lastLocalSyncAtRef.current < 4000) {
-        return;
-      }
-      if (refreshTimer) window.clearTimeout(refreshTimer);
-      refreshTimer = window.setTimeout(async () => {
-        const scopesSnapshot = new Set(pendingScopes);
-        pendingScopes.clear();
-        if (scopesSnapshot.size === 0) return;
-        if (activeLocalSyncCountRef.current > 0 || Date.now() - lastLocalSyncAtRef.current < 4000) {
-          return;
-        }
-        try {
-          const snapshot = await fetchScopedOperationalDataFromSupabase(scopesSnapshot, {
-            proposals: latestDataRef.current.proposals,
-          });
-          if (activeLocalSyncCountRef.current > 0 || Date.now() - lastLocalSyncAtRef.current < 4000) {
-            return;
-          }
-          applyRemoteOperationalState({
-            ...(snapshot.records ? { records: snapshot.records } : {}),
-            ...(snapshot.proposals ? { proposals: snapshot.proposals } : {}),
-            ...(snapshot.items && snapshot.items.length > 0 ? { items: snapshot.items } : {}),
-            ...(snapshot.pekerjaanList && snapshot.pekerjaanList.length > 0
-              ? { pekerjaanList: snapshot.pekerjaanList }
-              : {}),
-            ...(snapshot.wilayahList && snapshot.wilayahList.length > 0
-              ? { wilayahList: snapshot.wilayahList }
-              : {}),
-            ...(snapshot.pengelolaList ? { pengelolaList: snapshot.pengelolaList } : {}),
-            ...(snapshot.proposalHistory ? { proposalHistory: snapshot.proposalHistory } : {}),
-            ...(snapshot.kpmAuditLogs ? { kpmAuditLogs: snapshot.kpmAuditLogs } : {}),
-          });
-        } catch {
-          // Abaikan gangguan jaringan sementara
-        }
-      }, 900);
-    };
 
     let disposed = false;
 
     const syncMessagesFromSupabase = async () => {
       try {
-        const [all, watermarks] = await Promise.all([
-          supabaseFetchDirectMessages(),
+        const [mine, watermarks] = await Promise.all([
+          supabaseFetchDirectMessages(uid, 150),
           fetchChatDeliveryWatermarks(),
         ]);
         if (disposed) return;
 
-        const mine = all.filter((m) => m.senderId === uid || m.recipientId === uid);
+        chatLoadedOnceRef.current = true;
+        setRemoteUnreadChatCount(null);
+
         const wasHydrated = initialMessagesHydratedRef.current;
         if (!wasHydrated) {
           seedChatNotificationBaseline(uid, mine);
         }
-        const newIncoming = wasHydrated
-          ? mine.filter(
-              (m) => m.recipientId === uid && !m.readAt && !prevMessageIdsRef.current.has(m.id)
-            )
-          : [];
         prevMessageIdsRef.current = new Set(mine.map((m) => m.id));
         setChatDeliveryWatermarks(watermarks);
         setDirectMessages(mine);
 
-        // Tandai pesan masuk sebagai "terkirim / masuk ke perangkat penerima" (centang 2)
         const incomingForMe = mine.filter((m) => m.recipientId === uid);
         if (incomingForMe.length > 0) {
           const latestIncoming = incomingForMe[incomingForMe.length - 1];
@@ -3012,319 +3091,22 @@ export default function App() {
             void supabaseMarkDirectMessagesDelivered(uid, latestIncoming.createdAt, undeliveredIds)
               .then((nextWm) => {
                 if (!disposed) setChatDeliveryWatermarks(nextWm);
-                const nowIso = nextWm[uid] || new Date().toISOString();
-                void realtimeChannelRef.current?.send({
-                  type: 'broadcast',
-                  event: 'chat:delivered',
-                  payload: {
-                    recipientId: uid,
-                    deliveredAt: nowIso,
-                    messageIds: undeliveredIds,
-                  },
-                });
               })
               .catch(() => {});
           }
         }
-
-        const latestNew = newIncoming[newIncoming.length - 1];
-        if (latestNew) {
-          const isViewingThread =
-            subViewRef.current === 'chat' &&
-            activeChatPeerIdRef.current === latestNew.senderId &&
-            document.visibilityState === 'visible';
-
-          if (isViewingThread) {
-            const readAtNow = new Date().toISOString();
-            const incomingIds = newIncoming.map((m) => m.id);
-            const incomingIdSet = new Set(incomingIds);
-            setDirectMessages((prev) =>
-              prev.map((m) =>
-                incomingIdSet.has(m.id) ? { ...m, deliveredAt: m.deliveredAt || readAtNow, readAt: readAtNow } : m
-              )
-            );
-            markMessagesAsNotified(uid, incomingIds);
-            const sorted = [uid, latestNew.senderId].sort();
-            void supabaseMarkDirectMessagesRead(`${sorted[0]}::${sorted[1]}`, uid);
-            void markNativeNotifiedIds(incomingIds, latestNew.createdAt);
-          } else {
-            const unnotified = newIncoming.filter(
-              (m) => !notifiedChatMsgIdsRef.current.has(m.id)
-            );
-            const newIncomingIds = newIncoming.map((m) => m.id);
-            markMessagesAsNotified(uid, newIncomingIds);
-            void markNativeNotifiedIds(newIncomingIds, latestNew.createdAt);
-
-            if (unnotified.length > 0) {
-              const targetMsg = unnotified[unnotified.length - 1];
-              const sender = internalUsersRef.current.find((u) => u.id === targetMsg.senderId);
-              const senderName =
-                (currentUserAliasesRef.current[targetMsg.senderId] || '').trim() ||
-                sender?.nama ||
-                'Pengguna Internal';
-              const senderRole = sender?.role || 'Admin';
-              const displayMsgText =
-                targetMsg.text ||
-                (targetMsg.sharedKpm
-                  ? `Kartu KPM: ${targetMsg.sharedKpm.nama} (${targetMsg.sharedKpm.proposal})`
-                  : 'Pesan baru');
-
-              const unreadFromSender = mine.filter(
-                (m) => m.senderId === targetMsg.senderId && m.recipientId === uid && !m.readAt
-              ).length;
-              const notifCount = Math.max(1, unreadFromSender);
-              const notifTitle = `${notifCount} pesan masuk dari ${senderName}`;
-
-              playMessageChime();
-              setIncomingToast({
-                id: targetMsg.id,
-                senderId: targetMsg.senderId,
-                senderName,
-                senderRole,
-                text: displayMsgText,
-              });
-              if (toastTimer) window.clearTimeout(toastTimer);
-              toastTimer = window.setTimeout(() => {
-                setIncomingToast((curr) => (curr?.id === targetMsg.id ? null : curr));
-              }, 6500);
-
-              if (pushEnabledRef.current) {
-                void triggerPushNotification(notifTitle, displayMsgText, {
-                  senderId: targetMsg.senderId,
-                  tag: `masdeta-chat-${targetMsg.senderId}`,
-                });
-              }
-            }
-          }
-        }
       } catch {
-        // Ignore
+        // Ignore transient network errors
       }
     };
 
     syncIncomingMessagesRef.current = syncMessagesFromSupabase;
 
-    const channel = supabase
-      .channel('masdeta-realtime-sync', {
-        config: {
-          broadcast: { self: false },
-        },
-      })
-      .on('broadcast', { event: 'chat:delivered' }, ({ payload }) => {
-        if (!payload || typeof payload !== 'object') return;
-        const p = payload as {
-          recipientId?: string;
-          deliveredAt?: string;
-          messageIds?: string[];
-        };
-        const recId = p.recipientId ? String(p.recipientId) : '';
-        const deliveredAt = p.deliveredAt ? String(p.deliveredAt) : new Date().toISOString();
-        if (recId) {
-          setChatDeliveryWatermarks((prev) => {
-            const prevTs = prev[recId] ? new Date(prev[recId]).getTime() : 0;
-            const nextTs = new Date(deliveredAt).getTime();
-            if (Number.isFinite(nextTs) && nextTs <= prevTs) return prev;
-            return { ...prev, [recId]: deliveredAt };
-          });
-        }
-        if (Array.isArray(p.messageIds) && p.messageIds.length > 0) {
-          const ids = new Set(p.messageIds.map(String));
-          setDirectMessages((prev) =>
-            prev.map((m) => (ids.has(m.id) && !m.deliveredAt ? { ...m, deliveredAt } : m))
-          );
-        }
-      })
-      .on('broadcast', { event: 'app:notification' }, ({ payload }) => {
-        if (!payload || typeof payload !== 'object') return;
-        const p = payload as Record<string, unknown>;
-        if (p.actorId && String(p.actorId) === currentUserIdRef.current) return;
-        const notifId = String(p.id || '');
-        const notifType = p.type === 'user_registered' ? 'user_registered' : 'proposal_deleted';
-        if (notifType === 'user_registered' && currentUserRoleRef.current !== 'SuperAdmin') {
-          return;
-        }
-        const proposalId = p.proposalId ? String(p.proposalId) : '';
-        if (proposalId) {
-          if (notifiedDeletedProposalIdsRef.current.has(proposalId)) return;
-          notifiedDeletedProposalIdsRef.current.add(proposalId);
-        }
-        pushAppNotification({
-          id: notifId || `notif-rt-${Date.now()}`,
-          type: notifType,
-          title: String(p.title || 'Notifikasi Sistem'),
-          message: String(p.message || ''),
-          actorName: p.actorName ? String(p.actorName) : undefined,
-          createdAt: String(p.createdAt || new Date().toISOString()),
-          read: false,
-          targetAction: p.targetAction === 'users' ? 'users' : 'proposals',
-        });
-      })
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'internal_users' },
-        () => {
-          void supabaseFetchInternalUsers().then((users) => {
-            if (users.length > 0) setInternalUsers(mergeFetchedInternalUsers(users));
-          });
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'direct_chat_messages' },
-        () => {
-          void syncMessagesFromSupabase();
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'kpm_records' },
-        () => scheduleOperationalRefresh('kpm')
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'kpm_documents' },
-        () => scheduleOperationalRefresh('kpm')
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'kpm_sub_item_deliveries' },
-        () => scheduleOperationalRefresh('kpm')
-      )
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'proposals' },
-        () => scheduleOperationalRefresh('proposals')
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'proposals' },
-        () => scheduleOperationalRefresh('proposals')
-      )
-      .on(
-        'postgres_changes',
-        { event: 'DELETE', schema: 'public', table: 'proposals' },
-        (payload) => {
-          const oldRow = (payload.old || {}) as Record<string, unknown>;
-          const deletedId = String(oldRow.id || '');
-          const isLocalAction =
-            activeLocalSyncCountRef.current > 0 || Date.now() - lastLocalSyncAtRef.current < 4000;
-          if (deletedId && !isLocalAction && !notifiedDeletedProposalIdsRef.current.has(deletedId)) {
-            const known = proposalsRef.current.find((p) => p.id === deletedId);
-            const propName = String(oldRow.nama_proposal || known?.namaProposal || 'Proposal');
-            const propYear = String(oldRow.tahun || known?.tahun || '');
-            window.setTimeout(() => {
-              if (notifiedDeletedProposalIdsRef.current.has(deletedId)) return;
-              notifiedDeletedProposalIdsRef.current.add(deletedId);
-              pushAppNotification({
-                id: `notif-prop-del-${deletedId}`,
-                type: 'proposal_deleted',
-                title: 'Proposal Dihapus',
-                message: `Proposal "${propName}"${propYear ? ` (${propYear})` : ''} telah dihapus.`,
-                createdAt: new Date().toISOString(),
-                read: false,
-                targetAction: 'proposals',
-              });
-            }, 350);
-          }
-          scheduleOperationalRefresh('proposals');
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'proposal_documents' },
-        () => scheduleOperationalRefresh('proposals')
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'pengelola' },
-        () => scheduleOperationalRefresh('pengelola')
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'item_bantuan' },
-        () => scheduleOperationalRefresh('items')
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'proposal_kpm_history' },
-        () => scheduleOperationalRefresh('history')
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'kpm_audit_logs' },
-        () => scheduleOperationalRefresh('audit')
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'masdeta_app_state' },
-        () => {
-          if (activeLocalSyncCountRef.current > 0 || Date.now() - lastLocalSyncAtRef.current < 4000) {
-            return;
-          }
-          void loadAppStateSlicesRef.current();
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'schedules' },
-        () => {
-          void loadAppStateSlicesRef.current();
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'document_templates' },
-        () => {
-          void loadAppStateSlicesRef.current();
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'proposal_rab_configs' },
-        () => {
-          void loadAppStateSlicesRef.current();
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'proposal_style_history' },
-        () => {
-          void loadAppStateSlicesRef.current();
-        }
-      )
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          void syncMessagesFromSupabase();
-        }
-      });
-
-    realtimeChannelRef.current = channel;
-
-    const fallbackPollId = window.setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        void syncMessagesFromSupabase();
-      }
-    }, 45_000);
-
     return () => {
       disposed = true;
-      window.clearInterval(fallbackPollId);
-      if (refreshTimer) window.clearTimeout(refreshTimer);
-      if (toastTimer) window.clearTimeout(toastTimer);
-      if (realtimeChannelRef.current === channel) {
-        realtimeChannelRef.current = null;
-      }
       syncIncomingMessagesRef.current = async () => {};
-      void supabase.removeChannel(channel);
     };
-  }, [
-    currentUser?.id,
-    supabaseReady,
-    applyRemoteOperationalState,
-    pushAppNotification,
-    markMessagesAsNotified,
-    seedChatNotificationBaseline,
-  ]);
+  }, [currentUser?.id, supabaseReady, seedChatNotificationBaseline]);
 
   // Koneksi WebSocket Real-time (Fallback saat schema Supabase belum dijalankan)
   useEffect(() => {
@@ -3598,15 +3380,9 @@ export default function App() {
 
     syncIncomingMessagesRef.current = syncCollabFromBackend;
     connect();
-    const fallbackPollId = window.setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        void syncCollabFromBackend();
-      }
-    }, 12_000);
 
     return () => {
       closedByCleanup = true;
-      window.clearInterval(fallbackPollId);
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       if (toastTimer) window.clearTimeout(toastTimer);
       syncIncomingMessagesRef.current = async () => {};
@@ -3672,18 +3448,13 @@ export default function App() {
     const uid = currentUser?.id;
     if (!uid) return;
 
-    const handleWakeSync = () => {
+    const handleVisibility = () => {
       const visible = document.visibilityState === 'visible';
       void setNativeAppForeground(visible);
-      if (visible) {
-        void syncIncomingMessagesRef.current();
-      }
     };
 
     void setNativeAppForeground(document.visibilityState === 'visible');
-    document.addEventListener('visibilitychange', handleWakeSync);
-    window.addEventListener('focus', handleWakeSync);
-    window.addEventListener('online', handleWakeSync);
+    document.addEventListener('visibilitychange', handleVisibility);
 
     let appStateHandle: PluginListenerHandle | null = null;
     let disposed = false;
@@ -3692,7 +3463,6 @@ export default function App() {
         if (disposed) return;
         void setNativeAppForeground(isActive);
         if (isActive) {
-          void syncIncomingMessagesRef.current();
           void consumePendingNotificationSender().then((senderId) => {
             if (!disposed && senderId) {
               openChatViewRef.current(senderId);
@@ -3712,236 +3482,45 @@ export default function App() {
 
     return () => {
       disposed = true;
-      document.removeEventListener('visibilitychange', handleWakeSync);
-      window.removeEventListener('focus', handleWakeSync);
-      window.removeEventListener('online', handleWakeSync);
+      document.removeEventListener('visibilitychange', handleVisibility);
       if (appStateHandle) {
         void appStateHandle.remove();
       }
     };
   }, [currentUser?.id]);
 
-  // Pelacak Aktivitas Otomatis Presisi Tinggi untuk Presence Dot (Hijau = Aktif, Oranye = Idle, Abu-abu = Offline)
+  // Presence Hemat Kuota: HANYA sinkronisasi saat tab unload/close atau perubahan visibilitas (>= 5 menit cooldown).
+  // TANPA listener klik/scroll/keydown dan TANPA setInterval heartbeat/polling pengguna!
   useEffect(() => {
     const uid = currentUser?.id;
     const isManual = currentUser?.presenceManual;
     if (!uid || isManual) return;
 
-    const VISIBLE_IDLE_MS = 300_000; // 5 menit tanpa interaksi di layar aktif
-    const HIDDEN_IDLE_MS = 45_000; // Grace 45 detik saat APK ke background/kamera/file picker
-    const HEARTBEAT_MS = 25_000; // Segarkan status online & lastActiveAt berkala
-    const ONLINE_RETRY_MS = 2_500; // Coba ulang cepat jika sinkronisasi 'online' sempat gagal saat wake-up
+    const MIN_NETWORK_PRESENCE_COOLDOWN_MS = 5 * 60 * 1000;
+    let lastNetworkSyncAt = Date.now();
+    let committedStatus: UserPresenceStatus = 'online';
 
-    const isDocumentVisible = () =>
-      document.visibilityState === 'visible' ||
-      (document.visibilityState !== 'hidden' && document.hidden === false);
-
-    let idleTimer: number | undefined;
-    let hiddenIdleTimer: number | undefined;
-    let heartbeatTimer: number | undefined;
-    let retryOnlineTimer: number | undefined;
-    let committedStatus: UserPresenceStatus | null = null;
-    let isForegroundActive = isDocumentVisible();
-    let lastInteractionAt = Date.now();
-    let lastCommittedAt = 0;
-    let presenceSeq = 0;
-    let presenceWriteChain: Promise<void> = Promise.resolve();
-    let disposed = false;
-    let appStateHandle: PluginListenerHandle | undefined;
-
-    const clearRetryOnlineTimer = () => {
-      if (retryOnlineTimer) {
-        window.clearTimeout(retryOnlineTimer);
-        retryOnlineTimer = undefined;
-      }
-    };
-
-    const applyLocalPresence = (status: UserPresenceStatus) => {
+    const syncPresenceIfAllowed = (status: UserPresenceStatus) => {
       desiredAutoPresenceRef.current = status;
-      const nowIso = new Date().toISOString();
-      setInternalUsers((prev) => {
-        let changed = false;
-        const next = prev.map((u) => {
-          if (u.id !== uid || u.presenceManual) return u;
-          const prevActiveMs = u.lastActiveAt ? new Date(u.lastActiveAt).getTime() : 0;
-          if (
-            u.presenceStatus === status &&
-            Number.isFinite(prevActiveMs) &&
-            Date.now() - prevActiveMs < 20_000
-          ) {
-            return u;
-          }
-          changed = true;
-          return {
-            ...u,
-            presenceStatus: status,
-            lastActiveAt: nowIso,
-          };
-        });
-        return changed ? next : prev;
-      });
-    };
-
-    const sendPresence = (status: UserPresenceStatus, forceNetworkSync = false) => {
-      const statusChanged =
-        committedStatus !== status || currentUserPresenceRef.current !== status;
-      const mustSync = forceNetworkSync || statusChanged;
-      applyLocalPresence(status);
-
-      if (supabaseReadyRef.current) {
-        const shouldSkip =
-          !mustSync &&
-          committedStatus === status &&
-          currentUserPresenceRef.current === status &&
-          Date.now() - lastCommittedAt < HEARTBEAT_MS;
-        if (shouldSkip) return;
-
-        clearRetryOnlineTimer();
-        const seq = ++presenceSeq;
-
-        presenceWriteChain = presenceWriteChain.then(async () => {
-          if (disposed || seq !== presenceSeq) return;
-          const ok = await supabaseSetUserPresence(uid, status, false);
-          if (disposed || seq !== presenceSeq) return;
-          if (ok) {
-            committedStatus = status;
-            lastCommittedAt = Date.now();
-            clearRetryOnlineTimer();
-          } else if (status === 'online' && (isForegroundActive || isDocumentVisible())) {
-            clearRetryOnlineTimer();
-            retryOnlineTimer = window.setTimeout(() => {
-              retryOnlineTimer = undefined;
-              if (!disposed && (isForegroundActive || isDocumentVisible())) {
-                sendPresence('online', true);
-              }
-            }, ONLINE_RETRY_MS);
-          }
-        });
-        return;
-      }
-
-      const sock = wsRef.current;
-      if (sock && sock.readyState === WebSocket.OPEN) {
-        const shouldSkip =
-          !mustSync &&
-          committedStatus === status &&
-          currentUserPresenceRef.current === status &&
-          Date.now() - lastCommittedAt < HEARTBEAT_MS;
-        if (shouldSkip) return;
-        committedStatus = status;
-        lastCommittedAt = Date.now();
-        sock.send(JSON.stringify({ type: 'presence:activity', status }));
-      }
-    };
-
-    const isNative = Capacitor.isNativePlatform();
-    const startHiddenIdleCountdown = () => {
-      isForegroundActive = false;
-      clearRetryOnlineTimer();
-      if (idleTimer) {
-        window.clearTimeout(idleTimer);
-        idleTimer = undefined;
-      }
-      if (!isNative) {
-        // Di Web / iOS Safari / WebView browser: segera tandai idle saat tab/app disembunyikan
-        sendPresence('idle', true);
-        return;
-      }
-      if (hiddenIdleTimer) return;
-      hiddenIdleTimer = window.setTimeout(() => {
-        hiddenIdleTimer = undefined;
-        if (!disposed && !isForegroundActive && !isDocumentVisible()) {
-          sendPresence('idle', true);
-        }
-      }, HIDDEN_IDLE_MS);
-    };
-
-    const scheduleVisibleIdleCheck = (delayMs = VISIBLE_IDLE_MS) => {
-      if (idleTimer) {
-        window.clearTimeout(idleTimer);
-        idleTimer = undefined;
-      }
-      idleTimer = window.setTimeout(() => {
-        idleTimer = undefined;
-        if (disposed) return;
-        const elapsed = Date.now() - lastInteractionAt;
-        if (elapsed >= VISIBLE_IDLE_MS) {
-          sendPresence('idle', true);
-        } else {
-          scheduleVisibleIdleCheck(Math.max(1000, VISIBLE_IDLE_MS - elapsed));
-        }
-      }, delayMs);
-    };
-
-    const markActive = (throttled = false, forceForeground = false) => {
-      if (disposed) return;
       const now = Date.now();
-      const docVisible = isDocumentVisible();
-      if (forceForeground || docVisible) {
-        isForegroundActive = true;
+      if (committedStatus === status) return;
+      if (now - lastNetworkSyncAt < MIN_NETWORK_PRESENCE_COOLDOWN_MS) return;
+      committedStatus = status;
+      lastNetworkSyncAt = now;
+      if (supabaseReadyRef.current) {
+        void supabaseSetUserPresence(uid, status, false);
       }
-
-      // Hanya masuk hitungan background idle jika benar-benar hidden dan tidak ada sinyal foreground
-      if (!isForegroundActive && !docVisible) {
-        startHiddenIdleCountdown();
-        return;
-      }
-
-      if (
-        throttled &&
-        !forceForeground &&
-        committedStatus === 'online' &&
-        currentUserPresenceRef.current === 'online' &&
-        now - lastInteractionAt < 1000
-      ) {
-        return;
-      }
-      lastInteractionAt = now;
-
-      if (hiddenIdleTimer) {
-        window.clearTimeout(hiddenIdleTimer);
-        hiddenIdleTimer = undefined;
-      }
-
-      sendPresence('online', forceForeground || committedStatus !== 'online');
-      scheduleVisibleIdleCheck(VISIBLE_IDLE_MS);
     };
 
     const handleVisibilityChange = () => {
-      if (disposed) return;
       if (document.visibilityState === 'hidden' || document.hidden) {
-        startHiddenIdleCountdown();
+        syncPresenceIfAllowed('idle');
       } else {
-        markActive(false, true);
+        syncPresenceIfAllowed('online');
       }
     };
 
-    const handleFocusResume = () => {
-      if (disposed) return;
-      if (document.visibilityState !== 'hidden' && !document.hidden) {
-        markActive(false, true);
-      }
-    };
-
-    const handlePointerMove = () => markActive(true, false);
-    const handleImmediateInteraction = () => markActive(false, true);
-    const handleWsOpen = () => {
-      if (!disposed && (isForegroundActive || isDocumentVisible())) {
-        markActive(false, true);
-      }
-    };
-    const handleOnlineRestore = () => {
-      if (!disposed && (isForegroundActive || isDocumentVisible())) {
-        markActive(false, true);
-      }
-    };
-    const handleOfflineEvent = () => {
-      clearRetryOnlineTimer();
-    };
     const handleUnload = () => {
-      clearRetryOnlineTimer();
-      if (idleTimer) window.clearTimeout(idleTimer);
-      if (hiddenIdleTimer) window.clearTimeout(hiddenIdleTimer);
       if (supabaseReadyRef.current) {
         supabaseMarkOfflineKeepalive(uid);
       } else if (
@@ -3955,125 +3534,21 @@ export default function App() {
           });
           navigator.sendBeacon('/api/presence/offline', payload);
         } catch {
-          // Abaikan kegagalan beacon saat window ditutup
+          // Ignore beacon failure on window close
         }
       }
     };
 
-    markActive(false, true);
-
-    heartbeatTimer = window.setInterval(() => {
-      if (disposed) return;
-      const isVisible = isForegroundActive || isDocumentVisible();
-      if (!isVisible) return;
-      const sinceInteraction = Date.now() - lastInteractionAt;
-      if (sinceInteraction >= VISIBLE_IDLE_MS) {
-        if (committedStatus !== 'idle') {
-          sendPresence('idle', true);
-        }
-        return;
-      }
-      if (
-        committedStatus !== 'online' ||
-        currentUserPresenceRef.current !== 'online' ||
-        Date.now() - lastCommittedAt >= HEARTBEAT_MS
-      ) {
-        sendPresence('online', true);
-      }
-    }, HEARTBEAT_MS);
-
-    const immediateEvents: (keyof WindowEventMap)[] = [
-      'pointerdown',
-      'touchstart',
-      'touchmove',
-      'keydown',
-      'click',
-      'wheel',
-      'input',
-      'change',
-    ];
-    immediateEvents.forEach((ev) =>
-      window.addEventListener(ev, handleImmediateInteraction, { passive: true, capture: true })
-    );
-    window.addEventListener('pointermove', handlePointerMove, { passive: true });
-    // capture: true wajib agar scroll pada container internal (overflow-y-auto) ikut terdeteksi
-    window.addEventListener('scroll', handlePointerMove, { capture: true, passive: true });
-    window.addEventListener('focus', handleFocusResume);
-    window.addEventListener('pageshow', handleFocusResume);
-    window.addEventListener('online', handleOnlineRestore);
-    window.addEventListener('offline', handleOfflineEvent);
-    window.addEventListener('masdeta-network-online', handleOnlineRestore);
-    window.addEventListener('masdeta-ws-open', handleWsOpen);
     window.addEventListener('pagehide', handleUnload);
     window.addEventListener('beforeunload', handleUnload);
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    if (Capacitor.isNativePlatform()) {
-      CapacitorApp.addListener('appStateChange', ({ isActive }) => {
-        if (disposed) return;
-        if (isActive) {
-          // Android WebView kadang menunda update document.visibilityState beberapa milidetik setelah resume
-          markActive(false, true);
-          window.setTimeout(() => {
-            if (!disposed && (isForegroundActive || isDocumentVisible())) {
-              markActive(false, true);
-            }
-          }, 250);
-        } else {
-          startHiddenIdleCountdown();
-        }
-      })
-        .then((handle) => {
-          if (disposed) {
-            void handle.remove();
-          } else {
-            appStateHandle = handle;
-          }
-        })
-        .catch(() => {});
-    }
-
     return () => {
-      disposed = true;
-      clearRetryOnlineTimer();
-      if (idleTimer) window.clearTimeout(idleTimer);
-      if (hiddenIdleTimer) window.clearTimeout(hiddenIdleTimer);
-      if (heartbeatTimer) window.clearInterval(heartbeatTimer);
-      immediateEvents.forEach((ev) =>
-        window.removeEventListener(ev, handleImmediateInteraction, { capture: true })
-      );
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('scroll', handlePointerMove, { capture: true });
-      window.removeEventListener('focus', handleFocusResume);
-      window.removeEventListener('pageshow', handleFocusResume);
-      window.removeEventListener('online', handleOnlineRestore);
-      window.removeEventListener('offline', handleOfflineEvent);
-      window.removeEventListener('masdeta-network-online', handleOnlineRestore);
-      window.removeEventListener('masdeta-ws-open', handleWsOpen);
       window.removeEventListener('pagehide', handleUnload);
       window.removeEventListener('beforeunload', handleUnload);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      if (appStateHandle) {
-        void appStateHandle.remove();
-      }
     };
   }, [currentUser?.id, currentUser?.presenceManual, supabaseReady]);
-
-  // Evaluasi staleness presence 90 detik & sinkronisasi daftar pengguna aktif di Web/Mobile
-  useEffect(() => {
-    if (!currentUser?.id) return;
-    const id = window.setInterval(() => {
-      setPresenceTickNow(Date.now());
-      if (supabaseReadyRef.current && document.visibilityState === 'visible') {
-        void supabaseFetchInternalUsers()
-          .then((users) => {
-            if (users.length > 0) setInternalUsers(mergeFetchedInternalUsers(users));
-          })
-          .catch(() => {});
-      }
-    }, 30_000);
-    return () => window.clearInterval(id);
-  }, [currentUser?.id, mergeFetchedInternalUsers]);
 
   // Web Push registration & deep-link notifikasi Service Worker (?chatPeer=...)
   useEffect(() => {
@@ -4582,6 +4057,47 @@ export default function App() {
     );
   }, [proposals, items, wilayahList]);
 
+  useEffect(() => {
+    if (!authReady || !sessionUserId || !supabaseReady) return;
+    if (
+      subView === 'kpm-history' ||
+      subView === 'proposal-detail' ||
+      subView === 'proposal-history' ||
+      (activeTab === 'menu' &&
+        (menuSection === 'activity' || menuSection === 'superadmin'))
+    ) {
+      void ensureOperationalLogsLoaded();
+    }
+    if (activeTab === 'menu' && menuSection === 'sampah') {
+      void ensureLazySliceLoaded('trash');
+    }
+    if (activeTab === 'menu' && menuSection === 'troubleshooting') {
+      void ensureLazySliceLoaded('reconcile');
+    }
+    if (
+      subView === 'proposal-detail' ||
+      (activeTab === 'menu' && menuSection === 'rab')
+    ) {
+      void ensureLazySliceLoaded('rab');
+    }
+    if (
+      subView === 'proposal-detail' ||
+      (activeTab === 'menu' && menuSection === 'buat-proposal')
+    ) {
+      void ensureLazySliceLoaded('styleHistory');
+      void ensureLazySliceLoaded('proposalChanges');
+    }
+  }, [
+    authReady,
+    sessionUserId,
+    supabaseReady,
+    activeTab,
+    menuSection,
+    subView,
+    ensureOperationalLogsLoaded,
+    ensureLazySliceLoaded,
+  ]);
+
   const openKpmDetail = (
     record: KpmRecord,
     fromTab: MainTab = activeTab,
@@ -4599,6 +4115,7 @@ export default function App() {
     setKpmDetailReturnToChatPeerId(fromChatPeerId);
     setActiveKpmId(record.id);
     setSubView('kpm-detail');
+    void hydrateKpmDetailOnDemand(record.id);
   };
 
   const openPhotoGallery = (
@@ -4610,6 +4127,7 @@ export default function App() {
     setPhotoGalleryProposalId(proposalId ?? null);
     setPhotoGalleryReturnTarget(fromTarget);
     setSubView('proposal-photo-gallery');
+    void hydrateProposalExtraDocsOnDemand(proposalId);
   };
 
   const openSubItemRecap = (fromTab: MainTab = activeTab) => {
@@ -4650,6 +4168,9 @@ export default function App() {
     setTargetKpmFormSlot(record ? null : targetSlot);
     setEditingKpmRecord(record);
     setSubView('kpm-form');
+    if (record) {
+      void hydrateKpmDetailOnDemand(record.id);
+    }
   };
 
   const openAddProposalForm = (
@@ -6254,10 +5775,10 @@ export default function App() {
           proposals,
           pengelolaList
         );
-        return;
-      } catch {
-        // Fallback ke full sync
+      } catch (err) {
+        console.warn('[MASDETA] Gagal sinkron dokumen cepat ke Supabase:', err);
       }
+      return;
     }
     const nextRecordsSafe = nextRecords.map((r) =>
       r.id === kpmId ? { ...r, documents: safeDocsForSync } : r
@@ -7457,21 +6978,8 @@ export default function App() {
 
     isFlushingQueueRef.current = true;
     try {
-      let baseSnapshot = latestDataRef.current;
-      if (supabaseReadyRef.current) {
-        try {
-          const freshRemote = await fetchOperationalDataFromSupabase();
-          baseSnapshot = {
-            ...freshRemote,
-            wilayahList:
-              freshRemote.wilayahList.length > 0
-                ? freshRemote.wilayahList
-                : latestDataRef.current.wilayahList,
-          };
-        } catch {
-          // Fallback ke snapshot lokal terakhir jika fetch sementara gagal
-        }
-      }
+      // Gunakan snapshot lokal terakhir tanpa refetch massal seluruh database sebelum flush
+      const baseSnapshot = latestDataRef.current;
 
       const prevRecordById = new Map(baseSnapshot.records.map((r) => [r.id, r]));
       let workRecords = [...baseSnapshot.records];
@@ -9577,7 +9085,9 @@ export default function App() {
         action: nextStatus === 'locked' ? 'removed' : 'entered',
       }
     );
-    const nextHistory = [actEntry, ...proposalHistoryRef.current];
+    const prevProposalsSnapshot = currentProposals;
+    const prevHistorySnapshot = proposalHistoryRef.current;
+    const nextHistory = [actEntry, ...prevHistorySnapshot];
 
     proposalsRef.current = nextProposals;
     proposalHistoryRef.current = nextHistory;
@@ -9634,16 +9144,16 @@ export default function App() {
             type: 'error',
             message: `Gagal menyimpan status kunci proposal ke Supabase: ${msg}`,
           });
-          // Pulihkan snapshot dari database agar status di layar tetap jujur
-          try {
-            const snapshot = await fetchOperationalDataFromSupabase();
-            applyRemoteOperationalState({
-              proposals: snapshot.proposals,
-              proposalHistory: snapshot.proposalHistory,
-            });
-          } catch {
-            // Abaikan error pemulihan
-          }
+          // Rollback state lokal langsung tanpa full refetch database
+          proposalsRef.current = prevProposalsSnapshot;
+          proposalHistoryRef.current = prevHistorySnapshot;
+          latestDataRef.current = {
+            ...latestDataRef.current,
+            proposals: prevProposalsSnapshot,
+            proposalHistory: prevHistorySnapshot,
+          };
+          setProposals(prevProposalsSnapshot);
+          setProposalHistory(prevHistorySnapshot);
           return false;
         }
       });
@@ -9699,7 +9209,9 @@ export default function App() {
         action: nextStatus === 'locked' ? 'removed' : 'entered',
       }
     );
-    const nextHistory = [actEntry, ...proposalHistoryRef.current];
+    const prevProposalsSnapshot = currentProposals;
+    const prevHistorySnapshot = proposalHistoryRef.current;
+    const nextHistory = [actEntry, ...prevHistorySnapshot];
 
     proposalsRef.current = nextProposals;
     proposalHistoryRef.current = nextHistory;
@@ -9754,15 +9266,16 @@ export default function App() {
             type: 'error',
             message: `Gagal menyimpan status kunci massal ke Supabase: ${msg}`,
           });
-          try {
-            const snapshot = await fetchOperationalDataFromSupabase();
-            applyRemoteOperationalState({
-              proposals: snapshot.proposals,
-              proposalHistory: snapshot.proposalHistory,
-            });
-          } catch {
-            // Abaikan error pemulihan
-          }
+          // Rollback state lokal langsung tanpa full refetch database
+          proposalsRef.current = prevProposalsSnapshot;
+          proposalHistoryRef.current = prevHistorySnapshot;
+          latestDataRef.current = {
+            ...latestDataRef.current,
+            proposals: prevProposalsSnapshot,
+            proposalHistory: prevHistorySnapshot,
+          };
+          setProposals(prevProposalsSnapshot);
+          setProposalHistory(prevHistorySnapshot);
           return false;
         }
       });
@@ -9922,18 +9435,6 @@ export default function App() {
             });
           }
           await supabaseDeleteProposalDirect(target, [actEntry]);
-          if (realtimeChannelRef.current) {
-            void realtimeChannelRef.current.send({
-              type: 'broadcast',
-              event: 'app:notification',
-              payload: {
-                ...deletedNotif,
-                read: false,
-                proposalId,
-                actorId: currentUser?.id,
-              },
-            });
-          }
           return true;
         } catch (err) {
           const msg =
@@ -9983,14 +9484,10 @@ export default function App() {
             error: res.error || 'Username/email atau kata sandi tidak sesuai.',
           };
         }
-        const [users, msgs] = await Promise.all([
+        const [users, unreadCount] = await Promise.all([
           supabaseFetchInternalUsers(),
-          supabaseFetchDirectMessages(),
+          supabaseFetchUnreadChatCount(res.user.id).catch(() => 0),
         ]);
-        const userMsgs = msgs.filter(
-          (m) => m.senderId === res.user!.id || m.recipientId === res.user!.id
-        );
-        seedChatNotificationBaseline(res.user.id, userMsgs);
         if (users.length > 0) {
           const loggedInId = res.user.id;
           const nowIso = new Date().toISOString();
@@ -10005,9 +9502,13 @@ export default function App() {
             )
           );
         }
-        setDirectMessages(userMsgs);
+        chatLoadedOnceRef.current = false;
+        setDirectMessages([]);
+        setRemoteUnreadChatCount(unreadCount);
 
         const supaToken = `supabase-session-${res.user.id}`;
+        // Tandai sesi sudah di-bootstrap agar useEffect bootstrapSession tidak double-fetch!
+        bootstrappedSessionKeyRef.current = res.user.id;
         setSessionToken(supaToken);
         setSessionUserId(res.user.id);
         try {
@@ -10308,9 +9809,12 @@ export default function App() {
 
     if (supabaseReadyRef.current) {
       try {
-        await supabaseAdminControlInternalUser(userId, patch);
-        const freshUsers = await supabaseFetchInternalUsers();
-        setInternalUsers(mergeFetchedInternalUsers(freshUsers));
+        const updatedUser = await supabaseAdminControlInternalUser(userId, patch);
+        if (updatedUser) {
+          setInternalUsers((prev) =>
+            prev.map((u) => (u.id === userId ? updatedUser : u))
+          );
+        }
       } catch (err) {
         setFeedback({
           type: 'error',
@@ -10358,8 +9862,7 @@ export default function App() {
     if (supabaseReadyRef.current) {
       try {
         await supabaseDeleteInternalUser(userId);
-        const freshUsers = await supabaseFetchInternalUsers();
-        setInternalUsers(mergeFetchedInternalUsers(freshUsers));
+        setInternalUsers((prev) => prev.filter((u) => u.id !== userId));
         setFeedback({ type: 'success', message: 'Akun pengguna berhasil dihapus dari Supabase.' });
       } catch (err) {
         setFeedback({
@@ -10409,14 +9912,18 @@ export default function App() {
       try {
         lastLocalSyncAtRef.current = Date.now();
         await runAdminDataActionInSupabase(action);
-        const freshSnapshot = await fetchOperationalDataFromSupabase();
+        invalidateMasterReferenceCache();
         try {
           localStorage.setItem('masdeta_csv_seed_ptk_kota_2026_v1', 'done');
         } catch {
           // Ignore storage write error
         }
-        applyRemoteOperationalState(freshSnapshot);
+        // Perbarui state lokal langsung sesuai aksi tanpa menarik ulang seluruh database
         if (action === 'delete_all_kpm') {
+          applyRemoteOperationalState({
+            records: [],
+            kpmAuditLogs: [],
+          });
           persistProposalSlotMap({});
           setReconcileSnapshots({});
           setActiveKpmId(null);
@@ -10425,6 +9932,12 @@ export default function App() {
             message: 'Seluruh data KPM dan log audit KPM telah dihapus.',
           });
         } else if (action === 'delete_all_proposal') {
+          applyRemoteOperationalState({
+            records: [],
+            proposals: [],
+            proposalHistory: [],
+            kpmAuditLogs: [],
+          });
           persistProposalSlotMap({});
           setProposalRabMap({});
           setProposalStyleHistory([]);
@@ -10437,11 +9950,19 @@ export default function App() {
             message: 'Seluruh daftar proposal, KPM terkait, RAB, dan rekam jejak telah dihapus.',
           });
         } else if (action === 'delete_all_items') {
+          applyRemoteOperationalState({ items: [] });
           setFeedback({
             type: 'success',
             message: 'Seluruh katalog item dan sub-item telah dikosongkan.',
           });
         } else if (action === 'delete_all_data') {
+          applyRemoteOperationalState({
+            records: [],
+            proposals: [],
+            proposalHistory: [],
+            kpmAuditLogs: [],
+            pengelolaList: [],
+          });
           persistProposalSlotMap({});
           setProposalRabMap({});
           setProposalStyleHistory([]);
@@ -10456,6 +9977,15 @@ export default function App() {
             message: 'Seluruh data KPM, proposal, RAB, jadwal, pengelola, dan riwayat telah dihapus.',
           });
         } else if (action === 'reset_total') {
+          applyRemoteOperationalState({
+            records: [],
+            proposals: [],
+            proposalHistory: [],
+            kpmAuditLogs: [],
+            items: [],
+            pengelolaList: [],
+            pekerjaanList: [],
+          });
           persistProposalSlotMap({});
           setProposalRabMap({});
           setProposalStyleHistory([]);
@@ -10464,6 +9994,7 @@ export default function App() {
           setTrashBin([]);
           setSchedules([]);
           setDirectMessages([]);
+          setRemoteUnreadChatCount(0);
           setActiveKpmId(null);
           setActiveProposalId(null);
           setFeedback({
@@ -10587,12 +10118,12 @@ export default function App() {
           setFeedback({ type: 'error', message: errMsg });
           return { ok: false, error: errMsg };
         }
-        const freshUsers = await supabaseFetchInternalUsers();
-        setInternalUsers(
-          freshUsers.length > 0
-            ? mergeFetchedInternalUsers(freshUsers)
-            : [res.user, ...internalUsers]
-        );
+        setInternalUsers((prev) => {
+          const exists = prev.some((u) => u.id === res.user!.id);
+          return exists
+            ? prev.map((u) => (u.id === res.user!.id ? res.user! : u))
+            : [res.user!, ...prev];
+        });
         setFeedback({
           type: 'success',
           message: `Akun "${user.nama}" (${user.email}) aktif ditambahkan di Supabase dengan kata sandi awal: ${initialPassword}`,
@@ -10781,6 +10312,7 @@ export default function App() {
     setReturnToTab(activeTab);
     setActiveChatPeerId(peerId ?? null);
     setSubView('chat');
+    void syncIncomingMessagesRef.current();
     if (peerId) {
       void handleMarkChatRead(peerId);
     }
@@ -11857,7 +11389,7 @@ export default function App() {
           pengelola: '',
           catatan: `Input baru dari Nama BAST Tanpa Pasangan (BAST No. ${bastNoText} · ${row.bastOriginalItemCode || row.kodeItem}) saat Rekonsiliasi Troubleshooting.`,
           payment: 0,
-          documents: {},
+          documents: { rumah: [], lainnya: [] },
           createdAt: now,
           updatedAt: now,
         };
@@ -12741,6 +12273,8 @@ export default function App() {
             if (!requirePermission('add', 'menambah data KPM atau proposal baru', { allowOffline: true })) return;
             setIsQuickAddOpen(true);
           }}
+          onRefresh={() => void handleManualRefresh()}
+          isRefreshing={isManualRefreshing}
           onOpenProfile={openProfileView}
           onLogout={handleLogout}
         />
@@ -12986,6 +12520,7 @@ export default function App() {
                 }}
                 pushPermission={pushPermission}
                 onRequestPushPermission={handleRequestPushPermission}
+                onRefreshMessages={() => void syncIncomingMessagesRef.current()}
                 onBack={() => {
                   navigateRestoreScroll();
                   setActiveChatPeerId(null);
@@ -13506,6 +13041,8 @@ export default function App() {
             feedback={feedback}
             onDismissFeedback={() => setFeedback(null)}
             isLoading={isOperationalLoading}
+            isRefreshing={isManualRefreshing}
+            onRefresh={() => void handleManualRefresh()}
             isOnline={isOnline}
             offlineQueueCount={offlineQueueCount}
             onSyncOfflineQueue={() => void handleFlushOfflineQueue()}
@@ -13595,6 +13132,7 @@ export default function App() {
                 canUpdate={hasPermission('update')}
                 canDelete={hasPermission('delete')}
                 isLoading={isOperationalLoading}
+                isSupabaseOnline={supabaseReady && isOnline}
                 openedFromProposalDetail={kpmOpenedFromProposalDetail && Boolean(activeProposal)}
                 onOpenProposalDetail={(proposalId) => openProposalDetailById(proposalId, 'proposal')}
                 onBack={() => {

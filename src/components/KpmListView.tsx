@@ -7,6 +7,8 @@ import {
   ArrowUp,
   Check,
   CheckSquare,
+  ChevronLeft,
+  ChevronRight,
   Database,
   Eye,
   Lock,
@@ -52,6 +54,8 @@ import { ProposalPickerModal } from './ProposalPickerModal';
 import { SlotHandlingConfirmModal } from './SlotHandlingConfirmModal';
 import { SwipeAction, SwipeableRow } from './SwipeableRow';
 import { useOfflineStatus } from '../contexts/OfflineContext';
+import { fetchKpmPageFromSupabase } from '../services/supabaseData';
+import { isSupabaseConfigured } from '../lib/supabaseClient';
 
 type KpmSortKey = 'absen' | 'item' | 'rtrw' | 'pengelola' | 'pekerjaan' | 'kelurahan';
 
@@ -72,6 +76,7 @@ interface KpmListViewProps {
   canUpdate?: boolean;
   canDelete?: boolean;
   isLoading?: boolean;
+  isSupabaseOnline?: boolean;
   openedFromProposalDetail?: boolean;
   onOpenProposalDetail?: (proposalId: string) => void;
   onBack?: () => void;
@@ -135,6 +140,7 @@ export function KpmListView({
   canUpdate = true,
   canDelete = true,
   isLoading = false,
+  isSupabaseOnline,
   openedFromProposalDetail = false,
   onOpenProposalDetail,
   onBack,
@@ -152,6 +158,7 @@ export function KpmListView({
 }: KpmListViewProps) {
   const { isOffline } = useOfflineStatus();
   const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [sortBy, setSortBy] = useState<KpmSortKey>('absen');
   const [kelurahanFilter, setKelurahanFilter] = useState<string>('all');
   const [rtRwFilter, setRtRwFilter] = useState<string>('all');
@@ -159,6 +166,11 @@ export function KpmListView({
   const [pekerjaanFilter, setPekerjaanFilter] = useState<string>('all');
   const [showExtraFilters, setShowExtraFilters] = useState(false);
   const [visibleLimit, setVisibleLimit] = useState(40);
+  const [serverPage, setServerPage] = useState(1);
+  const [serverPageRecords, setServerPageRecords] = useState<KpmRecord[] | null>(null);
+  const [serverTotalCount, setServerTotalCount] = useState<number>(0);
+  const [isServerPageLoading, setIsServerPageLoading] = useState(false);
+  const SERVER_PAGE_SIZE = 40;
   const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
   const [pendingDeleteRecord, setPendingDeleteRecord] = useState<KpmRecord | null>(null);
   const [lockedNoticeRecord, setLockedNoticeRecord] = useState<KpmRecord | null>(null);
@@ -177,6 +189,14 @@ export function KpmListView({
   } | null>(null);
   const [dbPickerQuery, setDbPickerQuery] = useState('');
 
+  // Debounce pencarian minimal 500ms untuk mencegah query berulang setiap ketikan
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedQuery(query);
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
   useEffect(() => {
     if (isOffline && bulkMode) {
       setBulkMode(false);
@@ -188,8 +208,9 @@ export function KpmListView({
 
   useEffect(() => {
     setVisibleLimit(40);
+    setServerPage(1);
   }, [
-    query,
+    debouncedQuery,
     selectedYear,
     statusFilter,
     itemFilter,
@@ -390,7 +411,7 @@ export function KpmListView({
   }, [scopedRecords]);
 
   const filteredRecords = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = debouncedQuery.trim().toLowerCase();
     const filtered = scopedRecords.filter((rec) => {
       if (statusFilter !== 'all' && rec.validasi !== statusFilter) return false;
       if (!q) return true;
@@ -460,7 +481,7 @@ export function KpmListView({
           );
       }
     });
-  }, [scopedRecords, query, statusFilter, sortBy, items, proposals, wilayahList]);
+  }, [scopedRecords, debouncedQuery, statusFilter, sortBy, items, proposals, wilayahList]);
 
   const unlockedFilteredIds = useMemo(
     () => filteredRecords.filter((r) => !isRecordProposalLocked(r)).map((r) => r.id),
@@ -471,7 +492,7 @@ export function KpmListView({
     activeProposalRecord &&
       sortBy === 'absen' &&
       (statusFilter === 'all' || statusFilter === 'accepted') &&
-      !query.trim() &&
+      !debouncedQuery.trim() &&
       itemFilter === 'all' &&
       kelurahanFilter === 'all' &&
       rtRwFilter === 'all' &&
@@ -479,6 +500,79 @@ export function KpmListView({
       pekerjaanFilter === 'all' &&
       !bulkMode
   );
+
+  // Aktifkan server-side pagination `.range(start, end)` (40 data/halaman) saat online & tidak dalam mode slot proposal
+  const canUseServerPagination = Boolean(
+    (isSupabaseOnline ?? (isSupabaseConfigured && !isOffline)) &&
+      !isOffline &&
+      !isSlotViewActive &&
+      !bulkMode &&
+      proposalFilter === 'all' &&
+      rtRwFilter === 'all' &&
+      sortBy === 'absen'
+  );
+
+  useEffect(() => {
+    if (!canUseServerPagination) {
+      setServerPageRecords(null);
+      return;
+    }
+    let cancelled = false;
+    setIsServerPageLoading(true);
+    void fetchKpmPageFromSupabase({
+      page: serverPage,
+      pageSize: SERVER_PAGE_SIZE,
+      tahun: selectedYear,
+      validasi: statusFilter,
+      kelurahan: kelurahanFilter,
+      item: itemFilter,
+      pengelola: pengelolaFilter,
+      pekerjaan: pekerjaanFilter,
+      search: debouncedQuery,
+      proposals,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        setServerPageRecords(res.records);
+        setServerTotalCount(res.totalCount);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setServerPageRecords(null);
+      })
+      .finally(() => {
+        if (!cancelled) setIsServerPageLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    canUseServerPagination,
+    serverPage,
+    selectedYear,
+    statusFilter,
+    kelurahanFilter,
+    itemFilter,
+    pengelolaFilter,
+    pekerjaanFilter,
+    debouncedQuery,
+    proposals,
+  ]);
+
+  const localRecordById = useMemo(() => {
+    const map = new Map<string, KpmRecord>();
+    for (const r of records) map.set(r.id, r);
+    return map;
+  }, [records]);
+
+  const effectiveServerRecords = useMemo(() => {
+    if (!canUseServerPagination || !serverPageRecords) return null;
+    return serverPageRecords
+      .filter((r) => localRecordById.size === 0 || localRecordById.has(r.id))
+      .map((r) => localRecordById.get(r.id) ?? r);
+  }, [canUseServerPagination, serverPageRecords, localRecordById]);
+
+  const serverTotalPages = Math.max(1, Math.ceil(serverTotalCount / SERVER_PAGE_SIZE));
 
   const mergedSlots = useMemo<ProposalMergedSlotItem[]>(() => {
     if (!isSlotViewActive || !activeProposalRecord) return [];
@@ -564,12 +658,13 @@ export function KpmListView({
 
   const renderedEntries = useMemo<ProposalMergedSlotItem[]>(() => {
     if (isSlotViewActive) return mergedSlots;
-    return filteredRecords.map((record) => ({
+    const sourceRecords = effectiveServerRecords ?? filteredRecords;
+    return sourceRecords.map((record) => ({
       kind: 'kpm' as const,
       slotNumber: getAbsenSeq(record.registerCode),
       record,
     }));
-  }, [isSlotViewActive, mergedSlots, filteredRecords]);
+  }, [isSlotViewActive, mergedSlots, effectiveServerRecords, filteredRecords]);
 
   const emptySlotCountInProposal = useMemo(
     () => mergedSlots.filter((entry) => entry.kind === 'empty').length,
@@ -1473,7 +1568,42 @@ export function KpmListView({
                   </tbody>
                 </table>
               </div>
-              {renderedEntries.length > visibleLimit && (
+              {effectiveServerRecords ? (
+                serverTotalPages > 1 && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 bg-slate-50/70 px-4 py-3">
+                    <span className="text-xs font-medium text-slate-600 tabular-nums">
+                      Halaman {serverPage} dari {serverTotalPages} · {serverTotalCount} KPM
+                      {isServerPageLoading ? ' · Memuat...' : ''}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={serverPage <= 1 || isServerPageLoading}
+                        onClick={() => {
+                          setServerPage((p) => Math.max(1, p - 1));
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        className="inline-flex min-h-[36px] items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        <ChevronLeft className="h-3.5 w-3.5" />
+                        <span>Sebelumnya</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={serverPage >= serverTotalPages || isServerPageLoading}
+                        onClick={() => {
+                          setServerPage((p) => Math.min(serverTotalPages, p + 1));
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        className="inline-flex min-h-[36px] items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        <span>Berikutnya</span>
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                )
+              ) : renderedEntries.length > visibleLimit ? (
                 <div className="border-t border-slate-100 bg-slate-50/70 p-3">
                   <button
                     type="button"
@@ -1483,7 +1613,7 @@ export function KpmListView({
                     Muat Lebih Banyak ({renderedEntries.length - visibleLimit} tersisa)
                   </button>
                 </div>
-              )}
+              ) : null}
             </div>
           ) : (
             /* Mobile & Native APK Swipeable Cards */
@@ -1896,7 +2026,39 @@ export function KpmListView({
                 </SwipeableRow>
               );
             })}
-            {renderedEntries.length > visibleLimit && (
+            {effectiveServerRecords ? (
+              serverTotalPages > 1 && (
+                <div className="flex items-center justify-between gap-2 bg-slate-50/70 p-3">
+                  <button
+                    type="button"
+                    disabled={serverPage <= 1 || isServerPageLoading}
+                    onClick={() => {
+                      setServerPage((p) => Math.max(1, p - 1));
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                    className="inline-flex min-h-[40px] items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" />
+                    <span>Prev</span>
+                  </button>
+                  <span className="text-[11px] font-semibold text-slate-600 tabular-nums">
+                    Hal {serverPage}/{serverTotalPages} ({serverTotalCount})
+                  </span>
+                  <button
+                    type="button"
+                    disabled={serverPage >= serverTotalPages || isServerPageLoading}
+                    onClick={() => {
+                      setServerPage((p) => Math.min(serverTotalPages, p + 1));
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                    className="inline-flex min-h-[40px] items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    <span>Next</span>
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              )
+            ) : renderedEntries.length > visibleLimit ? (
               <div className="bg-slate-50/70 p-3">
                 <button
                   type="button"
@@ -1906,7 +2068,7 @@ export function KpmListView({
                   Muat Lebih Banyak ({renderedEntries.length - visibleLimit} tersisa)
                 </button>
               </div>
-            )}
+            ) : null}
           </div>
           )}
           </>

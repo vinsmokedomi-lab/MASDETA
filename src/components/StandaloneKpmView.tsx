@@ -5,6 +5,8 @@ import {
   ArrowLeft,
   Check,
   CheckSquare,
+  ChevronLeft,
+  ChevronRight,
   Database,
   FolderPlus,
   MapPin,
@@ -38,6 +40,8 @@ import { DriveImage } from './DriveImage';
 import { FilterSelect } from './FormControls';
 import { ProposalPickerModal } from './ProposalPickerModal';
 import { useOfflineStatus } from '../contexts/OfflineContext';
+import { fetchKpmPageFromSupabase } from '../services/supabaseData';
+import { isSupabaseConfigured } from '../lib/supabaseClient';
 
 export type StandaloneMode = 'database' | 'arsip';
 
@@ -89,6 +93,7 @@ export function StandaloneKpmView({
   const targetStatus = isDatabase ? 'pending' : 'rejected';
 
   const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [yearFilter, setYearFilter] = useState('all');
   const [kecamatanFilter, setKecamatanFilter] = useState('all');
   const [kelurahanFilter, setKelurahanFilter] = useState('all');
@@ -96,6 +101,12 @@ export function StandaloneKpmView({
   const [itemFilter, setItemFilter] = useState('all');
   const [dtsenFilter, setDtsenFilter] = useState('all');
   const [showFilters, setShowFilters] = useState(false);
+
+  const [serverPage, setServerPage] = useState(1);
+  const [serverPageRecords, setServerPageRecords] = useState<KpmRecord[] | null>(null);
+  const [serverTotalCount, setServerTotalCount] = useState<number>(0);
+  const [isServerPageLoading, setIsServerPageLoading] = useState(false);
+  const SERVER_PAGE_SIZE = 40;
 
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -107,6 +118,27 @@ export function StandaloneKpmView({
     | null
   >(null);
   const [isBusy, setIsBusy] = useState(false);
+
+  // Debounce pencarian minimal 500ms
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedQuery(query);
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  useEffect(() => {
+    setServerPage(1);
+  }, [
+    mode,
+    debouncedQuery,
+    yearFilter,
+    kecamatanFilter,
+    kelurahanFilter,
+    pengelolaFilter,
+    itemFilter,
+    dtsenFilter,
+  ]);
 
   useEffect(() => {
     if (isOffline && selectionMode) {
@@ -224,7 +256,7 @@ export function StandaloneKpmView({
   }, [kecamatanFilter, kelurahanFilter, pengelolaFilter, itemFilter, dtsenFilter]);
 
   const filteredEntries = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = debouncedQuery.trim().toLowerCase();
     return enrichedRecords
       .filter(({ record, kecamatan, kelurahan }) => {
         const recTahun = (record.tahun || '').trim();
@@ -297,13 +329,91 @@ export function StandaloneKpmView({
     pengelolaFilter,
     itemFilter,
     dtsenFilter,
-    query,
+    debouncedQuery,
   ]);
+
+  const canUseServerPagination = Boolean(isSupabaseConfigured && !isOffline && !selectionMode);
+
+  useEffect(() => {
+    if (!canUseServerPagination) {
+      setServerPageRecords(null);
+      return;
+    }
+    let cancelled = false;
+    setIsServerPageLoading(true);
+    void fetchKpmPageFromSupabase({
+      page: serverPage,
+      pageSize: SERVER_PAGE_SIZE,
+      validasi: targetStatus,
+      standaloneOnly: true,
+      tahun: yearFilter,
+      kecamatan: kecamatanFilter,
+      kelurahan: kelurahanFilter,
+      pengelola: pengelolaFilter,
+      item: itemFilter,
+      dtsen: dtsenFilter,
+      search: debouncedQuery,
+      proposals,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        setServerPageRecords(res.records);
+        setServerTotalCount(res.totalCount);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setServerPageRecords(null);
+      })
+      .finally(() => {
+        if (!cancelled) setIsServerPageLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    canUseServerPagination,
+    serverPage,
+    targetStatus,
+    yearFilter,
+    kecamatanFilter,
+    kelurahanFilter,
+    pengelolaFilter,
+    itemFilter,
+    dtsenFilter,
+    debouncedQuery,
+    proposals,
+  ]);
+
+  const localRecordById = useMemo(() => {
+    const map = new Map<string, KpmRecord>();
+    for (const r of records) map.set(r.id, r);
+    return map;
+  }, [records]);
+
+  const visiblePageEntries = useMemo(() => {
+    if (canUseServerPagination && serverPageRecords) {
+      return serverPageRecords
+        .filter((r) => localRecordById.size === 0 || localRecordById.has(r.id))
+        .map((r) => {
+          const merged = localRecordById.get(r.id) ?? r;
+          const dom = resolveKpmDomicile(merged, proposals, wilayahList);
+          return {
+            record: merged,
+            kabKota: dom.kabKota || merged.kabKota || '',
+            kecamatan: dom.kecamatan || merged.kecamatan || '',
+            kelurahan: dom.kelurahan || merged.kelurahan || '',
+          };
+        });
+    }
+    return filteredEntries;
+  }, [canUseServerPagination, serverPageRecords, localRecordById, proposals, wilayahList, filteredEntries]);
+
+  const serverTotalPages = Math.max(1, Math.ceil(serverTotalCount / SERVER_PAGE_SIZE));
 
   // Kelompokkan berdasarkan Domisili (Kecamatan)
   const groupedByDomicile = useMemo(() => {
-    const groups = new Map<string, typeof filteredEntries>();
-    for (const entry of filteredEntries) {
+    const groups = new Map<string, typeof visiblePageEntries>();
+    for (const entry of visiblePageEntries) {
       const kecLabel = entry.kecamatan.trim()
         ? formatKecamatanCategoryLabel(entry.kecamatan)
         : 'Domisili Belum Dilengkapi';
@@ -316,7 +426,7 @@ export function StandaloneKpmView({
       if (b === 'Domisili Belum Dilengkapi') return -1;
       return a.localeCompare(b, 'id');
     });
-  }, [filteredEntries]);
+  }, [visiblePageEntries]);
 
   const filteredIdList = useMemo(
     () => filteredEntries.map((e) => e.record.id),
@@ -880,6 +990,41 @@ export function StandaloneKpmView({
                 </div>
               </section>
             ))}
+
+            {canUseServerPagination && serverPageRecords && serverTotalPages > 1 && (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                <span className="text-xs font-medium text-slate-600 tabular-nums">
+                  Halaman {serverPage} dari {serverTotalPages} · {serverTotalCount} KPM
+                  {isServerPageLoading ? ' · Memuat...' : ''}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={serverPage <= 1 || isServerPageLoading}
+                    onClick={() => {
+                      setServerPage((p) => Math.max(1, p - 1));
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                    className="inline-flex min-h-[36px] items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" />
+                    <span>Sebelumnya</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={serverPage >= serverTotalPages || isServerPageLoading}
+                    onClick={() => {
+                      setServerPage((p) => Math.min(serverTotalPages, p + 1));
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                    className="inline-flex min-h-[36px] items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    <span>Berikutnya</span>
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

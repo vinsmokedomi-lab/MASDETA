@@ -18,6 +18,7 @@ import {
   Ticket,
   Trash2,
 } from 'lucide-react';
+import { uploadMediaToDrive } from '../services/driveManager';
 import { TAHUN_OPTIONS } from '../data/kpmOptions';
 import {
   BastTemplateConfig,
@@ -199,20 +200,31 @@ interface MenuDownloadViewProps {
 }
 
 async function compressKopLogoFile(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Gagal membaca file gambar kop.'));
-    reader.onload = () => {
-      const src = typeof reader.result === 'string' ? reader.result : '';
-      if (!src) {
-        reject(new Error('File gambar tidak valid.'));
-        return;
-      }
+  const objectUrl =
+    typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function'
+      ? URL.createObjectURL(file)
+      : '';
+  const src =
+    objectUrl ||
+    (await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('Gagal membaca file gambar kop.'));
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+      reader.readAsDataURL(file);
+    }));
+  if (!src) {
+    throw new Error('File gambar tidak valid.');
+  }
+  try {
+    const pngBlob = await new Promise<Blob>((resolve, reject) => {
       const img = new Image();
       img.onerror = () => reject(new Error('Format gambar kop tidak didukung.'));
       img.onload = () => {
         const maxDim = 220;
-        const scale = Math.min(1, maxDim / Math.max(img.naturalWidth || maxDim, img.naturalHeight || maxDim));
+        const scale = Math.min(
+          1,
+          maxDim / Math.max(img.naturalWidth || maxDim, img.naturalHeight || maxDim)
+        );
         const w = Math.max(1, Math.round((img.naturalWidth || maxDim) * scale));
         const h = Math.max(1, Math.round((img.naturalHeight || maxDim) * scale));
         const canvas = document.createElement('canvas');
@@ -220,17 +232,36 @@ async function compressKopLogoFile(file: File): Promise<string> {
         canvas.height = h;
         const ctx = canvas.getContext('2d');
         if (!ctx) {
-          resolve(src);
+          reject(new Error('Browser tidak mendukung pemrosesan logo kop.'));
           return;
         }
         ctx.clearRect(0, 0, w, h);
         ctx.drawImage(img, 0, 0, w, h);
-        resolve(canvas.toDataURL('image/png'));
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              reject(new Error('Gagal mengompresi file logo kop.'));
+              return;
+            }
+            resolve(blob);
+          },
+          'image/png'
+        );
       };
       img.src = src;
-    };
-    reader.readAsDataURL(file);
-  });
+    });
+    const logoFile = new File([pngBlob], `logo-template-${Date.now()}.png`, { type: 'image/png' });
+    const uploaded = await uploadMediaToDrive(logoFile);
+    return uploaded.directUrl || uploaded.thumbnailUrl;
+  } finally {
+    if (objectUrl) {
+      try {
+        URL.revokeObjectURL(objectUrl);
+      } catch {
+        // ignore
+      }
+    }
+  }
 }
 
 export function MenuDownloadView({
