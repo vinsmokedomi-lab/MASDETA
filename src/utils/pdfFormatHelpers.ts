@@ -1251,13 +1251,19 @@ export function buildCatNomorBarangMatrix(options: {
     ? new Set(proposalKeysFilter)
     : null;
 
+  const recordById = new Map<string, KpmRecord>();
+  for (const rec of records) {
+    if (rec.id) recordById.set(rec.id, rec);
+  }
+
   for (const cand of candidateMap.values()) {
     if (allowedKeysSet && !allowedKeysSet.has(cand.key)) continue;
     const slotResolution = resolveProposalSlotStateForGroup(
       proposalSlotMap,
       cand.proposalId,
       cand.proposalName,
-      cand.tahun
+      cand.tahun,
+      proposals
     );
     const mergedSlots = buildMergedProposalSlots({
       groupRecords: cand.groupRecords,
@@ -1271,13 +1277,60 @@ export function buildCatNomorBarangMatrix(options: {
 
     const slotsByItem = new Map<string, number[]>();
     const emptySlotNumbers = new Set<number>();
-    for (const slot of mergedSlots) {
+
+    for (let slotIdx = 0; slotIdx < mergedSlots.length; slotIdx += 1) {
+      const slot = mergedSlots[slotIdx];
+      let rawCode = '';
+
       if (slot.kind === 'empty') {
-        emptySlotNumbers.add(slot.slotNumber);
-        continue;
+        rawCode = (slot.emptySlot.item || '').trim().toUpperCase();
+        if (!rawCode && slot.emptySlot.previousKpmId) {
+          rawCode = (recordById.get(slot.emptySlot.previousKpmId)?.item || '')
+            .trim()
+            .toUpperCase();
+        }
+        if (!rawCode) {
+          let prevItem = '';
+          for (let i = slotIdx - 1; i >= 0; i -= 1) {
+            const candidate = mergedSlots[i];
+            if (candidate.kind === 'kpm') {
+              prevItem = (candidate.record.item || '').trim().toUpperCase();
+              break;
+            }
+            if ((candidate.emptySlot.item || '').trim()) {
+              prevItem = (candidate.emptySlot.item || '').trim().toUpperCase();
+              break;
+            }
+          }
+          let nextItem = '';
+          for (let i = slotIdx + 1; i < mergedSlots.length; i += 1) {
+            const candidate = mergedSlots[i];
+            if (candidate.kind === 'kpm') {
+              nextItem = (candidate.record.item || '').trim().toUpperCase();
+              break;
+            }
+            if ((candidate.emptySlot.item || '').trim()) {
+              nextItem = (candidate.emptySlot.item || '').trim().toUpperCase();
+              break;
+            }
+          }
+          if (prevItem && prevItem === nextItem) {
+            rawCode = prevItem;
+          } else if (prevItem && !nextItem) {
+            rawCode = prevItem;
+          } else if (!prevItem && nextItem) {
+            rawCode = nextItem;
+          }
+        }
+        if (!rawCode) {
+          emptySlotNumbers.add(slot.slotNumber);
+          continue;
+        }
+      } else {
+        rawCode = (slot.record.item || '').trim().toUpperCase();
+        if (!rawCode) continue;
       }
-      const rawCode = (slot.record.item || '').trim().toUpperCase();
-      if (!rawCode) continue;
+
       presentItemCodes.add(rawCode);
       const bucket = slotsByItem.get(rawCode) ?? [];
       bucket.push(slot.slotNumber);

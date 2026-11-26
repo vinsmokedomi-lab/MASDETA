@@ -6570,7 +6570,7 @@ export async function exportCatNomorBarangToPdf(
       } else {
         doc.setTextColor(100, 116, 139);
       }
-      doc.text(hasItems ? `${unitCount} KPM` : 'Kosong', x + cardW - 3.2, y + headerH * 0.38, {
+      doc.text(hasItems ? `${unitCount} Unit` : 'Kosong', x + cardW - 3.2, y + headerH * 0.38, {
         align: 'right',
         baseline: 'middle',
       });
