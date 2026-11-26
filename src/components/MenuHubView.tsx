@@ -9,6 +9,7 @@ import {
   Briefcase,
   Calculator,
   CalendarClock,
+  CalendarPlus,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -87,6 +88,10 @@ const CorrespondentKpmListPanel = lazy(() =>
 const StandaloneKpmView = lazy(() =>
   import('./StandaloneKpmView').then((m) => ({ default: m.StandaloneKpmView }))
 );
+const PengelolaBookingPanel = lazy(() =>
+  import('./PengelolaBookingPanel').then((m) => ({ default: m.PengelolaBookingPanel }))
+);
+import { PengelolaExportModal } from './PengelolaExportModal';
 import {
   BastTemplateConfig,
   CouponPrintConfig,
@@ -101,6 +106,7 @@ import {
   KpmDocumentFile,
   KpmRecord,
   PejabatProfile,
+  PengelolaBookingItem,
   PengelolaProfile,
   ProposalBastMap,
   ProposalDestinationType,
@@ -337,6 +343,8 @@ interface MenuHubViewProps {
   }) => Promise<void> | void;
   onDeleteProposalStyleUsage?: (id: string) => Promise<void> | void;
   proposalSchemaMissingNotice?: boolean;
+  pengelolaBookings?: PengelolaBookingItem[];
+  onSavePengelolaBookings?: (next: PengelolaBookingItem[]) => void;
 }
 
 export function MenuHubView({
@@ -447,6 +455,8 @@ export function MenuHubView({
   onRecordProposalStyleUsage,
   onDeleteProposalStyleUsage,
   proposalSchemaMissingNotice = false,
+  pengelolaBookings = [],
+  onSavePengelolaBookings,
 }: MenuHubViewProps) {
   const isDesktopWeb = useIsDesktopWeb();
   const isNativeApp = !isDesktopWeb;
@@ -478,6 +488,16 @@ export function MenuHubView({
 
   // Pengelola, Pekerjaan & DTSEN drill-down state (lifted when provided)
   const [isAddPengelolaOpen, setIsAddPengelolaOpen] = useState(false);
+  const [pengelolaViewTab, setPengelolaViewTab] = useState<'list' | 'booking'>('list');
+  const [exportPengelolaTarget, setExportPengelolaTarget] = useState<string | null>(null);
+  const [bookingPrefillTarget, setBookingPrefillTarget] = useState<{
+    pengelolaId?: string;
+    pengelolaName: string;
+    kontak?: string;
+    kecamatan?: string;
+    kelurahan?: string;
+    alamatCatatan?: string;
+  } | null>(null);
   const [localPengelolaDrill, setLocalPengelolaDrill] = useState<string | null>(null);
   const [localPekerjaanDrill, setLocalPekerjaanDrill] = useState<string | null>(null);
   const [localDtsenDrill, setLocalDtsenDrill] = useState<string | null>(null);
@@ -3830,6 +3850,8 @@ export function MenuHubView({
           items={items}
           pengelolaList={pengelolaList}
           wilayahList={wilayahList}
+          reportTemplate={reportTemplate}
+          proposalSlotMap={proposalSlotMap}
           canAdd={canAdd}
           canUpdate={canUpdate}
           canDelete={canDelete}
@@ -3855,6 +3877,8 @@ export function MenuHubView({
           items={items}
           pengelolaList={pengelolaList}
           wilayahList={wilayahList}
+          reportTemplate={reportTemplate}
+          proposalSlotMap={proposalSlotMap}
           canAdd={false}
           canUpdate={canUpdate}
           canDelete={canDelete}
@@ -4216,6 +4240,19 @@ export function MenuHubView({
         : '';
       const waUrl = matchedPengelola ? formatWhatsAppUrl(matchedPengelola.kontak) : null;
 
+      const openBookingForDrillPengelola = () => {
+        setBookingPrefillTarget({
+          pengelolaId: matchedPengelola?.id,
+          pengelolaName: pengelolaTitle,
+          kontak: matchedPengelola?.kontak,
+          kecamatan: matchedPengelola?.kecamatan,
+          kelurahan: matchedPengelola?.kelurahan,
+          alamatCatatan: matchedPengelola?.alamat,
+        });
+        setPengelolaDrill(null);
+        setPengelolaViewTab('booking');
+      };
+
       return (
         <div className="min-h-screen pb-24">
           {renderSubHeader(pengelolaTitle, () => setPengelolaDrill(null))}
@@ -4235,7 +4272,7 @@ export function MenuHubView({
                 emptySubtitle={`Pengelola ${pengelolaTitle} belum memiliki data KPM yang terdaftar.`}
                 onSelectRecord={onSelectKpm}
                 headerCard={
-                  <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-3.5">
+                  <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex min-w-0 items-center gap-3">
                       {matchedPengelola?.foto ? (
                         <button
@@ -4256,7 +4293,14 @@ export function MenuHubView({
                         </div>
                       )}
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-bold text-slate-900">{pengelolaTitle}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="truncate text-sm font-bold text-slate-900">
+                            {pengelolaTitle}
+                          </p>
+                          <span className="shrink-0 text-xs font-semibold text-teal-800 tabular-nums">
+                            · {correspondentRecords.length} KPM
+                          </span>
+                        </div>
                         {domicileText && (
                           <p className="truncate text-xs text-slate-500">{domicileText}</p>
                         )}
@@ -4273,14 +4317,48 @@ export function MenuHubView({
                         )}
                       </div>
                     </div>
-                    <span className="shrink-0 rounded-lg bg-teal-50 px-2.5 py-1 text-xs font-bold text-teal-800 tabular-nums">
-                      {correspondentRecords.length} KPM
-                    </span>
+
+                    <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
+                      {canAdd && (
+                        <button
+                          type="button"
+                          disabled={isOffline}
+                          onClick={openBookingForDrillPengelola}
+                          className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:border-teal-300 hover:bg-teal-50/70 hover:text-teal-800 whitespace-nowrap disabled:opacity-45"
+                        >
+                          <CalendarPlus className="h-3.5 w-3.5 text-teal-700" />
+                          <span>Booking Tahun Depan</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={correspondentRecords.length === 0}
+                        onClick={() => setExportPengelolaTarget(pengelolaTitle)}
+                        className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl bg-teal-700 px-3.5 text-xs font-semibold text-white transition-colors hover:bg-teal-800 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        <span>Unduh KPM</span>
+                      </button>
+                    </div>
                   </div>
                 }
               />
             </Suspense>
           </div>
+
+          {exportPengelolaTarget && (
+            <PengelolaExportModal
+              pengelolaName={exportPengelolaTarget}
+              records={records}
+              allRecords={records}
+              proposals={proposals}
+              items={items}
+              wilayahList={wilayahList}
+              reportTemplate={reportTemplate}
+              proposalSlotMap={proposalSlotMap}
+              onClose={() => setExportPengelolaTarget(null)}
+            />
+          )}
         </div>
       );
     }
@@ -4361,302 +4439,443 @@ export function MenuHubView({
         }
       });
 
+    const activeBookedMap = new Map<string, string[]>();
+    let activeBookingCount = 0;
+    for (const bk of pengelolaBookings) {
+      if (bk.status === 'booked') {
+        activeBookingCount += 1;
+        const k = bk.pengelolaName.trim().toLowerCase();
+        const yrs = activeBookedMap.get(k) ?? [];
+        if (bk.targetTahun && !yrs.includes(bk.targetTahun)) yrs.push(bk.targetTahun);
+        activeBookedMap.set(k, yrs);
+      }
+    }
+
+    const triggerBookingForPengelola = (p: PengelolaProfile) => {
+      setBookingPrefillTarget({
+        pengelolaId: p.id,
+        pengelolaName: p.displayName,
+        kontak: p.kontak,
+        kecamatan: p.kecamatan,
+        kelurahan: p.kelurahan,
+        alamatCatatan: p.alamat,
+      });
+      setPengelolaViewTab('booking');
+    };
+
     return (
       <div className="min-h-screen pb-24">
         {renderSubHeader('Pengelola Lapangan', () => onChangeSection('root'))}
         <div
-          className={`space-y-3 px-4 pt-4 ${
+          className={`space-y-4 px-4 pt-4 ${
             !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''
           }`}
         >
-          {canAdd && (
-            <button
-              type="button"
-              disabled={isOffline}
-              onClick={() => {
-                if (isOffline) return;
-                setIsAddPengelolaOpen(true);
-              }}
-              className={`inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 ${
-                !isNativeApp ? 'md:w-auto md:px-5' : ''
-              }`}
-            >
-              <Plus className="h-4 w-4" />
-              <span>Tambah Pengelola Baru</span>
-            </button>
-          )}
+          {/* Segmented Tab: Daftar Pengelola | Booking Tahun Berikutnya */}
+          <div className={!isNativeApp ? 'max-w-lg' : ''}>
+            <SegmentedTabs
+              value={pengelolaViewTab}
+              onChange={setPengelolaViewTab}
+              tabs={[
+                {
+                  key: 'list',
+                  label: 'Daftar Pengelola',
+                  count: pengelolaList.length,
+                },
+                {
+                  key: 'booking',
+                  label: 'Booking Tahun Depan',
+                  count: activeBookingCount,
+                },
+              ]}
+            />
+          </div>
 
-          {pengelolaList.length > 0 && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <div className="relative min-w-0 flex-1">
-                  <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <input
-                    type="search"
-                    value={pengelolaQuery}
-                    onChange={(e) => setPengelolaQuery(e.target.value)}
-                    placeholder="Pencarian..."
-                    className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pr-3 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
-                  />
-                </div>
-
+          {pengelolaViewTab === 'booking' ? (
+            <Suspense fallback={<LazyViewFallback label="Memuat daftar booking..." />}>
+              <PengelolaBookingPanel
+                bookings={pengelolaBookings}
+                pengelolaList={pengelolaList}
+                proposals={proposals}
+                items={items}
+                wilayahList={wilayahList}
+                currentUserName={currentUser.nama}
+                canAdd={canAdd}
+                canUpdate={canUpdate}
+                canDelete={canDelete}
+                isOffline={isOffline}
+                initialPrefill={bookingPrefillTarget}
+                onConsumePrefill={() => setBookingPrefillTarget(null)}
+                onSaveBookings={(next) => onSavePengelolaBookings?.(next)}
+              />
+            </Suspense>
+          ) : (
+            <>
+              {canAdd && (
                 <button
                   type="button"
-                  onClick={() => setShowPengelolaFilters((prev) => !prev)}
-                  aria-label="Filter dan urutkan pengelola"
-                  aria-expanded={showPengelolaFilters}
-                  className={`relative inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl border transition-colors ${
-                    showPengelolaFilters || activePengelolaFilterCount > 0
-                      ? 'border-teal-700 bg-teal-50 text-teal-800'
-                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                  disabled={isOffline}
+                  onClick={() => {
+                    if (isOffline) return;
+                    setIsAddPengelolaOpen(true);
+                  }}
+                  className={`inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-teal-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 ${
+                    !isNativeApp ? 'md:w-auto md:px-5' : ''
                   }`}
                 >
-                  <SlidersHorizontal className="h-4 w-4" />
-                  {activePengelolaFilterCount > 0 && (
-                    <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-teal-700 px-1 text-[10px] font-bold text-white tabular-nums">
-                      {activePengelolaFilterCount}
-                    </span>
-                  )}
+                  <Plus className="h-4 w-4" />
+                  <span>Tambah Pengelola Baru</span>
                 </button>
-              </div>
+              )}
 
-              {showPengelolaFilters && (
-                <div className="rounded-2xl border border-slate-200 bg-white p-3 space-y-2.5">
-                  <div className="grid grid-cols-2 gap-2">
-                    <FilterSelect
-                      ariaLabel="Filter jumlah KPM pengelola"
-                      value={pengelolaKpmFilter}
-                      onChange={(v) => setPengelolaKpmFilter(v as 'all' | 'with_kpm' | 'empty')}
-                    >
-                      <option value="all">Semua Pengelola</option>
-                      <option value="with_kpm">Memiliki KPM (&gt;0)</option>
-                      <option value="empty">Belum Ada KPM (0)</option>
-                    </FilterSelect>
+              {pengelolaList.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <div className="relative min-w-0 flex-1">
+                      <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="search"
+                        value={pengelolaQuery}
+                        onChange={(e) => setPengelolaQuery(e.target.value)}
+                        placeholder="Pencarian..."
+                        className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-white pr-3 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/15"
+                      />
+                    </div>
 
-                    <FilterSelect
-                      ariaLabel="Urutkan pengelola lapangan"
-                      value={pengelolaSortBy}
-                      onChange={(v) =>
-                        setPengelolaSortBy(
-                          v as 'name_asc' | 'name_desc' | 'count_desc' | 'count_asc' | 'wilayah_asc'
-                        )
-                      }
+                    <button
+                      type="button"
+                      onClick={() => setShowPengelolaFilters((prev) => !prev)}
+                      aria-label="Filter dan urutkan pengelola"
+                      aria-expanded={showPengelolaFilters}
+                      className={`relative inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl border transition-colors ${
+                        showPengelolaFilters || activePengelolaFilterCount > 0
+                          ? 'border-teal-700 bg-teal-50 text-teal-800'
+                          : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                      }`}
                     >
-                      <option value="name_asc">Urut: Nama (A–Z)</option>
-                      <option value="name_desc">Urut: Nama (Z–A)</option>
-                      <option value="count_desc">Urut: KPM Terbanyak</option>
-                      <option value="count_asc">Urut: KPM Tersedikit</option>
-                      <option value="wilayah_asc">Urut: Wilayah (A–Z)</option>
-                    </FilterSelect>
+                      <SlidersHorizontal className="h-4 w-4" />
+                      {activePengelolaFilterCount > 0 && (
+                        <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-teal-700 px-1 text-[10px] font-bold text-white tabular-nums">
+                          {activePengelolaFilterCount}
+                        </span>
+                      )}
+                    </button>
                   </div>
 
-                  {pengelolaWilayahOptions.length > 0 && (
-                    <div className="border-t border-slate-100 pt-2.5">
-                      <FilterSelect
-                        ariaLabel="Filter wilayah pengelola"
-                        value={pengelolaWilayahFilter}
-                        onChange={setPengelolaWilayahFilter}
-                      >
-                        <option value="all">Semua Wilayah</option>
-                        {pengelolaWilayahOptions.map((wil) => (
-                          <option key={wil} value={wil}>
-                            {wil}
-                          </option>
-                        ))}
-                      </FilterSelect>
-                    </div>
-                  )}
+                  {showPengelolaFilters && (
+                    <div className="rounded-2xl border border-slate-200 bg-white p-3 space-y-2.5">
+                      <div className="grid grid-cols-2 gap-2">
+                        <FilterSelect
+                          ariaLabel="Filter jumlah KPM pengelola"
+                          value={pengelolaKpmFilter}
+                          onChange={(v) => setPengelolaKpmFilter(v as 'all' | 'with_kpm' | 'empty')}
+                        >
+                          <option value="all">Semua Pengelola</option>
+                          <option value="with_kpm">Memiliki KPM (&gt;0)</option>
+                          <option value="empty">Belum Ada KPM (0)</option>
+                        </FilterSelect>
 
-                  {activePengelolaFilterCount > 0 && (
-                    <div className="flex justify-end">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setPengelolaWilayahFilter('all');
-                          setPengelolaKpmFilter('all');
-                          setPengelolaSortBy('name_asc');
-                        }}
-                        className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-800"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                        <span>Reset Filter</span>
-                      </button>
+                        <FilterSelect
+                          ariaLabel="Urutkan pengelola lapangan"
+                          value={pengelolaSortBy}
+                          onChange={(v) =>
+                            setPengelolaSortBy(
+                              v as
+                                | 'name_asc'
+                                | 'name_desc'
+                                | 'count_desc'
+                                | 'count_asc'
+                                | 'wilayah_asc'
+                            )
+                          }
+                        >
+                          <option value="name_asc">Urut: Nama (A–Z)</option>
+                          <option value="name_desc">Urut: Nama (Z–A)</option>
+                          <option value="count_desc">Urut: KPM Terbanyak</option>
+                          <option value="count_asc">Urut: KPM Tersedikit</option>
+                          <option value="wilayah_asc">Urut: Wilayah (A–Z)</option>
+                        </FilterSelect>
+                      </div>
+
+                      {pengelolaWilayahOptions.length > 0 && (
+                        <div className="border-t border-slate-100 pt-2.5">
+                          <FilterSelect
+                            ariaLabel="Filter wilayah pengelola"
+                            value={pengelolaWilayahFilter}
+                            onChange={setPengelolaWilayahFilter}
+                          >
+                            <option value="all">Semua Wilayah</option>
+                            {pengelolaWilayahOptions.map((wil) => (
+                              <option key={wil} value={wil}>
+                                {wil}
+                              </option>
+                            ))}
+                          </FilterSelect>
+                        </div>
+                      )}
+
+                      {activePengelolaFilterCount > 0 && (
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPengelolaWilayahFilter('all');
+                              setPengelolaKpmFilter('all');
+                              setPengelolaSortBy('name_asc');
+                            }}
+                            className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-800"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                            <span>Reset Filter</span>
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
               )}
-            </div>
-          )}
 
-          {pengelolaList.length === 0 ? (
-            <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
-              <p className="text-sm font-semibold text-slate-900">
-                Belum ada data pengelola lapangan
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                Ketuk tombol di atas untuk mendaftarkan pengelola lapangan baru.
-              </p>
-            </div>
-          ) : filteredPengelolaList.length === 0 ? (
-            <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center space-y-2.5">
-              <p className="text-sm font-semibold text-slate-900">
-                Tidak ada pengelola yang cocok
-              </p>
-              <p className="text-xs text-slate-500">
-                Ubah kata kunci pencarian atau reset filter untuk melihat semua pengelola.
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  setPengelolaQuery('');
-                  setPengelolaWilayahFilter('all');
-                  setPengelolaKpmFilter('all');
-                  setPengelolaSortBy('name_asc');
-                }}
-                className="inline-flex min-h-[36px] items-center justify-center rounded-xl border border-slate-200 px-3.5 text-xs font-semibold text-teal-700 hover:bg-slate-50"
-              >
-                Reset Pencarian &amp; Filter
-              </button>
-            </div>
-          ) : (
-            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
-              {filteredPengelolaList.map((p) => {
-                const count = pengelolaKpmCounts.get(p.displayName.trim().toLowerCase()) ?? 0;
-                const swipeActions: SwipeAction[] = [];
-                if (canUpdate && onUpdatePengelola) {
-                  swipeActions.push({
-                    key: 'edit',
-                    label: 'Edit',
-                    icon: <Edit3 className="h-4 w-4" />,
-                    tone: 'teal',
-                    onClick: () => setEditingPengelolaTarget(p),
-                  });
-                }
-                if (canDelete && onDeletePengelola) {
-                  swipeActions.push({
-                    key: 'delete',
-                    label: 'Hapus',
-                    icon: <Trash2 className="h-4 w-4" />,
-                    tone: 'danger',
-                    onClick: () => setPendingDeletePengelola({ profile: p, kpmCount: count }),
-                  });
-                }
-
-                return (
-                  <SwipeableRow
-                    key={p.id}
-                    id={p.id}
-                    isOpen={openPengelolaSwipeId === p.id}
-                    onOpen={setOpenPengelolaSwipeId}
-                    onClose={() => setOpenPengelolaSwipeId(null)}
-                    actions={swipeActions}
+              {pengelolaList.length === 0 ? (
+                <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center">
+                  <p className="text-sm font-semibold text-slate-900">
+                    Belum ada data pengelola lapangan
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Ketuk tombol di atas untuk mendaftarkan pengelola lapangan baru.
+                  </p>
+                </div>
+              ) : filteredPengelolaList.length === 0 ? (
+                <div className="rounded-2xl border border-slate-200 bg-white px-5 py-10 text-center space-y-2.5">
+                  <p className="text-sm font-semibold text-slate-900">
+                    Tidak ada pengelola yang cocok
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    Ubah kata kunci pencarian atau reset filter untuk melihat semua pengelola.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPengelolaQuery('');
+                      setPengelolaWilayahFilter('all');
+                      setPengelolaKpmFilter('all');
+                      setPengelolaSortBy('name_asc');
+                    }}
+                    className="inline-flex min-h-[36px] items-center justify-center rounded-xl border border-slate-200 px-3.5 text-xs font-semibold text-teal-700 hover:bg-slate-50"
                   >
-                    <div
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => setPengelolaDrill(p.displayName)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          setPengelolaDrill(p.displayName);
-                        }
-                      }}
-                      className="flex min-h-[56px] cursor-pointer items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70 focus:outline-none focus-visible:bg-slate-50"
-                    >
-                      <div className="flex min-w-0 items-center gap-3">
-                        {p.foto ? (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onPreviewDocument(p.foto!, p.displayName);
-                            }}
-                            className="h-10 w-10 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100"
-                            aria-label={`Lihat foto ${p.displayName}`}
-                          >
-                            <DriveImage
-                              doc={p.foto}
-                              alt={p.displayName}
-                              className="h-full w-full object-cover"
-                            />
-                          </button>
-                        ) : (
-                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
-                            <User className="h-4 w-4" />
-                          </div>
-                        )}
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium text-slate-900">
-                            {p.displayName}
-                          </p>
-                          {(p.kelurahan || p.kecamatan || p.kabKota) && (
-                            <p className="truncate text-xs text-slate-500">
-                              {getPengelolaWilayahLabel(p)}
-                            </p>
-                          )}
-                          {(() => {
-                            const waUrl = formatWhatsAppUrl(p.kontak);
-                            if (!waUrl || !p.kontak) return null;
-                            return (
-                              <a
-                                href={waUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                onClick={(e) => e.stopPropagation()}
-                                className="mt-0.5 inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:underline"
+                    Reset Pencarian &amp; Filter
+                  </button>
+                </div>
+              ) : (
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+                  {filteredPengelolaList.map((p) => {
+                    const count = pengelolaKpmCounts.get(p.displayName.trim().toLowerCase()) ?? 0;
+                    const bookedYears = activeBookedMap.get(p.displayName.trim().toLowerCase()) ?? [];
+                    const swipeActions: SwipeAction[] = [];
+                    if (count > 0) {
+                      swipeActions.push({
+                        key: 'download',
+                        label: 'Unduh',
+                        icon: <Download className="h-4 w-4" />,
+                        tone: 'teal',
+                        onClick: () => setExportPengelolaTarget(p.displayName),
+                      });
+                    }
+                    if (canAdd) {
+                      swipeActions.push({
+                        key: 'booking',
+                        label: 'Booking',
+                        icon: <CalendarPlus className="h-4 w-4" />,
+                        tone: 'neutral',
+                        onClick: () => triggerBookingForPengelola(p),
+                      });
+                    }
+                    if (canUpdate && onUpdatePengelola) {
+                      swipeActions.push({
+                        key: 'edit',
+                        label: 'Edit',
+                        icon: <Edit3 className="h-4 w-4" />,
+                        tone: 'teal',
+                        onClick: () => setEditingPengelolaTarget(p),
+                      });
+                    }
+                    if (canDelete && onDeletePengelola) {
+                      swipeActions.push({
+                        key: 'delete',
+                        label: 'Hapus',
+                        icon: <Trash2 className="h-4 w-4" />,
+                        tone: 'danger',
+                        onClick: () => setPendingDeletePengelola({ profile: p, kpmCount: count }),
+                      });
+                    }
+
+                    return (
+                      <SwipeableRow
+                        key={p.id}
+                        id={p.id}
+                        isOpen={openPengelolaSwipeId === p.id}
+                        onOpen={setOpenPengelolaSwipeId}
+                        onClose={() => setOpenPengelolaSwipeId(null)}
+                        actions={swipeActions}
+                      >
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setPengelolaDrill(p.displayName)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              setPengelolaDrill(p.displayName);
+                            }
+                          }}
+                          className="flex min-h-[56px] cursor-pointer items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100/70 focus:outline-none focus-visible:bg-slate-50"
+                        >
+                          <div className="flex min-w-0 items-center gap-3">
+                            {p.foto ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onPreviewDocument(p.foto!, p.displayName);
+                                }}
+                                className="h-10 w-10 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100"
+                                aria-label={`Lihat foto ${p.displayName}`}
                               >
-                                <MessageCircle className="h-3 w-3 shrink-0" />
-                                <span>{p.kontak}</span>
-                              </a>
-                            );
-                          })()}
+                                <DriveImage
+                                  doc={p.foto}
+                                  alt={p.displayName}
+                                  className="h-full w-full object-cover"
+                                />
+                              </button>
+                            ) : (
+                              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-slate-500">
+                                <User className="h-4 w-4" />
+                              </div>
+                            )}
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-x-2">
+                                <p className="truncate text-sm font-medium text-slate-900">
+                                  {p.displayName}
+                                </p>
+                                {bookedYears.length > 0 && (
+                                  <span className="text-[11px] font-semibold text-teal-700 tabular-nums">
+                                    · Booking {bookedYears.join(', ')}
+                                  </span>
+                                )}
+                              </div>
+                              {(p.kelurahan || p.kecamatan || p.kabKota) && (
+                                <p className="truncate text-xs text-slate-500">
+                                  {getPengelolaWilayahLabel(p)}
+                                </p>
+                              )}
+                              {(() => {
+                                const waUrl = formatWhatsAppUrl(p.kontak);
+                                if (!waUrl || !p.kontak) return null;
+                                return (
+                                  <a
+                                    href={waUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="mt-0.5 inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:underline"
+                                  >
+                                    <MessageCircle className="h-3 w-3 shrink-0" />
+                                    <span>{p.kontak}</span>
+                                  </a>
+                                );
+                              })()}
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            {count > 0 && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setExportPengelolaTarget(p.displayName);
+                                }}
+                                aria-label={`Unduh KPM pengelola ${p.displayName}`}
+                                title="Unduh KPM pengelola ini"
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700"
+                              >
+                                <Download className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                            {!isNativeApp && canAdd && (
+                              <button
+                                type="button"
+                                disabled={isOffline}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (isOffline) return;
+                                  triggerBookingForPengelola(p);
+                                }}
+                                aria-label={`Booking tahun depan untuk ${p.displayName}`}
+                                title="Booking untuk tahun berikutnya"
+                                className="hidden h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-40 md:inline-flex"
+                              >
+                                <CalendarPlus className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                            {!isNativeApp && canUpdate && onUpdatePengelola && (
+                              <button
+                                type="button"
+                                disabled={isOffline}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (isOffline) return;
+                                  setEditingPengelolaTarget(p);
+                                }}
+                                aria-label={`Edit pengelola ${p.displayName}`}
+                                title="Edit pengelola"
+                                className="hidden h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-40 md:inline-flex"
+                              >
+                                <Edit3 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                            {!isNativeApp && canDelete && onDeletePengelola && (
+                              <button
+                                type="button"
+                                disabled={isOffline}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (isOffline) return;
+                                  setPendingDeletePengelola({ profile: p, kpmCount: count });
+                                }}
+                                aria-label={`Hapus pengelola ${p.displayName}`}
+                                title="Hapus pengelola"
+                                className="hidden h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40 md:inline-flex"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                            <span className="min-w-[20px] text-right text-xs font-semibold text-slate-700 tabular-nums">
+                              {count}
+                            </span>
+                            <ChevronRight className="h-4 w-4 text-slate-400" />
+                          </div>
                         </div>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        {!isNativeApp && canUpdate && onUpdatePengelola && (
-                          <button
-                            type="button"
-                            disabled={isOffline}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (isOffline) return;
-                              setEditingPengelolaTarget(p);
-                            }}
-                            aria-label={`Edit pengelola ${p.displayName}`}
-                            title="Edit pengelola"
-                            className="hidden h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-40 md:inline-flex"
-                          >
-                            <Edit3 className="h-3.5 w-3.5" />
-                          </button>
-                        )}
-                        {!isNativeApp && canDelete && onDeletePengelola && (
-                          <button
-                            type="button"
-                            disabled={isOffline}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (isOffline) return;
-                              setPendingDeletePengelola({ profile: p, kpmCount: count });
-                            }}
-                            aria-label={`Hapus pengelola ${p.displayName}`}
-                            title="Hapus pengelola"
-                            className="hidden h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40 md:inline-flex"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        )}
-                        <span className="text-xs font-semibold text-slate-700 tabular-nums">
-                          {count}
-                        </span>
-                        <ChevronRight className="h-4 w-4 text-slate-400" />
-                      </div>
-                    </div>
-                  </SwipeableRow>
-                );
-              })}
-            </div>
+                      </SwipeableRow>
+                    );
+                  })}
+                </div>
+              )}
+            </>
           )}
         </div>
+
+        {exportPengelolaTarget && (
+          <PengelolaExportModal
+            pengelolaName={exportPengelolaTarget}
+            records={records}
+            allRecords={records}
+            proposals={proposals}
+            items={items}
+            wilayahList={wilayahList}
+            reportTemplate={reportTemplate}
+            proposalSlotMap={proposalSlotMap}
+            onClose={() => setExportPengelolaTarget(null)}
+          />
+        )}
 
         <AddPengelolaModal
           isOpen={isAddPengelolaOpen || Boolean(editingPengelolaTarget)}
@@ -7211,6 +7430,7 @@ export function MenuHubView({
           pejabatList={pejabatList}
           proposalBastMap={proposalBastMap}
           onSaveProposalBastConfig={onSaveProposalBastConfig}
+          pengelolaBookings={pengelolaBookings}
           onBack={() => onChangeSection('root')}
         />
       </Suspense>

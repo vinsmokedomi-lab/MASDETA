@@ -4,11 +4,16 @@ import {
   Archive,
   ArrowLeft,
   Check,
+  CheckCircle2,
   CheckSquare,
   ChevronLeft,
   ChevronRight,
   Database,
+  Download,
+  FileSpreadsheet,
+  FileText,
   FolderPlus,
+  Loader2,
   MapPin,
   Plus,
   RotateCcw,
@@ -28,6 +33,8 @@ import {
   KpmRecord,
   PengelolaProfile,
   ProposalRecord,
+  ProposalSlotMap,
+  ReportTemplateConfig,
   WilayahKabKota,
 } from '../types/kpm';
 import {
@@ -35,6 +42,9 @@ import {
   getPrimaryKpmPhoto,
   resolveKpmDomicile,
 } from '../utils/imageProcessor';
+import { DEFAULT_PDF_COLUMN_KEYS } from '../utils/pdfFormatHelpers';
+import { exportKpmTableToPdf } from '../utils/pdfExporter';
+import { exportKpmTableToXlsx } from '../utils/xlsxExporter';
 import { useIsDesktopWeb } from '../utils/platform';
 import { DriveImage } from './DriveImage';
 import { FilterSelect } from './FormControls';
@@ -52,6 +62,8 @@ interface StandaloneKpmViewProps {
   items: ItemBantuan[];
   pengelolaList: PengelolaProfile[];
   wilayahList?: WilayahKabKota[];
+  reportTemplate?: ReportTemplateConfig;
+  proposalSlotMap?: ProposalSlotMap;
   canAdd?: boolean;
   canUpdate?: boolean;
   canDelete?: boolean;
@@ -74,6 +86,8 @@ export function StandaloneKpmView({
   items,
   pengelolaList,
   wilayahList = INITIAL_WILAYAH_LIST,
+  reportTemplate,
+  proposalSlotMap = {},
   canAdd = true,
   canUpdate = true,
   canDelete = true,
@@ -118,6 +132,13 @@ export function StandaloneKpmView({
     | null
   >(null);
   const [isBusy, setIsBusy] = useState(false);
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [exportSplitByPengelola, setExportSplitByPengelola] = useState(false);
+  const [exportBusyFormat, setExportBusyFormat] = useState<'pdf' | 'xlsx' | null>(null);
+  const [exportFeedback, setExportFeedback] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
 
   // Debounce pencarian minimal 500ms
   useEffect(() => {
@@ -506,6 +527,104 @@ export function StandaloneKpmView({
 
   const canBulkAct = canUpdate || canDelete;
 
+  const activeFilterSummaryParts = useMemo(() => {
+    const parts: string[] = [];
+    if (yearFilter === NO_YEAR_KEY) parts.push('Tanpa Tahun');
+    else if (yearFilter !== 'all') parts.push(`Tahun ${yearFilter}`);
+    if (kecamatanFilter === NO_KECAMATAN_KEY) parts.push('Kec. Kosong');
+    else if (kecamatanFilter !== 'all') parts.push(kecamatanFilter);
+    if (kelurahanFilter !== 'all') parts.push(kelurahanFilter);
+    if (pengelolaFilter !== 'all') parts.push(`Pengelola: ${pengelolaFilter}`);
+    if (itemFilter !== 'all') parts.push(`Item: ${itemFilter}`);
+    if (dtsenFilter !== 'all') parts.push(`Desil: ${dtsenFilter}`);
+    if (debouncedQuery.trim()) parts.push(`Cari: "${debouncedQuery.trim()}"`);
+    return parts;
+  }, [
+    yearFilter,
+    kecamatanFilter,
+    kelurahanFilter,
+    pengelolaFilter,
+    itemFilter,
+    dtsenFilter,
+    debouncedQuery,
+  ]);
+
+  const handleStandaloneExport = async (format: 'pdf' | 'xlsx') => {
+    const targetRecords = filteredEntries.map((e) => e.record);
+    if (targetRecords.length === 0 || exportBusyFormat) return;
+    setExportBusyFormat(format);
+    setExportFeedback(null);
+
+    const exportTitle = isDatabase ? 'DATABASE KPM (MENUNGGU)' : 'ARSIP BERKAS KPM DITOLAK';
+    const exportSubtitle =
+      activeFilterSummaryParts.length > 0
+        ? `Filter: ${activeFilterSummaryParts.join(' · ')}`
+        : isDatabase
+          ? 'Seluruh KPM berstatus Menunggu (Tanpa Proposal)'
+          : 'Seluruh Berkas KPM Ditolak (Tanpa Proposal)';
+    const baseName = isDatabase ? 'Database_KPM' : 'Arsip_Ditolak_KPM';
+    const suffixParts: string[] = [];
+    if (yearFilter !== 'all' && yearFilter !== NO_YEAR_KEY) suffixParts.push(yearFilter);
+    if (kecamatanFilter !== 'all' && kecamatanFilter !== NO_KECAMATAN_KEY) {
+      suffixParts.push(kecamatanFilter.replace(/[^a-zA-Z0-9]+/g, '_'));
+    }
+    if (pengelolaFilter !== 'all') {
+      suffixParts.push(pengelolaFilter.replace(/[^a-zA-Z0-9]+/g, '_'));
+    }
+    const fileName = [baseName, ...suffixParts].join('_');
+
+    try {
+      if (format === 'pdf') {
+        const res = await exportKpmTableToPdf({
+          records: targetRecords,
+          allRecords: records,
+          proposals,
+          items,
+          wilayahList,
+          selectedColumns: DEFAULT_PDF_COLUMN_KEYS,
+          title: exportTitle,
+          subtitle: exportSubtitle,
+          fileName,
+          includeSummary: true,
+          reportTemplate,
+          splitByPengelola: exportSplitByPengelola,
+          selectedPengelolaLabel: pengelolaFilter !== 'all' ? pengelolaFilter : undefined,
+          proposalSlotMap,
+          includeEmptySlots: false,
+        });
+        setExportFeedback({
+          type: 'success',
+          text: `PDF berhasil diunduh (${res.count} KPM) — ${res.savedFileName}`,
+        });
+      } else {
+        const res = await exportKpmTableToXlsx({
+          records: targetRecords,
+          allRecords: records,
+          proposals,
+          items,
+          wilayahList,
+          proposalSlotMap,
+          title: exportTitle,
+          subtitle: exportSubtitle,
+          fileName,
+          includeEmptySlots: false,
+          splitByPengelola: exportSplitByPengelola,
+        });
+        setExportFeedback({
+          type: 'success',
+          text: `Excel berhasil diunduh (${res.count} KPM) — ${res.savedFileName}`,
+        });
+      }
+    } catch (err) {
+      setExportFeedback({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Gagal membuat file ekspor.',
+      });
+    } finally {
+      setExportBusyFormat(null);
+    }
+  };
+
   return (
     <div className={`min-h-screen ${selectionMode && selectedIds.length > 0 ? 'pb-40' : 'pb-24'}`}>
       {/* Native Mobile Header */}
@@ -524,6 +643,20 @@ export function StandaloneKpmView({
           </div>
 
           <div className="flex shrink-0 items-center gap-1.5">
+            {filteredEntries.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setExportFeedback(null);
+                  setIsExportModalOpen(true);
+                }}
+                aria-label="Unduh data hasil filter"
+                className="inline-flex h-10 items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap"
+              >
+                <Download className="h-4 w-4 text-teal-700" />
+                <span>Unduh</span>
+              </button>
+            )}
             {isDatabase && canAdd && onCreateNewStandalone && (
               <button
                 type="button"
@@ -602,6 +735,20 @@ export function StandaloneKpmView({
             </div>
 
             <div className="flex shrink-0 items-center gap-2">
+              {filteredEntries.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setExportFeedback(null);
+                    setIsExportModalOpen(true);
+                  }}
+                  className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 text-xs font-semibold text-slate-700 transition-colors hover:border-teal-300 hover:bg-teal-50/60 hover:text-teal-800 whitespace-nowrap"
+                >
+                  <Download className="h-4 w-4 text-teal-700" />
+                  <span>Unduh ({filteredEntries.length})</span>
+                </button>
+              )}
+
               {canBulkAct && enrichedRecords.length > 0 && (
                 <button
                   type="button"
@@ -1223,6 +1370,111 @@ export function StandaloneKpmView({
                         ? 'Ya, Tolak ke Arsip'
                         : 'Ya, Pulihkan'}
                 </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Unduh Database / Arsip Ditolak */}
+      {isExportModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/45 p-0 backdrop-blur-[2px] sm:items-center sm:p-4"
+          onClick={() => setIsExportModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-md overflow-hidden rounded-t-3xl border border-slate-200 bg-white shadow-2xl sm:rounded-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-teal-700">
+                  Ekspor Data Sesuai Filter
+                </p>
+                <h3 className="mt-0.5 text-base font-bold text-slate-900">{title}</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsExportModalOpen(false)}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              >
+                <X className="h-4.5 w-4.5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 px-5 py-4">
+              <div className="rounded-xl bg-slate-50 px-4 py-3">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-xs font-medium text-slate-600">Jumlah data terfilter</span>
+                  <span className="text-lg font-bold text-slate-900 tabular-nums">
+                    {filteredEntries.length} KPM
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-slate-500">
+                  {activeFilterSummaryParts.length > 0
+                    ? activeFilterSummaryParts.join(' · ')
+                    : 'Semua data tanpa filter tambahan'}
+                </p>
+              </div>
+
+              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-slate-200 px-3.5 py-2.5 transition-colors hover:bg-slate-50">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-slate-800">
+                    Pisahkan halaman / sheet per Pengelola
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    Kelompokkan hasil unduhan berdasarkan masing-masing pengelola lapangan.
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={exportSplitByPengelola}
+                  onChange={(e) => setExportSplitByPengelola(e.target.checked)}
+                  className="h-4 w-4 shrink-0 rounded border-slate-300 text-teal-700 focus:ring-teal-700"
+                />
+              </label>
+
+              {exportFeedback && (
+                <div
+                  className={`flex items-start gap-2 rounded-xl px-3.5 py-2.5 text-xs font-medium ${
+                    exportFeedback.type === 'success'
+                      ? 'bg-emerald-50 text-emerald-800'
+                      : 'bg-rose-50 text-rose-700'
+                  }`}
+                >
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{exportFeedback.text}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-2 border-t border-slate-100 bg-slate-50/70 px-5 py-3.5 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                disabled={filteredEntries.length === 0 || exportBusyFormat !== null}
+                onClick={() => void handleStandaloneExport('xlsx')}
+                className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-800 hover:bg-slate-50 disabled:opacity-45 whitespace-nowrap"
+              >
+                {exportBusyFormat === 'xlsx' ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-emerald-700" />
+                ) : (
+                  <FileSpreadsheet className="h-4 w-4 text-emerald-700" />
+                )}
+                <span>Unduh Excel (.xlsx)</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={filteredEntries.length === 0 || exportBusyFormat !== null}
+                onClick={() => void handleStandaloneExport('pdf')}
+                className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-45 whitespace-nowrap"
+              >
+                {exportBusyFormat === 'pdf' ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <FileText className="h-4 w-4" />
+                )}
+                <span>Unduh PDF (F4)</span>
               </button>
             </div>
           </div>

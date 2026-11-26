@@ -712,3 +712,26 @@ export interface ProposalChangeLogEntry {
   timestamp: string;
 }
 
+export type PengelolaBookingStatus = 'booked' | 'assigned' | 'cancelled';
+
+export type PengelolaBookingPriority = 'normal' | 'prioritas';
+
+export interface PengelolaBookingItem {
+  id: string;
+  pengelolaId?: string;
+  pengelolaName: string;
+  kontak?: string;
+  kecamatan?: string;
+  kelurahan?: string;
+  alamatCatatan?: string;
+  targetTahun: string;
+  targetProposal: string;
+  estimasiKpm: number;
+  rencanaItem?: string;
+  priority: PengelolaBookingPriority;
+  status: PengelolaBookingStatus;
+  catatan: string;
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+}

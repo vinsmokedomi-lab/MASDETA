@@ -4,7 +4,9 @@ import {
   ArrowLeft,
   Check,
   ChevronDown,
+  ChevronRight,
   ClipboardCheck,
+  Database,
   FileCheck2,
   FileSpreadsheet,
   FileText,
@@ -17,7 +19,10 @@ import {
   Tag,
   Ticket,
   Trash2,
+  Users,
 } from 'lucide-react';
+import { DownloadPengelolaPanel } from './DownloadPengelolaPanel';
+import { DownloadStandalonePanel } from './DownloadStandalonePanel';
 import { uploadMediaToDrive } from '../services/driveManager';
 import { TAHUN_OPTIONS } from '../data/kpmOptions';
 import {
@@ -34,6 +39,7 @@ import {
   ItemBantuan,
   KpmRecord,
   PejabatProfile,
+  PengelolaBookingItem,
   PengelolaProfile,
   ProposalBastMap,
   ProposalRecord,
@@ -102,6 +108,122 @@ type DownloadPrintMode =
   | 'dinsos'
   | 'cat_nomor'
   | 'absensi';
+
+type DownloadHubMode = DownloadPrintMode | 'pengelola' | 'standalone';
+
+interface DownloadFormatCatalogItem {
+  id: DownloadHubMode;
+  group: 'data' | 'admin' | 'dinsos';
+  label: string;
+  subtitle: string;
+  formatNote: string;
+  Icon: typeof Printer;
+}
+
+const DOWNLOAD_FORMAT_CATALOG: DownloadFormatCatalogItem[] = [
+  {
+    id: 'kpm',
+    group: 'data',
+    label: 'Data KPM',
+    subtitle: 'Tabel daftar penerima KPM dengan pilihan kolom fleksibel dan ringkasan item.',
+    formatNote: 'PDF F4 · Excel',
+    Icon: Printer,
+  },
+  {
+    id: 'pengelola',
+    group: 'data',
+    label: 'KPM per Pengelola & Booking',
+    subtitle: 'Unduh daftar KPM milik pengelola tertentu, semua terpisah, dan daftar booking tahun depan.',
+    formatNote: 'PDF F4 · Excel',
+    Icon: Users,
+  },
+  {
+    id: 'subitem',
+    group: 'data',
+    label: 'Rekap Sub-Item',
+    subtitle: 'Rincian kelengkapan pengambilan item dan sub-item per KPM (sudah vs belum).',
+    formatNote: 'PDF F4',
+    Icon: Package,
+  },
+  {
+    id: 'standalone',
+    group: 'data',
+    label: 'Database & Arsip Ditolak',
+    subtitle: 'Ekspor KPM berstatus Menunggu (Database) atau Arsip Ditolak sesuai filter domisili.',
+    formatNote: 'PDF F4 · Excel',
+    Icon: Database,
+  },
+  {
+    id: 'kupon',
+    group: 'admin',
+    label: 'Cetak Kupon',
+    subtitle: 'Kartu pengambilan bantuan ukuran 88 × 54 mm (10 kupon/lembar) dengan QR Code.',
+    formatNote: 'PDF F4',
+    Icon: Ticket,
+  },
+  {
+    id: 'bast',
+    group: 'admin',
+    label: 'BAST Massal',
+    subtitle: 'Berita Acara Serah Terima barang bantuan resmi format Dinas Sosial (1 halaman/KPM).',
+    formatNote: 'PDF F4',
+    Icon: FileCheck2,
+  },
+  {
+    id: 'sptjm',
+    group: 'admin',
+    label: 'SPTJM Massal',
+    subtitle: 'Surat Pernyataan Tanggung Jawab Mutlak massal per KPM dengan penyimpanan otomatis.',
+    formatNote: 'PDF F4',
+    Icon: FileText,
+  },
+  {
+    id: 'dinsos',
+    group: 'dinsos',
+    label: 'Nomor DINSOS',
+    subtitle: 'Label tag nomor barang format lipat dua (2 label per lembar F4) lengkap dengan garis potong.',
+    formatNote: 'PDF F4',
+    Icon: Tag,
+  },
+  {
+    id: 'cat_nomor',
+    group: 'dinsos',
+    label: 'Cat Nomor Barang',
+    subtitle: 'Matriks rentang nomor urut per item untuk keperluan penomoran fisik barang di gudang.',
+    formatNote: 'PDF F4 / A4',
+    Icon: Paintbrush,
+  },
+  {
+    id: 'absensi',
+    group: 'dinsos',
+    label: 'Absensi DINSOS',
+    subtitle: 'Daftar hadir peserta, makan minum, absensi kegiatan Dinas Sosial, dan absen arsip.',
+    formatNote: 'PDF F4',
+    Icon: ClipboardCheck,
+  },
+];
+
+const DOWNLOAD_HUB_GROUPS: {
+  id: 'data' | 'admin' | 'dinsos';
+  title: string;
+  description: string;
+}[] = [
+  {
+    id: 'data',
+    title: 'Data & Rekapitulasi',
+    description: 'Ekspor daftar penerima KPM, pengelola lapangan, sub-item, dan database mandiri.',
+  },
+  {
+    id: 'admin',
+    title: 'Dokumen Administrasi',
+    description: 'Dokumen cetak massal untuk proses pembagian dan serah terima bantuan.',
+  },
+  {
+    id: 'dinsos',
+    title: 'Operasional Dinas Sosial',
+    description: 'Label penomoran barang dan formulir absensi kegiatan lapangan.',
+  },
+];
 
 type AbsensiVariantState = 'daftar_hadir' | 'makan_minum' | 'kegiatan' | 'arsip';
 
@@ -196,6 +318,7 @@ interface MenuDownloadViewProps {
     config: Partial<BastTemplateConfig> | null,
     options?: { silent?: boolean }
   ) => void;
+  pengelolaBookings?: PengelolaBookingItem[];
   onBack: () => void;
 }
 
@@ -285,6 +408,7 @@ export function MenuDownloadView({
   pejabatList = DEFAULT_PEJABAT_LIST,
   proposalBastMap = {},
   onSaveProposalBastConfig,
+  pengelolaBookings = [],
   onBack,
 }: MenuDownloadViewProps) {
   const isDesktopWeb = useIsDesktopWeb();
@@ -313,6 +437,7 @@ export function MenuDownloadView({
     [scheduleBooks]
   );
 
+  const [activeHubMode, setActiveHubMode] = useState<DownloadHubMode | null>(null);
   const [printMode, setPrintMode] = useState<DownloadPrintMode>(
     () => initialWorkspace.printMode || 'kpm'
   );
@@ -2229,540 +2354,620 @@ export function MenuDownloadView({
     (bastDraft.kopLogoDataUrl || '').trim() ||
     DEFAULT_KOP_LOGO_URL;
 
+  const activeFormatMeta = useMemo(
+    () => DOWNLOAD_FORMAT_CATALOG.find((item) => item.id === activeHubMode) ?? null,
+    [activeHubMode]
+  );
+
+  const openDownloadMode = (mode: DownloadHubMode) => {
+    setActiveHubMode(mode);
+    if (mode !== 'pengelola' && mode !== 'standalone') {
+      setPrintMode(mode);
+    }
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const handleHeaderBack = () => {
+    if (activeHubMode !== null) {
+      setActiveHubMode(null);
+      if (typeof window !== 'undefined') {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+      return;
+    }
+    onBack();
+  };
+
   return (
     <div className="min-h-screen pb-24">
       {isNativeApp && (
-        <header className="sticky top-0 z-20 flex h-14 items-center gap-1.5 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
-          <button
-            type="button"
-            onClick={onBack}
-            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
-            aria-label="Kembali ke Menu"
-          >
-            <ArrowLeft className="h-5 w-5" />
-          </button>
-          <h1 className="truncate text-base font-bold text-slate-900">Download Data</h1>
+        <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-slate-200 bg-white/95 px-3 backdrop-blur-md">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <button
+              type="button"
+              onClick={handleHeaderBack}
+              className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-slate-700 transition-colors hover:bg-slate-100"
+              aria-label={activeHubMode ? 'Kembali ke Pusat Download' : 'Kembali ke Menu'}
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </button>
+            <div className="min-w-0">
+              <h1 className="truncate text-base font-bold text-slate-900">
+                {activeFormatMeta ? activeFormatMeta.label : 'Pusat Download'}
+              </h1>
+              {activeFormatMeta && (
+                <p className="truncate text-[11px] text-slate-500">
+                  Pusat Download · {activeFormatMeta.formatNote}
+                </p>
+              )}
+            </div>
+          </div>
+          {activeHubMode !== null && (
+            <select
+              aria-label="Pindah format download"
+              value={activeHubMode}
+              onChange={(e) => openDownloadMode(e.target.value as DownloadHubMode)}
+              className="h-9 max-w-[132px] shrink-0 rounded-xl border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 focus:border-teal-700 focus:outline-none"
+            >
+              {DOWNLOAD_FORMAT_CATALOG.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          )}
         </header>
       )}
 
-      <div
-        className={`space-y-3.5 px-4 pt-3.5 ${
-          !isNativeApp
-            ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6 md:grid md:grid-cols-12 md:items-start md:gap-6 md:space-y-0'
-            : ''
-        }`}
-      >
-        {!isNativeApp && (
-          <div className="flex items-center gap-3 md:col-span-12">
-            <button
-              type="button"
-              onClick={onBack}
-              className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
-              aria-label="Kembali ke Menu"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              <span>Kembali</span>
-            </button>
-            <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
-              Download Data
-            </h1>
-          </div>
-        )}
-
-        {/* Kolom Kiri (Desktop) / Atas (Mobile): Filter, Excel & Kop Umum */}
-        <div className={`space-y-3.5 ${!isNativeApp ? 'md:col-span-5 md:col-start-1' : ''}`}>
-          {/* Card 1: Filter Cetak (Tahun, Pengelola, Tipe Proposal, Proposal) */}
-          <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-3 md:p-4">
-            <div className="flex items-center justify-between gap-2">
-              <h2 className="text-sm font-bold text-slate-900">Filter Cetak Dokumen</h2>
-              <span className="shrink-0 rounded-lg border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-700 tabular-nums">
-                {filteredRecords.length} KPM
-              </span>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2.5">
-              <div className="min-w-0">
-                <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                  Tahun / Sumber Data
-                </span>
+      {/* TAMPILAN 1: PUSAT DOWNLOAD (HUB UTAMA YANG LEGA & TERSTRUKTUR) */}
+      {activeHubMode === null ? (
+        <div
+          className={`space-y-7 px-4 pt-5 ${
+            !isNativeApp ? 'md:mx-auto md:max-w-[1180px] md:px-6 md:pt-7' : ''
+          }`}
+        >
+          {/* Header Halaman Utama */}
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex min-w-0 items-center gap-3">
+              {!isNativeApp && (
                 <button
                   type="button"
-                  onClick={() => setIsTahunModalOpen(true)}
-                  className="mt-1 flex min-h-[42px] w-full items-center justify-between gap-1.5 rounded-xl border border-slate-300 bg-white px-3 text-left text-xs font-medium text-slate-900 transition-colors hover:bg-slate-50"
+                  onClick={onBack}
+                  className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+                  aria-label="Kembali ke Menu"
                 >
-                  <span className="truncate">{selectedTahunDisplayLabel}</span>
-                  <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+                  <ArrowLeft className="h-4 w-4" />
+                  <span>Menu</span>
                 </button>
-              </div>
-
+              )}
               <div className="min-w-0">
-                <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                  Pengelola
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setIsPengelolaModalOpen(true)}
-                  className="mt-1 flex min-h-[42px] w-full items-center justify-between gap-1.5 rounded-xl border border-slate-300 bg-white px-3 text-left text-xs font-medium text-slate-900 transition-colors hover:bg-slate-50"
-                >
-                  <span className="truncate">
-                    {selectedPengelola === 'all' ? 'Semua Pengelola' : selectedPengelola}
-                  </span>
-                  <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" />
-                </button>
-              </div>
-            </div>
-
-            <div>
-              <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                Tipe Proposal
-              </span>
-              <div
-                className={`mt-1 grid grid-cols-3 gap-1 rounded-xl border p-1 ${
-                  isStandaloneSource
-                    ? 'border-slate-200 bg-slate-100/60 opacity-60'
-                    : 'border-slate-200 bg-slate-100/80'
-                }`}
-              >
-                {(
-                  [
-                    { value: 'all', label: 'Semua' },
-                    { value: 'Murni', label: 'Murni' },
-                    { value: 'Perubahan', label: 'Perubahan' },
-                  ] as const
-                ).map((opt) => {
-                  const active = !isStandaloneSource && selectedProposalTipe === opt.value;
-                  return (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      disabled={isStandaloneSource}
-                      onClick={() => handleSelectProposalTipe(opt.value)}
-                      className={`min-h-[34px] rounded-lg px-2 text-xs font-semibold transition-all ${
-                        active
-                          ? 'bg-teal-700 text-white shadow-xs'
-                          : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
-                      } disabled:cursor-not-allowed`}
-                    >
-                      {opt.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="min-w-0">
-              <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                Proposal
-              </span>
-              <button
-                type="button"
-                disabled={isStandaloneSource}
-                onClick={() => setIsProposalModalOpen(true)}
-                className={`mt-1 flex min-h-[42px] w-full items-center justify-between gap-2 rounded-xl border px-3 text-left text-xs font-medium transition-colors ${
-                  isStandaloneSource
-                    ? 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-500'
-                    : 'border-slate-300 bg-white text-slate-900 hover:bg-slate-50'
-                }`}
-              >
-                <span className="truncate">
-                  {isStandaloneSource
-                    ? 'Standalone (Tanpa Proposal)'
-                    : selectedProposal === 'all'
-                      ? selectedProposalTipe === 'all'
-                        ? 'Semua Proposal'
-                        : `Semua Proposal ${selectedProposalTipe}`
-                      : selectedProposal}
-                </span>
-                {!isStandaloneSource && (
-                  <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" />
-                )}
-              </button>
-            </div>
-          </section>
-
-          {/* Card 2: Pilihan Jenis Cetak */}
-          <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-3 md:p-4">
-            <div className="flex items-center justify-between gap-2">
-              <div>
-                <h2 className="text-sm font-bold text-slate-900">Pilih Jenis Cetak PDF</h2>
-                <p className="mt-0.5 text-[11px] text-slate-500">
-                  {printMode === 'dinsos'
-                    ? 'Ukuran kertas F4 (216 × 330 mm · 2 Label/Lembar)'
-                    : printMode === 'absensi'
-                      ? 'Ukuran kertas F4 Portrait (216 × 330 mm · Format Dinas Sosial)'
-                      : printMode === 'cat_nomor'
-                        ? `Matriks rentang nomor cat (${catNomorOrientation === 'landscape' ? 'Landscape' : 'Portrait'} · ${catNomorPaperSize.toUpperCase()})`
-                        : 'Ukuran kertas F4 Portrait (216 × 310 mm)'}
+                <h1 className="text-xl font-bold tracking-tight text-slate-900 md:text-2xl">
+                  Pusat Download
+                </h1>
+                <p className="mt-0.5 text-xs text-slate-500 tabular-nums md:text-sm">
+                  Pilih jenis dokumen yang ingin dicetak atau diekspor · {records.length} KPM ·{' '}
+                  {proposals.length} Proposal · {pengelolaList.length} Pengelola
                 </p>
               </div>
-              <span className="shrink-0 rounded-lg bg-teal-50 px-2 py-1 text-[10px] font-bold text-teal-800 border border-teal-200/70">
-                8 Format
-              </span>
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              {(
-                [
-                  {
-                    id: 'kpm',
-                    label: 'Data KPM',
-                    subtitle: 'Tabel daftar penerima',
-                    Icon: Printer,
-                  },
-                  {
-                    id: 'subitem',
-                    label: 'Rekap Sub-Item',
-                    subtitle: 'Sudah & belum diterima',
-                    Icon: Package,
-                  },
-                  {
-                    id: 'kupon',
-                    label: 'Cetak Kupon',
-                    subtitle: 'Kartu & QR Code',
-                    Icon: Ticket,
-                  },
-                  {
-                    id: 'bast',
-                    label: 'BAST Massal',
-                    subtitle: 'Berita acara F4',
-                    Icon: FileCheck2,
-                  },
-                  {
-                    id: 'sptjm',
-                    label: 'SPTJM Massal',
-                    subtitle: 'Surat tanggung jawab',
-                    Icon: FileText,
-                  },
-                  {
-                    id: 'dinsos',
-                    label: 'Nomor DINSOS',
-                    subtitle: 'Tag nomor barang F4',
-                    Icon: Tag,
-                  },
-                  {
-                    id: 'cat_nomor',
-                    label: 'Cat Nomor Barang',
-                    subtitle: 'Rentang nomor per item',
-                    Icon: Paintbrush,
-                  },
-                  {
-                    id: 'absensi',
-                    label: 'Absensi DINSOS',
-                    subtitle: 'Hadir, makan minum & arsip',
-                    Icon: ClipboardCheck,
-                  },
-                ] as const
-              ).map(({ id, label, subtitle, Icon }) => {
-                const active = printMode === id;
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => setPrintMode(id)}
-                    className={`flex items-center gap-2.5 rounded-xl border p-2.5 text-left transition-all ${
-                      active
-                        ? 'border-teal-700 bg-teal-700 text-white shadow-xs'
-                        : 'border-slate-200 bg-slate-50/70 text-slate-800 hover:border-teal-300 hover:bg-teal-50/50'
-                    }`}
-                  >
-                    <span
-                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
-                        active
-                          ? 'bg-white/15 text-white'
-                          : 'bg-white text-teal-700 border border-slate-200'
-                      }`}
-                    >
-                      <Icon className="h-4 w-4" />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-xs font-bold leading-snug">
-                        {label}
-                      </span>
-                      <span
-                        className={`block text-[10px] leading-tight mt-0.5 ${
-                          active ? 'text-teal-100' : 'text-slate-500'
-                        }`}
-                      >
-                        {subtitle}
-                      </span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </section>
+          </div>
 
-          {/* Template Kop Surat & Penandatangan (untuk mode KPM & Rekap Sub-Item) */}
-          {(printMode === 'kpm' || printMode === 'subitem') && (
-          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-            <button
-              type="button"
-              onClick={() => setShowTemplateEditor((prev) => !prev)}
-              className="flex min-h-[52px] w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-            >
-              <div className="flex min-w-0 items-center gap-2.5">
-                <FileText className="h-4 w-4 shrink-0 text-teal-700" />
+          {/* 3 Kelompok Kategori Format Download */}
+          <div className="space-y-7">
+            {DOWNLOAD_HUB_GROUPS.map((group) => {
+              const groupItems = DOWNLOAD_FORMAT_CATALOG.filter((item) => item.group === group.id);
+              return (
+                <section key={group.id} className="space-y-3">
+                  <div className="px-0.5">
+                    <h2 className="text-sm font-bold text-slate-900">{group.title}</h2>
+                    <p className="mt-0.5 text-xs text-slate-500">{group.description}</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    {groupItems.map(({ id, label, subtitle, formatNote, Icon }) => (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => openDownloadMode(id)}
+                        className="group flex items-start gap-3.5 rounded-2xl border border-slate-200 bg-white p-4 text-left transition-all hover:border-teal-300 hover:bg-teal-50/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-700/20"
+                      >
+                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-teal-700 transition-colors group-hover:border-teal-200 group-hover:bg-teal-50">
+                          <Icon className="h-4.5 w-4.5" />
+                        </span>
+
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate text-sm font-bold text-slate-900 group-hover:text-teal-900">
+                              {label}
+                            </span>
+                            <span className="shrink-0 text-[11px] font-medium text-slate-400">
+                              {formatNote}
+                            </span>
+                          </div>
+                          <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-500">
+                            {subtitle}
+                          </p>
+                        </div>
+
+                        <ChevronRight className="mt-2.5 h-4 w-4 shrink-0 text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-teal-700" />
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        /* TAMPILAN 2: SUB-HALAMAN FOKUS PER FORMAT */
+        <div
+          className={`space-y-5 px-4 pt-4 ${
+            !isNativeApp ? 'md:mx-auto md:max-w-[1280px] md:px-6 md:pt-6' : ''
+          }`}
+        >
+          {/* Desktop Breadcrumb & Quick Format Switcher */}
+          {!isNativeApp && activeFormatMeta && (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/80 pb-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setActiveHubMode(null)}
+                  className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  <span>Pusat Download</span>
+                </button>
                 <div className="min-w-0">
-                  <p className="text-sm font-bold text-slate-900">
-                    Template Kop &amp; Penandatangan
-                  </p>
-                  <p className="truncate text-[11px] text-slate-500">
-                    {templateDraft.enabled
-                      ? `${templateDraft.orgHeaderLine2} · Aktif pada Laporan PDF`
-                      : 'Nonaktif · Ketuk untuk mengaktifkan kop Laporan PDF'}
+                  <div className="flex items-center gap-2">
+                    <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
+                      {activeFormatMeta.label}
+                    </h1>
+                    <span className="shrink-0 text-xs font-medium text-slate-400">
+                      · {activeFormatMeta.formatNote}
+                    </span>
+                  </div>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    {activeFormatMeta.subtitle}
                   </p>
                 </div>
               </div>
-              <ChevronDown
-                className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${
-                  showTemplateEditor ? 'rotate-180' : ''
-                }`}
-              />
-            </button>
 
-            {showTemplateEditor && (
-              <div className="space-y-3 border-t border-slate-100 px-4 py-3.5">
-                <label className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold text-slate-800">
-                  <span>Sertakan Kop Surat &amp; Blok Tanda Tangan</span>
-                  <input
-                    type="checkbox"
-                    checked={templateDraft.enabled}
-                    onChange={(e) => {
-                      setTemplateSavedNotice(false);
-                      setTemplateDraft((prev) => ({ ...prev, enabled: e.target.checked }));
-                    }}
-                    className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-600"
-                  />
+              <div className="flex shrink-0 items-center gap-2">
+                <label className="text-xs font-medium text-slate-500" htmlFor="quick-switch-format">
+                  Format:
                 </label>
+                <select
+                  id="quick-switch-format"
+                  value={activeHubMode}
+                  onChange={(e) => openDownloadMode(e.target.value as DownloadHubMode)}
+                  className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 transition-colors hover:border-slate-300 focus:border-teal-700 focus:outline-none"
+                >
+                  {DOWNLOAD_FORMAT_CATALOG.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
 
-                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2">
-                  <p className="text-[11px] font-semibold text-slate-700">
-                    Logo Kop Surat Instansi (dipakai di Kop Laporan &amp; BAST)
-                  </p>
-                  <div className="flex items-center gap-3">
-                    <input
-                      ref={reportKopLogoInputRef}
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={(e) => void handleKopLogoUpload(e)}
-                    />
-                    <img
-                      src={activeKopLogoSrc}
-                      alt="Logo Kop Instansi"
-                      className="h-13 w-11 shrink-0 rounded-lg border border-slate-200 bg-white p-0.5 object-contain"
-                    />
-                    <div className="flex flex-wrap gap-2">
+          {/* SUB-HALAMAN BARU 1: KPM PER PENGELOLA & BOOKING */}
+          {activeHubMode === 'pengelola' ? (
+            <DownloadPengelolaPanel
+              records={records}
+              proposals={proposals}
+              items={items}
+              pengelolaList={pengelolaList}
+              wilayahList={wilayahList}
+              reportTemplate={templateDraft}
+              proposalSlotMap={proposalSlotMap}
+              pengelolaBookings={pengelolaBookings}
+            />
+          ) : activeHubMode === 'standalone' ? (
+            /* SUB-HALAMAN BARU 2: DATABASE KPM & ARSIP DITOLAK */
+            <DownloadStandalonePanel
+              records={records}
+              proposals={proposals}
+              items={items}
+              pengelolaList={pengelolaList}
+              wilayahList={wilayahList}
+              reportTemplate={templateDraft}
+              proposalSlotMap={proposalSlotMap}
+            />
+          ) : (
+            /* SUB-HALAMAN 8 FORMAT CETAK PDF/EXCEL (WORKSPACE 2 KOLOM YANG LEGA) */
+            <div
+              className={`space-y-5 ${
+                !isNativeApp ? 'lg:grid lg:grid-cols-12 lg:items-start lg:gap-6 lg:space-y-0' : ''
+              }`}
+            >
+              {/* Kolom Kiri: Filter Sumber Data & Kop Surat (Sticky di Desktop) */}
+              <div
+                className={`space-y-4 ${
+                  !isNativeApp ? 'lg:col-span-4 lg:sticky lg:top-6' : ''
+                }`}
+              >
+                <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-4 md:p-5">
+                  <div className="flex items-baseline justify-between gap-2 border-b border-slate-100 pb-3">
+                    <div>
+                      <h2 className="text-sm font-bold text-slate-900">Sumber Data</h2>
+                      <p className="mt-0.5 text-[11px] text-slate-500">
+                        Tentukan tahun, proposal, atau pengelola yang dicetak.
+                      </p>
+                    </div>
+                    <span className="shrink-0 text-xs font-bold text-teal-800 tabular-nums">
+                      {filteredRecords.length} KPM
+                    </span>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <span className="block text-[11px] font-semibold text-slate-600">
+                        Tahun / Sumber Data
+                      </span>
                       <button
                         type="button"
-                        disabled={isOffline}
-                        onClick={() => reportKopLogoInputRef.current?.click()}
-                        className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        onClick={() => setIsTahunModalOpen(true)}
+                        className="mt-1.5 flex min-h-[42px] w-full items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 text-left text-xs font-medium text-slate-900 transition-colors hover:border-slate-300 hover:bg-slate-50"
                       >
-                        <ImagePlus className="h-3.5 w-3.5" />
-                        <span>Upload / Ganti Logo</span>
+                        <span className="truncate">{selectedTahunDisplayLabel}</span>
+                        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
                       </button>
-                      {activeKopLogoSrc !== DEFAULT_KOP_LOGO_URL && (
-                        <button
-                          type="button"
-                          disabled={isOffline}
-                          onClick={() => {
-                            setTemplateSavedNotice(false);
-                            setBastSavedNotice(false);
-                            setTemplateDraft((prev) => ({
-                              ...prev,
-                              kopLogoDataUrl: DEFAULT_KOP_LOGO_URL,
-                            }));
-                            setBastDraft((prev) => ({
-                              ...prev,
-                              kopLogoDataUrl: DEFAULT_KOP_LOGO_URL,
-                            }));
-                          }}
-                          className="inline-flex min-h-[36px] items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-semibold text-teal-800 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          <span>Logo Default Kalbar</span>
-                        </button>
-                      )}
                     </div>
-                  </div>
-                </div>
 
-                <div className="space-y-2.5">
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600">
-                      Baris Atas Kop Instansi
-                    </label>
-                    <input
-                      type="text"
-                      value={templateDraft.orgHeaderLine1}
-                      onChange={(e) => {
-                        setTemplateSavedNotice(false);
-                        setTemplateDraft((prev) => ({ ...prev, orgHeaderLine1: e.target.value }));
-                      }}
-                      placeholder="Contoh: PEMERINTAH PROVINSI KALIMANTAN BARAT"
-                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                    />
-                  </div>
+                    {!isStandaloneSource && (
+                      <>
+                        <div>
+                          <span className="block text-[11px] font-semibold text-slate-600">
+                            Tipe Proposal
+                          </span>
+                          <div className="mt-1.5 grid grid-cols-3 gap-1 rounded-xl border border-slate-200 bg-slate-100/80 p-1">
+                            {(
+                              [
+                                { value: 'all', label: 'Semua' },
+                                { value: 'Murni', label: 'Murni' },
+                                { value: 'Perubahan', label: 'Perubahan' },
+                              ] as const
+                            ).map((opt) => {
+                              const active = selectedProposalTipe === opt.value;
+                              return (
+                                <button
+                                  key={opt.value}
+                                  type="button"
+                                  onClick={() => handleSelectProposalTipe(opt.value)}
+                                  className={`min-h-[34px] rounded-lg px-2 text-xs font-semibold transition-all ${
+                                    active
+                                      ? 'bg-teal-700 text-white shadow-xs'
+                                      : 'text-slate-600 hover:bg-white/80 hover:text-slate-900'
+                                  }`}
+                                >
+                                  {opt.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
 
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600">
-                      Nama Dinas / Unit Pengelola
-                    </label>
-                    <input
-                      type="text"
-                      value={templateDraft.orgHeaderLine2}
-                      onChange={(e) => {
-                        setTemplateSavedNotice(false);
-                        setTemplateDraft((prev) => ({ ...prev, orgHeaderLine2: e.target.value }));
-                      }}
-                      placeholder="Contoh: DINAS SOSIAL / TIM KOORDINASI MASDETA"
-                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                    />
-                  </div>
+                        <div>
+                          <span className="block text-[11px] font-semibold text-slate-600">
+                            Proposal
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setIsProposalModalOpen(true)}
+                            className="mt-1.5 flex min-h-[42px] w-full items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 text-left text-xs font-medium text-slate-900 transition-colors hover:border-slate-300 hover:bg-slate-50"
+                          >
+                            <span className="truncate">
+                              {selectedProposal === 'all'
+                                ? selectedProposalTipe === 'all'
+                                  ? 'Semua Proposal'
+                                  : `Semua Proposal ${selectedProposalTipe}`
+                                : selectedProposal}
+                            </span>
+                            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                          </button>
+                        </div>
+                      </>
+                    )}
 
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600">
-                      Alamat / Kontak Sekretariat
-                    </label>
-                    <input
-                      type="text"
-                      value={templateDraft.orgAddress}
-                      onChange={(e) => {
-                        setTemplateSavedNotice(false);
-                        setTemplateDraft((prev) => ({ ...prev, orgAddress: e.target.value }));
-                      }}
-                      placeholder="Alamat sekretariat"
-                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="block text-[11px] font-semibold text-slate-600">
-                        Kota Penandatanganan
-                      </label>
-                      <input
-                        type="text"
-                        value={templateDraft.city}
-                        onChange={(e) => {
-                          setTemplateSavedNotice(false);
-                          setTemplateDraft((prev) => ({ ...prev, city: e.target.value }));
-                        }}
-                        placeholder="Pontianak"
-                        className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-600">
-                        Jabatan Penandatangan
-                      </label>
-                      <input
-                        type="text"
-                        value={templateDraft.signatoryTitle}
-                        onChange={(e) => {
-                          setTemplateSavedNotice(false);
-                          setTemplateDraft((prev) => ({ ...prev, signatoryTitle: e.target.value }));
-                        }}
-                        placeholder="Koordinator Pelaksana"
-                        className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                      />
+                      <span className="block text-[11px] font-semibold text-slate-600">
+                        Pengelola
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setIsPengelolaModalOpen(true)}
+                        className="mt-1.5 flex min-h-[42px] w-full items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 text-left text-xs font-medium text-slate-900 transition-colors hover:border-slate-300 hover:bg-slate-50"
+                      >
+                        <span className="truncate">
+                          {selectedPengelola === 'all' ? 'Semua Pengelola' : selectedPengelola}
+                        </span>
+                        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                      </button>
                     </div>
                   </div>
+                </section>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-600">
-                        Nama Penandatangan
-                      </label>
-                      <input
-                        type="text"
-                        value={templateDraft.signatoryName}
-                        onChange={(e) => {
-                          setTemplateSavedNotice(false);
-                          setTemplateDraft((prev) => ({ ...prev, signatoryName: e.target.value }));
-                        }}
-                        placeholder="( ................................ )"
-                        className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                {/* Template Kop Surat & Penandatangan (Collapsible, khusus mode KPM & Rekap Sub-Item) */}
+                {(printMode === 'kpm' || printMode === 'subitem') && (
+                  <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                    <button
+                      type="button"
+                      onClick={() => setShowTemplateEditor((prev) => !prev)}
+                      className="flex min-h-[54px] w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                    >
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <FileText className="h-4 w-4 shrink-0 text-teal-700" />
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-slate-900">
+                            Kop Surat &amp; Penandatangan
+                          </p>
+                          <p className="truncate text-[11px] text-slate-500">
+                            {templateDraft.enabled
+                              ? `${templateDraft.orgHeaderLine2} · Aktif`
+                              : 'Nonaktif · Klik untuk mengatur'}
+                          </p>
+                        </div>
+                      </div>
+                      <ChevronDown
+                        className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${
+                          showTemplateEditor ? 'rotate-180' : ''
+                        }`}
                       />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-600">
-                        NIP / NRP (Opsional)
-                      </label>
-                      <input
-                        type="text"
-                        value={templateDraft.signatoryNip || ''}
-                        onChange={(e) => {
-                          setTemplateSavedNotice(false);
-                          setTemplateDraft((prev) => ({ ...prev, signatoryNip: e.target.value }));
-                        }}
-                        placeholder="NIP. ..."
-                        className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                      />
-                    </div>
-                  </div>
-                </div>
+                    </button>
 
-                {templateSavedNotice && (
-                  <p className="flex items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-medium text-teal-900">
-                    <Check className="h-3.5 w-3.5 shrink-0 text-teal-700" />
-                    <span>Template Kop &amp; Penandatangan berhasil disimpan.</span>
-                  </p>
-                )}
+                    {showTemplateEditor && (
+                      <div className="space-y-3 border-t border-slate-100 px-4 py-4">
+                        <label className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold text-slate-800">
+                          <span>Sertakan Kop Surat &amp; Tanda Tangan</span>
+                          <input
+                            type="checkbox"
+                            checked={templateDraft.enabled}
+                            onChange={(e) => {
+                              setTemplateSavedNotice(false);
+                              setTemplateDraft((prev) => ({ ...prev, enabled: e.target.checked }));
+                            }}
+                            className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-600"
+                          />
+                        </label>
 
-                {onSaveReportTemplate && (
-                  <button
-                    type="button"
-                    disabled={isOffline}
-                    onClick={() => {
-                      if (isOffline) return;
-                      onSaveReportTemplate(templateDraft);
-                      if (
-                        onSaveBastTemplate &&
-                        templateDraft.kopLogoDataUrl &&
-                        templateDraft.kopLogoDataUrl !== bastTemplate?.kopLogoDataUrl
-                      ) {
-                        onSaveBastTemplate({
-                          ...(bastTemplate ?? DEFAULT_BAST_TEMPLATE),
-                          kopLogoDataUrl: templateDraft.kopLogoDataUrl,
-                        });
-                      }
-                      setTemplateSavedNotice(true);
-                    }}
-                    className="inline-flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-4 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
-                  >
-                    <Check className="h-3.5 w-3.5" />
-                    <span>{isOffline ? 'Simpan Template (Mode Read-Only)' : 'Simpan Template Laporan'}</span>
-                  </button>
+                        <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2">
+                          <p className="text-[11px] font-semibold text-slate-700">
+                            Logo Kop Surat Instansi
+                          </p>
+                          <div className="flex items-center gap-3">
+                            <input
+                              ref={reportKopLogoInputRef}
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={(e) => void handleKopLogoUpload(e)}
+                            />
+                            <img
+                              src={activeKopLogoSrc}
+                              alt="Logo Kop Instansi"
+                              className="h-12 w-10 shrink-0 rounded-lg border border-slate-200 bg-white p-0.5 object-contain"
+                            />
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                disabled={isOffline}
+                                onClick={() => reportKopLogoInputRef.current?.click()}
+                                className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                <ImagePlus className="h-3.5 w-3.5" />
+                                <span>Ganti Logo</span>
+                              </button>
+                              {activeKopLogoSrc !== DEFAULT_KOP_LOGO_URL && (
+                                <button
+                                  type="button"
+                                  disabled={isOffline}
+                                  onClick={() => {
+                                    setTemplateSavedNotice(false);
+                                    setBastSavedNotice(false);
+                                    setTemplateDraft((prev) => ({
+                                      ...prev,
+                                      kopLogoDataUrl: DEFAULT_KOP_LOGO_URL,
+                                    }));
+                                    setBastDraft((prev) => ({
+                                      ...prev,
+                                      kopLogoDataUrl: DEFAULT_KOP_LOGO_URL,
+                                    }));
+                                  }}
+                                  className="inline-flex min-h-[36px] items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 text-xs font-semibold text-teal-800 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  <span>Default Kalbar</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="space-y-2.5">
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-600">
+                              Baris Atas Kop Instansi
+                            </label>
+                            <input
+                              type="text"
+                              value={templateDraft.orgHeaderLine1}
+                              onChange={(e) => {
+                                setTemplateSavedNotice(false);
+                                setTemplateDraft((prev) => ({ ...prev, orgHeaderLine1: e.target.value }));
+                              }}
+                              placeholder="PEMERINTAH PROVINSI KALIMANTAN BARAT"
+                              className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-200 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-600">
+                              Nama Dinas / Unit Pengelola
+                            </label>
+                            <input
+                              type="text"
+                              value={templateDraft.orgHeaderLine2}
+                              onChange={(e) => {
+                                setTemplateSavedNotice(false);
+                                setTemplateDraft((prev) => ({ ...prev, orgHeaderLine2: e.target.value }));
+                              }}
+                              placeholder="DINAS SOSIAL / TIM KOORDINASI MASDETA"
+                              className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-200 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-600">
+                              Alamat / Kontak Sekretariat
+                            </label>
+                            <input
+                              type="text"
+                              value={templateDraft.orgAddress}
+                              onChange={(e) => {
+                                setTemplateSavedNotice(false);
+                                setTemplateDraft((prev) => ({ ...prev, orgAddress: e.target.value }));
+                              }}
+                              placeholder="Alamat sekretariat"
+                              className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-200 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                            />
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-[11px] font-semibold text-slate-600">
+                                Kota
+                              </label>
+                              <input
+                                type="text"
+                                value={templateDraft.city}
+                                onChange={(e) => {
+                                  setTemplateSavedNotice(false);
+                                  setTemplateDraft((prev) => ({ ...prev, city: e.target.value }));
+                                }}
+                                placeholder="Pontianak"
+                                className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-200 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] font-semibold text-slate-600">
+                                Jabatan
+                              </label>
+                              <input
+                                type="text"
+                                value={templateDraft.signatoryTitle}
+                                onChange={(e) => {
+                                  setTemplateSavedNotice(false);
+                                  setTemplateDraft((prev) => ({ ...prev, signatoryTitle: e.target.value }));
+                                }}
+                                placeholder="Koordinator Pelaksana"
+                                className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-200 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-[11px] font-semibold text-slate-600">
+                                Nama Penandatangan
+                              </label>
+                              <input
+                                type="text"
+                                value={templateDraft.signatoryName}
+                                onChange={(e) => {
+                                  setTemplateSavedNotice(false);
+                                  setTemplateDraft((prev) => ({ ...prev, signatoryName: e.target.value }));
+                                }}
+                                placeholder="( ........................ )"
+                                className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-200 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] font-semibold text-slate-600">
+                                NIP / NRP
+                              </label>
+                              <input
+                                type="text"
+                                value={templateDraft.signatoryNip || ''}
+                                onChange={(e) => {
+                                  setTemplateSavedNotice(false);
+                                  setTemplateDraft((prev) => ({ ...prev, signatoryNip: e.target.value }));
+                                }}
+                                placeholder="NIP. ..."
+                                className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-200 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        {templateSavedNotice && (
+                          <p className="flex items-center gap-1.5 rounded-xl bg-teal-50 px-3 py-2 text-xs font-medium text-teal-900">
+                            <Check className="h-3.5 w-3.5 shrink-0 text-teal-700" />
+                            <span>Template tersimpan.</span>
+                          </p>
+                        )}
+
+                        {onSaveReportTemplate && (
+                          <button
+                            type="button"
+                            disabled={isOffline}
+                            onClick={() => {
+                              if (isOffline) return;
+                              onSaveReportTemplate(templateDraft);
+                              if (
+                                onSaveBastTemplate &&
+                                templateDraft.kopLogoDataUrl &&
+                                templateDraft.kopLogoDataUrl !== bastTemplate?.kopLogoDataUrl
+                              ) {
+                                onSaveBastTemplate({
+                                  ...(bastTemplate ?? DEFAULT_BAST_TEMPLATE),
+                                  kopLogoDataUrl: templateDraft.kopLogoDataUrl,
+                                });
+                              }
+                              setTemplateSavedNotice(true);
+                            }}
+                            className="inline-flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-4 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
+                          >
+                            <Check className="h-3.5 w-3.5" />
+                            <span>{isOffline ? 'Mode Read-Only' : 'Simpan Template'}</span>
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </section>
                 )}
               </div>
-            )}
-          </section>
-          )}
-        </div>
 
-        {/* Kolom Kanan (Desktop) / Bawah (Mobile): Panel sesuai Mode Cetak */}
-        <div className={`${!isNativeApp ? 'md:col-span-7 md:col-start-6' : ''}`}>
-          {/* MODE 1: PRINT KPM (TABEL DATA KPM) */}
-          {printMode === 'kpm' && (
-            <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2.5 md:p-5">
-              <div className="flex items-center justify-between gap-2">
-                <h2 className="text-sm font-bold text-slate-900">Pilih Kolom Tabel PDF</h2>
-                <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPdfFeedback(null);
-                      setLimitNotice(false);
-                      if (selectedAddonColumns.length > 0) {
-                        setSelectedAddonColumns([]);
-                      } else {
-                        setSelectedAddonColumns(
-                          applyProposalKelurahanDefault(
-                            [...DEFAULT_ADDON_PDF_COLUMN_KEYS],
-                            selectedProposal
-                          )
-                        );
-                      }
+              {/* Kolom Kanan: Workspace Pengaturan & Cetak Sub-Halaman */}
+              <div className={`${!isNativeApp ? 'lg:col-span-8' : ''}`}>
+                {/* MODE 1: PRINT KPM (TABEL DATA KPM) */}
+                {printMode === 'kpm' && (
+                  <section className="rounded-2xl border border-slate-200 bg-white p-5 space-y-4 md:p-6">
+                    <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-3.5">
+                      <div>
+                        <h2 className="text-sm font-bold text-slate-900">Pengaturan Kolom &amp; Ekspor</h2>
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          Pilih kolom tambahan yang ingin ditampilkan di PDF F4 Portrait.
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPdfFeedback(null);
+                            setLimitNotice(false);
+                            if (selectedAddonColumns.length > 0) {
+                              setSelectedAddonColumns([]);
+                            } else {
+                              setSelectedAddonColumns(
+                                applyProposalKelurahanDefault(
+                                  [...DEFAULT_ADDON_PDF_COLUMN_KEYS],
+                                  selectedProposal
+                                )
+                              );
+                            }
                     }}
                     className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-semibold text-slate-700 hover:bg-slate-100"
                   >
@@ -3355,17 +3560,17 @@ export function MenuDownloadView({
 
           {/* MODE 2: KUPON (10 KUPON PER LEMBAR F4) */}
           {printMode === 'kupon' && (
-            <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-3.5 md:p-5">
-              <div className="flex items-start justify-between gap-2">
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 space-y-5 md:p-6">
+              <div className="flex items-baseline justify-between gap-3 border-b border-slate-100 pb-3.5">
                 <div>
                   <h2 className="text-sm font-bold text-slate-900">
-                    Cetak Kupon Pembagian Massal (F4)
+                    Pratinjau &amp; Pengaturan Kupon (F4)
                   </h2>
-                  <p className="mt-0.5 text-[11px] text-slate-500">
-                    Ukuran kartu 88 × 54 mm (10 kupon/halaman). Jumlah kupon sesuai jumlah KPM aktif per proposal.
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Ukuran kartu 88 × 54 mm (10 kupon/halaman) · Sesuai jumlah KPM aktif per proposal.
                   </p>
                 </div>
-                <span className="shrink-0 text-xs font-bold text-teal-700 tabular-nums">
+                <span className="shrink-0 text-xs font-bold text-teal-800 tabular-nums">
                   {eligibleKuponRecords.length} Kupon
                 </span>
               </div>
@@ -3756,26 +3961,26 @@ export function MenuDownloadView({
 
           {/* MODE 3: BAST ELEKTRONIK MASSAL (FORMAT RESMI DINAS SOSIAL PROV. KALBAR) */}
           {printMode === 'bast' && (
-            <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-3 md:p-5">
-              <div className="flex items-start justify-between gap-2">
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 space-y-5 md:p-6">
+              <div className="flex items-baseline justify-between gap-3 border-b border-slate-100 pb-3.5">
                 <div>
                   <h2 className="text-sm font-bold text-slate-900">
-                    Berita Acara Serah Terima Barang (BAST)
+                    Pengaturan Berita Acara Serah Terima (BAST)
                   </h2>
-                  <p className="mt-0.5 text-[11px] text-slate-500">
+                  <p className="mt-0.5 text-xs text-slate-500">
                     {selectedProposalObj
                       ? `Pengaturan untuk "${selectedProposalObj.namaProposal}"`
                       : 'Template BAST default · 1 halaman F4 per KPM'}
                   </p>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-2.5 shrink-0">
                   {bastSavedNotice && (
-                    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-teal-700">
-                      <Check className="h-3 w-3" />
+                    <span className="inline-flex items-center gap-1 text-xs font-medium text-teal-700">
+                      <Check className="h-3.5 w-3.5" />
                       <span>{bastSavedLabel}</span>
                     </span>
                   )}
-                  <span className="rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-bold text-teal-700 tabular-nums">
+                  <span className="text-xs font-bold text-teal-800 tabular-nums">
                     {eligibleBastRecords.length} KPM
                   </span>
                 </div>
@@ -4204,24 +4409,24 @@ export function MenuDownloadView({
 
           {/* MODE 4: SPTJM MINIMALIS MASSAL (SURAT PERNYATAAN TANGGUNG JAWAB MUTLAK) */}
           {printMode === 'sptjm' && (
-            <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-3 md:p-5">
-              <div className="flex items-start justify-between gap-2">
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 space-y-5 md:p-6">
+              <div className="flex items-baseline justify-between gap-3 border-b border-slate-100 pb-3.5">
                 <div>
                   <h2 className="text-sm font-bold text-slate-900">
-                    Surat Pernyataan Tanggung Jawab Mutlak (SPTJM)
+                    Pengaturan SPTJM Massal (F4)
                   </h2>
-                  <p className="mt-0.5 text-[11px] text-slate-500">
-                    1 halaman F4 per KPM · Perubahan otomatis tersimpan
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    1 halaman F4 per KPM · Perubahan otomatis tersimpan.
                   </p>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-2.5 shrink-0">
                   {sptjmSavedNotice && (
-                    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-teal-700">
-                      <Check className="h-3 w-3" />
-                      <span>Tersimpan otomatis</span>
+                    <span className="inline-flex items-center gap-1 text-xs font-medium text-teal-700">
+                      <Check className="h-3.5 w-3.5" />
+                      <span>Tersimpan</span>
                     </span>
                   )}
-                  <span className="rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-bold text-teal-700 tabular-nums">
+                  <span className="text-xs font-bold text-teal-800 tabular-nums">
                     {eligibleBastRecords.length} KPM
                   </span>
                 </div>
@@ -4442,17 +4647,17 @@ export function MenuDownloadView({
 
           {/* MODE 5: REKAP SUB-ITEM KPM (SUDAH & BELUM DITERIMA + TOTAL BAWAH) */}
           {printMode === 'subitem' && (
-            <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-3.5 md:p-5">
-              <div className="flex items-start justify-between gap-2">
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 space-y-5 md:p-6">
+              <div className="flex items-baseline justify-between gap-3 border-b border-slate-100 pb-3.5">
                 <div>
                   <h2 className="text-sm font-bold text-slate-900">
-                    Rekap KPM &amp; Listing Sub-Item (Sudah vs Belum)
+                    Filter &amp; Rekap Sub-Item KPM
                   </h2>
-                  <p className="mt-0.5 text-[11px] text-slate-500">
-                    Mencetak daftar setiap KPM beserta rincian sub-item yang sudah dan belum diterima, lengkap dengan total rekap keseluruhan di bagian paling bawah PDF.
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Daftar KPM beserta rincian sub-item sudah dan belum diterima, lengkap dengan total rekap di akhir PDF.
                   </p>
                 </div>
-                <span className="shrink-0 text-xs font-bold text-teal-700 tabular-nums">
+                <span className="shrink-0 text-xs font-bold text-teal-800 tabular-nums">
                   {subItemClassified.activeRecords.length} KPM
                 </span>
               </div>
@@ -4804,17 +5009,17 @@ export function MenuDownloadView({
               .toUpperCase();
 
             return (
-              <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-3.5 md:p-5">
-                <div className="flex items-start justify-between gap-2">
+              <section className="rounded-2xl border border-slate-200 bg-white p-5 space-y-5 md:p-6">
+                <div className="flex items-baseline justify-between gap-3 border-b border-slate-100 pb-3.5">
                   <div>
                     <h2 className="text-sm font-bold text-slate-900">
-                      Cetak PDF Nomor DINSOS
+                      Pratinjau &amp; Label Nomor DINSOS
                     </h2>
-                    <p className="mt-0.5 text-[11px] text-slate-500">
-                      Kertas F4 (216 × 330 mm), format lipat dua (2 label per lembar · 216 × 165 mm/label). Nomor urut dicetak fixed mulai 01 sesuai jumlah KPM proposal termasuk baris kosong.
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Kertas F4 (216 × 330 mm), lipat dua (2 label/lembar). Nomor urut dicetak fixed mulai 01 termasuk baris kosong.
                     </p>
                   </div>
-                  <span className="shrink-0 text-xs font-bold text-teal-700 tabular-nums">
+                  <span className="shrink-0 text-xs font-bold text-teal-800 tabular-nums">
                     {dinsosFixedLabelCount} Label
                   </span>
                 </div>
@@ -4959,17 +5164,17 @@ export function MenuDownloadView({
 
           {/* MODE 7: CAT NOMOR BARANG (1 PROPOSAL FULL 1 LEMBAR BESAR / MULTI-PROPOSAL MATRIKS) */}
           {printMode === 'cat_nomor' && (
-            <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-4 md:p-5">
-              <div className="flex items-start justify-between gap-2">
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 space-y-5 md:p-6">
+              <div className="flex items-baseline justify-between gap-3 border-b border-slate-100 pb-3.5">
                 <div>
                   <h2 className="text-sm font-bold text-slate-900">
-                    Cetak PDF Cat Nomor Barang
+                    Pengaturan Matriks Cat Nomor Barang
                   </h2>
-                  <p className="mt-0.5 text-[11px] text-slate-500">
-                    Centang <strong>1 proposal</strong> untuk hasil ukuran besar memenuhi 1 lembar penuh, atau centang <strong>beberapa proposal</strong> untuk format tabel matriks multi-lokasi.
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Pilih 1 proposal untuk format penuh 1 lembar, atau beberapa proposal untuk tabel matriks multi-lokasi.
                   </p>
                 </div>
-                <span className="shrink-0 rounded-lg bg-teal-50 px-2.5 py-1 text-xs font-bold text-teal-700 tabular-nums border border-teal-200/70">
+                <span className="shrink-0 text-xs font-bold text-teal-800 tabular-nums">
                   {effectiveCatNomorSelectedKeys.length}/{availableCatNomorMatrix.rows.length} Lokasi
                 </span>
               </div>
@@ -5403,17 +5608,17 @@ export function MenuDownloadView({
 
           {/* Mode 8: Absensi Dinas Sosial (Daftar Hadir / Daftar Makan Minum + Absensi Kegiatan + Absen Arsip) */}
           {printMode === 'absensi' && (
-            <section className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-3.5 md:p-4">
-              <div className="flex items-start justify-between gap-2">
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 space-y-5 md:p-6">
+              <div className="flex items-baseline justify-between gap-3 border-b border-slate-100 pb-3.5">
                 <div>
                   <h2 className="text-sm font-bold text-slate-900">
-                    Absen Dinas, Kegiatan &amp; Arsip (PDF F4)
+                    Pengaturan Absensi Dinas Sosial (F4)
                   </h2>
-                  <p className="mt-0.5 text-[11px] text-slate-500">
-                    Pilih Daftar Hadir, Daftar Makan &amp; Minum, Absensi Kegiatan (DINSOS), atau Absen Arsip (DPRD Kalbar)
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Daftar Hadir, Makan &amp; Minum, Absensi Kegiatan (DINSOS), atau Absen Arsip (DPRD Kalbar).
                   </p>
                 </div>
-                <span className="shrink-0 rounded-lg bg-indigo-50 px-2 py-1 text-[10px] font-bold text-indigo-800 border border-indigo-200/70 tabular-nums">
+                <span className="shrink-0 text-xs font-bold text-teal-800 tabular-nums">
                   {absensiMatchStats.totalProposals} Proposal
                 </span>
               </div>
@@ -5970,8 +6175,11 @@ export function MenuDownloadView({
               </p>
             </section>
           )}
+              </div>
+            </div>
+          )}
         </div>
-      </div>
+      )}
 
       {/* Pop-up Pilihan Tahun / Sumber Data */}
       <SelectionPickerModal

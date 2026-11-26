@@ -8,10 +8,21 @@ export interface ChangelogRelease {
 
 export const APP_CHANGELOG: ChangelogRelease[] = [
   {
+    version: '2.0.1',
+    title: 'Remake Pusat Download, Ekspor KPM Pengelola & Booking Tahun Berikutnya',
+    releasedAt: '25 Nov 2026',
+    badge: 'Versi Terbaru',
+    highlights: [
+      'Remake Total Pusat Download & Sub-Halaman: Tata letak baru berbasis kategori yang lega, bersih, dan fokus per format cetak (Data KPM, KPM per Pengelola, Database/Arsip, Kupon, BAST, SPTJM, Nomor DINSOS, Cat Nomor, Absensi) dengan panel ringkasan cetak yang rapi.',
+      'Unduh KPM per Pengelola (PDF F4 & Excel): Tersedia langsung di setiap baris & halaman detail Pengelola Lapangan maupun di Pusat Download dengan filter status KPM, tahun, dan pemisahan per proposal.',
+      'Booking Pengelola Tahun Berikutnya: Fitur pencatatan rencana pengelola, estimasi kuota KPM, target proposal tahun depan, prioritas, kontak WA, dan status tindak lanjut (Dibooking / Masuk Proposal / Batal) lengkap dengan ekspor PDF & Excel.',
+      'Tombol Unduh di Database KPM & Arsip Ditolak: Ekspor langsung daftar KPM yang sedang difilter (berdasarkan tahun, kecamatan, kelurahan, pengelola, item, desil DTSEN, dan pencarian) ke PDF F4 atau Excel.',
+    ],
+  },
+  {
     version: '1.1.9',
     title: 'Sinkronisasi Changelog GitHub, Keandalan Chat & Integritas Multi-Admin',
     releasedAt: '17 Nov 2026, 01:23 WIB',
-    badge: 'Versi Terbaru',
     highlights: [
       'Perbaikan Notifikasi Chat Berulang: Pesan yang sudah dibuka atau dibaca tidak lagi memunculkan notifikasi ulang setiap kali aplikasi dibuka kembali.',
       'Paginasi & Mutasi Granular Supabase: Pengambilan data menembus batas 1.000 baris dan setiap simpan/ubah/hapus tidak menimpa perubahan admin lain secara bersamaan.',

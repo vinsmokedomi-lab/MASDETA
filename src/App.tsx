@@ -114,6 +114,7 @@ import {
   KpmFormValues,
   KpmRecord,
   PejabatProfile,
+  PengelolaBookingItem,
   PengelolaProfile,
   ProposalBastMap,
   ProposalChangeLogEntry,
@@ -999,6 +1000,20 @@ export default function App() {
   });
   const proposalChangeLogsRef = useRef<ProposalChangeLogEntry[]>(proposalChangeLogs);
   proposalChangeLogsRef.current = proposalChangeLogs;
+  const [pengelolaBookings, setPengelolaBookings] = useState<PengelolaBookingItem[]>(() => {
+    try {
+      const raw = localStorage.getItem('masdeta_slice_pengelola_bookings_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw) as unknown;
+        if (Array.isArray(parsed)) {
+          return parsed as PengelolaBookingItem[];
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  });
   const [highlightEmptySlotsProposalId, setHighlightEmptySlotsProposalId] = useState<string | null>(
     null
   );
@@ -1048,6 +1063,7 @@ export default function App() {
     rab?: boolean;
     styleHistory?: boolean;
     proposalChanges?: boolean;
+    bookings?: boolean;
   }>({});
   const chatLoadedOnceRef = useRef<boolean>(false);
   const hasAppliedRemoteRef = useRef<boolean>(false);
@@ -2243,7 +2259,7 @@ export default function App() {
   // Lazy loaders untuk data berat yang hanya dibutuhkan saat halaman/fitur terkait dibuka
   const ensureLazySliceLoaded = useCallback(
     async (
-      slice: 'trash' | 'reconcile' | 'rab' | 'styleHistory' | 'proposalChanges',
+      slice: 'trash' | 'reconcile' | 'rab' | 'styleHistory' | 'proposalChanges' | 'bookings',
       force = false
     ) => {
       if (!supabaseReadyRef.current) return;
@@ -2306,6 +2322,19 @@ export default function App() {
           if (Array.isArray(fetched)) {
             proposalChangeLogsRef.current = fetched;
             setProposalChangeLogs(fetched);
+          }
+        } else if (slice === 'bookings') {
+          const fetched = await fetchAppStateSlice<PengelolaBookingItem[]>(
+            'pengelola_bookings_v1',
+            []
+          );
+          if (Array.isArray(fetched)) {
+            setPengelolaBookings(fetched);
+            try {
+              localStorage.setItem('masdeta_slice_pengelola_bookings_v1', JSON.stringify(fetched));
+            } catch {
+              // ignore storage quota
+            }
           }
         }
       } catch {
@@ -4086,6 +4115,12 @@ export default function App() {
     ) {
       void ensureLazySliceLoaded('styleHistory');
       void ensureLazySliceLoaded('proposalChanges');
+    }
+    if (
+      activeTab === 'menu' &&
+      (menuSection === 'pengelola' || menuSection === 'download')
+    ) {
+      void ensureLazySliceLoaded('bookings');
     }
   }, [
     authReady,
@@ -10949,6 +10984,19 @@ export default function App() {
     []
   );
 
+  const handleSavePengelolaBookings = useCallback(
+    (nextBookings: PengelolaBookingItem[]) => {
+      setPengelolaBookings(nextBookings);
+      try {
+        localStorage.setItem('masdeta_slice_pengelola_bookings_v1', JSON.stringify(nextBookings));
+      } catch {
+        // ignore storage quota
+      }
+      void saveAppStateSlice('pengelola_bookings_v1', nextBookings);
+    },
+    []
+  );
+
   const appendProposalChangeLogs = useCallback(
     (incoming: ProposalChangeLogEntry[]) => {
       if (incoming.length === 0) return;
@@ -13437,6 +13485,8 @@ export default function App() {
             onRecordProposalStyleUsage={handleRecordProposalStyleUsage}
             onDeleteProposalStyleUsage={handleDeleteProposalStyleUsage}
             proposalSchemaMissingNotice={proposalSchemaMissingNotice}
+            pengelolaBookings={pengelolaBookings}
+            onSavePengelolaBookings={handleSavePengelolaBookings}
               />
             </Suspense>
           </KeepAlivePane>
