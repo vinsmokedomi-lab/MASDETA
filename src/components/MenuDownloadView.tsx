@@ -465,8 +465,12 @@ export function MenuDownloadView({
   const [includeSummary, setIncludeSummary] = useState(true);
   const [splitByPengelola, setSplitByPengelola] = useState(false);
   const [onlyCompleteCheckedColumns, setOnlyCompleteCheckedColumns] = useState(false);
-  const [excludedPengelolaKeys, setExcludedPengelolaKeys] = useState<string[]>([]);
-  const [excludedKelurahanKeys, setExcludedKelurahanKeys] = useState<string[]>([]);
+  const [selectedPengelolaChecklistKeys, setSelectedPengelolaChecklistKeys] = useState<
+    string[] | null
+  >(null);
+  const [selectedKelurahanChecklistKeys, setSelectedKelurahanChecklistKeys] = useState<
+    string[] | null
+  >(null);
   const [isPengelolaChecklistOpen, setIsPengelolaChecklistOpen] = useState(false);
   const [isKelurahanChecklistOpen, setIsKelurahanChecklistOpen] = useState(false);
   const [pengelolaChecklistQuery, setPengelolaChecklistQuery] = useState('');
@@ -1173,10 +1177,15 @@ export function MenuDownloadView({
     );
   }, [filteredRecords, activeColumns, proposals, wilayahList, selectedProposal]);
 
+  const checklistSourceRecords = useMemo(
+    () => (onlyCompleteCheckedColumns ? matchedActiveColumnRecords : filteredRecords),
+    [onlyCompleteCheckedColumns, matchedActiveColumnRecords, filteredRecords]
+  );
+
   const pengelolaChecklistItems = useMemo(() => {
     if (!isPengelolaColumnChecked) return [];
     const map = new Map<string, { key: string; label: string; count: number; totalPayment: number }>();
-    for (const rec of matchedActiveColumnRecords) {
+    for (const rec of checklistSourceRecords) {
       const raw = (rec.pengelola || '').trim();
       const key = raw ? raw.toLowerCase() : '__EMPTY__';
       const label = raw || 'Tanpa Pengelola';
@@ -1194,12 +1203,12 @@ export function MenuDownloadView({
       if (b.key === '__EMPTY__') return -1;
       return a.label.localeCompare(b.label, 'id');
     });
-  }, [isPengelolaColumnChecked, matchedActiveColumnRecords]);
+  }, [isPengelolaColumnChecked, checklistSourceRecords]);
 
   const kelurahanChecklistItems = useMemo(() => {
     if (!isKelurahanColumnChecked) return [];
     const map = new Map<string, { key: string; label: string; count: number; totalPayment: number }>();
-    for (const rec of matchedActiveColumnRecords) {
+    for (const rec of checklistSourceRecords) {
       const dom = resolveKpmDomicile(rec, proposals, wilayahList);
       const raw = (dom.kelurahan || '').trim();
       const key = raw ? raw.toLowerCase() : '__EMPTY__';
@@ -1218,34 +1227,98 @@ export function MenuDownloadView({
       if (b.key === '__EMPTY__') return -1;
       return a.label.localeCompare(b.label, 'id');
     });
-  }, [isKelurahanColumnChecked, matchedActiveColumnRecords, proposals, wilayahList]);
+  }, [isKelurahanColumnChecked, checklistSourceRecords, proposals, wilayahList]);
 
-  const excludedPengelolaSet = useMemo(() => new Set(excludedPengelolaKeys), [excludedPengelolaKeys]);
-  const excludedKelurahanSet = useMemo(() => new Set(excludedKelurahanKeys), [excludedKelurahanKeys]);
-
-  const activeExcludedPengelolaCount = useMemo(
-    () => pengelolaChecklistItems.filter((item) => excludedPengelolaSet.has(item.key)).length,
-    [pengelolaChecklistItems, excludedPengelolaSet]
+  const validPengelolaKeySet = useMemo(
+    () => new Set(pengelolaChecklistItems.map((item) => item.key)),
+    [pengelolaChecklistItems]
   );
 
-  const activeExcludedKelurahanCount = useMemo(
-    () => kelurahanChecklistItems.filter((item) => excludedKelurahanSet.has(item.key)).length,
-    [kelurahanChecklistItems, excludedKelurahanSet]
+  const validKelurahanKeySet = useMemo(
+    () => new Set(kelurahanChecklistItems.map((item) => item.key)),
+    [kelurahanChecklistItems]
   );
+
+  const selectedPengelolaSet = useMemo(() => {
+    if (selectedPengelolaChecklistKeys === null) return null;
+    return new Set(selectedPengelolaChecklistKeys.filter((k) => validPengelolaKeySet.has(k)));
+  }, [selectedPengelolaChecklistKeys, validPengelolaKeySet]);
+
+  const selectedKelurahanSet = useMemo(() => {
+    if (selectedKelurahanChecklistKeys === null) return null;
+    return new Set(selectedKelurahanChecklistKeys.filter((k) => validKelurahanKeySet.has(k)));
+  }, [selectedKelurahanChecklistKeys, validKelurahanKeySet]);
+
+  const activeSelectedPengelolaCount = useMemo(() => {
+    if (selectedPengelolaSet === null) return pengelolaChecklistItems.length;
+    return pengelolaChecklistItems.filter((item) => selectedPengelolaSet.has(item.key)).length;
+  }, [pengelolaChecklistItems, selectedPengelolaSet]);
+
+  const activeSelectedKelurahanCount = useMemo(() => {
+    if (selectedKelurahanSet === null) return kelurahanChecklistItems.length;
+    return kelurahanChecklistItems.filter((item) => selectedKelurahanSet.has(item.key)).length;
+  }, [kelurahanChecklistItems, selectedKelurahanSet]);
+
+  const isPengelolaChecklistFiltered =
+    isPengelolaColumnChecked &&
+    selectedPengelolaSet !== null &&
+    activeSelectedPengelolaCount < pengelolaChecklistItems.length;
+
+  const isKelurahanChecklistFiltered =
+    isKelurahanColumnChecked &&
+    selectedKelurahanSet !== null &&
+    activeSelectedKelurahanCount < kelurahanChecklistItems.length;
+
+  const singleCheckedPengelolaLabel = useMemo(() => {
+    if (!isPengelolaChecklistFiltered || activeSelectedPengelolaCount !== 1 || !selectedPengelolaSet) {
+      return undefined;
+    }
+    const found = pengelolaChecklistItems.find((item) => selectedPengelolaSet.has(item.key));
+    return found?.label;
+  }, [
+    isPengelolaChecklistFiltered,
+    activeSelectedPengelolaCount,
+    selectedPengelolaSet,
+    pengelolaChecklistItems,
+  ]);
+
+  const togglePengelolaChecklistKey = (key: string) => {
+    setPdfFeedback(null);
+    const allKeys = pengelolaChecklistItems.map((item) => item.key);
+    setSelectedPengelolaChecklistKeys((prev) => {
+      const current = prev === null ? allKeys : prev.filter((k) => validPengelolaKeySet.has(k));
+      const next = current.includes(key)
+        ? current.filter((k) => k !== key)
+        : [...current, key];
+      return next.length >= allKeys.length ? null : next;
+    });
+  };
+
+  const toggleKelurahanChecklistKey = (key: string) => {
+    setPdfFeedback(null);
+    const allKeys = kelurahanChecklistItems.map((item) => item.key);
+    setSelectedKelurahanChecklistKeys((prev) => {
+      const current = prev === null ? allKeys : prev.filter((k) => validKelurahanKeySet.has(k));
+      const next = current.includes(key)
+        ? current.filter((k) => k !== key)
+        : [...current, key];
+      return next.length >= allKeys.length ? null : next;
+    });
+  };
 
   const matchedAfterChecklistRecords = useMemo(() => {
     return matchedActiveColumnRecords.filter((rec) => {
       if (
         isPengelolaColumnChecked &&
-        excludedPengelolaSet.size > 0 &&
-        excludedPengelolaSet.has(getPengelolaFilterKey(rec))
+        selectedPengelolaSet !== null &&
+        !selectedPengelolaSet.has(getPengelolaFilterKey(rec))
       ) {
         return false;
       }
       if (
         isKelurahanColumnChecked &&
-        excludedKelurahanSet.size > 0 &&
-        excludedKelurahanSet.has(getKelurahanFilterKey(rec))
+        selectedKelurahanSet !== null &&
+        !selectedKelurahanSet.has(getKelurahanFilterKey(rec))
       ) {
         return false;
       }
@@ -1255,8 +1328,8 @@ export function MenuDownloadView({
     matchedActiveColumnRecords,
     isPengelolaColumnChecked,
     isKelurahanColumnChecked,
-    excludedPengelolaSet,
-    excludedKelurahanSet,
+    selectedPengelolaSet,
+    selectedKelurahanSet,
     proposals,
     wilayahList,
   ]);
@@ -1268,15 +1341,15 @@ export function MenuDownloadView({
     return filteredRecords.filter((rec) => {
       if (
         isPengelolaColumnChecked &&
-        excludedPengelolaSet.size > 0 &&
-        excludedPengelolaSet.has(getPengelolaFilterKey(rec))
+        selectedPengelolaSet !== null &&
+        !selectedPengelolaSet.has(getPengelolaFilterKey(rec))
       ) {
         return false;
       }
       if (
         isKelurahanColumnChecked &&
-        excludedKelurahanSet.size > 0 &&
-        excludedKelurahanSet.has(getKelurahanFilterKey(rec))
+        selectedKelurahanSet !== null &&
+        !selectedKelurahanSet.has(getKelurahanFilterKey(rec))
       ) {
         return false;
       }
@@ -1288,8 +1361,8 @@ export function MenuDownloadView({
     filteredRecords,
     isPengelolaColumnChecked,
     isKelurahanColumnChecked,
-    excludedPengelolaSet,
-    excludedKelurahanSet,
+    selectedPengelolaSet,
+    selectedKelurahanSet,
     proposals,
     wilayahList,
   ]);
@@ -1482,8 +1555,8 @@ export function MenuDownloadView({
     }
     setSelectedProposal('all');
     setSelectedPengelola('all');
-    setExcludedPengelolaKeys([]);
-    setExcludedKelurahanKeys([]);
+    setSelectedPengelolaChecklistKeys(null);
+    setSelectedKelurahanChecklistKeys(null);
     setPengelolaChecklistQuery('');
     setKelurahanChecklistQuery('');
     setSelectedAddonColumns((prev) => applyProposalKelurahanDefault(prev, 'all'));
@@ -1508,8 +1581,8 @@ export function MenuDownloadView({
     const nextProposal = shouldKeepSelectedProposal ? selectedProposal : 'all';
     setSelectedProposal(nextProposal);
     setSelectedPengelola('all');
-    setExcludedPengelolaKeys([]);
-    setExcludedKelurahanKeys([]);
+    setSelectedPengelolaChecklistKeys(null);
+    setSelectedKelurahanChecklistKeys(null);
     setPengelolaChecklistQuery('');
     setKelurahanChecklistQuery('');
     setSelectedAddonColumns((prev) => applyProposalKelurahanDefault(prev, nextProposal));
@@ -1526,8 +1599,8 @@ export function MenuDownloadView({
   const handleSelectProposal = (nextProp: string) => {
     setSelectedProposal(nextProp);
     setSelectedPengelola('all');
-    setExcludedPengelolaKeys([]);
-    setExcludedKelurahanKeys([]);
+    setSelectedPengelolaChecklistKeys(null);
+    setSelectedKelurahanChecklistKeys(null);
     setPengelolaChecklistQuery('');
     setKelurahanChecklistQuery('');
     setSelectedAddonColumns((prev) => applyProposalKelurahanDefault(prev, nextProp));
@@ -1635,8 +1708,8 @@ export function MenuDownloadView({
         !isStandaloneSource &&
         selectedPengelola === 'all' &&
         !onlyCompleteCheckedColumns &&
-        activeExcludedPengelolaCount === 0 &&
-        activeExcludedKelurahanCount === 0;
+        !isPengelolaChecklistFiltered &&
+        !isKelurahanChecklistFiltered;
       const selectedProposalMeta =
         !isStandaloneSource && selectedProposal !== 'all'
           ? proposals.find(
@@ -1645,7 +1718,13 @@ export function MenuDownloadView({
                 (selectedTahun === 'all' || p.tahun === selectedTahun)
             )
           : undefined;
-      const effectiveFileName = splitByPengelola ? `${fileName}_Per_Pengelola` : fileName;
+      const effectivePengelolaLabel =
+        selectedPengelola !== 'all' ? selectedPengelola : singleCheckedPengelolaLabel;
+      const effectiveFileName = splitByPengelola
+        ? `${fileName}_Per_Pengelola`
+        : effectivePengelolaLabel && selectedPengelola === 'all'
+          ? `${fileName}_${effectivePengelolaLabel}`
+          : fileName;
       const { exportKpmTableToPdf } = await import('../utils/pdfExporter');
       const res = await exportKpmTableToPdf({
         records: pdfPrintRecords,
@@ -1662,7 +1741,7 @@ export function MenuDownloadView({
         splitByProposal: shouldSplitByProposal,
         splitByPengelola,
         autoExcludeKelurahanWhenInProposalTitle: shouldSplitByProposal && !isStandaloneSource,
-        selectedPengelolaLabel: selectedPengelola !== 'all' ? selectedPengelola : undefined,
+        selectedPengelolaLabel: effectivePengelolaLabel,
         proposalSlotMap,
         includeEmptySlots,
         proposalMeta: selectedProposalMeta
@@ -1708,8 +1787,8 @@ export function MenuDownloadView({
         !isStandaloneSource &&
         selectedPengelola === 'all' &&
         !onlyCompleteCheckedColumns &&
-        activeExcludedPengelolaCount === 0 &&
-        activeExcludedKelurahanCount === 0;
+        !isPengelolaChecklistFiltered &&
+        !isKelurahanChecklistFiltered;
       const selectedProposalMeta =
         !isStandaloneSource && selectedProposal !== 'all'
           ? proposals.find(
@@ -1718,7 +1797,11 @@ export function MenuDownloadView({
                 (selectedTahun === 'all' || p.tahun === selectedTahun)
             )
           : undefined;
-      const effectiveFileName = splitByPengelola ? `${fileName}_Per_Pengelola` : fileName;
+      const effectiveFileName = splitByPengelola
+        ? `${fileName}_Per_Pengelola`
+        : singleCheckedPengelolaLabel && selectedPengelola === 'all'
+          ? `${fileName}_${singleCheckedPengelolaLabel}`
+          : fileName;
       const { exportKpmTableToXlsx } = await import('../utils/xlsxExporter');
       const res = await exportKpmTableToXlsx({
         records: pdfPrintRecords,
@@ -3086,16 +3169,16 @@ export function MenuDownloadView({
                 </span>
               </button>
 
-              {/* Opsi Pilih / Kecualikan Pengelola (muncul saat kolom Pengelola dicentang) */}
+              {/* Opsi Pilih Pengelola yang Dicetak (muncul saat kolom Pengelola dicentang) */}
               {isPengelolaColumnChecked && filteredRecords.length > 0 && (
                 <div className="rounded-xl border border-slate-200 bg-slate-50/70">
                   {pengelolaChecklistItems.length === 0 ? (
                     <div className="px-3 py-2.5">
                       <p className="text-xs font-semibold text-slate-800">
-                        Filter / Kecualikan Pengelola
+                        Pilih Pengelola yang Dicetak
                       </p>
                       <p className="mt-0.5 text-[10px] text-slate-500">
-                        Tidak ada pengelola yang cocok dengan urutan kolom PDF aktif saat ini (0 KPM cocok).
+                        Tidak ada pengelola yang cocok dengan filter kolom saat ini (0 KPM cocok).
                       </p>
                     </div>
                   ) : (
@@ -3108,12 +3191,12 @@ export function MenuDownloadView({
                         >
                           <div className="min-w-0">
                             <p className="text-xs font-semibold text-slate-800">
-                              Filter / Kecualikan Pengelola
+                              Pilih Pengelola yang Dicetak
                             </p>
                             <p className="text-[10px] text-slate-500">
-                              {activeExcludedPengelolaCount === 0
-                                ? `Semua cocok dipilih (${pengelolaChecklistItems.length} pengelola · sesuai kolom PDF aktif)`
-                                : `${pengelolaChecklistItems.length - activeExcludedPengelolaCount} dari ${pengelolaChecklistItems.length} dipilih · ${activeExcludedPengelolaCount} dikecualikan`}
+                              {!isPengelolaChecklistFiltered
+                                ? `Semua pengelola dicetak (${pengelolaChecklistItems.length} pengelola · ${checklistSourceRecords.length} KPM)`
+                                : `${activeSelectedPengelolaCount} dari ${pengelolaChecklistItems.length} dipilih · hanya yang dicentang yang dicetak`}
                             </p>
                           </div>
                           <ChevronDown
@@ -3122,12 +3205,12 @@ export function MenuDownloadView({
                             }`}
                           />
                         </button>
-                        {activeExcludedPengelolaCount > 0 && (
+                        {isPengelolaChecklistFiltered && (
                           <button
                             type="button"
                             onClick={() => {
                               setPdfFeedback(null);
-                              setExcludedPengelolaKeys([]);
+                              setSelectedPengelolaChecklistKeys(null);
                             }}
                             className="shrink-0 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold text-teal-700 hover:bg-teal-50"
                           >
@@ -3138,24 +3221,6 @@ export function MenuDownloadView({
 
                       {isPengelolaChecklistOpen && (
                         <div className="border-t border-slate-200 bg-white px-3 py-2.5 rounded-b-xl space-y-2">
-                          {!onlyCompleteCheckedColumns &&
-                            matchedActiveColumnRecords.length < filteredRecords.length && (
-                              <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[10px] text-amber-900">
-                                <span>
-                                  Hanya menampilkan pengelola yang cocok kolom aktif ({matchedActiveColumnRecords.length} KPM).
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setPdfFeedback(null);
-                                    setOnlyCompleteCheckedColumns(true);
-                                  }}
-                                  className="shrink-0 rounded-md bg-teal-700 px-2 py-0.5 font-semibold text-white hover:bg-teal-800"
-                                >
-                                  Cetak Cocok Saja
-                                </button>
-                              </div>
-                            )}
                           {pengelolaChecklistItems.length > 5 && (
                             <div className="relative">
                               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
@@ -3173,7 +3238,7 @@ export function MenuDownloadView({
                               type="button"
                               onClick={() => {
                                 setPdfFeedback(null);
-                                setExcludedPengelolaKeys([]);
+                                setSelectedPengelolaChecklistKeys(null);
                               }}
                               className="font-semibold text-teal-700 hover:underline"
                             >
@@ -3183,11 +3248,11 @@ export function MenuDownloadView({
                               type="button"
                               onClick={() => {
                                 setPdfFeedback(null);
-                                setExcludedPengelolaKeys(pengelolaChecklistItems.map((x) => x.key));
+                                setSelectedPengelolaChecklistKeys([]);
                               }}
-                              className="font-semibold text-rose-700 hover:underline"
+                              className="font-semibold text-slate-600 hover:text-rose-700 hover:underline"
                             >
-                              Kecualikan Semua
+                              Kosongkan
                             </button>
                           </div>
                           <div className="max-h-48 overflow-y-auto space-y-1 pr-0.5">
@@ -3200,21 +3265,16 @@ export function MenuDownloadView({
                                       .includes(pengelolaChecklistQuery.trim().toLowerCase())
                               )
                               .map((item) => {
-                                const included = !excludedPengelolaSet.has(item.key);
+                                const included =
+                                  selectedPengelolaSet === null ||
+                                  selectedPengelolaSet.has(item.key);
                                 return (
                                   <button
                                     key={item.key}
                                     type="button"
                                     role="checkbox"
                                     aria-checked={included}
-                                    onClick={() => {
-                                      setPdfFeedback(null);
-                                      setExcludedPengelolaKeys((prev) =>
-                                        prev.includes(item.key)
-                                          ? prev.filter((k) => k !== item.key)
-                                          : [...prev, item.key]
-                                      );
-                                    }}
+                                    onClick={() => togglePengelolaChecklistKey(item.key)}
                                     className={`flex w-full items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-left text-xs transition-colors ${
                                       included
                                         ? 'border-teal-700/35 bg-teal-50/50 text-slate-900'
@@ -3250,16 +3310,16 @@ export function MenuDownloadView({
                 </div>
               )}
 
-              {/* Opsi Pilih / Kecualikan Kelurahan (muncul saat kolom Kelurahan dicentang) */}
+              {/* Opsi Pilih Kelurahan yang Dicetak (muncul saat kolom Kelurahan dicentang) */}
               {isKelurahanColumnChecked && filteredRecords.length > 0 && (
                 <div className="rounded-xl border border-slate-200 bg-slate-50/70">
                   {kelurahanChecklistItems.length === 0 ? (
                     <div className="px-3 py-2.5">
                       <p className="text-xs font-semibold text-slate-800">
-                        Filter / Kecualikan Kelurahan
+                        Pilih Kelurahan yang Dicetak
                       </p>
                       <p className="mt-0.5 text-[10px] text-slate-500">
-                        Tidak ada kelurahan yang cocok dengan urutan kolom PDF aktif saat ini (0 KPM cocok).
+                        Tidak ada kelurahan yang cocok dengan filter kolom saat ini (0 KPM cocok).
                       </p>
                     </div>
                   ) : (
@@ -3272,12 +3332,12 @@ export function MenuDownloadView({
                         >
                           <div className="min-w-0">
                             <p className="text-xs font-semibold text-slate-800">
-                              Filter / Kecualikan Kelurahan
+                              Pilih Kelurahan yang Dicetak
                             </p>
                             <p className="text-[10px] text-slate-500">
-                              {activeExcludedKelurahanCount === 0
-                                ? `Semua cocok dipilih (${kelurahanChecklistItems.length} kelurahan · sesuai kolom PDF aktif)`
-                                : `${kelurahanChecklistItems.length - activeExcludedKelurahanCount} dari ${kelurahanChecklistItems.length} dipilih · ${activeExcludedKelurahanCount} dikecualikan`}
+                              {!isKelurahanChecklistFiltered
+                                ? `Semua kelurahan dicetak (${kelurahanChecklistItems.length} kelurahan · ${checklistSourceRecords.length} KPM)`
+                                : `${activeSelectedKelurahanCount} dari ${kelurahanChecklistItems.length} dipilih · hanya yang dicentang yang dicetak`}
                             </p>
                           </div>
                           <ChevronDown
@@ -3286,12 +3346,12 @@ export function MenuDownloadView({
                             }`}
                           />
                         </button>
-                        {activeExcludedKelurahanCount > 0 && (
+                        {isKelurahanChecklistFiltered && (
                           <button
                             type="button"
                             onClick={() => {
                               setPdfFeedback(null);
-                              setExcludedKelurahanKeys([]);
+                              setSelectedKelurahanChecklistKeys(null);
                             }}
                             className="shrink-0 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold text-teal-700 hover:bg-teal-50"
                           >
@@ -3302,24 +3362,6 @@ export function MenuDownloadView({
 
                       {isKelurahanChecklistOpen && (
                         <div className="border-t border-slate-200 bg-white px-3 py-2.5 rounded-b-xl space-y-2">
-                          {!onlyCompleteCheckedColumns &&
-                            matchedActiveColumnRecords.length < filteredRecords.length && (
-                              <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[10px] text-amber-900">
-                                <span>
-                                  Hanya menampilkan kelurahan yang cocok kolom aktif ({matchedActiveColumnRecords.length} KPM).
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setPdfFeedback(null);
-                                    setOnlyCompleteCheckedColumns(true);
-                                  }}
-                                  className="shrink-0 rounded-md bg-teal-700 px-2 py-0.5 font-semibold text-white hover:bg-teal-800"
-                                >
-                                  Cetak Cocok Saja
-                                </button>
-                              </div>
-                            )}
                           {kelurahanChecklistItems.length > 5 && (
                             <div className="relative">
                               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
@@ -3337,7 +3379,7 @@ export function MenuDownloadView({
                               type="button"
                               onClick={() => {
                                 setPdfFeedback(null);
-                                setExcludedKelurahanKeys([]);
+                                setSelectedKelurahanChecklistKeys(null);
                               }}
                               className="font-semibold text-teal-700 hover:underline"
                             >
@@ -3347,11 +3389,11 @@ export function MenuDownloadView({
                               type="button"
                               onClick={() => {
                                 setPdfFeedback(null);
-                                setExcludedKelurahanKeys(kelurahanChecklistItems.map((x) => x.key));
+                                setSelectedKelurahanChecklistKeys([]);
                               }}
-                              className="font-semibold text-rose-700 hover:underline"
+                              className="font-semibold text-slate-600 hover:text-rose-700 hover:underline"
                             >
-                              Kecualikan Semua
+                              Kosongkan
                             </button>
                           </div>
                           <div className="max-h-48 overflow-y-auto space-y-1 pr-0.5">
@@ -3364,21 +3406,16 @@ export function MenuDownloadView({
                                       .includes(kelurahanChecklistQuery.trim().toLowerCase())
                               )
                               .map((item) => {
-                                const included = !excludedKelurahanSet.has(item.key);
+                                const included =
+                                  selectedKelurahanSet === null ||
+                                  selectedKelurahanSet.has(item.key);
                                 return (
                                   <button
                                     key={item.key}
                                     type="button"
                                     role="checkbox"
                                     aria-checked={included}
-                                    onClick={() => {
-                                      setPdfFeedback(null);
-                                      setExcludedKelurahanKeys((prev) =>
-                                        prev.includes(item.key)
-                                          ? prev.filter((k) => k !== item.key)
-                                          : [...prev, item.key]
-                                      );
-                                    }}
+                                    onClick={() => toggleKelurahanChecklistKey(item.key)}
                                     className={`flex w-full items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-left text-xs transition-colors ${
                                       included
                                         ? 'border-teal-700/35 bg-teal-50/50 text-slate-900'
@@ -6273,8 +6310,8 @@ export function MenuDownloadView({
         onClose={() => setIsPengelolaModalOpen(false)}
         onSelect={(val) => {
           setSelectedPengelola(val);
-          setExcludedPengelolaKeys([]);
-          setExcludedKelurahanKeys([]);
+          setSelectedPengelolaChecklistKeys(null);
+          setSelectedKelurahanChecklistKeys(null);
           setPengelolaChecklistQuery('');
           setKelurahanChecklistQuery('');
           setPdfFeedback(null);
