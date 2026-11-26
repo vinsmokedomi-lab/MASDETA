@@ -51,11 +51,13 @@ import {
   ProposalExtractedRow,
   ReconciledRowStatus,
   SlotPlacementStrategy,
+  TROUBLESHOOTING_ITEM_META,
   TroubleshootingManualOverrides,
   TroubleshootingReconcileResult,
   buildProposalRowsFromDatabase,
   buildWhatsAppReconcileSummary,
   getTroubleshootingItemBadgeClass,
+  getTroubleshootingItemName,
   reconcileProposalWithBast,
 } from '../utils/troubleshootingReconciler';
 
@@ -123,6 +125,7 @@ const DEFAULT_TROUBLESHOOTING_OVERRIDES: TroubleshootingManualOverrides = {
   excludedRowKeysByItem: {},
   orderedIncludedKeysByItem: {},
   manualBastLinkByRowKey: {},
+  bastItemCodeOverrideByNo: {},
   placementStrategy: 'proposal_order',
 };
 
@@ -150,6 +153,7 @@ function createInitialTroubleshootingWorkspace(): TroubleshootingWorkspaceCache 
                 excludedRowKeysByItem: parsed.overrides.excludedRowKeysByItem || {},
                 orderedIncludedKeysByItem: parsed.overrides.orderedIncludedKeysByItem || {},
                 manualBastLinkByRowKey: parsed.overrides.manualBastLinkByRowKey || {},
+                bastItemCodeOverrideByNo: parsed.overrides.bastItemCodeOverrideByNo || {},
                 placementStrategy: parsed.overrides.placementStrategy || 'proposal_order',
               }
             : { ...DEFAULT_TROUBLESHOOTING_OVERRIDES },
@@ -274,6 +278,14 @@ export function TroubleshootingView({
 
   // Modal pemilihan KPM over-kuota yang dikeluarkan
   const [overQuotaModalItem, setOverQuotaModalItem] = useState<string | null>(null);
+  const [overQuotaReplaceTarget, setOverQuotaReplaceTarget] = useState<{
+    kodeItem: string;
+    rowKey: string;
+    nama: string;
+    noAsalProposal: string;
+  } | null>(null);
+  const [overQuotaDraftKeys, setOverQuotaDraftKeys] = useState<string[] | null>(null);
+  const [overQuotaNotice, setOverQuotaNotice] = useState<string | null>(null);
   const [overQuotaSearch, setOverQuotaSearch] = useState('');
 
   // Panel Audit & Dampak Pengelola
@@ -530,6 +542,7 @@ export function TroubleshootingView({
           excludedRowKeysByItem: {},
           orderedIncludedKeysByItem: {},
           manualBastLinkByRowKey: {},
+          bastItemCodeOverrideByNo: {},
           placementStrategy: 'proposal_order',
         });
         setRawSource({
@@ -559,6 +572,7 @@ export function TroubleshootingView({
           excludedRowKeysByItem: {},
           orderedIncludedKeysByItem: {},
           manualBastLinkByRowKey: {},
+          bastItemCodeOverrideByNo: {},
           placementStrategy: 'proposal_order',
         });
         setRawSource({
@@ -579,6 +593,9 @@ export function TroubleshootingView({
       setOnlySequenceWarnings(false);
       setHighlightedSequenceNo(null);
       setOverQuotaModalItem(null);
+      setOverQuotaReplaceTarget(null);
+      setOverQuotaDraftKeys(null);
+      setOverQuotaNotice(null);
       setOverQuotaSearch('');
     } catch (err) {
       const msg =
@@ -593,31 +610,59 @@ export function TroubleshootingView({
   };
 
   // === HANDLER PILIH KPM OVER-KUOTA ===
-  const handleToggleExcludedCandidate = (
-    kodeItem: string,
-    rowKey: string,
-    excessCount: number,
-    currentExcludedKeys: string[]
-  ) => {
+  const closeOverQuotaModal = () => {
+    setOverQuotaModalItem(null);
+    setOverQuotaReplaceTarget(null);
+    setOverQuotaDraftKeys(null);
+    setOverQuotaNotice(null);
+    setOverQuotaSearch('');
+  };
+
+  const openOverQuotaBatchModal = (kodeItem: string) => {
+    const grp = result?.overQuotaGroups.find((g) => g.kodeItem === kodeItem);
+    const currentKeys = grp
+      ? grp.candidates.filter((c) => c.isExcluded).map((c) => c.rowKey)
+      : [];
+    setOverQuotaModalItem(kodeItem);
+    setOverQuotaReplaceTarget(null);
+    setOverQuotaDraftKeys(currentKeys);
+    setOverQuotaNotice(null);
+    setOverQuotaSearch('');
+  };
+
+  const openOverQuotaReplaceModal = (row: {
+    kodeItem: string;
+    rowKey?: string;
+    nama: string;
+    noAsalProposal: string;
+  }) => {
+    setOverQuotaModalItem(row.kodeItem);
+    setOverQuotaReplaceTarget(
+      row.rowKey
+        ? {
+            kodeItem: row.kodeItem,
+            rowKey: row.rowKey,
+            nama: row.nama,
+            noAsalProposal: row.noAsalProposal,
+          }
+        : null
+    );
+    if (!row.rowKey) {
+      const grp = result?.overQuotaGroups.find((g) => g.kodeItem === row.kodeItem);
+      setOverQuotaDraftKeys(
+        grp ? grp.candidates.filter((c) => c.isExcluded).map((c) => c.rowKey) : []
+      );
+    } else {
+      setOverQuotaDraftKeys(null);
+    }
+    setOverQuotaNotice(null);
+    setOverQuotaSearch('');
+  };
+
+  const commitExcludedKeysForItem = (kodeItem: string, nextKeys: string[]) => {
     setOverrides((prev) => {
-      const existing = [...currentExcludedKeys];
-      let nextKeys: string[];
-
-      if (excessCount <= 1) {
-        // Radio behavior: 1 klik langsung mengganti KPM yang dikeluarkan
-        nextKeys = [rowKey];
-      } else if (existing.includes(rowKey)) {
-        nextKeys = existing.filter((k) => k !== rowKey);
-      } else if (existing.length < excessCount) {
-        nextKeys = [...existing, rowKey];
-      } else {
-        // Ganti pilihan paling lama jika sudah mencapai batas excessCount
-        nextKeys = [...existing.slice(1), rowKey];
-      }
-
       const nextCustomOrder = { ...(prev.orderedIncludedKeysByItem || {}) };
       delete nextCustomOrder[kodeItem];
-
       return {
         ...prev,
         excludedRowKeysByItem: {
@@ -629,6 +674,72 @@ export function TroubleshootingView({
     });
   };
 
+  const handleReplaceExcludedCandidate = (
+    kodeItem: string,
+    targetOldRowKey: string,
+    replacementRowKey: string,
+    currentExcludedKeys: string[]
+  ) => {
+    if (!targetOldRowKey || !replacementRowKey) return;
+    if (replacementRowKey === targetOldRowKey) {
+      closeOverQuotaModal();
+      return;
+    }
+    if (currentExcludedKeys.includes(replacementRowKey)) {
+      setOverQuotaNotice(
+        'KPM ini sudah berada di daftar dikeluarkan pada baris lain. Pilih KPM yang berstatus "Masuk Utama".'
+      );
+      return;
+    }
+
+    const nextKeys = currentExcludedKeys.includes(targetOldRowKey)
+      ? currentExcludedKeys.map((k) => (k === targetOldRowKey ? replacementRowKey : k))
+      : [...currentExcludedKeys.slice(0, Math.max(0, currentExcludedKeys.length - 1)), replacementRowKey];
+
+    commitExcludedKeysForItem(kodeItem, nextKeys);
+    closeOverQuotaModal();
+  };
+
+  const handleToggleExcludedCandidate = (
+    kodeItem: string,
+    rowKey: string,
+    excessCount: number,
+    effectiveExcludedKeys: string[]
+  ) => {
+    setOverQuotaNotice(null);
+
+    if (excessCount <= 1) {
+      // Radio behavior: 1 klik langsung mengganti KPM yang dikeluarkan
+      const nextKeys = [rowKey];
+      setOverQuotaDraftKeys(nextKeys);
+      commitExcludedKeysForItem(kodeItem, nextKeys);
+      return;
+    }
+
+    const existing = [...effectiveExcludedKeys];
+    if (existing.includes(rowKey)) {
+      // Hapus centang di draft lokal saja agar reconciler tidak langsung mengisi ulang otomatis
+      const nextDraft = existing.filter((k) => k !== rowKey);
+      setOverQuotaDraftKeys(nextDraft);
+      return;
+    }
+
+    if (existing.length < excessCount) {
+      const nextDraft = [...existing, rowKey];
+      setOverQuotaDraftKeys(nextDraft);
+      // Begitu jumlah pilihan lengkap sesuai excessCount, langsung terapkan ke hasil
+      if (nextDraft.length === excessCount) {
+        commitExcludedKeysForItem(kodeItem, nextDraft);
+      }
+      return;
+    }
+
+    // Jangan diam-diam menimpa baris pertama — beri tahu admin untuk melepas centang salah satu KPM dulu
+    setOverQuotaNotice(
+      `Kuota keluar sudah penuh (${excessCount}/${excessCount}). Klik untuk melepas centang salah satu KPM yang bertanda "Dikeluarkan" terlebih dahulu sebelum memilih KPM penggantinya.`
+    );
+  };
+
   const handleAutoExcludeNotInBast = (kodeItem: string) => {
     const group = result?.overQuotaGroups.find((g) => g.kodeItem === kodeItem);
     if (!group) return;
@@ -638,21 +749,22 @@ export function TroubleshootingView({
     const prioritized = [...notInBast.reverse(), ...inBast.reverse()];
     const picked = prioritized.slice(0, group.excessCount).map((c) => c.rowKey);
 
-    setOverrides((prev) => {
-      const nextCustomOrder = { ...(prev.orderedIncludedKeysByItem || {}) };
-      delete nextCustomOrder[kodeItem];
-      return {
-        ...prev,
-        excludedRowKeysByItem: {
-          ...(prev.excludedRowKeysByItem || {}),
-          [kodeItem]: picked,
-        },
-        orderedIncludedKeysByItem: nextCustomOrder,
-      };
-    });
+    setOverQuotaReplaceTarget(null);
+    setOverQuotaDraftKeys(picked);
+    setOverQuotaNotice(null);
+    commitExcludedKeysForItem(kodeItem, picked);
   };
 
   const handleResetExcludedForItem = (kodeItem: string) => {
+    const group = result?.overQuotaGroups.find((g) => g.kodeItem === kodeItem);
+    const defaultPicked = group
+      ? group.candidates.slice(-group.excessCount).map((c) => c.rowKey)
+      : [];
+
+    setOverQuotaReplaceTarget(null);
+    setOverQuotaDraftKeys(defaultPicked);
+    setOverQuotaNotice(null);
+
     setOverrides((prev) => {
       const nextMap = { ...(prev.excludedRowKeysByItem || {}) };
       delete nextMap[kodeItem];
@@ -733,6 +845,42 @@ export function TroubleshootingView({
       };
     });
   };
+
+  // === HANDLER PERBAIKI KODE ITEM SLOT BAST (MIS. BARIS TERBACA LAINNYA) ===
+  const handleOverrideBastSlotItemCode = (bastNo: number, nextCode: string) => {
+    const cleanCode = nextCode.trim().toUpperCase();
+    setOverrides((prev) => {
+      const nextMap = { ...(prev.bastItemCodeOverrideByNo || {}) };
+      if (!cleanCode) {
+        delete nextMap[bastNo];
+      } else {
+        nextMap[bastNo] = cleanCode;
+      }
+      return {
+        ...prev,
+        bastItemCodeOverrideByNo: nextMap,
+        orderedIncludedKeysByItem: {},
+      };
+    });
+  };
+
+  const availableBastItemCodeOptions = useMemo(() => {
+    const codeSet = new Set<string>(Object.keys(TROUBLESHOOTING_ITEM_META));
+    for (const it of items) {
+      const c = (it.code || '').trim().toUpperCase();
+      if (c && c !== 'LAINNYA') codeSet.add(c);
+    }
+    if (result) {
+      for (const comp of result.itemComparisons) {
+        const c = (comp.kodeItem || '').trim().toUpperCase();
+        if (c && c !== 'LAINNYA') codeSet.add(c);
+      }
+    }
+    return Array.from(codeSet).map((code) => ({
+      code,
+      label: `${code} — ${getTroubleshootingItemName(code, items)}`,
+    }));
+  }, [items, result]);
 
   // === HANDLER SALIN RINGKASAN WHATSAPP ===
   const handleCopyWhatsAppSummary = async () => {
@@ -2121,6 +2269,35 @@ export function TroubleshootingView({
             {(resultSectionTab === 'summary' || resultSectionTab === 'all') && (
               <>
                 {/* BAGIAN 3: SATU TABEL REKAPITULASI PERBANDINGAN KUOTA ITEM (BAST VS PROPOSAL) */}
+                {result.itemComparisons.some((c) => c.kodeItem === 'LAINNYA') && (
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-950">
+                    <div className="flex items-start gap-2.5">
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                      <div>
+                        <p className="font-bold text-amber-950">
+                          Terdeteksi baris BAST dengan kode item &quot;LAINNYA&quot;
+                        </p>
+                        <p className="mt-0.5 leading-relaxed text-amber-900">
+                          Artinya teks kolom barang pada nomor BAST tersebut di PDF kosong, terpotong pindah halaman, atau belum dikenali. Anda dapat memperbaiki kode itemnya langsung di Tabel Utama agar kuota item aslinya kembali akurat.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setResultSectionTab('main_table');
+                        setItemFilter('LAINNYA');
+                        setStatusFilter('all');
+                        setOnlySequenceWarnings(false);
+                      }}
+                      className="inline-flex min-h-[36px] shrink-0 items-center gap-1.5 rounded-xl bg-amber-600 px-3.5 text-xs font-bold text-white hover:bg-amber-700"
+                    >
+                      <Wrench className="h-3.5 w-3.5" />
+                      <span>Perbaiki Baris LAINNYA</span>
+                    </button>
+                  </div>
+                )}
+
                 <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
                   <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3.5">
                     <div className="flex items-center gap-2">
@@ -2268,10 +2445,7 @@ export function TroubleshootingView({
                           <button
                             key={`pick-over-${grp.kodeItem}`}
                             type="button"
-                            onClick={() => {
-                              setOverQuotaModalItem(grp.kodeItem);
-                              setOverQuotaSearch('');
-                            }}
+                            onClick={() => openOverQuotaBatchModal(grp.kodeItem)}
                             className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl border border-rose-300 bg-rose-50 px-3 text-xs font-bold text-rose-800 transition-colors hover:bg-rose-100"
                           >
                             <ArrowUpDown className="h-3.5 w-3.5" />
@@ -2358,10 +2532,7 @@ export function TroubleshootingView({
                               <td className="px-3 py-2.5 text-center">
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    setOverQuotaModalItem(row.kodeItem);
-                                    setOverQuotaSearch('');
-                                  }}
+                                  onClick={() => openOverQuotaReplaceModal(row)}
                                   className="inline-flex h-8 items-center gap-1 rounded-lg border border-rose-300 bg-white px-2.5 text-[11px] font-bold text-rose-700 transition-colors hover:bg-rose-600 hover:text-white"
                                 >
                                   <ArrowUpDown className="h-3 w-3" />
@@ -2635,6 +2806,39 @@ export function TroubleshootingView({
                                     >
                                       {row.keterangan}
                                     </span>
+                                    {(row.kodeItem === 'LAINNYA' || row.isBastItemOverridden) && (
+                                      <div className="mt-1.5 flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50/90 px-2.5 py-1.5 text-[11px]">
+                                        <span className="font-semibold text-amber-950">
+                                          {row.rawBastBarangText
+                                            ? `Teks barang BAST No. ${row.noUrutText}: "${row.rawBastBarangText}"`
+                                            : `Kolom barang BAST No. ${row.noUrutText} kosong/terpotong di PDF`}
+                                        </span>
+                                        <select
+                                          aria-label={`Ubah kode item BAST No. ${row.noUrutText}`}
+                                          value={
+                                            overrides.bastItemCodeOverrideByNo?.[row.noUrut] || ''
+                                          }
+                                          onChange={(e) =>
+                                            handleOverrideBastSlotItemCode(
+                                              row.noUrut,
+                                              e.target.value
+                                            )
+                                          }
+                                          className="h-7 rounded-md border border-amber-400 bg-white px-2 text-[11px] font-bold text-slate-800 focus:border-teal-700 focus:outline-none"
+                                        >
+                                          <option value="">
+                                            {row.isBastItemOverridden
+                                              ? '-- Kembalikan Otomatis --'
+                                              : '-- Perbaiki Kode Item BAST --'}
+                                          </option>
+                                          {availableBastItemCodeOptions.map((opt) => (
+                                            <option key={opt.code} value={opt.code}>
+                                              {opt.label}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                    )}
                                   </div>
                                 </td>
                                 <td className="px-2 py-2.5 text-center">
@@ -2832,9 +3036,19 @@ export function TroubleshootingView({
           result.overQuotaGroups[0];
         if (!activeGroup) return null;
 
-        const currentExcludedKeys = activeGroup.candidates
+        const isReplaceMode =
+          overQuotaReplaceTarget !== null &&
+          overQuotaReplaceTarget.kodeItem === activeGroup.kodeItem;
+
+        const committedExcludedKeys = activeGroup.candidates
           .filter((c) => c.isExcluded)
           .map((c) => c.rowKey);
+
+        const effectiveExcludedKeys = isReplaceMode
+          ? committedExcludedKeys
+          : overQuotaDraftKeys ?? committedExcludedKeys;
+        const effectiveExcludedSet = new Set(effectiveExcludedKeys);
+        const remainingToPick = Math.max(0, activeGroup.excessCount - effectiveExcludedKeys.length);
 
         const q = overQuotaSearch.trim().toLowerCase();
         const visibleCandidates = activeGroup.candidates.filter((c) => {
@@ -2853,7 +3067,7 @@ export function TroubleshootingView({
           const pName = c.pengelola && c.pengelola !== '-' ? c.pengelola : 'Tanpa Pengelola';
           const prev = pengelolaStatsMap.get(pName) || { total: 0, excluded: 0 };
           prev.total += 1;
-          if (c.isExcluded) prev.excluded += 1;
+          if (effectiveExcludedSet.has(c.rowKey)) prev.excluded += 1;
           pengelolaStatsMap.set(pName, prev);
         });
         const itemPengelolaStats = Array.from(pengelolaStatsMap.entries()).sort(
@@ -2865,7 +3079,7 @@ export function TroubleshootingView({
             role="dialog"
             aria-modal="true"
             aria-label="Pilih KPM Over-Kuota yang Dikeluarkan"
-            onClick={() => setOverQuotaModalItem(null)}
+            onClick={closeOverQuotaModal}
             className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-xs sm:items-center sm:p-4"
           >
             <div
@@ -2877,10 +3091,14 @@ export function TroubleshootingView({
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="text-[11px] font-bold uppercase tracking-wider text-rose-700">
-                      Penentuan KPM Over-Kuota BAST
+                      {isReplaceMode
+                        ? 'Ganti 1 Baris KPM yang Dikeluarkan'
+                        : 'Penentuan KPM Over-Kuota BAST'}
                     </p>
                     <h2 className="mt-0.5 text-base font-bold text-slate-900">
-                      Pilih KPM yang Dikeluarkan — {activeGroup.kodeItem} ({activeGroup.namaItem})
+                      {isReplaceMode
+                        ? `Ganti KPM Dikeluarkan — ${activeGroup.kodeItem} (${activeGroup.namaItem})`
+                        : `Pilih KPM yang Dikeluarkan — ${activeGroup.kodeItem} (${activeGroup.namaItem})`}
                     </h2>
                     <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
                       Usulan Proposal: <strong>{activeGroup.usulanKpm} KPM</strong> · Kuota BAST:{' '}
@@ -2890,13 +3108,35 @@ export function TroubleshootingView({
                   </div>
                   <button
                     type="button"
-                    onClick={() => setOverQuotaModalItem(null)}
+                    onClick={closeOverQuotaModal}
                     className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600"
                     aria-label="Tutup"
                   >
                     <X className="h-4 w-4" />
                   </button>
                 </div>
+
+                {/* Banner Khusus Mode Ganti 1 Baris Tertentu */}
+                {isReplaceMode && overQuotaReplaceTarget && (
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-900">
+                    <div className="min-w-0">
+                      <span className="font-semibold text-rose-700">Baris yang diganti: </span>
+                      <span className="font-bold text-slate-900">
+                        No. {overQuotaReplaceTarget.noAsalProposal} — {overQuotaReplaceTarget.nama}
+                      </span>
+                      <p className="mt-0.5 text-[11px] text-rose-800">
+                        Klik 1 KPM berstatus <strong>Masuk Utama</strong> di bawah untuk menggantikan baris ini saja. Baris lain yang sudah dipilih tetap aman.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => openOverQuotaBatchModal(activeGroup.kodeItem)}
+                      className="shrink-0 rounded-lg border border-rose-300 bg-white px-2.5 py-1 text-[11px] font-bold text-rose-700 hover:bg-rose-100"
+                    >
+                      Mode Pilih Semua ({activeGroup.excessCount})
+                    </button>
+                  </div>
+                )}
 
                 {/* Tab pindah antar item over-kuota jika > 1 item */}
                 {result.overQuotaGroups.length > 1 && (
@@ -2905,10 +3145,7 @@ export function TroubleshootingView({
                       <button
                         key={`tab-over-${grp.kodeItem}`}
                         type="button"
-                        onClick={() => {
-                          setOverQuotaModalItem(grp.kodeItem);
-                          setOverQuotaSearch('');
-                        }}
+                        onClick={() => openOverQuotaBatchModal(grp.kodeItem)}
                         className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
                           grp.kodeItem === activeGroup.kodeItem
                             ? 'bg-rose-700 text-white'
@@ -2977,97 +3214,163 @@ export function TroubleshootingView({
 
               {/* Daftar Kandidat KPM */}
               <div className="flex-1 overflow-y-auto p-4">
+                {overQuotaNotice && (
+                  <div className="mb-3 flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                    <span>{overQuotaNotice}</span>
+                  </div>
+                )}
+
                 <p className="mb-2.5 text-[11px] text-slate-500">
-                  {activeGroup.excessCount === 1
+                  {isReplaceMode && overQuotaReplaceTarget
+                    ? `Pilih 1 KPM berstatus "Masuk Utama" untuk menggantikan ${overQuotaReplaceTarget.nama}.`
+                    : activeGroup.excessCount === 1
                     ? 'Klik satu nama KPM di bawah untuk menjadikannya KPM yang dikeluarkan. KPM lainnya otomatis masuk ke Tabel Utama.'
-                    : `Pilih tepat ${activeGroup.excessCount} nama KPM untuk dikeluarkan (${currentExcludedKeys.length}/${activeGroup.excessCount} terpilih).`}
+                    : `Pilih tepat ${activeGroup.excessCount} nama KPM untuk dikeluarkan (${effectiveExcludedKeys.length}/${activeGroup.excessCount} terpilih). Klik KPM yang sudah dicentang untuk melepas centangnya.`}
                 </p>
 
                 <div className="space-y-2">
-                  {visibleCandidates.map((cand) => (
-                    <button
-                      key={cand.rowKey}
-                      type="button"
-                      onClick={() =>
-                        handleToggleExcludedCandidate(
-                          activeGroup.kodeItem,
-                          cand.rowKey,
-                          activeGroup.excessCount,
-                          currentExcludedKeys
-                        )
-                      }
-                      className={`flex w-full items-start justify-between gap-3 rounded-xl border p-3 text-left transition-colors ${
-                        cand.isExcluded
-                          ? 'border-rose-400 bg-rose-50/70'
-                          : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/70'
-                      }`}
-                    >
-                      <div className="flex min-w-0 flex-1 items-start gap-2.5">
-                        <span
-                          className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border text-[10px] font-bold ${
-                            cand.isExcluded
-                              ? 'border-rose-600 bg-rose-600 text-white'
-                              : 'border-slate-300 bg-white text-transparent'
-                          }`}
-                        >
-                          <Check className="h-3.5 w-3.5" />
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600 tabular-nums">
-                              No. {cand.noAsalProposal}
-                            </span>
-                            <span className="text-xs font-bold text-slate-900">{cand.nama}</span>
-                            {cand.pengelola && cand.pengelola !== '-' && (
-                              <span className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-700">
-                                {cand.pengelola}
-                              </span>
-                            )}
-                            {cand.matchedBastNo ? (
-                              <span className="rounded border border-teal-200 bg-teal-50 px-1.5 py-0.5 text-[10px] font-semibold text-teal-800 tabular-nums">
-                                Ada di BAST No. {String(cand.matchedBastNo).padStart(2, '0')}
-                                {cand.matchedBastItemCode &&
-                                cand.matchedBastItemCode !== activeGroup.kodeItem
-                                  ? ` (${cand.matchedBastItemCode})`
-                                  : ''}
-                              </span>
-                            ) : (
-                              <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
-                                Tidak ada di BAST
-                              </span>
-                            )}
-                          </div>
-                          <p className="mt-1 truncate text-[11px] text-slate-600">{cand.alamat}</p>
-                        </div>
-                      </div>
+                  {visibleCandidates.map((cand) => {
+                    const isChecked = effectiveExcludedSet.has(cand.rowKey);
+                    const isTargetRow =
+                      isReplaceMode && overQuotaReplaceTarget?.rowKey === cand.rowKey;
+                    const isOtherExcludedInReplaceMode =
+                      isReplaceMode && isChecked && !isTargetRow;
 
-                      <span
-                        className={`shrink-0 rounded-lg px-2.5 py-1 text-[11px] font-bold ${
-                          cand.isExcluded
-                            ? 'bg-rose-700 text-white'
-                            : 'bg-emerald-50 text-emerald-700'
+                    return (
+                      <button
+                        key={cand.rowKey}
+                        type="button"
+                        disabled={isOtherExcludedInReplaceMode}
+                        onClick={() => {
+                          if (isReplaceMode && overQuotaReplaceTarget) {
+                            handleReplaceExcludedCandidate(
+                              activeGroup.kodeItem,
+                              overQuotaReplaceTarget.rowKey,
+                              cand.rowKey,
+                              committedExcludedKeys
+                            );
+                          } else {
+                            handleToggleExcludedCandidate(
+                              activeGroup.kodeItem,
+                              cand.rowKey,
+                              activeGroup.excessCount,
+                              effectiveExcludedKeys
+                            );
+                          }
+                        }}
+                        className={`flex w-full items-start justify-between gap-3 rounded-xl border p-3 text-left transition-colors ${
+                          isTargetRow
+                            ? 'border-amber-400 bg-amber-50/80 ring-1 ring-amber-300'
+                            : isOtherExcludedInReplaceMode
+                            ? 'cursor-not-allowed border-rose-200 bg-rose-50/40 opacity-65'
+                            : isChecked
+                            ? 'border-rose-400 bg-rose-50/70 hover:bg-rose-50'
+                            : 'border-slate-200 bg-white hover:border-teal-400 hover:bg-teal-50/30'
                         }`}
                       >
-                        {cand.isExcluded ? 'Dikeluarkan' : 'Masuk Utama'}
-                      </span>
-                    </button>
-                  ))}
+                        <div className="flex min-w-0 flex-1 items-start gap-2.5">
+                          <span
+                            className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border text-[10px] font-bold ${
+                              isTargetRow
+                                ? 'border-amber-600 bg-amber-500 text-white'
+                                : isChecked
+                                ? 'border-rose-600 bg-rose-600 text-white'
+                                : 'border-slate-300 bg-white text-transparent'
+                            }`}
+                          >
+                            <Check className="h-3.5 w-3.5" />
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600 tabular-nums">
+                                No. {cand.noAsalProposal}
+                              </span>
+                              <span className="text-xs font-bold text-slate-900">{cand.nama}</span>
+                              {cand.pengelola && cand.pengelola !== '-' && (
+                                <span className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-700">
+                                  {cand.pengelola}
+                                </span>
+                              )}
+                              {cand.matchedBastNo ? (
+                                <span className="rounded border border-teal-200 bg-teal-50 px-1.5 py-0.5 text-[10px] font-semibold text-teal-800 tabular-nums">
+                                  Ada di BAST No. {String(cand.matchedBastNo).padStart(2, '0')}
+                                  {cand.matchedBastItemCode &&
+                                  cand.matchedBastItemCode !== activeGroup.kodeItem
+                                    ? ` (${cand.matchedBastItemCode})`
+                                    : ''}
+                                </span>
+                              ) : (
+                                <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+                                  Tidak ada di BAST
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-1 truncate text-[11px] text-slate-600">{cand.alamat}</p>
+                          </div>
+                        </div>
+
+                        <span
+                          className={`shrink-0 rounded-lg px-2.5 py-1 text-[11px] font-bold ${
+                            isTargetRow
+                              ? 'bg-amber-600 text-white'
+                              : isOtherExcludedInReplaceMode
+                              ? 'bg-rose-200 text-rose-900'
+                              : isChecked
+                              ? 'bg-rose-700 text-white'
+                              : 'bg-emerald-50 text-emerald-700'
+                          }`}
+                        >
+                          {isTargetRow
+                            ? 'Sedang Diganti'
+                            : isOtherExcludedInReplaceMode
+                            ? 'Dikeluarkan (Baris Lain)'
+                            : isChecked
+                            ? 'Dikeluarkan'
+                            : isReplaceMode
+                            ? 'Pilih Pengganti'
+                            : 'Masuk Utama'}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
               {/* Footer Modal */}
-              <div className="flex items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-3">
                 <p className="text-xs text-slate-600">
-                  Perubahan langsung diterapkan ke Tabel Utama, PDF, dan Apply Proposal.
+                  {!isReplaceMode && remainingToPick > 0 ? (
+                    <span className="font-semibold text-rose-700">
+                      Pilih {remainingToPick} KPM lagi agar lengkap ({effectiveExcludedKeys.length}/
+                      {activeGroup.excessCount}) sebelum menerapkan.
+                    </span>
+                  ) : isReplaceMode ? (
+                    'Klik salah satu KPM "Pilih Pengganti" untuk langsung menukar baris terpilih.'
+                  ) : (
+                    'Perubahan langsung diterapkan ke Tabel Utama, PDF, dan Apply Proposal.'
+                  )}
                 </p>
-                <button
-                  type="button"
-                  onClick={() => setOverQuotaModalItem(null)}
-                  className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-bold text-white hover:bg-teal-800"
-                >
-                  <CheckCircle2 className="h-4 w-4" />
-                  <span>Selesai &amp; Terapkan</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  {!isReplaceMode && remainingToPick > 0 && (
+                    <button
+                      type="button"
+                      onClick={closeOverQuotaModal}
+                      className="inline-flex min-h-[38px] items-center rounded-xl border border-slate-300 bg-white px-3.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                    >
+                      Batal
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    disabled={!isReplaceMode && remainingToPick > 0}
+                    onClick={closeOverQuotaModal}
+                    className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-bold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <CheckCircle2 className="h-4 w-4" />
+                    <span>{isReplaceMode ? 'Tutup' : 'Selesai & Terapkan'}</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>

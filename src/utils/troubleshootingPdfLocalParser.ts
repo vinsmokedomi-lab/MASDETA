@@ -90,12 +90,59 @@ function clusterValues(vals: number[], tol = 2.5): number[] {
   return out;
 }
 
+interface HSegment {
+  y: number;
+  xL: number;
+  xR: number;
+}
+
+interface HBandsMeta {
+  y: number;
+  minX: number;
+  maxX: number;
+  span: number;
+}
+
+function clusterHSegments(segments: HSegment[], minSpan: number, tol = 2.5): HBandsMeta[] {
+  if (segments.length === 0) return [];
+  const sorted = [...segments].sort((a, b) => a.y - b.y);
+  const clusters: { ySum: number; count: number; minX: number; maxX: number; lastY: number }[] = [];
+
+  for (const seg of sorted) {
+    const prev = clusters[clusters.length - 1];
+    if (prev && seg.y - prev.lastY <= tol) {
+      prev.ySum += seg.y;
+      prev.count += 1;
+      prev.lastY = seg.y;
+      if (seg.xL < prev.minX) prev.minX = seg.xL;
+      if (seg.xR > prev.maxX) prev.maxX = seg.xR;
+    } else {
+      clusters.push({
+        ySum: seg.y,
+        count: 1,
+        minX: seg.xL,
+        maxX: seg.xR,
+        lastY: seg.y,
+      });
+    }
+  }
+
+  return clusters
+    .map((c) => ({
+      y: c.ySum / c.count,
+      minX: c.minX,
+      maxX: c.maxX,
+      span: c.maxX - c.minX,
+    }))
+    .filter((c) => c.span >= minSpan);
+}
+
 async function extractPageGeometry(
   page: { getOperatorList: () => Promise<{ fnArray: number[]; argsArray: unknown[] }> },
   vpHeight: number,
   minHWidth: number,
   OPS: PdfjsModule['OPS']
-): Promise<{ hLines: number[]; vLines: number[] }> {
+): Promise<{ hLines: number[]; hBandsMeta: HBandsMeta[]; vLines: number[] }> {
   const ops = await page.getOperatorList();
   let ctm = [1, 0, 0, 1, 0, 0];
   const stack: number[][] = [];
@@ -104,7 +151,7 @@ async function extractPageGeometry(
     ctm[1] * x + ctm[3] * y + ctm[5],
   ];
 
-  const rawHLines: number[] = [];
+  const rawHSegments: HSegment[] = [];
   const rawVLines: number[] = [];
 
   for (let i = 0; i < ops.fnArray.length; i += 1) {
@@ -142,11 +189,15 @@ async function extractPageGeometry(
         } else if (op === 1) {
           // lineTo
           const [nx, ny] = apply(pathArr[k++], pathArr[k++]);
-          if (Math.abs(ny - cy) < 1 && Math.abs(nx - cx) > minHWidth) {
-            rawHLines.push(vpHeight - ny);
+          if (Math.abs(ny - cy) < 1 && Math.abs(nx - cx) > 12) {
+            rawHSegments.push({
+              y: vpHeight - (ny + cy) / 2,
+              xL: Math.min(cx, nx),
+              xR: Math.max(cx, nx),
+            });
           }
           if (Math.abs(nx - cx) < 1 && Math.abs(ny - cy) > 8) {
-            rawVLines.push(nx);
+            rawVLines.push((cx + nx) / 2);
           }
           cx = nx;
           cy = ny;
@@ -158,11 +209,15 @@ async function extractPageGeometry(
           k += 4;
         } else if (op === 4) {
           // closePath
-          if (Math.abs(sy - cy) < 1 && Math.abs(sx - cx) > minHWidth) {
-            rawHLines.push(vpHeight - sy);
+          if (Math.abs(sy - cy) < 1 && Math.abs(sx - cx) > 12) {
+            rawHSegments.push({
+              y: vpHeight - (sy + cy) / 2,
+              xL: Math.min(cx, sx),
+              xR: Math.max(cx, sx),
+            });
           }
           if (Math.abs(sx - cx) < 1 && Math.abs(sy - cy) > 8) {
-            rawVLines.push(sx);
+            rawVLines.push((cx + sx) / 2);
           }
           cx = sx;
           cy = sy;
@@ -179,11 +234,11 @@ async function extractPageGeometry(
           const xL = Math.min(px1, px2);
           const xR = Math.max(px1, px2);
 
-          if (xR - xL > minHWidth && yBot - yTop > 8) {
+          if (xR - xL > 12 && yBot - yTop > 8) {
             rawVLines.push(xL, xR);
-            rawHLines.push(yTop, yBot);
-          } else if (xR - xL > minHWidth && yBot - yTop <= 3) {
-            rawHLines.push((yTop + yBot) / 2);
+            rawHSegments.push({ y: yTop, xL, xR }, { y: yBot, xL, xR });
+          } else if (xR - xL > 12 && yBot - yTop <= 3) {
+            rawHSegments.push({ y: (yTop + yBot) / 2, xL, xR });
           } else if (yBot - yTop > 8 && xR - xL <= 3) {
             rawVLines.push((xL + xR) / 2);
           }
@@ -194,8 +249,10 @@ async function extractPageGeometry(
     }
   }
 
+  const hBandsMeta = clusterHSegments(rawHSegments, minHWidth, 2.5);
   return {
-    hLines: clusterValues(rawHLines, 2.5),
+    hLines: hBandsMeta.map((m) => m.y),
+    hBandsMeta,
     vLines: clusterValues(rawVLines, 2.5),
   };
 }
@@ -203,13 +260,70 @@ async function extractPageGeometry(
 function isBastHeaderBand(band: PdfTextItem[]): boolean {
   const hasNo = band.some((t) => /^NO\.?$/i.test(t.s));
   const hasNama = band.some((t) => /^NAMA(\s+PENERIMA|\s+KPM)?$/i.test(t.s));
-  const hasNikOrBarang = band.some((t) => /^NIK$/i.test(t.s) || /^(NAMA\s+)?BARANG$/i.test(t.s));
-  return hasNo && (hasNama || hasNikOrBarang);
+  const hasNikOrBarang = band.some(
+    (t) =>
+      /^NIK(\s+KTP)?$/i.test(t.s) ||
+      /^(NAMA\s+|JENIS\s+|URAIAN\s+)?(BARANG|BANTUAN)(\s+BANTUAN)?$/i.test(t.s)
+  );
+  if (hasNo && (hasNama || hasNikOrBarang)) return true;
+
+  // Sub-header nomor kolom seperti: 1 | 2 | 3 | 4 | 5 | 6 atau (1) | (2) | (3)
+  if (band.length >= 4 && band.length <= 10) {
+    const colNums = band
+      .map((t) => t.s.replace(/[().]/g, '').trim())
+      .map((s) => (/^\d{1,2}$/.test(s) ? Number(s) : NaN));
+    if (colNums.every((n) => Number.isFinite(n) && n >= 1 && n <= 12)) {
+      const sorted = [...colNums].sort((a, b) => a - b);
+      const isSequential = sorted.every((n, i) => n === i + 1);
+      if (isSequential) return true;
+    }
+  }
+  return false;
 }
 
-function extractBandNo(band: PdfTextItem[], noMaxX: number): number | null {
+function isBastFooterOrTitleBand(band: PdfTextItem[]): boolean {
+  const joined = band
+    .map((t) => t.s)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase();
+  if (!joined) return true;
+
+  // Jangan pernah membuang band yang jelas berisi NIK 14-18 digit atau nama barang BAST
+  const hasNik = band.some((t) => /^\d{14,18}$/.test(t.s.replace(/\s+/g, '')));
+  if (hasNik) return false;
+  if (
+    /\b(KOMPOR|PANCI|OVEN|MIXER|MIKSER|TEFLON|SELANG|REGULATOR|DISPENSER|RICE\s+COOKER|MAGIC\s*COM|MESIN\s+JAHIT|MESIN\s+CUCI|KERANJANG|GERINDA|POTONG\s+PAPAN|SERUT|AMPLAS|MESIN\s+BOR|CUP\s+ES|TERMOS|TEKO\s+SIUL|BLENDER|POTONG\s+RUMPUT|CHAINSAW|SEMPROT|TENDA|KURSI|LEMARI\s+ES|KULKAS)\b/i.test(
+      joined
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    /^(HALAMAN|PAGE)\s+\d+/i.test(joined) ||
+    /^(MENGETAHUI|KEPALA\s+DINAS|PEJABAT|PIHAK\s+(KESATU|KEDUA|PERTAMA)|LAMPIRAN|BERITA\s+ACARA|PEMERINTAH\s+KOTA|DINAS\s+SOSIAL)/i.test(
+      joined
+    ) ||
+    /\b(KEPALA\s+DINAS|PEJABAT\s+PEMBUAT|MENGETAHUI|YANG\s+MENERIMA|YANG\s+MENYERAHKAN)\b/i.test(
+      joined
+    ) ||
+    /\bNIP\.?\s*\d{8,}/i.test(joined) ||
+    /^(JUMLAH|TOTAL)(\s+KESELURUHAN)?\b/i.test(joined)
+  ) {
+    return true;
+  }
+  // Nomor halaman tunggal di bawah halaman
+  if (band.length === 1 && /^\d{1,3}$/.test(joined)) {
+    return true;
+  }
+  return false;
+}
+
+function extractBastBandNo(band: PdfTextItem[], noMaxX: number): number | null {
   for (const t of band) {
-    if (t.x > noMaxX + 8) continue;
+    if (t.x > noMaxX + 5) continue;
     const merged = t.s.match(/^(\d{1,4})\s+(.+)$/);
     if (merged) {
       const n = Number(merged[1]);
@@ -221,6 +335,24 @@ function extractBandNo(band: PdfTextItem[], noMaxX: number): number | null {
     }
   }
   return null;
+}
+
+interface BastPageBand {
+  items: PdfTextItem[];
+  isOpenTop: boolean;
+  isOpenBottom: boolean;
+}
+
+function findVerticalDividerBetween(
+  vLines: number[],
+  leftEdge: number,
+  rightEdge: number,
+  fallback: number,
+  prefer: 'leftmost' | 'rightmost'
+): number {
+  const candidates = vLines.filter((x) => x >= leftEdge - 2 && x <= rightEdge + 2);
+  if (candidates.length === 0) return fallback;
+  return prefer === 'leftmost' ? candidates[0] : candidates[candidates.length - 1];
 }
 
 export async function parseBastPdfLocally(
@@ -238,7 +370,7 @@ export async function parseBastPdfLocally(
     barangMaxX: number;
   } | null = null;
 
-  const allBands: PdfTextItem[][] = [];
+  const allBands: BastPageBand[] = [];
 
   try {
     for (let p = 1; p <= doc.numPages; p += 1) {
@@ -263,15 +395,29 @@ export async function parseBastPdfLocally(
       totalTextItems += textItems.length;
       if (textItems.length === 0) continue;
 
+      const { hLines, hBandsMeta, vLines } = await extractPageGeometry(
+        page,
+        vp.height,
+        180,
+        pdfjs.OPS
+      );
+
+      const pageNoHdr = textItems.find((t) => /^NO\.?$/i.test(t.s));
+      const pageNamaHdr = textItems.find((t) => /^NAMA(\s+PENERIMA|\s+KPM)?$/i.test(t.s));
+      const pageHasHeader = Boolean(
+        pageNoHdr && pageNamaHdr && Math.abs(pageNoHdr.y - pageNamaHdr.y) < 18
+      );
+      const pageHeaderY = pageHasHeader && pageNoHdr ? pageNoHdr.y : null;
+
       if (!colBounds) {
-        const noHdr = textItems.find((t) => /^NO\.?$/i.test(t.s));
-        const namaHdr = textItems.find((t) => /^NAMA(\s+PENERIMA|\s+KPM)?$/i.test(t.s));
+        const noHdr = pageNoHdr;
+        const namaHdr = pageNamaHdr;
         const nikHdr = textItems.find((t) => /^NIK(\s+KTP)?$/i.test(t.s));
         const alamatHdr = textItems.find((t) => /^ALAMAT(\s+LENGKAP)?$/i.test(t.s));
         const barangHdr = textItems.find((t) =>
-          /^(NAMA\s+)?(BARANG|BANTUAN|JENIS\s+BARANG|URAIAN\s+BARANG)$/i.test(t.s)
+          /^(NAMA\s+|JENIS\s+|URAIAN\s+)?(BARANG|BANTUAN)(\s+BANTUAN)?$/i.test(t.s)
         );
-        const volHdr = textItems.find((t) => /^(VOLUME|VOL\.?|JUMLAH|QTY|SATUAN)$/i.test(t.s));
+        const volHdr = textItems.find((t) => /^(VOLUME|VOL\.?|JUMLAH|QTY|SATUAN|HARGA)$/i.test(t.s));
 
         if (noHdr && namaHdr && alamatHdr && barangHdr) {
           const headerY = noHdr.y;
@@ -285,68 +431,160 @@ export async function parseBastPdfLocally(
             }
           }
 
+          const fallbackNoMaxX = (noHdr.x + noHdr.w + namaHdr.x) / 2 - 5;
+          const fallbackNamaMaxX = nikHdr
+            ? (namaHdr.x + namaHdr.w + nikHdr.x) / 2 - 8
+            : (namaHdr.x + namaHdr.w + alamatHdr.x) / 2 - 10;
+          const fallbackAlamatMaxX = (alamatHdr.x + alamatHdr.w + barangHdr.x) / 2 - 5;
+          const fallbackBarangMaxX = volHdr ? (barangHdr.x + barangHdr.w + volHdr.x) / 2 : vp.width;
+
+          const nextAfterNamaX = nikHdr ? nikHdr.x : alamatHdr.x;
           colBounds = {
-            noMaxX: (noHdr.x + noHdr.w + namaHdr.x) / 2 - 5,
-            namaMaxX: nikHdr
-              ? (namaHdr.x + namaHdr.w + nikHdr.x) / 2 - 8
-              : (namaHdr.x + namaHdr.w + alamatHdr.x) / 2 - 10,
-            alamatMaxX: (alamatHdr.x + alamatHdr.w + barangHdr.x) / 2 - 5,
-            barangMaxX: volHdr ? (barangHdr.x + barangHdr.w + volHdr.x) / 2 : vp.width,
+            noMaxX: findVerticalDividerBetween(
+              vLines,
+              noHdr.x + noHdr.w,
+              namaHdr.x,
+              fallbackNoMaxX,
+              'leftmost'
+            ),
+            namaMaxX: findVerticalDividerBetween(
+              vLines,
+              namaHdr.x + namaHdr.w,
+              nextAfterNamaX,
+              fallbackNamaMaxX,
+              'leftmost'
+            ),
+            alamatMaxX: findVerticalDividerBetween(
+              vLines,
+              alamatHdr.x + alamatHdr.w,
+              barangHdr.x,
+              fallbackAlamatMaxX,
+              'rightmost'
+            ),
+            barangMaxX: volHdr
+              ? findVerticalDividerBetween(
+                  vLines,
+                  barangHdr.x + barangHdr.w,
+                  volHdr.x,
+                  fallbackBarangMaxX,
+                  'rightmost'
+                )
+              : vp.width,
           };
         }
       }
 
-      const { hLines } = await extractPageGeometry(page, vp.height, 260, pdfjs.OPS);
+      let pageBands: BastPageBand[] = [];
 
-      let pageBands: PdfTextItem[][] = [];
+      // Pilih hanya garis horizontal selebar tabel (yang mencakup kolom NO di sisi kiri),
+      // agar garis sub-baris internal khusus di kolom BARANG tidak memotong 1 KPM menjadi 2 baris!
+      const tableMaxSpan = hBandsMeta.reduce((acc, m) => Math.max(acc, m.span), 0);
+      const minRowLineSpan = Math.max(200, tableMaxSpan * 0.55);
+      const fullRowHLines = hBandsMeta
+        .filter(
+          (m) =>
+            m.span >= minRowLineSpan &&
+            (!colBounds || m.minX <= colBounds.noMaxX + 28)
+        )
+        .map((m) => m.y);
+      const effectiveHLines = colBounds ? fullRowHLines : hLines;
 
-      if (hLines.length >= 2) {
-        const boundaries = [0, ...hLines, Infinity];
-        for (let b = 0; b < boundaries.length - 1; b += 1) {
-          const y0 = boundaries[b];
-          const y1 = boundaries[b + 1];
+      if (effectiveHLines.length >= 2 || (effectiveHLines.length === 1 && p > 1 && colBounds)) {
+        // 1. Leading band di atas garis horizontal penuh pertama:
+        //    Sangat krusial untuk halaman lanjutan (p > 1) tanpa header berulang, di mana baris KPM
+        //    yang terpotong page break (mis. No. 63 AFRIANI) tidak punya garis tutup atas!
+        if (p > 1 && !pageHasHeader) {
+          const leadingItems = textItems.filter((t) => t.y < effectiveHLines[0] - 0.5);
+          if (leadingItems.length > 0 && !isBastFooterOrTitleBand(leadingItems)) {
+            pageBands.push({ items: leadingItems, isOpenTop: true, isOpenBottom: false });
+          }
+        }
+
+        // 2. Band tertutup di antara dua garis horizontal penuh
+        for (let b = 0; b < effectiveHLines.length - 1; b += 1) {
+          const y0 = effectiveHLines[b];
+          const y1 = effectiveHLines[b + 1];
+          // Jika halaman memiliki judul di atas header, abaikan teks di atas baris header
+          if (pageHeaderY !== null && y1 < pageHeaderY - 4) continue;
           const band = textItems.filter((t) => t.y >= y0 - 0.5 && t.y < y1 - 0.5);
           if (band.length > 0) {
-            pageBands.push(band);
+            pageBands.push({ items: band, isOpenTop: false, isOpenBottom: false });
           }
+        }
+
+        // 3. Trailing band di bawah garis horizontal penuh terakhir:
+        //    Menangkap awal baris KPM baru yang terpotong page break (mis. KOMPOR 1000 & PANCI 30 CM
+        //    di bawah garis tutup No. 62, yang lanjutannya No. 63 AFRIANI ada di halaman berikutnya).
+        const trailingItems = textItems.filter(
+          (t) => t.y >= effectiveHLines[effectiveHLines.length - 1] - 0.5
+        );
+        if (trailingItems.length > 0 && !isBastFooterOrTitleBand(trailingItems)) {
+          pageBands.push({ items: trailingItems, isOpenTop: false, isOpenBottom: true });
         }
       } else if (colBounds) {
         // Fallback untuk BAST tanpa garis border horizontal: kelompokkan menurut anchor NO
         const sortedItems = [...textItems].sort((a, b) => a.y - b.y || a.x - b.x);
         const noAnchors = sortedItems.filter(
           (t) =>
-            t.x <= colBounds!.noMaxX + 8 &&
+            t.x <= colBounds!.noMaxX + 6 &&
             (/^\d{1,4}$/.test(t.s) || /^\d{1,4}\s+[A-Z]/i.test(t.s))
         );
         if (noAnchors.length > 0) {
           const preAnchor = sortedItems.filter((t) => t.y < noAnchors[0].y - 8);
-          if (preAnchor.length > 0) pageBands.push(preAnchor);
+          if (preAnchor.length > 0 && !isBastFooterOrTitleBand(preAnchor)) {
+            pageBands.push({ items: preAnchor, isOpenTop: p > 1, isOpenBottom: false });
+          }
           for (let i = 0; i < noAnchors.length; i += 1) {
             const prevY =
               i === 0 ? noAnchors[0].y - 8 : (noAnchors[i - 1].y + noAnchors[i].y) / 2;
             const nextY =
               i === noAnchors.length - 1 ? Infinity : (noAnchors[i].y + noAnchors[i + 1].y) / 2;
             const band = sortedItems.filter((t) => t.y >= prevY && t.y < nextY);
-            if (band.length > 0) pageBands.push(band);
+            if (band.length > 0) {
+              pageBands.push({
+                items: band,
+                isOpenTop: false,
+                isOpenBottom: i === noAnchors.length - 1,
+              });
+            }
           }
+        } else if (p > 1 && !isBastFooterOrTitleBand(sortedItems)) {
+          pageBands.push({ items: sortedItems, isOpenTop: true, isOpenBottom: true });
         }
       }
 
-      // Buang band header berulang di halaman lanjutan
-      pageBands = pageBands.filter((band) => !isBastHeaderBand(band));
+      // Buang band header berulang / nomor kolom / judul / footer halaman
+      pageBands = pageBands.filter(
+        (band) => !isBastHeaderBand(band.items) && !isBastFooterOrTitleBand(band.items)
+      );
 
+      // Gabungkan baris yang terpotong pindah halaman (page break):
+      // - Kasus A (seperti No. 63): bawah hal. p punya sebagian barang (isOpenBottom, no=null),
+      //   atas hal. p+1 punya no=63, nama, dan sisa barang (isOpenTop, no=63) -> gabung jadi 1 baris No. 63!
+      // - Kasus B (sebaliknya): bawah hal. p punya no & nama (isOpenBottom, no=61),
+      //   atas hal. p+1 punya sisa alamat/barang (isOpenTop, no=null) -> gabung jadi 1 baris No. 61!
       if (p > 1 && allBands.length > 0 && pageBands.length > 0 && colBounds) {
         const prevBand = allBands[allBands.length - 1];
         const firstBand = pageBands[0];
-        const prevNo = extractBandNo(prevBand, colBounds.noMaxX);
-        const firstNo = extractBandNo(firstBand, colBounds.noMaxX);
+        const prevNo = extractBastBandNo(prevBand.items, colBounds.noMaxX);
+        const firstNo = extractBastBandNo(firstBand.items, colBounds.noMaxX);
 
+        const canMergeSameOrSplit =
+          prevNo === null || firstNo === null || prevNo === firstNo;
         const shouldMergeAcrossPage =
-          prevNo === null || firstNo === null || (prevNo !== null && firstNo === prevNo);
+          canMergeSameOrSplit &&
+          ((prevBand.isOpenBottom && firstBand.isOpenTop) ||
+            (prevBand.isOpenBottom && prevNo === null && firstNo !== null) ||
+            (firstNo === null && prevNo !== null) ||
+            (prevNo !== null && firstNo !== null && prevNo === firstNo));
 
         if (shouldMergeAcrossPage) {
           pageBands.shift();
-          allBands[allBands.length - 1] = [...prevBand, ...firstBand];
+          allBands[allBands.length - 1] = {
+            items: [...prevBand.items, ...firstBand.items],
+            isOpenTop: prevBand.isOpenTop,
+            isOpenBottom: firstBand.isOpenBottom,
+          };
         }
       }
 
@@ -368,8 +606,9 @@ export async function parseBastPdfLocally(
 
   const rows: BastExtractedRow[] = [];
 
-  for (const band of allBands) {
-    if (band.length === 0 || isBastHeaderBand(band)) continue;
+  for (const bandObj of allBands) {
+    const band = bandObj.items;
+    if (band.length === 0 || isBastHeaderBand(band) || isBastFooterOrTitleBand(band)) continue;
 
     let noVal: number | null = null;
     const namaParts: string[] = [];
@@ -385,7 +624,7 @@ export async function parseBastPdfLocally(
       // Deteksi NIK 14-18 digit di area NAMA..ALAMAT agar tidak salah kolom
       if (
         /^\d{14,18}$/.test(compactDigits) &&
-        t.x >= colBounds.noMaxX &&
+        t.x >= colBounds.noMaxX - 2 &&
         t.x < colBounds.alamatMaxX
       ) {
         if (!nikVal) nikVal = compactDigits;
@@ -394,11 +633,11 @@ export async function parseBastPdfLocally(
 
       if (t.x < colBounds.namaMaxX) {
         const mergedMatch = t.s.match(/^(\d{1,4})\s+(.+)$/);
-        if (mergedMatch && t.x <= colBounds.noMaxX + 8) {
+        if (mergedMatch && t.x <= colBounds.noMaxX + 5) {
           if (noVal === null) noVal = Number(mergedMatch[1]);
           const nm = mergedMatch[2].trim();
           if (nm && !namaParts.includes(nm)) namaParts.push(nm);
-        } else if (/^\d{1,4}$/.test(t.s) && t.x <= colBounds.noMaxX + 8) {
+        } else if (/^\d{1,4}$/.test(t.s) && t.x <= colBounds.noMaxX + 5) {
           if (noVal === null) noVal = Number(t.s);
         } else if (!namaParts.includes(t.s)) {
           namaParts.push(t.s);
@@ -409,7 +648,7 @@ export async function parseBastPdfLocally(
         }
       } else if (t.x < colBounds.barangMaxX) {
         if (
-          !/^\d+([.,]\d+)?$/.test(t.s) &&
+          !/^\d+([.,]\d+)*$/.test(t.s) &&
           !/^(UNIT|SET|PAKET|BUAH|PCS|BH|LSN|KOTAK|DUS)$/i.test(t.s)
         ) {
           barangParts.push(t.s);
@@ -417,14 +656,52 @@ export async function parseBastPdfLocally(
       }
     }
 
-    if (noVal !== null && Number.isFinite(noVal) && noVal > 0 && namaParts.length > 0) {
-      rows.push({
-        no: noVal,
-        nama: namaParts.join(' ').replace(/\s+/g, ' ').trim().toUpperCase(),
-        nik: nikVal,
-        alamat: alamatParts.join(' ').replace(/\s+/g, ' ').trim(),
-        barangList: barangParts,
-      });
+    if (noVal !== null && Number.isFinite(noVal) && noVal > 0) {
+      const prevRow = rows[rows.length - 1];
+      if (prevRow && prevRow.no === noVal && namaParts.length === 0) {
+        if (!prevRow.nik && nikVal) prevRow.nik = nikVal;
+        const extraAlamat = alamatParts.join(' ').replace(/\s+/g, ' ').trim();
+        if (extraAlamat && !prevRow.alamat.includes(extraAlamat)) {
+          prevRow.alamat = `${prevRow.alamat} ${extraAlamat}`.trim();
+        }
+        for (const b of barangParts) {
+          if (!prevRow.barangList.includes(b)) prevRow.barangList.push(b);
+        }
+      } else if (namaParts.length > 0 || nikVal || barangParts.length > 0) {
+        rows.push({
+          no: noVal,
+          nama: namaParts.join(' ').replace(/\s+/g, ' ').trim().toUpperCase(),
+          nik: nikVal,
+          alamat: alamatParts.join(' ').replace(/\s+/g, ' ').trim(),
+          barangList: barangParts,
+        });
+      }
+    } else if (rows.length > 0) {
+      // Band lanjutan tanpa nomor urut (akibat split halaman / sub-baris barang di dalam 1 KPM):
+      // WAJIB digabungkan ke baris KPM sebelumnya agar barangList tidak hilang menjadi LAINNYA!
+      const prevRow = rows[rows.length - 1];
+      if (!prevRow.nik && nikVal) {
+        prevRow.nik = nikVal;
+      }
+      if (namaParts.length > 0) {
+        const extraNama = namaParts.join(' ').replace(/\s+/g, ' ').trim().toUpperCase();
+        if (!prevRow.nama) {
+          prevRow.nama = extraNama;
+        } else if (extraNama && !prevRow.nama.includes(extraNama) && prevRow.barangList.length === 0) {
+          prevRow.nama = `${prevRow.nama} ${extraNama}`.trim();
+        }
+      }
+      if (alamatParts.length > 0) {
+        const extraAlamat = alamatParts.join(' ').replace(/\s+/g, ' ').trim();
+        if (extraAlamat && !prevRow.alamat.includes(extraAlamat)) {
+          prevRow.alamat = `${prevRow.alamat} ${extraAlamat}`.trim();
+        }
+      }
+      for (const b of barangParts) {
+        if (!prevRow.barangList.includes(b)) {
+          prevRow.barangList.push(b);
+        }
+      }
     }
   }
 
@@ -434,6 +711,7 @@ export async function parseBastPdfLocally(
   const mergedByKey = new Map<string, BastExtractedRow>();
   let dupCounter = 0;
   for (const row of rows) {
+    if (!row.nama) continue;
     const baseKey = `no:${row.no}`;
     const existing = mergedByKey.get(baseKey);
     if (!existing) {

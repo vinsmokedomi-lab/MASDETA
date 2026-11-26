@@ -135,80 +135,141 @@ function normalizeTextUpper(value: string): string {
 
 /**
  * Memetakan rincian daftar barang BAST pada satu slot penerima ke kode item standar MASDETA (Aturan 1).
+ * Menggunakan gabungan spasi (`spaceJoined`) agar kata yang terpecah baris/span di PDF
+ * (mis. ["Mesin", "Jahit"] atau ["Kompor", "Gas"]) tetap terdeteksi akurat dan tidak jatuh ke LAINNYA.
  */
-export function mapBastBarangToItemCode(barangList: string[]): string {
+export function mapBastBarangToItemCode(
+  barangList: string[],
+  catalog: ItemBantuan[] = []
+): string {
   const normalizedItems = barangList.map((b) => normalizeTextUpper(b)).filter(Boolean);
+  if (normalizedItems.length === 0) return 'LAINNYA';
+
   const joined = normalizedItems.join(' | ');
-  if (!joined) return 'LAINNYA';
+  const spaceJoined = normalizedItems.join(' ').replace(/[-_/]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const has = (kw: string): boolean => joined.includes(kw) || spaceJoined.includes(kw);
 
   if (
-    joined.includes('OVEN GAS') ||
-    joined.includes('MIXER') ||
-    joined.includes('TEFLON')
+    has('OVEN GAS') ||
+    has('OVEN') ||
+    has('MIXER') ||
+    has('MIKSER') ||
+    has('TEFLON') ||
+    has('LOYANG')
   ) {
     return 'OV';
   }
   if (
-    joined.includes('SELANG GAS') ||
-    joined.includes('REGULATOR') ||
-    joined.includes('KOMPOR GAS') ||
-    joined.includes('DISPENSER') ||
-    joined.includes('RICE COOKER')
+    has('SELANG GAS') ||
+    has('REGULATOR') ||
+    has('KOMPOR GAS') ||
+    has('DISPENSER') ||
+    has('RICE COOKER') ||
+    has('MAGIC COM') ||
+    has('MAGICCOM') ||
+    has('PENANAK NASI')
   ) {
     return 'KPR';
   }
-  if (joined.includes('MESIN JAHIT')) {
+  if (has('MESIN JAHIT') || has('JAHIT') || has('OBRAS')) {
     return 'JHT';
   }
-  if (joined.includes('CUCI KENDARAAN') || joined.includes('CUCI MOTOR')) {
+  if (
+    has('CUCI KENDARAAN') ||
+    has('CUCI MOTOR') ||
+    has('JET CLEANER') ||
+    has('DOORSMEER') ||
+    has('STEAM') ||
+    has('KOMPRESOR')
+  ) {
     return 'CMT';
   }
   if (
-    joined.includes('KERANJANG') ||
-    (joined.includes('MESIN CUCI') && !joined.includes('KENDARAAN') && !joined.includes('MOTOR'))
+    has('KERANJANG') ||
+    (has('MESIN CUCI') && !has('KENDARAAN') && !has('MOTOR'))
   ) {
     return 'MC';
   }
   if (
-    joined.includes('POTONG PAPAN') ||
-    joined.includes('GERINDA') ||
-    joined.includes('SERUT KAYU') ||
-    joined.includes('AMPLAS') ||
-    joined.includes('MESIN BOR')
+    has('POTONG PAPAN') ||
+    has('GERINDA') ||
+    has('SERUT KAYU') ||
+    has('AMPLAS') ||
+    has('MESIN BOR') ||
+    has('BOR LISTRIK') ||
+    has('CIRCULAR SAW') ||
+    has('JIGSAW') ||
+    has('KETAM') ||
+    has('PERALATAN TUKANG')
   ) {
     return 'TKG';
   }
   if (
-    joined.includes('CUP ES') ||
-    joined.includes('SERUT ES') ||
-    joined.includes('TERMOS ES')
+    has('CUP ES') ||
+    has('CUP SEALER') ||
+    has('SERUT ES') ||
+    has('TERMOS ES') ||
+    has('COOLER BOX') ||
+    has('PERALATAN ES')
   ) {
     return 'ES';
   }
   if (
-    joined.includes('POTONG RUMPUT') ||
-    joined.includes('CHAINSAW') ||
-    joined.includes('ALAT SEMPROT')
+    has('POTONG RUMPUT') ||
+    has('BABAT RUMPUT') ||
+    has('CHAINSAW') ||
+    has('SENSAW') ||
+    has('ALAT SEMPROT') ||
+    has('SPRAYER') ||
+    has('PERALATAN TEBAS')
   ) {
     return 'TBS';
   }
   if (
-    joined.includes('KOMPOR 1000') ||
-    joined.includes('KOMPOR SERIBU') ||
-    joined.includes('PANCI') ||
-    joined.includes('TEKO SIUL')
+    has('KOMPOR 1000') ||
+    has('KOMPOR SERIBU') ||
+    has('MATA SERIBU') ||
+    has('PANCI') ||
+    has('TEKO SIUL') ||
+    has('DANDANG') ||
+    has('WAJAN') ||
+    has('KUALI') ||
+    has('TERMOS NASI') ||
+    has('PERALATAN MASAK')
   ) {
     return 'MSK';
   }
-  if (joined.includes('TENDA') || joined.includes('KURSI')) {
+  if (has('TENDA') || has('KURSI') || has('TEROP')) {
     return 'TND';
   }
-  if (joined.includes('LEMARI ES') || joined.includes('KULKAS')) {
+  if (has('LEMARI ES') || has('KULKAS') || has('FREEZER') || has('SHOWCASE')) {
     return 'LE';
   }
 
-  if (joined.includes('TERMOS') && !joined.includes('ES')) return 'MSK';
-  if (joined.includes('BLENDER')) return 'KPR';
+  // Fallback lunak untuk nama barang tunggal yang terpotong kata lanjutannya
+  if (has('TERMOS') && !has('ES')) return 'MSK';
+  if (has('KOMPOR') && !has('1000') && !has('SERIBU')) return 'KPR';
+  if (has('BLENDER')) return 'KPR';
+
+  // Fallback dinamis terhadap katalog ItemBantuan aktif
+  if (catalog.length > 0) {
+    for (const item of catalog) {
+      const code = normalizeTextUpper(item.code);
+      if (!code) continue;
+      const itemName = normalizeTextUpper(item.name);
+      if (itemName && itemName.length >= 4 && spaceJoined.includes(itemName)) {
+        return code;
+      }
+      if (Array.isArray(item.subItems)) {
+        for (const sub of item.subItems) {
+          const cleanSub = normalizeTextUpper(sub).replace(/\(.*?\)/g, '').trim();
+          if (cleanSub.length >= 4 && cleanSub !== 'BLENDER' && spaceJoined.includes(cleanSub)) {
+            return code;
+          }
+        }
+      }
+    }
+  }
 
   return 'LAINNYA';
 }
@@ -341,6 +402,8 @@ export interface TroubleshootingManualOverrides {
   manualBastLinkByRowKey?: Record<string, number>;
   /** Map noUrut slot baris kosong -> bastNo dari Nama BAST Tanpa Pasangan (input baru ke proposal) */
   filledEmptySlotByBastNo?: Record<number, number>;
+  /** Map bastNo -> kodeItem override manual (untuk memperbaiki baris BAST yang terbaca LAINNYA / salah item) */
+  bastItemCodeOverrideByNo?: Record<number, string>;
   /** Strategi penempatan slot dalam blok BAST */
   placementStrategy?: SlotPlacementStrategy;
 }
@@ -367,6 +430,8 @@ export interface ReconciledMainRow {
   keterangan: string;
   hasSequenceWarning?: boolean;
   sequenceWarningReason?: string | null;
+  rawBastBarangText?: string;
+  isBastItemOverridden?: boolean;
 }
 
 export interface ReconciledExcludedRow {
@@ -706,16 +771,41 @@ export function reconcileProposalWithBast(params: {
     .filter((r) => Number.isFinite(Number(r.no)) && Number(r.no) > 0)
     .sort((a, b) => Number(a.no) - Number(b.no));
 
-  const indexedBastSlots: IndexedBastSlot[] = sortedBast.map((row) => ({
-    bastNo: Number(row.no),
-    itemCode: mapBastBarangToItemCode(row.barangList || []),
-    nama: (row.nama || '').trim().toUpperCase(),
-    nik: (row.nik || '').replace(/\s+/g, '').trim(),
-    alamat: (row.alamat || '').replace(/\s+/g, ' ').trim(),
-    barangList: (row.barangList || []).map((b) => b.trim()).filter(Boolean),
-    strictName: normalizeStrictName(row.nama || ''),
-    alphaName: normalizeAlphaName(row.nama || ''),
-  }));
+  const bastItemOverrides = overrides?.bastItemCodeOverrideByNo || {};
+
+  const indexedBastSlots: IndexedBastSlot[] = sortedBast.map((row) => {
+    const bastNo = Number(row.no);
+    const manualCode = (bastItemOverrides[bastNo] || '').trim().toUpperCase();
+    const cleanedBarangList = (row.barangList || []).map((b) => b.trim()).filter(Boolean);
+    const detectedCode = mapBastBarangToItemCode(cleanedBarangList, catalog);
+    return {
+      bastNo,
+      itemCode: manualCode || detectedCode,
+      nama: (row.nama || '').trim().toUpperCase(),
+      nik: (row.nik || '').replace(/\s+/g, '').trim(),
+      alamat: (row.alamat || '').replace(/\s+/g, ' ').trim(),
+      barangList: cleanedBarangList,
+      strictName: normalizeStrictName(row.nama || ''),
+      alphaName: normalizeAlphaName(row.nama || ''),
+    };
+  });
+
+  // Jika ada slot BAST dengan barangList kosong (akibat sel kosong / terpotong di PDF) yang diapit oleh
+  // dua baris beritem sama persis (mis. KPR - kosong - KPR), otomatis warisi kode item tetangganya.
+  for (let i = 0; i < indexedBastSlots.length; i += 1) {
+    const slot = indexedBastSlots[i];
+    if (
+      slot.itemCode === 'LAINNYA' &&
+      slot.barangList.length === 0 &&
+      !bastItemOverrides[slot.bastNo]
+    ) {
+      const prevCode = i > 0 ? indexedBastSlots[i - 1].itemCode : null;
+      const nextCode = i < indexedBastSlots.length - 1 ? indexedBastSlots[i + 1].itemCode : null;
+      if (prevCode && nextCode && prevCode === nextCode && prevCode !== 'LAINNYA') {
+        slot.itemCode = prevCode;
+      }
+    }
+  }
 
   const bastSlotByNo = new Map<number, IndexedBastSlot>();
   const bastQuotaByItem = new Map<string, number>();
@@ -1279,6 +1369,8 @@ export function reconcileProposalWithBast(params: {
           keterangan,
           hasSequenceWarning,
           sequenceWarningReason,
+          rawBastBarangText: slot.barangList.join(', '),
+          isBastItemOverridden: Boolean(bastItemOverrides[slot.bastNo]),
         });
       } else {
         const chosenBastNo = filledEmptySlotMap[slot.bastNo];
@@ -1313,6 +1405,8 @@ export function reconcileProposalWithBast(params: {
               : baseFilledNote,
             hasSequenceWarning,
             sequenceWarningReason,
+            rawBastBarangText: slot.barangList.join(', '),
+            isBastItemOverridden: Boolean(bastItemOverrides[slot.bastNo]),
           });
         } else {
           emptyCount += 1;
@@ -1336,6 +1430,8 @@ export function reconcileProposalWithBast(params: {
               : baseKeterangan,
             hasSequenceWarning,
             sequenceWarningReason,
+            rawBastBarangText: slot.barangList.join(', '),
+            isBastItemOverridden: Boolean(bastItemOverrides[slot.bastNo]),
           });
         }
       }
