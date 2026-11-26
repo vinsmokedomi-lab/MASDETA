@@ -2067,38 +2067,42 @@ export async function exportKuponPdf({
       .map((rec, i) => ({ rec, ...getCouponNumber(rec, i) }))
       .sort((a, b) => a.num - b.num || a.rec.nama.localeCompare(b.rec.nama, 'id'));
 
-    withNum.forEach((entry, idx) => {
-      const slotIdxOnPage = idx % CARDS_PER_PAGE;
-      if (slotIdxOnPage === 0) {
-        if (!isFirstPageOverall) {
-          doc.addPage([F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM], 'portrait');
-        }
-        isFirstPageOverall = false;
+    const pageCount = Math.ceil(withNum.length / CARDS_PER_PAGE);
+    for (let pageIdx = 0; pageIdx < pageCount; pageIdx += 1) {
+      if (!isFirstPageOverall) {
+        doc.addPage([F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM], 'portrait');
       }
+      isFirstPageOverall = false;
 
-      const colIdx = slotIdxOnPage % CARDS_PER_ROW;
-      const rowIdx = Math.floor(slotIdxOnPage / CARDS_PER_ROW);
-      const x = F4_PDF_MARGINS.left + colIdx * (CARD_W + COL_GAP);
-      const y = F4_PDF_MARGINS.top + rowIdx * (CARD_H + ROW_GAP);
+      for (let slotIdxOnPage = 0; slotIdxOnPage < CARDS_PER_PAGE; slotIdxOnPage += 1) {
+        const entryIdx = slotIdxOnPage * pageCount + pageIdx;
+        if (entryIdx >= withNum.length) continue;
 
-      const effectiveConfig = shouldAutoResolveSchedule
-        ? resolveCouponScheduleForRecord(entry.rec, schedules, proposals, couponConfig, couponBookOpts)
-        : couponConfig;
+        const entry = withNum[entryIdx];
+        const colIdx = slotIdxOnPage % CARDS_PER_ROW;
+        const rowIdx = Math.floor(slotIdxOnPage / CARDS_PER_ROW);
+        const x = F4_PDF_MARGINS.left + colIdx * (CARD_W + COL_GAP);
+        const y = F4_PDF_MARGINS.top + rowIdx * (CARD_H + ROW_GAP);
 
-      drawCouponCard(doc, {
-        x,
-        y,
-        cardW: CARD_W,
-        cardH: CARD_H,
-        noKupon: entry.label,
-        record: entry.rec,
-        proposals,
-        wilayahList,
-        couponConfig: effectiveConfig,
-        loadedKalbarLogo,
-        loadedGerindraLogo,
-      });
-    });
+        const effectiveConfig = shouldAutoResolveSchedule
+          ? resolveCouponScheduleForRecord(entry.rec, schedules, proposals, couponConfig, couponBookOpts)
+          : couponConfig;
+
+        drawCouponCard(doc, {
+          x,
+          y,
+          cardW: CARD_W,
+          cardH: CARD_H,
+          noKupon: entry.label,
+          record: entry.rec,
+          proposals,
+          wilayahList,
+          couponConfig: effectiveConfig,
+          loadedKalbarLogo,
+          loadedGerindraLogo,
+        });
+      }
+    }
   }
 
   const defaultBulkName = `Cetak_Kupon_${targetRecords.length}_KPM`;
@@ -5524,17 +5528,25 @@ export async function exportNomorDinsosToPdf({
     }
   };
 
-  labelTasks.forEach((task, idx) => {
-    const slotOnPage = idx % 2;
-    if (slotOnPage === 0) {
-      if (idx > 0) {
-        doc.addPage([PAPER_W, PAPER_H], 'portrait');
-      }
-      drawCutGuideLine();
+  // Susun Tumpuk (Cut & Stack): halaman p berisi label [p] di atas dan [p + P] di bawah
+  // sehingga 1x potong tengah langsung menghasilkan 2 tumpukan berurutan (atas ditaruh di atas bawah).
+  const dinsosPageCount = Math.ceil(labelTasks.length / 2);
+  for (let pageIdx = 0; pageIdx < dinsosPageCount; pageIdx += 1) {
+    if (pageIdx > 0) {
+      doc.addPage([PAPER_W, PAPER_H], 'portrait');
     }
-    const halfStartY = slotOnPage === 0 ? 0 : HALF_H;
-    drawHalfLabel(halfStartY, task.tahun, task.locationLines, task.numLabel);
-  });
+    drawCutGuideLine();
+
+    const topTask = labelTasks[pageIdx];
+    if (topTask) {
+      drawHalfLabel(0, topTask.tahun, topTask.locationLines, topTask.numLabel);
+    }
+
+    const bottomTask = labelTasks[pageIdx + dinsosPageCount];
+    if (bottomTask) {
+      drawHalfLabel(HALF_H, bottomTask.tahun, bottomTask.locationLines, bottomTask.numLabel);
+    }
+  }
 
   const defaultName = `Nomor_DINSOS_${labelTasks.length}_Label`;
   const res = await saveOrOpenPdfDocument(doc, fileName || defaultName);

@@ -3604,7 +3604,7 @@ export function MenuDownloadView({
                     Pratinjau &amp; Pengaturan Kupon (F4)
                   </h2>
                   <p className="mt-0.5 text-xs text-slate-500">
-                    Ukuran kartu 88 × 54 mm (10 kupon/halaman) · Sesuai jumlah KPM aktif per proposal.
+                    Ukuran kartu 88 × 54 mm (10 kupon/halaman) · Susun Tumpuk (Cut &amp; Stack): potong jadi 10 tumpukan lalu susun kiri→kanan, atas→bawah.
                   </p>
                 </div>
                 <span className="shrink-0 text-xs font-bold text-teal-800 tabular-nums">
@@ -3991,7 +3991,7 @@ export function MenuDownloadView({
               </button>
 
               <p className="text-center text-[11px] leading-relaxed text-slate-500">
-                Kertas F4 Portrait (216 × 310 mm) · Margin Kiri 2 cm · Kanan 1,5 cm · Atas &amp; Bawah 1 cm · 10 Kupon / Halaman
+                Kertas F4 Portrait (216 × 310 mm) · 10 Kupon / Halaman · Mode Susun Tumpuk (Cut &amp; Stack: tumpuk 1 → 2 → … → 10)
               </p>
             </section>
           )}
@@ -5045,6 +5045,13 @@ export function MenuDownloadView({
               .trim()
               .toUpperCase();
 
+            const dinsosPageCount = Math.max(1, Math.ceil(dinsosFixedLabelCount / 2));
+            const topRangeEnd = String(dinsosPageCount).padStart(2, '0');
+            const bottomStartNum =
+              dinsosFixedLabelCount >= 2 ? String(1 + dinsosPageCount).padStart(2, '0') : null;
+            const bottomEndNum =
+              dinsosFixedLabelCount >= 2 ? String(dinsosFixedLabelCount).padStart(2, '0') : null;
+
             return (
               <section className="rounded-2xl border border-slate-200 bg-white p-5 space-y-5 md:p-6">
                 <div className="flex items-baseline justify-between gap-3 border-b border-slate-100 pb-3.5">
@@ -5053,7 +5060,7 @@ export function MenuDownloadView({
                       Pratinjau &amp; Label Nomor DINSOS
                     </h2>
                     <p className="mt-0.5 text-xs text-slate-500">
-                      Kertas F4 (216 × 330 mm), lipat dua (2 label/lembar). Nomor urut dicetak fixed mulai 01 termasuk baris kosong.
+                      Kertas F4 (216 × 330 mm), lipat dua (2 label/lembar). Susun Tumpuk (Cut &amp; Stack): 1× potong tengah langsung urut 01–{bottomEndNum || '01'}.
                     </p>
                   </div>
                   <span className="shrink-0 text-xs font-bold text-teal-800 tabular-nums">
@@ -5064,9 +5071,9 @@ export function MenuDownloadView({
                 {/* Live Mini Preview 1 Lembar F4 (2 Label Lipat Dua) */}
                 <div className="rounded-xl border border-slate-300 bg-slate-50/70 p-3">
                   <div className="mb-2 flex items-center justify-between text-[10px] font-semibold text-slate-500">
-                    <span>Pratinjau 1 Lembar F4 (216 × 330 mm)</span>
+                    <span>Pratinjau Lembar 1 F4 (Cut &amp; Stack)</span>
                     <span className="tabular-nums">
-                      ~{Math.ceil(dinsosFixedLabelCount / 2)} Lembar
+                      {Math.ceil(dinsosFixedLabelCount / 2)} Lembar
                     </span>
                   </div>
 
@@ -5098,23 +5105,34 @@ export function MenuDownloadView({
                     </div>
 
                     {/* Bagian Bawah (165mm) */}
-                    <div className="flex flex-col items-center justify-center px-3 py-5 text-center">
-                      <p className="text-[12px] font-extrabold leading-tight tracking-wide text-black uppercase">
-                        {cleanProvText}
-                      </p>
-                      <p className="text-[12px] font-extrabold leading-tight text-black">
-                        TAHUN {sampleTahun}
-                      </p>
-                      <p className="my-2.5 text-4xl font-black tracking-tight text-black leading-none">
-                        {cleanPrefixText} 02
-                      </p>
-                      <div className="space-y-0.5 text-[11.5px] font-extrabold text-black leading-tight">
-                        {sampleLocationLines.map((line, i) => (
-                          <p key={`prev-bot-${i}`}>{line}</p>
-                        ))}
+                    {bottomStartNum ? (
+                      <div className="flex flex-col items-center justify-center px-3 py-5 text-center">
+                        <p className="text-[12px] font-extrabold leading-tight tracking-wide text-black uppercase">
+                          {cleanProvText}
+                        </p>
+                        <p className="text-[12px] font-extrabold leading-tight text-black">
+                          TAHUN {sampleTahun}
+                        </p>
+                        <p className="my-2.5 text-4xl font-black tracking-tight text-black leading-none">
+                          {cleanPrefixText} {bottomStartNum}
+                        </p>
+                        <div className="space-y-0.5 text-[11.5px] font-extrabold text-black leading-tight">
+                          {sampleLocationLines.map((line, i) => (
+                            <p key={`prev-bot-${i}`}>{line}</p>
+                          ))}
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                      <div className="flex items-center justify-center px-3 py-8 text-center text-[11px] font-medium text-slate-400">
+                        Bagian bawah kosong (hanya 1 label)
+                      </div>
+                    )}
                   </div>
+                  {bottomStartNum && bottomEndNum && (
+                    <p className="mt-2 text-center text-[10px] font-medium text-slate-600 tabular-nums">
+                      Setelah 1× potong tengah: tumpukan atas ({cleanPrefixText} 01–{topRangeEnd}) langsung ditaruh di atas tumpukan bawah ({cleanPrefixText} {bottomStartNum}–{bottomEndNum}).
+                    </p>
+                  )}
                 </div>
 
                 {/* Pengaturan Teks Label */}
@@ -5193,7 +5211,7 @@ export function MenuDownloadView({
                 </button>
 
                 <p className="text-center text-[11px] leading-relaxed text-slate-500">
-                  Kertas F4 (216 × 330 mm) · 2 Label per Lembar · Center-Middle Alignment · Garis Potong Tengah (165 mm)
+                  Kertas F4 (216 × 330 mm) · 2 Label per Lembar · Susun Tumpuk (Cut &amp; Stack) · Garis Potong Tengah (165 mm)
                 </p>
               </section>
             );
