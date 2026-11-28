@@ -739,9 +739,9 @@ export function DashboardView({
       </header>
       )}
 
-      <main className={`space-y-5 px-4 pt-4 ${isDesktopWeb ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''}`}>
-        {isDesktopWeb && (
-          <div className="flex flex-wrap items-center justify-between gap-3">
+      {isDesktopWeb && (
+        <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+          <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-3 px-4 py-3.5 md:px-6">
             <div className="min-w-0">
               <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
                 Halo, {currentUser.nama}
@@ -791,7 +791,10 @@ export function DashboardView({
               )}
             </div>
           </div>
-        )}
+        </header>
+      )}
+
+      <main className={`space-y-5 px-4 pt-4 ${isDesktopWeb ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-5' : ''}`}>
 
         {(!isOnline || offlineQueueCount > 0) && (
           <section className="flex items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs text-amber-950">

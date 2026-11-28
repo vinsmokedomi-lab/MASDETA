@@ -93,13 +93,12 @@ import {
   uploadImageDocumentToDrive,
 } from '../utils/imageProcessor';
 import {
-  SPTJM_DAY_OPTIONS,
   applyBastScheduleDateToBastConfig,
   formatBastProposalLocation,
-  formatIndonesianDDMonthYYYY,
   formatIndonesianDateWords,
   formatIndonesianShortDate,
   formatSptjmFullDate,
+  getSptjmAutoDayFromIso,
   normalizeIsoDateInput,
   normalizePejabatNipNumber,
   resolveBastScheduleForProposal,
@@ -1092,6 +1091,7 @@ export function KpmDetailView({
     };
     setSptjmDraft({
       ...merged,
+      hari: '',
       tanggalIso:
         matchedBastDateIso ||
         normalizeIsoDateInput(merged.tanggalIso) ||
@@ -1110,6 +1110,7 @@ export function KpmDetailView({
     try {
       const effectiveSptjm: SptjmTemplateConfig = {
         ...sptjmDraft,
+        hari: '',
         tanggalIso:
           matchedBastDateIso ||
           normalizeIsoDateInput(sptjmDraft.tanggalIso) ||
@@ -2751,78 +2752,87 @@ export function KpmDetailView({
       )}
 
       {isDesktopWeb ? (
-        <main className="mx-auto max-w-[1440px] space-y-5 px-6 pt-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-3">
-              <button
-                type="button"
-                onClick={onBack}
-                className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
-                aria-label="Kembali ke daftar KPM"
-              >
-                <ArrowLeft className="h-4 w-4" />
-                <span>Kembali</span>
-              </button>
-              <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
-                Detail KPM
-              </h1>
-            </div>
-
-            {(canUpdate || canDelete) && (
-              <div className="flex shrink-0 items-center gap-2">
-                {canUpdate && (
-                  <button
-                    type="button"
-                    disabled={isProposalLocked || isOffline}
-                    onClick={() => onEditRecord(record)}
-                    className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3 text-xs font-semibold text-teal-700 transition-colors hover:bg-teal-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-                    aria-label="Edit Data KPM"
-                    title={
-                      isProposalLocked
-                        ? 'Proposal Terkunci'
-                        : isOffline
-                          ? 'Mode Read-Only (Offline)'
-                          : 'Edit Data KPM'
-                    }
-                  >
-                    <Pencil className="h-4 w-4" />
-                    <span>Edit Data</span>
-                  </button>
-                )}
-                {canDelete && (
-                  <button
-                    type="button"
-                    disabled={isProposalLocked || isOffline}
-                    onClick={() => setConfirmDelete(true)}
-                    className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-                    aria-label="Hapus Data KPM"
-                    title={
-                      isProposalLocked
-                        ? 'Proposal Terkunci'
-                        : isOffline
-                          ? 'Mode Read-Only (Offline)'
-                          : 'Hapus Data KPM'
-                    }
-                  >
-                    <Trash2 className="h-4 w-4" />
-                    <span>Hapus Data</span>
-                  </button>
-                )}
+        <>
+          <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+            <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-3 px-6 py-3.5">
+              <div className="flex min-w-0 items-center gap-3">
+                <button
+                  type="button"
+                  onClick={onBack}
+                  className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+                  aria-label="Kembali ke daftar KPM"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  <span>Kembali</span>
+                </button>
+                <div className="flex min-w-0 items-baseline gap-2">
+                  <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
+                    Detail KPM
+                  </h1>
+                  <span className="truncate text-xs font-medium text-slate-500">
+                    · {record.nama}
+                  </span>
+                </div>
               </div>
-            )}
-          </div>
-          {lockedBannerBlock}
-          <div className="grid grid-cols-12 items-start gap-5">
-            <div className="col-span-5 space-y-5 md:sticky md:top-6 self-start md:max-h-[calc(100vh-3rem)] md:overflow-y-auto md:pr-1">
-              {identityAndDupBlock}
-              {pengajuanAndDomisiliBlock}
+
+              {(canUpdate || canDelete) && (
+                <div className="flex shrink-0 items-center gap-2">
+                  {canUpdate && (
+                    <button
+                      type="button"
+                      disabled={isProposalLocked || isOffline}
+                      onClick={() => onEditRecord(record)}
+                      className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3 text-xs font-semibold text-teal-700 transition-colors hover:bg-teal-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                      aria-label="Edit Data KPM"
+                      title={
+                        isProposalLocked
+                          ? 'Proposal Terkunci'
+                          : isOffline
+                            ? 'Mode Read-Only (Offline)'
+                            : 'Edit Data KPM'
+                      }
+                    >
+                      <Pencil className="h-4 w-4" />
+                      <span>Edit Data</span>
+                    </button>
+                  )}
+                  {canDelete && (
+                    <button
+                      type="button"
+                      disabled={isProposalLocked || isOffline}
+                      onClick={() => setConfirmDelete(true)}
+                      className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                      aria-label="Hapus Data KPM"
+                      title={
+                        isProposalLocked
+                          ? 'Proposal Terkunci'
+                          : isOffline
+                            ? 'Mode Read-Only (Offline)'
+                            : 'Hapus Data KPM'
+                      }
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      <span>Hapus Data</span>
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
-            <div className="col-span-7 space-y-5">
-              {subItemAndBastBlock}
-              {docsAndHistoryBlock}
+          </header>
+          <main className="mx-auto max-w-[1440px] space-y-5 px-6 pt-5">
+            {lockedBannerBlock}
+            <div className="grid grid-cols-12 items-start gap-5">
+              <div className="col-span-5 space-y-5 md:sticky md:top-20 self-start md:max-h-[calc(100vh-6rem)] md:overflow-y-auto md:pr-1">
+                {identityAndDupBlock}
+                {pengajuanAndDomisiliBlock}
+              </div>
+              <div className="col-span-7 space-y-5">
+                {subItemAndBastBlock}
+                {docsAndHistoryBlock}
+              </div>
             </div>
-          </div>
-        </main>
+          </main>
+        </>
       ) : (
         <main className="space-y-4 px-4 pt-4">
           {lockedBannerBlock}
@@ -3747,36 +3757,7 @@ export function KpmDetailView({
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600">
-                    1. Pilih Hari
-                  </label>
-                  <select
-                    value={sptjmDraft.hari || ''}
-                    onChange={(e) =>
-                      setSptjmDraft((prev) => ({
-                        ...prev,
-                        hari: e.target.value,
-                        tanggalCustomText: '',
-                      }))
-                    }
-                    className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 bg-white px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                  >
-                    <option value="">
-                      Tanpa Hari (Standar:{' '}
-                      {formatIndonesianShortDate(
-                        sptjmDraft.tanggalIso || DEFAULT_SPTJM_TEMPLATE.tanggalIso
-                      )}
-                      )
-                    </option>
-                    {SPTJM_DAY_OPTIONS.map((day) => (
-                      <option key={day} value={day}>
-                        {day}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600">
-                    2. Pilih Tanggal {matchedBastDateIso ? '(Dari Jadwal BAST)' : '(00 Bulan 0000)'}
+                    Tanggal SPTJM {matchedBastDateIso ? '(Dari Jadwal BAST)' : ''}
                   </label>
                   <input
                     type="date"
@@ -3786,6 +3767,7 @@ export function KpmDetailView({
                       if (matchedBastDateIso) return;
                       setSptjmDraft((prev) => ({
                         ...prev,
+                        hari: '',
                         tanggalIso: e.target.value,
                         tanggalCustomText: '',
                       }));
@@ -3799,7 +3781,25 @@ export function KpmDetailView({
                   <p className="mt-0.5 text-[10px] text-slate-500 tabular-nums">
                     {matchedBastDateIso
                       ? `Terkunci ke Buku Jadwal BAST (${formatIndonesianShortDate(matchedBastDateIso)})`
-                      : `Format: ${formatIndonesianDDMonthYYYY(sptjmDraft.tanggalIso)}`}
+                      : `Format cetak: ${formatIndonesianShortDate(sptjmDraft.tanggalIso)}`}
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600">
+                    Hari (Otomatis dari Tanggal)
+                  </label>
+                  <div
+                    className={`mt-1 flex min-h-[38px] w-full items-center rounded-xl border px-3 text-xs font-semibold ${
+                      matchedBastDateIso
+                        ? 'border-teal-200 bg-teal-50/60 text-teal-900'
+                        : 'border-slate-200 bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    {getSptjmAutoDayFromIso(matchedBastDateIso || sptjmDraft.tanggalIso)}
+                  </div>
+                  <p className="mt-0.5 text-[10px] text-slate-500">
+                    Otomatis mengikuti tanggal{' '}
+                    {matchedBastDateIso ? 'Jadwal BAST' : 'terpilih'}.
                   </p>
                 </div>
               </div>

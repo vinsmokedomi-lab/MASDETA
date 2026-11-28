@@ -422,15 +422,9 @@ export function ItemManagerView({
         </header>
         )}
 
-        <form
-          onSubmit={handleFormSubmit}
-          noValidate
-          className={`space-y-4 px-4 pt-4 ${
-            !isNativeApp ? 'md:mx-auto md:max-w-4xl md:px-6 md:pt-6' : ''
-          }`}
-        >
-          {!isNativeApp && (
-            <div className="flex items-center gap-3">
+        {!isNativeApp && (
+          <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+            <div className="mx-auto flex max-w-4xl items-center gap-3 px-4 py-3.5 md:px-6">
               <button
                 type="button"
                 onClick={() => setMode('list')}
@@ -444,7 +438,16 @@ export function ItemManagerView({
                 {editingOriginalCode ? 'Edit Item Bantuan' : 'Tambah Item Bantuan'}
               </h1>
             </div>
-          )}
+          </header>
+        )}
+
+        <form
+          onSubmit={handleFormSubmit}
+          noValidate
+          className={`space-y-4 px-4 pt-4 ${
+            !isNativeApp ? 'md:mx-auto md:max-w-4xl md:px-6 md:pt-5' : ''
+          }`}
+        >
           <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-4">
             {/* 1. Tahun */}
             <div>
@@ -1032,13 +1035,9 @@ export function ItemManagerView({
       </header>
       )}
 
-      <div
-        className={`space-y-4 px-4 pt-4 ${
-          !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''
-        }`}
-      >
-        {!isNativeApp && (
-          <div className="flex items-center gap-3">
+      {!isNativeApp && (
+        <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+          <div className="mx-auto flex max-w-[1440px] items-center gap-3 px-4 py-3.5 md:px-6">
             <button
               type="button"
               onClick={onBack}
@@ -1052,7 +1051,14 @@ export function ItemManagerView({
               Kelola Item &amp; Sub-Item
             </h1>
           </div>
-        )}
+        </header>
+      )}
+
+      <div
+        className={`space-y-4 px-4 pt-4 ${
+          !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-5' : ''
+        }`}
+      >
 
         {/* Top Bar: Pilih Tahun + Tombol Tambah Item */}
         <div className={`flex items-center gap-2 ${!isNativeApp ? 'md:justify-between' : ''}`}>

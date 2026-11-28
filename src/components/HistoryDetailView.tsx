@@ -114,13 +114,9 @@ export function HistoryDetailView({
           </header>
         )}
 
-        <main
-          className={`space-y-4 px-4 pt-4 ${
-            !isNativeApp ? 'md:mx-auto md:max-w-4xl md:px-6 md:pt-6' : ''
-          }`}
-        >
-          {!isNativeApp && (
-            <div className="flex items-center gap-3">
+        {!isNativeApp && (
+          <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+            <div className="mx-auto flex max-w-4xl items-center gap-3 px-4 py-3.5 md:px-6">
               <button
                 type="button"
                 onClick={onBack}
@@ -134,7 +130,14 @@ export function HistoryDetailView({
                 Rekam Jejak
               </h1>
             </div>
-          )}
+          </header>
+        )}
+
+        <main
+          className={`space-y-4 px-4 pt-4 ${
+            !isNativeApp ? 'md:mx-auto md:max-w-4xl md:px-6 md:pt-5' : ''
+          }`}
+        >
           <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3.5">
             <p className="text-sm font-bold text-slate-900">
               {proposal.namaProposal} {proposal.tahun}
@@ -354,13 +357,9 @@ export function HistoryDetailView({
         </header>
       )}
 
-      <main
-        className={`space-y-4 px-4 pt-4 ${
-          !isNativeApp ? 'md:mx-auto md:max-w-4xl md:px-6 md:pt-6' : ''
-        }`}
-      >
-        {!isNativeApp && (
-          <div className="flex items-center gap-3">
+      {!isNativeApp && (
+        <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+          <div className="mx-auto flex max-w-4xl items-center gap-3 px-4 py-3.5 md:px-6">
             <button
               type="button"
               onClick={onBack}
@@ -374,7 +373,14 @@ export function HistoryDetailView({
               Rekam Jejak
             </h1>
           </div>
-        )}
+        </header>
+      )}
+
+      <main
+        className={`space-y-4 px-4 pt-4 ${
+          !isNativeApp ? 'md:mx-auto md:max-w-4xl md:px-6 md:pt-5' : ''
+        }`}
+      >
         {record && (
           <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3.5">
             <p className="text-sm font-bold text-slate-900">{record.nama}</p>

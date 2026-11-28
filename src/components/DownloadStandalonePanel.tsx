@@ -432,7 +432,7 @@ export function DownloadStandalonePanel({
           </label>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 space-y-4 lg:col-span-5 lg:sticky lg:top-6">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 space-y-4 lg:col-span-5 lg:sticky lg:top-24">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-wider text-teal-700">
               Ringkasan Ekspor

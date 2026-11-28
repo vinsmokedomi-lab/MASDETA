@@ -446,15 +446,13 @@ export function formatIndonesianDDMonthYYYY(isoDate?: string): string {
 }
 
 export function formatSptjmFullDate(sptjmConfig?: Partial<SptjmTemplateConfig>): string {
-  const hariVal = (sptjmConfig?.hari || '').trim();
   const rawIso = (sptjmConfig?.tanggalIso || '').trim();
   const isoVal = normalizeIsoDateInput(rawIso) || DEFAULT_SPTJM_TEMPLATE.tanggalIso;
   const customLegacy = (sptjmConfig?.tanggalCustomText || '').trim();
-  if (customLegacy && !hariVal && !rawIso) {
+  if (customLegacy && !rawIso) {
     return customLegacy;
   }
-  const resolvedDate = formatIndonesianShortDate(isoVal);
-  return hariVal ? `${hariVal}, ${resolvedDate}` : resolvedDate;
+  return formatIndonesianShortDate(isoVal);
 }
 
 export function formatIndonesianDayShortDate(isoDate?: string): string {
@@ -464,15 +462,15 @@ export function formatIndonesianDayShortDate(isoDate?: string): string {
 
 export function formatScheduleIndonesianDate(targetDate?: string, targetDay?: string): string {
   const raw = (targetDate || '').trim();
-  const manualDay = (targetDay || '').trim();
-  if (!raw) return manualDay || '-';
+  const fallbackDay = (targetDay || '').trim();
+  if (!raw) return fallbackDay || '-';
   const normalizedIso = normalizeIsoDateInput(raw);
   if (normalizedIso) {
     const [yyyy, mm, dd] = normalizedIso.split('-');
-    const dayName = manualDay || getSptjmAutoDayFromIso(normalizedIso);
+    const dayName = getSptjmAutoDayFromIso(normalizedIso);
     return `${dayName}, ${dd}-${mm}-${yyyy}`;
   }
-  return manualDay ? `${manualDay}, ${raw}` : raw;
+  return fallbackDay ? `${fallbackDay}, ${raw}` : raw;
 }
 
 export function formatBastProposalLocation(
@@ -778,7 +776,7 @@ export function formatScheduleDateTimeForCoupon(
     const dt = new Date(y, m - 1, d);
     if (!Number.isNaN(dt.getTime())) {
       const autoDay = dt.getDay() === 5 ? "Jum'at" : INDONESIAN_WEEKDAYS[dt.getDay()] || 'Senin';
-      const dayName = (targetDay || '').trim() || autoDay;
+      const dayName = autoDay || (targetDay || '').trim();
       const monthName = INDONESIAN_MONTHS[dt.getMonth()] || 'Januari';
       dateLabel = `${dayName}, ${dt.getDate()} ${monthName} ${dt.getFullYear()}`;
     }
@@ -953,12 +951,14 @@ export function resolveEffectiveSptjmConfigForRecord(
   if (scheduleIso) {
     return {
       ...sptjmConfig,
+      hari: '',
       tanggalIso: scheduleIso,
       tanggalCustomText: '',
     };
   }
   return {
     ...sptjmConfig,
+    hari: '',
     tanggalIso: normalizeIsoDateInput(sptjmConfig.tanggalIso) || DEFAULT_SPTJM_TEMPLATE.tanggalIso,
   };
 }
@@ -1005,7 +1005,7 @@ export function formatAbsensiScheduleFields(
     }
   }
 
-  const hari = (schedule.targetDay || '').trim() || autoDay;
+  const hari = autoDay || (schedule.targetDay || '').trim();
   const rawTime = (schedule.targetTime || '').trim();
   let pukul = '';
   if (rawTime) {

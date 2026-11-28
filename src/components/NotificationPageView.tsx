@@ -67,9 +67,8 @@ export function NotificationPageView({
 
   return (
     <div className="min-h-screen pb-12">
-      <div className="mx-auto max-w-[1440px] space-y-5 px-6 pt-6">
-        {/* In-Page Title & Action Bar (No <header>) */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+        <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-3 px-4 py-3.5 md:px-6">
           <div>
             <h1 className="text-xl font-bold tracking-tight text-slate-900">Notifikasi</h1>
             <p className="mt-0.5 text-xs text-slate-500">
@@ -102,6 +101,9 @@ export function NotificationPageView({
             )}
           </div>
         </div>
+      </header>
+
+      <div className="mx-auto max-w-[1440px] space-y-5 px-4 pt-5 md:px-6">
 
         <div className="grid grid-cols-12 items-start gap-5">
           {/* Left Summary Panel */}

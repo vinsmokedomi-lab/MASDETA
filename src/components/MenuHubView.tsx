@@ -60,7 +60,6 @@ import { APP_CHANGELOG, ChangelogRelease } from '../data/changelogData';
 import { fetchGithubReleasesChangelog } from '../services/appUpdater';
 import { DTSEN_OPTION_ITEMS, TAHUN_OPTIONS } from '../data/kpmOptions';
 import {
-  SPTJM_DAY_OPTIONS,
   formatScheduleIndonesianDate,
   getSptjmAutoDayFromIso,
   getTodayLocalIsoDate,
@@ -940,7 +939,6 @@ export function MenuHubView({
   const [bookModalError, setBookModalError] = useState<string | null>(null);
   const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
   const [scheduleCategory, setScheduleCategory] = useState<ScheduleCategory>('distribusi');
-  const [scheduleDay, setScheduleDay] = useState<string>('');
   const [scheduleDate, setScheduleDate] = useState(() => getTodayLocalIsoDate());
   const [scheduleTime, setScheduleTime] = useState('');
   const [scheduleYear, setScheduleYear] = useState(() =>
@@ -1334,19 +1332,21 @@ export function MenuHubView({
         <h1 className="truncate text-base font-bold text-slate-900">{title}</h1>
       </header>
     ) : (
-      <div
-        className={`mx-auto flex w-full items-center gap-3 px-4 pt-4 md:px-6 md:pt-6 ${webMaxWidthClass}`}
-      >
-        <button
-          type="button"
-          onClick={onBack}
-          className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 shrink-0"
+      <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+        <div
+          className={`mx-auto flex w-full items-center gap-3 px-4 py-3.5 md:px-6 ${webMaxWidthClass}`}
         >
-          <ArrowLeft className="h-4 w-4" />
-          <span>Kembali</span>
-        </button>
-        <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">{title}</h1>
-      </div>
+          <button
+            type="button"
+            onClick={onBack}
+            className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 shrink-0"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            <span>Kembali</span>
+          </button>
+          <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">{title}</h1>
+        </div>
+      </header>
     );
 
   // 1. ROOT MENU HUB
@@ -1355,20 +1355,23 @@ export function MenuHubView({
 
     return (
       <div className="min-h-screen pb-24">
-        {isNativeApp && (
+        {isNativeApp ? (
           <header className="sticky top-0 z-20 flex h-14 items-center border-b border-slate-200 bg-white/95 px-4 backdrop-blur-md">
             <h1 className="truncate text-base font-bold text-slate-900">Menu</h1>
+          </header>
+        ) : (
+          <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+            <div className="mx-auto flex max-w-[1440px] items-center px-4 py-3.5 md:px-6">
+              <h1 className="text-xl font-bold tracking-tight text-slate-900">Menu &amp; Alat</h1>
+            </div>
           </header>
         )}
 
         <div
           className={`space-y-5 px-4 pt-4 ${
-            !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''
+            !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-5' : ''
           }`}
         >
-          {!isNativeApp && (
-            <h1 className="text-xl font-bold tracking-tight text-slate-900">Menu &amp; Alat</h1>
-          )}
           {/* Active Profile Card */}
           <button
             type="button"
@@ -6519,7 +6522,6 @@ export function MenuHubView({
       if (activeBookObj) {
         setScheduleCategory(activeBookObj.defaultCategory);
       }
-      setScheduleDay('');
       setScheduleTime('');
       setScheduleProposal('');
       setScheduleLocation('');
@@ -6532,7 +6534,6 @@ export function MenuHubView({
       setEditingScheduleId(ev.id);
       setScheduleFormBookOverride(evBookId);
       setScheduleCategory(ev.category);
-      setScheduleDay(ev.targetDay || '');
       setScheduleDate(ev.targetDate);
       setScheduleTime(ev.targetTime || '');
       if (ev.tahun) setScheduleYear(ev.tahun);
@@ -6570,7 +6571,7 @@ export function MenuHubView({
         title: resolvedTitle,
         category: chosenCategory,
         bookId: effectiveFormBookId,
-        targetDay: scheduleDay.trim() || undefined,
+        targetDay: undefined,
         targetDate: scheduleDate,
         targetTime: scheduleTime.trim() || undefined,
         tahun: scheduleYear || undefined,
@@ -6856,25 +6857,6 @@ export function MenuHubView({
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="block text-xs font-semibold text-slate-700">
-                      Pilih Hari
-                    </label>
-                    <select
-                      disabled={isOffline}
-                      value={scheduleDay}
-                      onChange={(e) => setScheduleDay(e.target.value)}
-                      className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
-                    >
-                      <option value="">Otomatis ({autoDayLabel})</option>
-                      {SPTJM_DAY_OPTIONS.map((dayName) => (
-                        <option key={dayName} value={dayName}>
-                          {dayName}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700">
                       Tanggal Target
                     </label>
                     <input
@@ -6885,6 +6867,15 @@ export function MenuHubView({
                       onChange={(e) => setScheduleDate(e.target.value)}
                       className="mt-1 min-h-[42px] w-full rounded-xl border border-slate-300 px-2.5 text-xs font-semibold text-slate-800 focus:border-teal-700 focus:outline-none tabular-nums disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
                     />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Hari (Otomatis)
+                    </label>
+                    <div className="mt-1 flex min-h-[42px] w-full items-center rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700">
+                      {autoDayLabel}
+                    </div>
                   </div>
                 </div>
 

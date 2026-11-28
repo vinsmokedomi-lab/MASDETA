@@ -799,9 +799,9 @@ export function KpmListView({
       </header>
       )}
 
-      <div className={`space-y-4 px-4 pt-4 ${!isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''}`}>
-        {!isNativeApp && (
-          <div className="flex flex-wrap items-center justify-between gap-3">
+      {!isNativeApp && (
+        <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+          <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-3 px-4 py-3.5 md:px-6">
             <div className="flex min-w-0 items-center gap-2.5">
               {(openedFromProposalDetail ||
                 (proposalFilter !== 'all' && activeProposalRecord && onOpenProposalDetail)) && (
@@ -863,7 +863,10 @@ export function KpmListView({
               </button>
             </div>
           </div>
-        )}
+        </header>
+      )}
+
+      <div className={`space-y-4 px-4 pt-4 ${!isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-5' : ''}`}>
         {proposalFilter !== 'all' && onChangeProposalFilter && (
           <div className="space-y-1.5 rounded-2xl border border-teal-200 bg-teal-50 px-3.5 py-2.5 text-xs text-teal-900">
             <div className="flex flex-wrap items-center justify-between gap-2">

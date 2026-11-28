@@ -316,13 +316,9 @@ export function ProposalListView({
         </header>
       )}
 
-      <div
-        className={`space-y-4 px-4 pt-4 ${
-          !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''
-        }`}
-      >
-        {!isNativeApp && (
-          <div className="flex flex-wrap items-center justify-between gap-3">
+      {!isNativeApp && (
+        <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+          <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-3 px-4 py-3.5 md:px-6">
             <div className="flex min-w-0 items-baseline gap-2.5">
               <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
                 Daftar Proposal
@@ -361,7 +357,14 @@ export function ProposalListView({
               )}
             </div>
           </div>
-        )}
+        </header>
+      )}
+
+      <div
+        className={`space-y-4 px-4 pt-4 ${
+          !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-5' : ''
+        }`}
+      >
 
         {/* Clean Summary Strip */}
         <section className="grid grid-cols-2 divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200 bg-white md:grid-cols-4 md:divide-x md:divide-y-0">

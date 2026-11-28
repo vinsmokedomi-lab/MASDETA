@@ -809,13 +809,9 @@ export function SubItemRecapView({
           </header>
         )}
 
-        <main
-          className={`space-y-4 px-4 pt-4 ${
-            isDesktopWeb ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''
-          }`}
-        >
-          {isDesktopWeb && (
-            <div className="flex flex-wrap items-center justify-between gap-3">
+        {isDesktopWeb && (
+          <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+            <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-3 px-4 py-3.5 md:px-6">
               <div className="flex min-w-0 items-center gap-3">
                 <button
                   type="button"
@@ -858,7 +854,14 @@ export function SubItemRecapView({
                 </span>
               </div>
             </div>
-          )}
+          </header>
+        )}
+
+        <main
+          className={`space-y-4 px-4 pt-4 ${
+            isDesktopWeb ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-5' : ''
+          }`}
+        >
 
           {pdfNotice && (
             <div
@@ -968,13 +971,9 @@ export function SubItemRecapView({
         </header>
       )}
 
-      <main
-        className={`space-y-4 px-4 pt-4 ${
-          isDesktopWeb ? 'md:mx-auto md:max-w-[1440px] md:space-y-5 md:px-6 md:pt-6' : ''
-        }`}
-      >
-        {isDesktopWeb && (
-          <div className="flex flex-wrap items-center justify-between gap-3">
+      {isDesktopWeb && (
+        <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+          <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-3 px-4 py-3.5 md:px-6">
             <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
               Rekap Item
             </h1>
@@ -1036,7 +1035,14 @@ export function SubItemRecapView({
               </button>
             </div>
           </div>
-        )}
+        </header>
+      )}
+
+      <main
+        className={`space-y-4 px-4 pt-4 ${
+          isDesktopWeb ? 'md:mx-auto md:max-w-[1440px] md:space-y-5 md:px-6 md:pt-5' : ''
+        }`}
+      >
 
         {pdfNotice && (
           <div
@@ -1477,7 +1483,7 @@ export function SubItemRecapView({
             </div>
 
             {/* Kolom Kanan: Listing Sub-Item dari Item yang diklik (sticky di viewport desktop) */}
-            <div className="col-span-7 md:sticky md:top-6 self-start">
+            <div className="col-span-7 md:sticky md:top-24 self-start">
               <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
                 {!activeItemRow ? (
                   <div className="px-6 py-14 text-center">

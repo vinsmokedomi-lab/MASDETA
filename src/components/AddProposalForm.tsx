@@ -175,15 +175,9 @@ export function AddProposalForm({
       </header>
       )}
 
-      <form
-        onSubmit={handleSubmit}
-        noValidate
-        className={`space-y-4 px-4 pt-4 ${
-          !isNativeApp ? 'md:mx-auto md:max-w-3xl md:px-6 md:pt-6' : ''
-        }`}
-      >
-        {!isNativeApp && (
-          <div className="flex items-center gap-3">
+      {!isNativeApp && (
+        <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+          <div className="mx-auto flex max-w-3xl items-center gap-3 px-4 py-3.5 md:px-6">
             <button
               type="button"
               onClick={onBack}
@@ -197,7 +191,16 @@ export function AddProposalForm({
               Tambah Proposal Baru
             </h1>
           </div>
-        )}
+        </header>
+      )}
+
+      <form
+        onSubmit={handleSubmit}
+        noValidate
+        className={`space-y-4 px-4 pt-4 ${
+          !isNativeApp ? 'md:mx-auto md:max-w-3xl md:px-6 md:pt-5' : ''
+        }`}
+      >
 
         {isOffline && (
           <div

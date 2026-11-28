@@ -1184,37 +1184,39 @@ export function TroubleshootingView({
           )}
         </header>
       ) : (
-        <div className="mx-auto flex w-full max-w-[1440px] flex-wrap items-center justify-between gap-3 px-4 pt-4 md:px-6 md:pt-6">
-          <div className="flex min-w-0 items-center gap-3">
-            <button
-              type="button"
-              onClick={onBack}
-              className="inline-flex min-h-[38px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              <span>Kembali</span>
-            </button>
-            <div className="min-w-0">
-              <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
-                Troubleshooting Rekonsiliasi BAST
-              </h1>
-              <p className="mt-0.5 truncate text-xs text-slate-500">
-                Penyelarasan otomatis urutan KPM Proposal terhadap kuota resmi BAST Dinas
-              </p>
+        <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+          <div className="mx-auto flex w-full max-w-[1440px] flex-wrap items-center justify-between gap-3 px-4 py-3.5 md:px-6">
+            <div className="flex min-w-0 items-center gap-3">
+              <button
+                type="button"
+                onClick={onBack}
+                className="inline-flex min-h-[38px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                <span>Kembali</span>
+              </button>
+              <div className="min-w-0">
+                <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
+                  Troubleshooting Rekonsiliasi BAST
+                </h1>
+                <p className="mt-0.5 truncate text-xs text-slate-500">
+                  Penyelarasan otomatis urutan KPM Proposal terhadap kuota resmi BAST Dinas
+                </p>
+              </div>
             </div>
-          </div>
 
-          {hasWorkspaceData && (
-            <button
-              type="button"
-              onClick={handleResetWorkspace}
-              className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-teal-200 bg-teal-50 px-3.5 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              <span>Cek Proposal / BAST Baru</span>
-            </button>
-          )}
-        </div>
+            {hasWorkspaceData && (
+              <button
+                type="button"
+                onClick={handleResetWorkspace}
+                className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-teal-200 bg-teal-50 px-3.5 text-xs font-semibold text-teal-800 transition-colors hover:bg-teal-100"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                <span>Cek Proposal / BAST Baru</span>
+              </button>
+            )}
+          </div>
+        </header>
       )}
 
       <div

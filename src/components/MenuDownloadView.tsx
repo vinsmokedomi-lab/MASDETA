@@ -75,7 +75,6 @@ import {
   MAX_PDF_TOTAL_COLUMNS,
   PDF_COLUMN_DEFINITIONS,
   PdfColumnKey,
-  SPTJM_DAY_OPTIONS,
   buildCatNomorBarangMatrix,
   doesKpmRecordMatchCheckedColumns,
   formatAbsenDinasLocationText,
@@ -86,6 +85,7 @@ import {
   formatNomorDinsosLocationLines,
   formatScheduleDateTimeForCoupon,
   formatSptjmFullDate,
+  getSptjmAutoDayFromIso,
   isKecamatanScopedProposalForCoupon,
   normalizeIsoDateInput,
   normalizePejabatNipNumber,
@@ -277,7 +277,7 @@ function normalizeSptjmConfigDraft(raw?: Partial<SptjmTemplateConfig>): SptjmTem
   return {
     ...merged,
     tempat: merged.tempat ?? DEFAULT_SPTJM_TEMPLATE.tempat,
-    hari: merged.hari ?? '',
+    hari: '',
     tanggalIso: normalizeIsoDateInput(merged.tanggalIso) || DEFAULT_SPTJM_TEMPLATE.tanggalIso,
     tanggalCustomText: merged.tanggalCustomText ?? '',
     pejabatJabatan: merged.pejabatJabatan ?? DEFAULT_SPTJM_TEMPLATE.pejabatJabatan,
@@ -2053,6 +2053,7 @@ export function MenuDownloadView({
       }
       const effectiveExportSptjm: SptjmTemplateConfig = {
         ...normalizedSptjm,
+        hari: '',
         tanggalIso: effectiveSptjmTanggalIso,
         ...(matchedBastScheduleDateIso ? { tanggalCustomText: '' } : {}),
       };
@@ -2643,36 +2644,49 @@ export function MenuDownloadView({
 
       {/* TAMPILAN 1: PUSAT DOWNLOAD (HUB UTAMA YANG LEGA & TERSTRUKTUR) */}
       {activeHubMode === null ? (
-        <div
-          className={`space-y-7 px-4 pt-5 ${
-            !isNativeApp ? 'md:mx-auto md:max-w-[1180px] md:px-6 md:pt-7' : ''
-          }`}
-        >
-          {/* Header Halaman Utama */}
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex min-w-0 items-center gap-3">
-              {!isNativeApp && (
-                <button
-                  type="button"
-                  onClick={onBack}
-                  className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
-                  aria-label="Kembali ke Menu"
-                >
-                  <ArrowLeft className="h-4 w-4" />
-                  <span>Menu</span>
-                </button>
-              )}
+        <>
+          {!isNativeApp && (
+            <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+              <div className="mx-auto flex max-w-[1180px] flex-wrap items-center justify-between gap-4 px-4 py-3.5 md:px-6">
+                <div className="flex min-w-0 items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={onBack}
+                    className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+                    aria-label="Kembali ke Menu"
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                    <span>Menu</span>
+                  </button>
+                  <div className="min-w-0">
+                    <h1 className="text-xl font-bold tracking-tight text-slate-900 md:text-2xl">
+                      Pusat Download
+                    </h1>
+                    <p className="mt-0.5 text-xs text-slate-500 tabular-nums md:text-sm">
+                      Pilih jenis dokumen yang ingin dicetak atau diekspor · {records.length} KPM ·{' '}
+                      {proposals.length} Proposal · {pengelolaList.length} Pengelola
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </header>
+          )}
+          <div
+            className={`space-y-7 px-4 pt-5 ${
+              !isNativeApp ? 'md:mx-auto md:max-w-[1180px] md:px-6 md:pt-6' : ''
+            }`}
+          >
+            {isNativeApp && (
               <div className="min-w-0">
-                <h1 className="text-xl font-bold tracking-tight text-slate-900 md:text-2xl">
+                <h1 className="text-xl font-bold tracking-tight text-slate-900">
                   Pusat Download
                 </h1>
-                <p className="mt-0.5 text-xs text-slate-500 tabular-nums md:text-sm">
+                <p className="mt-0.5 text-xs text-slate-500 tabular-nums">
                   Pilih jenis dokumen yang ingin dicetak atau diekspor · {records.length} KPM ·{' '}
                   {proposals.length} Proposal · {pengelolaList.length} Pengelola
                 </p>
               </div>
-            </div>
-          </div>
+            )}
 
           {/* 3 Kelompok Kategori Format Download */}
           <div className="space-y-7">
@@ -2720,96 +2734,100 @@ export function MenuDownloadView({
             })}
           </div>
         </div>
+        </>
       ) : (
         /* TAMPILAN 2: SUB-HALAMAN FOKUS PER FORMAT */
-        <div
-          className={`space-y-5 px-4 pt-4 ${
-            !isNativeApp ? 'md:mx-auto md:max-w-[1280px] md:px-6 md:pt-6' : ''
-          }`}
-        >
-          {/* Desktop Breadcrumb & Quick Format Switcher */}
+        <>
+          {/* Sticky Desktop Breadcrumb & Quick Format Switcher */}
           {!isNativeApp && activeFormatMeta && (
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/80 pb-4">
-              <div className="flex min-w-0 items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => setActiveHubMode(null)}
-                  className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
-                >
-                  <ArrowLeft className="h-4 w-4" />
-                  <span>Pusat Download</span>
-                </button>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
-                      {activeFormatMeta.label}
-                    </h1>
-                    <span className="shrink-0 text-xs font-medium text-slate-400">
-                      · {activeFormatMeta.formatNote}
-                    </span>
+            <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+              <div className="mx-auto flex max-w-[1280px] flex-wrap items-center justify-between gap-3 px-4 py-3.5 md:px-6">
+                <div className="flex min-w-0 items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setActiveHubMode(null)}
+                    className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                    <span>Pusat Download</span>
+                  </button>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">
+                        {activeFormatMeta.label}
+                      </h1>
+                      <span className="shrink-0 text-xs font-medium text-slate-400">
+                        · {activeFormatMeta.formatNote}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 truncate text-xs text-slate-500">
+                      {activeFormatMeta.subtitle}
+                    </p>
                   </div>
-                  <p className="mt-0.5 truncate text-xs text-slate-500">
-                    {activeFormatMeta.subtitle}
-                  </p>
+                </div>
+
+                <div className="flex shrink-0 items-center gap-2">
+                  <label className="text-xs font-medium text-slate-500" htmlFor="quick-switch-format">
+                    Format:
+                  </label>
+                  <select
+                    id="quick-switch-format"
+                    value={activeHubMode}
+                    onChange={(e) => openDownloadMode(e.target.value as DownloadHubMode)}
+                    className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 transition-colors hover:border-slate-300 focus:border-teal-700 focus:outline-none"
+                  >
+                    {DOWNLOAD_FORMAT_CATALOG.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
-
-              <div className="flex shrink-0 items-center gap-2">
-                <label className="text-xs font-medium text-slate-500" htmlFor="quick-switch-format">
-                  Format:
-                </label>
-                <select
-                  id="quick-switch-format"
-                  value={activeHubMode}
-                  onChange={(e) => openDownloadMode(e.target.value as DownloadHubMode)}
-                  className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 transition-colors hover:border-slate-300 focus:border-teal-700 focus:outline-none"
-                >
-                  {DOWNLOAD_FORMAT_CATALOG.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
+            </header>
           )}
 
-          {/* SUB-HALAMAN BARU 1: KPM PER PENGELOLA & BOOKING */}
-          {activeHubMode === 'pengelola' ? (
-            <DownloadPengelolaPanel
-              records={records}
-              proposals={proposals}
-              items={items}
-              pengelolaList={pengelolaList}
-              wilayahList={wilayahList}
-              reportTemplate={templateDraft}
-              proposalSlotMap={proposalSlotMap}
-              pengelolaBookings={pengelolaBookings}
-            />
-          ) : activeHubMode === 'standalone' ? (
-            /* SUB-HALAMAN BARU 2: DATABASE KPM & ARSIP DITOLAK */
-            <DownloadStandalonePanel
-              records={records}
-              proposals={proposals}
-              items={items}
-              pengelolaList={pengelolaList}
-              wilayahList={wilayahList}
-              reportTemplate={templateDraft}
-              proposalSlotMap={proposalSlotMap}
-            />
-          ) : (
-            /* SUB-HALAMAN 8 FORMAT CETAK PDF/EXCEL (WORKSPACE 2 KOLOM YANG LEGA) */
-            <div
-              className={`space-y-5 ${
-                !isNativeApp ? 'lg:grid lg:grid-cols-12 lg:items-start lg:gap-6 lg:space-y-0' : ''
-              }`}
-            >
-              {/* Kolom Kiri: Filter Sumber Data & Kop Surat (Sticky di Desktop) */}
+          <div
+            className={`space-y-5 px-4 pt-4 ${
+              !isNativeApp ? 'md:mx-auto md:max-w-[1280px] md:px-6 md:pt-5' : ''
+            }`}
+          >
+            {/* SUB-HALAMAN BARU 1: KPM PER PENGELOLA & BOOKING */}
+            {activeHubMode === 'pengelola' ? (
+              <DownloadPengelolaPanel
+                records={records}
+                proposals={proposals}
+                items={items}
+                pengelolaList={pengelolaList}
+                wilayahList={wilayahList}
+                reportTemplate={templateDraft}
+                proposalSlotMap={proposalSlotMap}
+                pengelolaBookings={pengelolaBookings}
+              />
+            ) : activeHubMode === 'standalone' ? (
+              /* SUB-HALAMAN BARU 2: DATABASE KPM & ARSIP DITOLAK */
+              <DownloadStandalonePanel
+                records={records}
+                proposals={proposals}
+                items={items}
+                pengelolaList={pengelolaList}
+                wilayahList={wilayahList}
+                reportTemplate={templateDraft}
+                proposalSlotMap={proposalSlotMap}
+              />
+            ) : (
+              /* SUB-HALAMAN 8 FORMAT CETAK PDF/EXCEL (WORKSPACE 2 KOLOM YANG LEGA) */
               <div
-                className={`space-y-4 ${
-                  !isNativeApp ? 'lg:col-span-4 lg:sticky lg:top-6' : ''
+                className={`space-y-5 ${
+                  !isNativeApp ? 'lg:grid lg:grid-cols-12 lg:items-start lg:gap-6 lg:space-y-0' : ''
                 }`}
               >
+                {/* Kolom Kiri: Filter Sumber Data & Kop Surat (Sticky di Desktop) */}
+                <div
+                  className={`space-y-4 ${
+                    !isNativeApp ? 'lg:col-span-4 lg:sticky lg:top-24' : ''
+                  }`}
+                >
                 <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-4 md:p-5">
                   <div className="flex items-baseline justify-between gap-2 border-b border-slate-100 pb-3">
                     <div>
@@ -4808,34 +4826,7 @@ export function MenuDownloadView({
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-600">
-                      1. Pilih Hari
-                    </label>
-                    <select
-                      value={sptjmDraft.hari || ''}
-                      onChange={(e) => {
-                        sptjmDirtyRef.current = true;
-                        setSptjmSavedNotice(false);
-                        setSptjmDraft((prev) => ({
-                          ...prev,
-                          hari: e.target.value,
-                          tanggalCustomText: '',
-                        }));
-                      }}
-                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 bg-white px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
-                    >
-                      <option value="">
-                        Tanpa Hari (Standar: {formatIndonesianShortDate(effectiveSptjmTanggalIso)})
-                      </option>
-                      {SPTJM_DAY_OPTIONS.map((day) => (
-                        <option key={day} value={day}>
-                          {day}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600">
-                      2. Pilih Tanggal{' '}
+                      Tanggal SPTJM{' '}
                       {matchedBastScheduleDateIso ? `(Mengikuti ${bastScheduleBook.title})` : ''}
                     </label>
                     <input
@@ -4848,6 +4839,7 @@ export function MenuDownloadView({
                         setSptjmSavedNotice(false);
                         setSptjmDraft((prev) => ({
                           ...prev,
+                          hari: '',
                           tanggalIso: e.target.value,
                           tanggalCustomText: '',
                         }));
@@ -4859,7 +4851,25 @@ export function MenuDownloadView({
                       }`}
                     />
                     <p className="mt-1 text-[10px] text-slate-500 tabular-nums">
-                      Format: {formatIndonesianDDMonthYYYY(effectiveSptjmTanggalIso)}
+                      Format cetak: {formatIndonesianShortDate(effectiveSptjmTanggalIso)}
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600">
+                      Hari (Otomatis dari Tanggal)
+                    </label>
+                    <div
+                      className={`mt-1 flex min-h-[40px] w-full items-center rounded-xl border px-3 text-xs font-semibold ${
+                        matchedBastScheduleDateIso
+                          ? 'border-teal-200 bg-teal-50/60 text-teal-900'
+                          : 'border-slate-200 bg-slate-50 text-slate-700'
+                      }`}
+                    >
+                      {getSptjmAutoDayFromIso(effectiveSptjmTanggalIso)}
+                    </div>
+                    <p className="mt-1 text-[10px] text-slate-500">
+                      Disesuaikan otomatis mengikuti tanggal{' '}
+                      {matchedBastScheduleDateIso ? bastScheduleBook.title : 'terpilih'}.
                     </p>
                   </div>
                 </div>
@@ -6559,6 +6569,7 @@ export function MenuDownloadView({
             </div>
           )}
         </div>
+        </>
       )}
 
       {/* Pop-up Pilihan Tahun / Sumber Data */}

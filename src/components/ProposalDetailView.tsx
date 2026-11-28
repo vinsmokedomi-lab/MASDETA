@@ -3801,28 +3801,37 @@ export function ProposalDetailView({
       )}
 
       {isDesktopWeb ? (
-        <main className="mx-auto grid max-w-[1440px] grid-cols-12 items-start gap-5 px-6 pt-6">
-          <div className="col-span-12 flex items-center gap-3">
-            <button
-              type="button"
-              onClick={onBack}
-              className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
-              aria-label="Kembali"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              <span>Kembali</span>
-            </button>
-            <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">Proposal</h1>
-          </div>
-          <div className="col-span-5 space-y-5">
-            {overviewAndDtsenBlock}
-            {breakdownsBlock}
-            {historyBlock}
-          </div>
-          <div className="col-span-7 space-y-5 md:sticky md:top-6 self-start">
-            {proposalKpmListBlock}
-          </div>
-        </main>
+        <>
+          <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+            <div className="mx-auto flex max-w-[1440px] items-center gap-3 px-6 py-3.5">
+              <button
+                type="button"
+                onClick={onBack}
+                className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+                aria-label="Kembali"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                <span>Kembali</span>
+              </button>
+              <div className="flex min-w-0 items-baseline gap-2">
+                <h1 className="truncate text-xl font-bold tracking-tight text-slate-900">Proposal</h1>
+                <span className="truncate text-xs font-medium text-slate-500">
+                  · {proposal.namaProposal} ({proposal.tahun})
+                </span>
+              </div>
+            </div>
+          </header>
+          <main className="mx-auto grid max-w-[1440px] grid-cols-12 items-start gap-5 px-6 pt-5">
+            <div className="col-span-5 space-y-5">
+              {overviewAndDtsenBlock}
+              {breakdownsBlock}
+              {historyBlock}
+            </div>
+            <div className="col-span-7 space-y-5 md:sticky md:top-20 self-start">
+              {proposalKpmListBlock}
+            </div>
+          </main>
+        </>
       ) : (
         <main className="space-y-4 px-4 pt-4">
           {overviewAndDtsenBlock}

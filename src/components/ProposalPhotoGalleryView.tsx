@@ -1036,13 +1036,9 @@ export function ProposalPhotoGalleryView({
         </header>
       )}
 
-      <div
-        className={`space-y-4 px-4 pt-4 ${
-          !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-6' : ''
-        }`}
-      >
-        {!isNativeApp && (
-          <div className="flex flex-wrap items-center justify-between gap-3">
+      {!isNativeApp && (
+        <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+          <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-3 px-4 py-3.5 md:px-6">
             <div className="flex min-w-0 items-center gap-3">
               <button
                 type="button"
@@ -1080,7 +1076,14 @@ export function ProposalPhotoGalleryView({
               </button>
             )}
           </div>
-        )}
+        </header>
+      )}
+
+      <div
+        className={`space-y-4 px-4 pt-4 ${
+          !isNativeApp ? 'md:mx-auto md:max-w-[1440px] md:px-6 md:pt-5' : ''
+        }`}
+      >
 
         {/* Proposal / Kelurahan & Year Picker */}
         <section className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
@@ -1471,7 +1474,7 @@ export function ProposalPhotoGalleryView({
           /* Mode Audit Nomor DINSOS */
           <div className="space-y-3.5">
             {/* Toolbar Zoom Serentak, Fokus Kertas, & Filter Audit */}
-            <section className="sticky top-2 z-10 rounded-2xl border border-amber-200 bg-amber-50/95 p-3.5 shadow-sm backdrop-blur-sm space-y-3">
+            <section className="sticky top-16 z-10 rounded-2xl border border-amber-200 bg-amber-50/95 p-3.5 shadow-sm backdrop-blur-sm space-y-3 md:top-20">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
