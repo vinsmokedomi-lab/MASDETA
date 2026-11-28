@@ -50,6 +50,7 @@ import {
   ScheduleEventItem,
   SptjmTemplateConfig,
   WilayahKabKota,
+  resolveBastScheduleBook,
 } from '../types/kpm';
 import {
   buildMergedProposalSlots,
@@ -81,14 +82,14 @@ import {
   formatAbsensiScheduleFields,
   formatIndonesianDDMonthYYYY,
   formatIndonesianDateWords,
+  formatIndonesianShortDate,
   formatNomorDinsosLocationLines,
   formatScheduleDateTimeForCoupon,
   formatSptjmFullDate,
-  getSptjmAutoDayFromIso,
-  getTodayLocalIsoDate,
   isKecamatanScopedProposalForCoupon,
   normalizeIsoDateInput,
   normalizePejabatNipNumber,
+  resolveBastScheduleForProposal,
   resolveCouponScheduleForRecord,
   resolveEffectiveBastConfig,
   resolveScheduleForProposal,
@@ -277,7 +278,7 @@ function normalizeSptjmConfigDraft(raw?: Partial<SptjmTemplateConfig>): SptjmTem
     ...merged,
     tempat: merged.tempat ?? DEFAULT_SPTJM_TEMPLATE.tempat,
     hari: merged.hari ?? '',
-    tanggalIso: normalizeIsoDateInput(merged.tanggalIso) || getTodayLocalIsoDate(),
+    tanggalIso: normalizeIsoDateInput(merged.tanggalIso) || DEFAULT_SPTJM_TEMPLATE.tanggalIso,
     tanggalCustomText: merged.tanggalCustomText ?? '',
     pejabatJabatan: merged.pejabatJabatan ?? DEFAULT_SPTJM_TEMPLATE.pejabatJabatan,
     pejabatNama: merged.pejabatNama ?? DEFAULT_SPTJM_TEMPLATE.pejabatNama,
@@ -288,7 +289,9 @@ function normalizeSptjmConfigDraft(raw?: Partial<SptjmTemplateConfig>): SptjmTem
 function normalizeBastConfigDraft(raw: BastTemplateConfig): BastTemplateConfig {
   return {
     ...raw,
-    tanggalSerahTerimaIso: normalizeIsoDateInput(raw.tanggalSerahTerimaIso) || getTodayLocalIsoDate(),
+    tanggalSerahTerimaIso:
+      normalizeIsoDateInput(raw.tanggalSerahTerimaIso) ||
+      DEFAULT_BAST_TEMPLATE.tanggalSerahTerimaIso,
     pejabatNip: normalizePejabatNipNumber(raw.pejabatNip).trim(),
   };
 }
@@ -566,6 +569,7 @@ export function MenuDownloadView({
   const [showBastKopEditor, setShowBastKopEditor] = useState(false);
   const bastDirtyRef = useRef(false);
   const bastHydratedScopeRef = useRef<string>('');
+  const bastDraftScopeKeyRef = useRef<string>('__default__');
   const bastLastCommittedRef = useRef<string>('');
 
   const [sptjmDraft, setSptjmDraft] = useState<SptjmTemplateConfig>(() =>
@@ -811,12 +815,14 @@ export function MenuDownloadView({
         bastTemplate,
         proposalBastMap,
         selectedProposalObj?.id,
-        reportTemplate
+        reportTemplate,
+        selectedProposalObj?.tahun || (selectedTahun !== 'all' ? selectedTahun : undefined)
       )
     );
     const resolvedJson = JSON.stringify(resolved);
     if (bastHydratedScopeRef.current !== scopeKey) {
       bastHydratedScopeRef.current = scopeKey;
+      bastDraftScopeKeyRef.current = scopeKey;
       bastDirtyRef.current = false;
       bastLastCommittedRef.current = resolvedJson;
       setBastSavedNotice(false);
@@ -824,14 +830,25 @@ export function MenuDownloadView({
       return;
     }
     if (!bastDirtyRef.current && resolvedJson !== bastLastCommittedRef.current) {
+      bastDraftScopeKeyRef.current = scopeKey;
       bastLastCommittedRef.current = resolvedJson;
       setBastDraft(resolved);
     }
-  }, [bastTemplate, proposalBastMap, selectedProposalObj?.id, reportTemplate]);
+  }, [
+    bastTemplate,
+    proposalBastMap,
+    selectedProposalObj?.id,
+    selectedProposalObj?.tahun,
+    selectedTahun,
+    reportTemplate,
+  ]);
 
-  // Silent auto-save BAST (otomatis ke proposal aktif atau template default)
+  // Silent auto-save BAST (otomatis ke proposal aktif atau template default, terkunci per scope agar tidak tertukar)
   useEffect(() => {
-    if (isOffline || !bastDirtyRef.current) return;
+    const currentScopeKey = selectedProposalObj?.id || '__default__';
+    if (isOffline || !bastDirtyRef.current || bastDraftScopeKeyRef.current !== currentScopeKey) {
+      return;
+    }
     const normalized = normalizeBastConfigDraft(bastDraft);
     const nextJson = JSON.stringify(normalized);
     if (nextJson === bastLastCommittedRef.current) {
@@ -839,6 +856,7 @@ export function MenuDownloadView({
       return;
     }
     const timer = window.setTimeout(() => {
+      if (bastDraftScopeKeyRef.current !== currentScopeKey) return;
       bastDirtyRef.current = false;
       bastLastCommittedRef.current = nextJson;
       if (selectedProposalObj && onSaveProposalBastConfig) {
@@ -847,7 +865,7 @@ export function MenuDownloadView({
         setBastSavedNotice(true);
       } else if (onSaveBastTemplate) {
         onSaveBastTemplate(normalized, { silent: true });
-        setBastSavedLabel('Template BAST default tersimpan otomatis');
+        setBastSavedLabel('Template BAST default 2026 tersimpan otomatis');
         setBastSavedNotice(true);
       }
     }, 450);
@@ -1123,18 +1141,106 @@ export function MenuDownloadView({
     ).length;
   }, [eligibleKuponRecords, schedules, proposals, couponDraft, couponBookOptionsArg]);
 
+  const bastScheduleBook = useMemo(
+    () => resolveBastScheduleBook(effectiveScheduleBooks),
+    [effectiveScheduleBooks]
+  );
+
+  const matchedProposalBastSchedule = useMemo(() => {
+    if (isStandaloneSource || !selectedProposalObj) return undefined;
+    return resolveBastScheduleForProposal(
+      selectedProposalObj.namaProposal,
+      selectedProposalObj.tahun,
+      schedules,
+      effectiveScheduleBooks,
+      scheduleBookMap
+    );
+  }, [
+    isStandaloneSource,
+    selectedProposalObj,
+    schedules,
+    effectiveScheduleBooks,
+    scheduleBookMap,
+  ]);
+
+  const matchedBastScheduleDateIso = useMemo(
+    () => normalizeIsoDateInput(matchedProposalBastSchedule?.targetDate),
+    [matchedProposalBastSchedule]
+  );
+
+  const bastScheduleCoverage = useMemo(() => {
+    const seen = new Map<string, { name: string; tahun: string }>();
+    for (const rec of eligibleBastRecords) {
+      const matchedProp =
+        (rec.proposalId ? proposalLookup.byId.get(rec.proposalId) : undefined) ??
+        proposalLookup.byNameYear.get(`${(rec.proposal || '').trim()}__${(rec.tahun || '').trim()}`) ??
+        proposalLookup.byName.get((rec.proposal || '').trim());
+      const name = (matchedProp?.namaProposal || rec.proposal || '').trim();
+      const tahun = (matchedProp?.tahun || rec.tahun || '').trim();
+      if (!name) continue;
+      const key = `${name.toLowerCase()}__${tahun}`;
+      if (!seen.has(key)) {
+        seen.set(key, { name, tahun });
+      }
+    }
+    let syncedCount = 0;
+    const missingNames: string[] = [];
+    seen.forEach(({ name, tahun }) => {
+      const ev = resolveBastScheduleForProposal(
+        name,
+        tahun,
+        schedules,
+        effectiveScheduleBooks,
+        scheduleBookMap
+      );
+      if (normalizeIsoDateInput(ev?.targetDate)) {
+        syncedCount += 1;
+      } else {
+        missingNames.push(name);
+      }
+    });
+    return {
+      totalProposals: seen.size,
+      syncedCount,
+      missingNames,
+    };
+  }, [
+    eligibleBastRecords,
+    proposalLookup,
+    schedules,
+    effectiveScheduleBooks,
+    scheduleBookMap,
+  ]);
+
+  const effectiveBastTanggalIso =
+    matchedBastScheduleDateIso ||
+    normalizeIsoDateInput(bastDraft.tanggalSerahTerimaIso) ||
+    DEFAULT_BAST_TEMPLATE.tanggalSerahTerimaIso;
+
+  const effectiveSptjmTanggalIso =
+    matchedBastScheduleDateIso ||
+    normalizeIsoDateInput(sptjmDraft.tanggalIso) ||
+    DEFAULT_SPTJM_TEMPLATE.tanggalIso;
+
   const bastDatePreviewText = useMemo(() => {
-    if (bastDraft.tanggalSerahTerimaCustomText?.trim()) {
+    if (!matchedBastScheduleDateIso && bastDraft.tanggalSerahTerimaCustomText?.trim()) {
       return bastDraft.tanggalSerahTerimaCustomText.trim();
     }
-    return formatIndonesianDateWords(
-      bastDraft.tanggalSerahTerimaIso?.trim() || getTodayLocalIsoDate()
-    );
-  }, [bastDraft.tanggalSerahTerimaCustomText, bastDraft.tanggalSerahTerimaIso]);
+    return formatIndonesianDateWords(effectiveBastTanggalIso);
+  }, [
+    matchedBastScheduleDateIso,
+    bastDraft.tanggalSerahTerimaCustomText,
+    effectiveBastTanggalIso,
+  ]);
 
   const sptjmDatePreviewText = useMemo(
-    () => formatSptjmFullDate(sptjmDraft),
-    [sptjmDraft]
+    () =>
+      formatSptjmFullDate({
+        ...sptjmDraft,
+        tanggalIso: effectiveSptjmTanggalIso,
+        ...(matchedBastScheduleDateIso ? { tanggalCustomText: '' } : {}),
+      }),
+    [sptjmDraft, effectiveSptjmTanggalIso, matchedBastScheduleDateIso]
   );
 
   const maxAddonCount = MAX_PDF_TOTAL_COLUMNS - MANDATORY_PDF_COLUMN_KEYS.length; // 6 add-on
@@ -1884,9 +1990,23 @@ export function MenuDownloadView({
     setBastFeedback(null);
     setIsGeneratingBast(true);
     try {
+      const normalizedDraft = normalizeBastConfigDraft({
+        ...bastDraft,
+        tanggalSerahTerimaIso: effectiveBastTanggalIso,
+        ...(matchedBastScheduleDateIso ? { tanggalSerahTerimaCustomText: '' } : {}),
+      });
+      if (!isOffline && bastDirtyRef.current) {
+        bastDirtyRef.current = false;
+        bastLastCommittedRef.current = JSON.stringify(normalizedDraft);
+        if (selectedProposalObj && onSaveProposalBastConfig) {
+          onSaveProposalBastConfig(selectedProposalObj.id, normalizedDraft, { silent: true });
+        } else if (onSaveBastTemplate) {
+          onSaveBastTemplate(normalizedDraft, { silent: true });
+        }
+      }
       const { fileName } = buildScopeTitleAndFileName('BAST');
       const effectiveBulkMap: ProposalBastMap = selectedProposalObj
-        ? { ...proposalBastMap, [selectedProposalObj.id]: bastDraft }
+        ? { ...proposalBastMap, [selectedProposalObj.id]: normalizedDraft }
         : proposalBastMap;
       const { exportKpmBastBulkToPdf } = await import('../utils/pdfExporter');
       const res = await exportKpmBastBulkToPdf({
@@ -1896,8 +2016,11 @@ export function MenuDownloadView({
         items,
         wilayahList,
         proposalSlotMap,
+        schedules,
+        scheduleBooks: effectiveScheduleBooks,
+        scheduleBookMap,
         reportTemplate: templateDraft,
-        bastConfig: bastDraft,
+        bastConfig: normalizedDraft,
         proposalBastMap: effectiveBulkMap,
         fileName,
       });
@@ -1922,6 +2045,17 @@ export function MenuDownloadView({
     setSptjmFeedback(null);
     setIsGeneratingSptjm(true);
     try {
+      const normalizedSptjm = normalizeSptjmConfigDraft(sptjmDraft);
+      if (!isOffline && sptjmDirtyRef.current && onSaveSptjmTemplate) {
+        sptjmDirtyRef.current = false;
+        sptjmLastCommittedRef.current = JSON.stringify(normalizedSptjm);
+        onSaveSptjmTemplate(normalizedSptjm, { silent: true });
+      }
+      const effectiveExportSptjm: SptjmTemplateConfig = {
+        ...normalizedSptjm,
+        tanggalIso: effectiveSptjmTanggalIso,
+        ...(matchedBastScheduleDateIso ? { tanggalCustomText: '' } : {}),
+      };
       const { fileName } = buildScopeTitleAndFileName('SPTJM');
       const { exportKpmSptjmBulkToPdf } = await import('../utils/pdfExporter');
       const res = await exportKpmSptjmBulkToPdf({
@@ -1931,9 +2065,12 @@ export function MenuDownloadView({
         items,
         wilayahList,
         proposalSlotMap,
+        schedules,
+        scheduleBooks: effectiveScheduleBooks,
+        scheduleBookMap,
         reportTemplate: templateDraft,
-        bastConfig: bastDraft,
-        sptjmConfig: sptjmDraft,
+        bastConfig: normalizeBastConfigDraft(bastDraft),
+        sptjmConfig: effectiveExportSptjm,
         fileName,
       });
       setSptjmFeedback({
@@ -4010,13 +4147,42 @@ export function MenuDownloadView({
                       : 'Template BAST default · 1 halaman F4 per KPM'}
                   </p>
                 </div>
-                <div className="flex items-center gap-2.5 shrink-0">
+                <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
                   {bastSavedNotice && (
                     <span className="inline-flex items-center gap-1 text-xs font-medium text-teal-700">
                       <Check className="h-3.5 w-3.5" />
                       <span>{bastSavedLabel}</span>
                     </span>
                   )}
+                  <button
+                    type="button"
+                    disabled={isOffline}
+                    onClick={() => {
+                      const resetCfg = normalizeBastConfigDraft({
+                        ...DEFAULT_BAST_TEMPLATE,
+                        kopLogoDataUrl:
+                          (bastDraft.kopLogoDataUrl || '').trim() || DEFAULT_KOP_LOGO_URL,
+                      });
+                      bastDirtyRef.current = false;
+                      bastLastCommittedRef.current = JSON.stringify(resetCfg);
+                      setBastDraft(resetCfg);
+                      if (selectedProposalObj && onSaveProposalBastConfig) {
+                        onSaveProposalBastConfig(selectedProposalObj.id, resetCfg, {
+                          silent: true,
+                        });
+                        setBastSavedLabel(
+                          `Default 2026 diterapkan untuk "${selectedProposalObj.namaProposal}"`
+                        );
+                      } else if (onSaveBastTemplate) {
+                        onSaveBastTemplate(resetCfg, { silent: true });
+                        setBastSavedLabel('Default BAST 2026 diterapkan');
+                      }
+                      setBastSavedNotice(true);
+                    }}
+                    className="inline-flex min-h-[30px] items-center rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Default 2026
+                  </button>
                   <span className="text-xs font-bold text-teal-800 tabular-nums">
                     {eligibleBastRecords.length} KPM
                   </span>
@@ -4193,15 +4359,77 @@ export function MenuDownloadView({
                   />
                 </div>
 
+                {selectedProposalObj ? (
+                  matchedBastScheduleDateIso ? (
+                    <div className="flex items-start gap-2 rounded-xl border border-teal-200 bg-teal-50/80 px-3 py-2 text-[11px] text-teal-900">
+                      <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-teal-700" />
+                      <p className="leading-snug">
+                        <strong>Tanggal otomatis dari Buku {bastScheduleBook.title}:</strong>{' '}
+                        {formatIndonesianShortDate(matchedBastScheduleDateIso)} (
+                        {selectedProposalObj.namaProposal}). Ubah di menu <strong>Jadwal</strong>{' '}
+                        jika tanggal BAST berubah.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+                      <p className="leading-snug">
+                        Proposal <strong>{selectedProposalObj.namaProposal}</strong> belum
+                        memiliki tanggal di Buku <strong>{bastScheduleBook.title}</strong>. Wajib
+                        isi agenda di menu <strong>Jadwal &rarr; {bastScheduleBook.title}</strong>{' '}
+                        agar tanggal BAST &amp; SPTJM otomatis sinkron.
+                      </p>
+                    </div>
+                  )
+                ) : (
+                  bastScheduleCoverage.totalProposals > 0 && (
+                    <div
+                      className={`flex items-start gap-2 rounded-xl border px-3 py-2 text-[11px] ${
+                        bastScheduleCoverage.missingNames.length === 0
+                          ? 'border-teal-200 bg-teal-50/80 text-teal-900'
+                          : 'border-amber-200 bg-amber-50 text-amber-900'
+                      }`}
+                    >
+                      {bastScheduleCoverage.missingNames.length === 0 ? (
+                        <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-teal-700" />
+                      ) : (
+                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+                      )}
+                      <p className="leading-snug">
+                        <strong>Sinkron Buku {bastScheduleBook.title}:</strong>{' '}
+                        {bastScheduleCoverage.syncedCount} dari{' '}
+                        {bastScheduleCoverage.totalProposals} proposal otomatis memakai tanggal
+                        dari <strong>{bastScheduleBook.title}</strong>.
+                        {bastScheduleCoverage.missingNames.length > 0 && (
+                          <span>
+                            {' '}
+                            Belum dijadwalkan:{' '}
+                            {bastScheduleCoverage.missingNames.slice(0, 4).join(', ')}
+                            {bastScheduleCoverage.missingNames.length > 4
+                              ? ` (+${bastScheduleCoverage.missingNames.length - 4} lainnya)`
+                              : ''}
+                            .
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  )
+                )}
+
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-600">
-                      2. Tanggal Serah Terima (Otomatis Terbilang)
+                      2. Tanggal Serah Terima{' '}
+                      {matchedBastScheduleDateIso
+                        ? `(Mengikuti ${bastScheduleBook.title})`
+                        : '(Otomatis Terbilang)'}
                     </label>
                     <input
                       type="date"
-                      value={bastDraft.tanggalSerahTerimaIso}
+                      value={effectiveBastTanggalIso}
+                      disabled={Boolean(matchedBastScheduleDateIso)}
                       onChange={(e) => {
+                        if (matchedBastScheduleDateIso) return;
                         bastDirtyRef.current = true;
                         setBastSavedNotice(false);
                         setBastDraft((prev) => ({
@@ -4209,7 +4437,11 @@ export function MenuDownloadView({
                           tanggalSerahTerimaIso: e.target.value,
                         }));
                       }}
-                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                      className={`mt-1 min-h-[40px] w-full rounded-xl border px-3 text-xs focus:outline-none ${
+                        matchedBastScheduleDateIso
+                          ? 'cursor-not-allowed border-teal-200 bg-teal-50/60 font-semibold text-teal-900'
+                          : 'border-slate-300 text-slate-900 focus:border-teal-700'
+                      }`}
                     />
                   </div>
                   <div>
@@ -4218,8 +4450,14 @@ export function MenuDownloadView({
                     </label>
                     <input
                       type="text"
-                      value={bastDraft.tanggalSerahTerimaCustomText || ''}
+                      value={
+                        matchedBastScheduleDateIso
+                          ? ''
+                          : bastDraft.tanggalSerahTerimaCustomText || ''
+                      }
+                      disabled={Boolean(matchedBastScheduleDateIso)}
                       onChange={(e) => {
+                        if (matchedBastScheduleDateIso) return;
                         bastDirtyRef.current = true;
                         setBastSavedNotice(false);
                         setBastDraft((prev) => ({
@@ -4227,8 +4465,16 @@ export function MenuDownloadView({
                           tanggalSerahTerimaCustomText: e.target.value,
                         }));
                       }}
-                      placeholder="Kosongkan untuk teks otomatis"
-                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                      placeholder={
+                        matchedBastScheduleDateIso
+                          ? `Terkunci ke ${bastScheduleBook.title}`
+                          : 'Kosongkan untuk teks otomatis'
+                      }
+                      className={`mt-1 min-h-[40px] w-full rounded-xl border px-3 text-xs focus:outline-none ${
+                        matchedBastScheduleDateIso
+                          ? 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-500'
+                          : 'border-slate-300 text-slate-900 focus:border-teal-700'
+                      }`}
                     />
                   </div>
                 </div>
@@ -4370,7 +4616,7 @@ export function MenuDownloadView({
                         setBastSavedNotice(false);
                         setBastDraft((prev) => ({ ...prev, pejabatPangkat: e.target.value }));
                       }}
-                      placeholder="Contoh: Pembina Utama Muda / (IV/c)"
+                      placeholder="Contoh: Pembina / (IV/a)"
                       className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
                     />
                   </div>
@@ -4393,7 +4639,7 @@ export function MenuDownloadView({
                             pejabatNip: normalizePejabatNipNumber(e.target.value),
                           }));
                         }}
-                        placeholder="19770830 199603 1 001"
+                        placeholder="19780327 199612 2 001"
                         className="min-h-[38px] w-full border-0 bg-transparent px-3 text-xs text-slate-900 tabular-nums focus:outline-none"
                       />
                     </div>
@@ -4456,13 +4702,28 @@ export function MenuDownloadView({
                     1 halaman F4 per KPM · Perubahan otomatis tersimpan.
                   </p>
                 </div>
-                <div className="flex items-center gap-2.5 shrink-0">
+                <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
                   {sptjmSavedNotice && (
                     <span className="inline-flex items-center gap-1 text-xs font-medium text-teal-700">
                       <Check className="h-3.5 w-3.5" />
                       <span>Tersimpan</span>
                     </span>
                   )}
+                  <button
+                    type="button"
+                    disabled={isOffline}
+                    onClick={() => {
+                      const resetSptjm = normalizeSptjmConfigDraft(DEFAULT_SPTJM_TEMPLATE);
+                      sptjmDirtyRef.current = false;
+                      sptjmLastCommittedRef.current = JSON.stringify(resetSptjm);
+                      setSptjmDraft(resetSptjm);
+                      onSaveSptjmTemplate?.(resetSptjm, { silent: true });
+                      setSptjmSavedNotice(true);
+                    }}
+                    className="inline-flex min-h-[30px] items-center rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Default 2026
+                  </button>
                   <span className="text-xs font-bold text-teal-800 tabular-nums">
                     {eligibleBastRecords.length} KPM
                   </span>
@@ -4487,6 +4748,63 @@ export function MenuDownloadView({
                   />
                 </div>
 
+                {selectedProposalObj ? (
+                  matchedBastScheduleDateIso ? (
+                    <div className="flex items-start gap-2 rounded-xl border border-teal-200 bg-teal-50/80 px-3 py-2 text-[11px] text-teal-900">
+                      <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-teal-700" />
+                      <p className="leading-snug">
+                        <strong>Tanggal SPTJM mengikuti Buku {bastScheduleBook.title}:</strong>{' '}
+                        {formatIndonesianShortDate(matchedBastScheduleDateIso)} (
+                        {selectedProposalObj.namaProposal}). Ubah di menu <strong>Jadwal</strong>{' '}
+                        jika tanggal berubah.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+                      <p className="leading-snug">
+                        Proposal <strong>{selectedProposalObj.namaProposal}</strong> belum
+                        memiliki tanggal di Buku <strong>{bastScheduleBook.title}</strong>. Wajib
+                        isi agenda di menu <strong>Jadwal &rarr; {bastScheduleBook.title}</strong>{' '}
+                        terlebih dahulu.
+                      </p>
+                    </div>
+                  )
+                ) : (
+                  bastScheduleCoverage.totalProposals > 0 && (
+                    <div
+                      className={`flex items-start gap-2 rounded-xl border px-3 py-2 text-[11px] ${
+                        bastScheduleCoverage.missingNames.length === 0
+                          ? 'border-teal-200 bg-teal-50/80 text-teal-900'
+                          : 'border-amber-200 bg-amber-50 text-amber-900'
+                      }`}
+                    >
+                      {bastScheduleCoverage.missingNames.length === 0 ? (
+                        <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-teal-700" />
+                      ) : (
+                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+                      )}
+                      <p className="leading-snug">
+                        <strong>Sinkron Buku {bastScheduleBook.title}:</strong>{' '}
+                        {bastScheduleCoverage.syncedCount} dari{' '}
+                        {bastScheduleCoverage.totalProposals} proposal otomatis memakai tanggal
+                        dari <strong>{bastScheduleBook.title}</strong> saat cetak SPTJM massal.
+                        {bastScheduleCoverage.missingNames.length > 0 && (
+                          <span>
+                            {' '}
+                            Belum dijadwalkan:{' '}
+                            {bastScheduleCoverage.missingNames.slice(0, 4).join(', ')}
+                            {bastScheduleCoverage.missingNames.length > 4
+                              ? ` (+${bastScheduleCoverage.missingNames.length - 4} lainnya)`
+                              : ''}
+                            .
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  )
+                )}
+
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-600">
@@ -4506,7 +4824,7 @@ export function MenuDownloadView({
                       className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 bg-white px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
                     >
                       <option value="">
-                        Otomatis ({getSptjmAutoDayFromIso(sptjmDraft.tanggalIso)})
+                        Tanpa Hari (Standar: {formatIndonesianShortDate(effectiveSptjmTanggalIso)})
                       </option>
                       {SPTJM_DAY_OPTIONS.map((day) => (
                         <option key={day} value={day}>
@@ -4517,12 +4835,15 @@ export function MenuDownloadView({
                   </div>
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-600">
-                      2. Pilih Tanggal
+                      2. Pilih Tanggal{' '}
+                      {matchedBastScheduleDateIso ? `(Mengikuti ${bastScheduleBook.title})` : ''}
                     </label>
                     <input
                       type="date"
-                      value={sptjmDraft.tanggalIso}
+                      value={effectiveSptjmTanggalIso}
+                      disabled={Boolean(matchedBastScheduleDateIso)}
                       onChange={(e) => {
+                        if (matchedBastScheduleDateIso) return;
                         sptjmDirtyRef.current = true;
                         setSptjmSavedNotice(false);
                         setSptjmDraft((prev) => ({
@@ -4531,10 +4852,14 @@ export function MenuDownloadView({
                           tanggalCustomText: '',
                         }));
                       }}
-                      className="mt-1 min-h-[40px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                      className={`mt-1 min-h-[40px] w-full rounded-xl border px-3 text-xs focus:outline-none ${
+                        matchedBastScheduleDateIso
+                          ? 'cursor-not-allowed border-teal-200 bg-teal-50/60 font-semibold text-teal-900'
+                          : 'border-slate-300 text-slate-900 focus:border-teal-700'
+                      }`}
                     />
                     <p className="mt-1 text-[10px] text-slate-500 tabular-nums">
-                      Format: {formatIndonesianDDMonthYYYY(sptjmDraft.tanggalIso)}
+                      Format: {formatIndonesianDDMonthYYYY(effectiveSptjmTanggalIso)}
                     </p>
                   </div>
                 </div>

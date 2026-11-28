@@ -84,12 +84,16 @@ import {
 import {
   AbsenDinasVariant,
   DEFAULT_PDF_COLUMN_KEYS,
+  applyBastScheduleDateToBastConfig,
   formatAbsenDinasLocationText,
   formatAbsensiScheduleFields,
   formatBastProposalLocation,
   formatIndonesianDateWords,
+  formatIndonesianShortDate,
   formatScheduleDateTimeForCoupon,
+  normalizeIsoDateInput,
   normalizePejabatNipNumber,
+  resolveBastScheduleForProposal,
   resolveEffectiveBastConfig,
   resolveScheduleForProposal,
   resolveScheduleForProposalInBook,
@@ -108,6 +112,7 @@ interface ProposalDetailViewProps {
   proposalSlotMap?: ProposalSlotMap;
   schedules?: ScheduleEventItem[];
   scheduleBooks?: ScheduleBook[];
+  scheduleBookMap?: Record<string, string>;
   reportTemplate?: ReportTemplateConfig;
   bastTemplate?: BastTemplateConfig;
   sptjmTemplate?: SptjmTemplateConfig;
@@ -183,6 +188,7 @@ export function ProposalDetailView({
   proposalSlotMap = {},
   schedules = [],
   scheduleBooks = DEFAULT_SCHEDULE_BOOKS,
+  scheduleBookMap = {},
   reportTemplate,
   bastTemplate,
   sptjmTemplate = DEFAULT_SPTJM_TEMPLATE,
@@ -331,9 +337,35 @@ export function ProposalDetailView({
   } | null>(null);
   const [drillQuery, setDrillQuery] = useState('');
 
+  const matchedBastSchedule = useMemo(
+    () =>
+      resolveBastScheduleForProposal(
+        proposal.namaProposal,
+        proposal.tahun,
+        schedules,
+        scheduleBooks && scheduleBooks.length > 0 ? scheduleBooks : DEFAULT_SCHEDULE_BOOKS,
+        scheduleBookMap
+      ),
+    [proposal.namaProposal, proposal.tahun, schedules, scheduleBooks, scheduleBookMap]
+  );
+  const matchedBastDateIso = useMemo(
+    () => normalizeIsoDateInput(matchedBastSchedule?.targetDate),
+    [matchedBastSchedule]
+  );
+
   const effectiveBastConfig = useMemo(
-    () => resolveEffectiveBastConfig(bastTemplate, proposalBastMap, proposal.id, reportTemplate),
-    [bastTemplate, proposalBastMap, proposal.id, reportTemplate]
+    () =>
+      applyBastScheduleDateToBastConfig(
+        resolveEffectiveBastConfig(
+          bastTemplate,
+          proposalBastMap,
+          proposal.id,
+          reportTemplate,
+          proposal.tahun
+        ),
+        matchedBastSchedule
+      ),
+    [bastTemplate, proposalBastMap, proposal.id, proposal.tahun, reportTemplate, matchedBastSchedule]
   );
   const hasCustomProposalBast = Boolean(proposalBastMap && proposalBastMap[proposal.id]);
   const matchedSchedule = useMemo(
@@ -383,11 +415,15 @@ export function ProposalDetailView({
   const handleResetProposalBastToDefault = () => {
     if (!onSaveProposalBastConfig || isOffline) return;
     onSaveProposalBastConfig(proposal.id, null);
-    const defaultResolved = resolveEffectiveBastConfig(
-      bastTemplate,
-      {},
-      proposal.id,
-      reportTemplate
+    const defaultResolved = applyBastScheduleDateToBastConfig(
+      resolveEffectiveBastConfig(
+        bastTemplate,
+        {},
+        proposal.id,
+        reportTemplate,
+        proposal.tahun
+      ),
+      matchedBastSchedule
     );
     setBastDraft(defaultResolved);
     setBastFeedback({
@@ -401,7 +437,10 @@ export function ProposalDetailView({
     setBastBusy(true);
     setBastFeedback(null);
     try {
-      const cfg = configOverride || effectiveBastConfig;
+      const cfg = applyBastScheduleDateToBastConfig(
+        configOverride || effectiveBastConfig,
+        matchedBastSchedule
+      );
       const mergedMap: ProposalBastMap = {
         ...proposalBastMap,
         [proposal.id]: cfg,
@@ -413,6 +452,9 @@ export function ProposalDetailView({
         proposals: allProposals,
         items,
         proposalSlotMap,
+        schedules,
+        scheduleBooks: effectiveScheduleBooks,
+        scheduleBookMap,
         reportTemplate,
         bastConfig: cfg,
         proposalBastMap: mergedMap,
@@ -445,6 +487,9 @@ export function ProposalDetailView({
         items,
         wilayahList,
         proposalSlotMap,
+        schedules,
+        scheduleBooks: effectiveScheduleBooks,
+        scheduleBookMap,
         reportTemplate,
         bastConfig: effectiveBastConfig,
         sptjmConfig: sptjmTemplate ?? DEFAULT_SPTJM_TEMPLATE,
@@ -4202,21 +4247,40 @@ export function ProposalDetailView({
                 />
               </div>
 
+              {matchedBastDateIso ? (
+                <div className="rounded-xl border border-teal-200 bg-teal-50/80 px-3 py-2 text-[11px] text-teal-900">
+                  <strong>Tanggal terkunci ke Jadwal BAST:</strong>{' '}
+                  {formatIndonesianShortDate(matchedBastDateIso)}. Ubah di menu Jadwal &rarr;
+                  Jadwal BAST jika tanggal berubah.
+                </div>
+              ) : (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+                  Proposal ini belum memiliki agenda di buku <strong>Jadwal BAST</strong>. Isi
+                  terlebih dahulu di menu Jadwal agar tanggal BAST &amp; SPTJM otomatis sinkron.
+                </div>
+              )}
+
               <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                 <div>
                   <label className="mb-1 block text-xs font-semibold text-slate-700">
-                    2. Tanggal Serah Terima
+                    2. Tanggal Serah Terima {matchedBastDateIso ? '(Dari Jadwal BAST)' : ''}
                   </label>
                   <input
                     type="date"
-                    value={bastDraft.tanggalSerahTerimaIso}
-                    onChange={(e) =>
+                    value={matchedBastDateIso || bastDraft.tanggalSerahTerimaIso}
+                    disabled={Boolean(matchedBastDateIso)}
+                    onChange={(e) => {
+                      if (matchedBastDateIso) return;
                       setBastDraft((prev) => ({
                         ...prev,
                         tanggalSerahTerimaIso: e.target.value,
-                      }))
-                    }
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none focus:border-teal-600"
+                      }));
+                    }}
+                    className={`w-full rounded-xl border px-3 py-2 text-xs outline-none ${
+                      matchedBastDateIso
+                        ? 'cursor-not-allowed border-teal-200 bg-teal-50/60 font-semibold text-teal-900'
+                        : 'border-slate-200 bg-white text-slate-800 focus:border-teal-600'
+                    }`}
                   />
                 </div>
                 <div>
@@ -4225,15 +4289,23 @@ export function ProposalDetailView({
                   </label>
                   <input
                     type="text"
-                    value={bastDraft.tanggalSerahTerimaCustomText || ''}
-                    onChange={(e) =>
+                    value={matchedBastDateIso ? '' : bastDraft.tanggalSerahTerimaCustomText || ''}
+                    disabled={Boolean(matchedBastDateIso)}
+                    onChange={(e) => {
+                      if (matchedBastDateIso) return;
                       setBastDraft((prev) => ({
                         ...prev,
                         tanggalSerahTerimaCustomText: e.target.value,
-                      }))
+                      }));
+                    }}
+                    placeholder={
+                      matchedBastDateIso ? 'Terkunci ke Jadwal BAST' : 'Kosongkan untuk otomatis'
                     }
-                    placeholder="Kosongkan untuk otomatis"
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none focus:border-teal-600"
+                    className={`w-full rounded-xl border px-3 py-2 text-xs outline-none ${
+                      matchedBastDateIso
+                        ? 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-500'
+                        : 'border-slate-200 bg-white text-slate-800 focus:border-teal-600'
+                    }`}
                   />
                 </div>
               </div>
@@ -4241,8 +4313,10 @@ export function ProposalDetailView({
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
                 <p>
                   <strong className="text-slate-700">Pratinjau Tanggal:</strong>{' '}
-                  {(bastDraft.tanggalSerahTerimaCustomText || '').trim() ||
-                    formatIndonesianDateWords(bastDraft.tanggalSerahTerimaIso)}
+                  {(!matchedBastDateIso && (bastDraft.tanggalSerahTerimaCustomText || '').trim()) ||
+                    formatIndonesianDateWords(
+                      matchedBastDateIso || bastDraft.tanggalSerahTerimaIso
+                    )}
                 </p>
                 <p className="mt-0.5">
                   <strong className="text-slate-700">Lokasi BAST:</strong>{' '}
@@ -4258,7 +4332,7 @@ export function ProposalDetailView({
                   type="text"
                   value={bastDraft.nomorSk}
                   onChange={(e) => setBastDraft((prev) => ({ ...prev, nomorSk: e.target.value }))}
-                  placeholder="300.3.3/56/DINSOS tanggal 1 juli 2025"
+                  placeholder="300.3.3/113/DINSOS tanggal 6 November 2026"
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none focus:border-teal-600"
                 />
               </div>
@@ -4274,7 +4348,7 @@ export function ProposalDetailView({
                     onChange={(e) =>
                       setBastDraft((prev) => ({ ...prev, nomorPesanan: e.target.value }))
                     }
-                    placeholder="EP-01K6M49TRC1H4TS8M7FRPN4C99"
+                    placeholder="EP-01M77DFPSFACVMB75N02GAV3DS"
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none focus:border-teal-600"
                   />
                 </div>
@@ -4288,7 +4362,7 @@ export function ProposalDetailView({
                     onChange={(e) =>
                       setBastDraft((prev) => ({ ...prev, tanggalPemesanan: e.target.value }))
                     }
-                    placeholder="03 Oktober 2025"
+                    placeholder="17 November 2026"
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none focus:border-teal-600"
                   />
                 </div>

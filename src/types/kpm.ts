@@ -376,17 +376,33 @@ export interface ScheduleBooksState {
 export const DEFAULT_SCHEDULE_BOOKS: ScheduleBook[] = [
   {
     id: 'book-1',
-    title: 'Buku 1',
-    subtitle: 'Agenda BAST (Laporan)',
+    title: 'Jadwal BAST',
+    subtitle: 'Agenda BAST',
     defaultCategory: 'pemberkasan',
   },
   {
     id: 'book-2',
-    title: 'Buku 2',
+    title: 'Jadwal Pembagian',
     subtitle: 'Kegiatan Penyaluran',
     defaultCategory: 'distribusi',
   },
+  {
+    id: 'book-3',
+    title: 'Pengambilan Barang',
+    subtitle: 'Pengambilan Item Pembagian',
+    defaultCategory: 'distribusi',
+  },
 ];
+
+export function resolveBastScheduleBook(books?: ScheduleBook[]): ScheduleBook {
+  const effectiveBooks = books && books.length > 0 ? books : DEFAULT_SCHEDULE_BOOKS;
+  return (
+    effectiveBooks.find((b) => /\bbast\b/i.test(`${b.title} ${b.subtitle}`)) ||
+    effectiveBooks.find((b) => b.defaultCategory === 'pemberkasan') ||
+    effectiveBooks.find((b) => b.id === 'book-1') ||
+    effectiveBooks[0]
+  );
+}
 
 export interface ScheduleEventItem {
   id: string;
@@ -514,16 +530,16 @@ export const DEFAULT_BAST_TEMPLATE: BastTemplateConfig = {
   orgAddress2: 'Telepon (0561) 732523 - 732524',
   orgAddress3: 'Laman www.dinsos.kalbarprov.go.id Pos-el dinsos@kalbarprov.go.id',
   kopLogoDataUrl: DEFAULT_KOP_LOGO_URL,
-  nomorBast: '400.9.14.5 / ................... / DINSOS',
-  tanggalSerahTerimaIso: '',
+  nomorBast: '400.9.14.5/           /BAST/DINSOS',
+  tanggalSerahTerimaIso: '2026-11-23',
   tanggalSerahTerimaCustomText: '',
-  nomorSk: '300.3.3/56/DINSOS tanggal 1 juli 2025',
-  nomorPesanan: 'EP-01K6M49TRC1H4TS8M7FRPN4C99',
-  tanggalPemesanan: '03 Oktober 2025',
-  pejabatNama: 'Drs. RAMINUDDIN, M.Si',
-  pejabatJabatan: 'Kepala Dinas Sosial Provinsi Kalimantan Barat',
-  pejabatPangkat: 'Pembina Utama Muda / (IV/c)',
-  pejabatNip: '19770830 199603 1 001',
+  nomorSk: '300.3.3/113/DINSOS tanggal 6 November 2026',
+  nomorPesanan: 'EP-01M77DFPSFACVMB75N02GAV3DS',
+  tanggalPemesanan: '17 November 2026',
+  pejabatNama: 'SHINTA IKASARI, S.STP',
+  pejabatJabatan: 'Plt. Kepala Dinas Sosial Provinsi Kalimantan Barat',
+  pejabatPangkat: 'Pembina / (IV/a)',
+  pejabatNip: '19780327 199612 2 001',
   nilaiNominalText: '. . . . . . . . . . . . . . . . . . . . . . . . . . .',
 };
 
@@ -542,11 +558,11 @@ export interface SptjmTemplateConfig {
 export const DEFAULT_SPTJM_TEMPLATE: SptjmTemplateConfig = {
   tempat: 'Pontianak',
   hari: '',
-  tanggalIso: '',
+  tanggalIso: '2026-11-23',
   tanggalCustomText: '',
-  pejabatJabatan: 'Kepala Bidang Pemberdayaan Fakir Miskin Dinas Sosial Provinsi Kalbar',
-  pejabatNama: 'TATIK GESTYANINGSIH, A.Ks., M.Si',
-  pejabatNip: '19680514 198901 2 002',
+  pejabatJabatan: 'Pejabat Pelaksana Teknis Kegiatan,',
+  pejabatNama: 'YELLY MANALU, S.Sos',
+  pejabatNip: '19801112 200903 2 003',
 };
 
 export interface PejabatProfile {
@@ -560,6 +576,22 @@ export interface PejabatProfile {
 
 export const DEFAULT_PEJABAT_LIST: PejabatProfile[] = [
   {
+    id: 'pejabat-default-2',
+    nama: 'SHINTA IKASARI, S.STP',
+    kelas: 'Pembina / (IV/a)',
+    jabatan: 'Plt. Kepala Dinas Sosial Provinsi Kalimantan Barat',
+    nip: '19780327 199612 2 001',
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
+  {
+    id: 'pejabat-default-4',
+    nama: 'YELLY MANALU, S.Sos',
+    kelas: '',
+    jabatan: 'Pejabat Pelaksana Teknis Kegiatan,',
+    nip: '19801112 200903 2 003',
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
+  {
     id: 'pejabat-default-1',
     nama: 'Drs. RAMINUDDIN, M.Si',
     kelas: 'Pembina Utama Muda / (IV/c)',
@@ -568,27 +600,11 @@ export const DEFAULT_PEJABAT_LIST: PejabatProfile[] = [
     createdAt: '2025-01-01T00:00:00.000Z',
   },
   {
-    id: 'pejabat-default-2',
-    nama: 'SHINTA IKASARI, S.STP',
-    kelas: 'Pembina / (IV/a)',
-    jabatan: 'Plt. Kepala Dinas Sosial Provinsi Kalimantan Barat',
-    nip: '19780327 199612 2 001',
-    createdAt: '2025-01-01T00:00:00.000Z',
-  },
-  {
     id: 'pejabat-default-3',
     nama: 'TATIK GESTYANINGSIH, A.Ks., M.Si',
     kelas: 'Pembina / (IV/a)',
     jabatan: 'Kepala Bidang Pemberdayaan Fakir Miskin Dinas Sosial Provinsi Kalbar',
     nip: '19680514 198901 2 002',
-    createdAt: '2025-01-01T00:00:00.000Z',
-  },
-  {
-    id: 'pejabat-default-4',
-    nama: 'YELLY MANALU, S.Sos',
-    kelas: '',
-    jabatan: 'Pejabat Pelaksana Teknis Kegiatan',
-    nip: '19801112 200903 2 003',
     createdAt: '2025-01-01T00:00:00.000Z',
   },
 ];

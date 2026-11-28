@@ -65,6 +65,7 @@ import {
   getSptjmAutoDayFromIso,
   getTodayLocalIsoDate,
   normalizePejabatNipNumber,
+  resolveBastScheduleForProposal,
 } from '../utils/pdfFormatHelpers';
 
 const ItemManagerView = lazy(() =>
@@ -127,6 +128,7 @@ import {
   TroubleshootingReconcileSnapshot,
   UserPermissions,
   WilayahKabKota,
+  resolveBastScheduleBook,
   resolveScheduleBookId,
 } from '../types/kpm';
 import { TroubleshootingReconcileResult } from '../utils/troubleshootingReconciler';
@@ -6340,6 +6342,7 @@ export function MenuHubView({
     const autoDayLabel = getSptjmAutoDayFromIso(scheduleDate);
     const effectiveBooks =
       scheduleBooks.length > 0 ? scheduleBooks : DEFAULT_SCHEDULE_BOOKS;
+    const bastScheduleBook = resolveBastScheduleBook(effectiveBooks);
 
     const bookCounts = new Map<string, { total: number; pending: number }>();
     effectiveBooks.forEach((b) => bookCounts.set(b.id, { total: 0, pending: 0 }));
@@ -6483,6 +6486,12 @@ export function MenuHubView({
 
     const handleDeleteEditingBook = () => {
       if (isOffline || !editingBookId || !onSaveScheduleBooks || effectiveBooks.length <= 1) return;
+      if (editingBookId === bastScheduleBook.id) {
+        setBookModalError(
+          `Buku "${bastScheduleBook.title}" wajib dipertahankan karena menjadi acuan tanggal otomatis pada Download BAST & SPTJM.`
+        );
+        return;
+      }
       const countInBook = bookCounts.get(editingBookId)?.total || 0;
       if (countInBook > 0) {
         setBookModalError(
@@ -6535,9 +6544,26 @@ export function MenuHubView({
       }
     };
 
+    const existingBastScheduleForFormProposal =
+      scheduleProposal.trim() && effectiveFormBookId !== bastScheduleBook.id
+        ? resolveBastScheduleForProposal(
+            scheduleProposal,
+            scheduleYear,
+            schedules,
+            effectiveBooks,
+            scheduleBookMap
+          )
+        : undefined;
+    const isMissingRequiredBastSchedule = Boolean(
+      !editingScheduleId &&
+        scheduleProposal.trim() &&
+        effectiveFormBookId !== bastScheduleBook.id &&
+        !existingBastScheduleForFormProposal
+    );
+
     const handleSubmitSchedule = (e: FormEvent) => {
       e.preventDefault();
-      if (isOffline || !scheduleDate) return;
+      if (isOffline || !scheduleDate || isMissingRequiredBastSchedule) return;
       const chosenCategory = effectiveFormCategory;
       const resolvedTitle = catLabelMap[chosenCategory] || 'Agenda Lainnya';
       const payload = {
@@ -6628,7 +6654,9 @@ export function MenuHubView({
                     Buku / Bab Agenda
                   </h2>
                   <p className="text-[11px] text-slate-500">
-                    Pisahkan catatan jadwal per buku kegiatan (contoh: Buku 1 BAST &amp; Buku 2 Penyaluran)
+                    Alur wajib: isi <strong>{bastScheduleBook.title}</strong> terlebih dahulu
+                    (otomatis menjadi tanggal BAST &amp; SPTJM), lalu lanjutkan ke Jadwal
+                    Pembagian &amp; Pengambilan Barang.
                   </p>
                 </div>
               </div>
@@ -6690,6 +6718,11 @@ export function MenuHubView({
                           >
                             {counts.total}
                           </span>
+                          {book.id === bastScheduleBook.id && (
+                            <span className="inline-flex items-center rounded-md bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-800">
+                              Wajib #1
+                            </span>
+                          )}
                         </div>
                         <p
                           className={`mt-0.5 truncate text-[11px] ${
@@ -6944,9 +6977,53 @@ export function MenuHubView({
                   />
                 </div>
 
+                {isMissingRequiredBastSchedule && (
+                  <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-950 space-y-2">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                      <p className="leading-snug">
+                        Proposal <strong>{scheduleProposal}</strong> ({scheduleYear}) belum
+                        memiliki agenda di buku <strong>{bastScheduleBook.title}</strong>. Wajib
+                        isi <strong>{bastScheduleBook.title}</strong> terlebih dahulu agar tanggal
+                        BAST &amp; SPTJM otomatis sesuai jadwal.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveScheduleBookId(bastScheduleBook.id);
+                        setScheduleFormBookOverride(bastScheduleBook.id);
+                        setScheduleCategory(bastScheduleBook.defaultCategory || 'pemberkasan');
+                      }}
+                      className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3 text-[11px] font-bold text-amber-900 hover:bg-amber-100"
+                    >
+                      <BookOpen className="h-3.5 w-3.5 text-teal-700" />
+                      <span>Isi di Buku {bastScheduleBook.title} Terlebih Dahulu</span>
+                    </button>
+                  </div>
+                )}
+
+                {!editingScheduleId &&
+                  scheduleProposal.trim() &&
+                  effectiveFormBookId !== bastScheduleBook.id &&
+                  existingBastScheduleForFormProposal && (
+                    <div className="flex items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50/70 px-3 py-2 text-[11px] font-medium text-teal-900">
+                      <Check className="h-3.5 w-3.5 shrink-0 text-teal-700" />
+                      <span>
+                        {bastScheduleBook.title} sudah tercatat:{' '}
+                        <strong>
+                          {formatScheduleIndonesianDate(
+                            existingBastScheduleForFormProposal.targetDate,
+                            existingBastScheduleForFormProposal.targetDay
+                          )}
+                        </strong>
+                      </span>
+                    </div>
+                  )}
+
                 <button
                   type="submit"
-                  disabled={isOffline}
+                  disabled={isOffline || isMissingRequiredBastSchedule}
                   className="inline-flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-xl bg-teal-700 px-4 text-xs font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {editingScheduleId ? <Check className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
@@ -6968,7 +7045,9 @@ export function MenuHubView({
                       : `Daftar Agenda Semua Buku (${sortedSchedules.length})`}
                   </h2>
                   <p className="text-[11px] text-slate-500">
-                    Jadwal &amp; lokasi penyaluran otomatis terhubung ke Cetak Kupon
+                    {activeBookObj?.id === bastScheduleBook.id
+                      ? 'Tanggal di buku ini otomatis menjadi acuan resmi pada Download BAST & SPTJM'
+                      : 'Jadwal & lokasi penyaluran otomatis terhubung ke Cetak Kupon'}
                   </p>
                 </div>
                 <button

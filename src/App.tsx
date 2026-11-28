@@ -151,7 +151,12 @@ import {
   resolveScheduleBookId,
 } from './types/kpm';
 import { TroubleshootingReconcileResult } from './utils/troubleshootingReconciler';
-import { getTodayLocalIsoDate, normalizePejabatNipNumber } from './utils/pdfFormatHelpers';
+import {
+  getTodayLocalIsoDate,
+  normalizePejabatNipNumber,
+  upgradeLegacyBastConfigTo2026,
+  upgradeLegacySptjmConfigTo2026,
+} from './utils/pdfFormatHelpers';
 import {
   assignKpmToProposalSlot,
   clearSampleRecordsOnce,
@@ -950,6 +955,7 @@ export default function App() {
   const [sptjmTemplate, setSptjmTemplate] = useState<SptjmTemplateConfig>(DEFAULT_SPTJM_TEMPLATE);
   const [pejabatList, setPejabatList] = useState<PejabatProfile[]>(DEFAULT_PEJABAT_LIST);
   const [proposalBastMap, setProposalBastMap] = useState<ProposalBastMap>({});
+  const proposalBastMapRef = useRef<ProposalBastMap>({});
   const [proposalRabMap, setProposalRabMap] = useState<ProposalRabMap>({});
   const [proposalStyleHistory, setProposalStyleHistory] = useState<ProposalStyleUsageRecord[]>([]);
   const [proposalSchemaMissingNotice, setProposalSchemaMissingNotice] = useState<boolean>(false);
@@ -2168,7 +2174,7 @@ export default function App() {
             ? { ...DEFAULT_COUPON_CONFIG, ...fetchedCouponConfig }
             : DEFAULT_COUPON_CONFIG
         );
-        setBastTemplate(
+        const rawBastTemplate: BastTemplateConfig =
           fetchedBastTemplate && typeof fetchedBastTemplate === 'object'
             ? {
                 ...DEFAULT_BAST_TEMPLATE,
@@ -2177,19 +2183,33 @@ export default function App() {
                   fetchedBastTemplate.pejabatNip ?? DEFAULT_BAST_TEMPLATE.pejabatNip
                 ).trim(),
               }
-            : DEFAULT_BAST_TEMPLATE
-        );
-        setSptjmTemplate(
+            : DEFAULT_BAST_TEMPLATE;
+        const upgradedBast = upgradeLegacyBastConfigTo2026(rawBastTemplate, {
+          isGlobalDefault: true,
+        });
+        setBastTemplate(upgradedBast.config);
+        if (upgradedBast.upgraded && isOnlineRef.current) {
+          void saveDocumentTemplateInSupabase(
+            'bast',
+            'masdeta_bast_template_v1',
+            upgradedBast.config
+          );
+        }
+
+        const upgradedSptjm = upgradeLegacySptjmConfigTo2026(
           fetchedSptjmTemplate && typeof fetchedSptjmTemplate === 'object'
-            ? {
-                ...DEFAULT_SPTJM_TEMPLATE,
-                ...fetchedSptjmTemplate,
-                pejabatNip: normalizePejabatNipNumber(
-                  fetchedSptjmTemplate.pejabatNip ?? DEFAULT_SPTJM_TEMPLATE.pejabatNip
-                ).trim(),
-              }
+            ? fetchedSptjmTemplate
             : DEFAULT_SPTJM_TEMPLATE
         );
+        setSptjmTemplate(upgradedSptjm.config);
+        if (upgradedSptjm.upgraded && isOnlineRef.current) {
+          void saveDocumentTemplateInSupabase(
+            'sptjm',
+            'masdeta_sptjm_template_v1',
+            upgradedSptjm.config
+          );
+        }
+
         setPejabatList(
           Array.isArray(fetchedPejabatList) && fetchedPejabatList.length > 0
             ? fetchedPejabatList
@@ -2208,6 +2228,10 @@ export default function App() {
         setProposalSlotMap(safeSlotMap);
 
         const normalizedProposalBastMap: ProposalBastMap = {};
+        let anyProposalBastUpgraded = false;
+        const proposalYearById = new Map<string, string>(
+          proposalsRef.current.map((p) => [p.id, p.tahun])
+        );
         if (
           fetchedProposalBastMap &&
           typeof fetchedProposalBastMap === 'object' &&
@@ -2215,16 +2239,31 @@ export default function App() {
         ) {
           Object.entries(fetchedProposalBastMap).forEach(([k, v]) => {
             if (v && typeof v === 'object') {
-              normalizedProposalBastMap[k] = {
+              const cleaned: Partial<BastTemplateConfig> = {
                 ...v,
                 ...(v.pejabatNip !== undefined
                   ? { pejabatNip: normalizePejabatNipNumber(v.pejabatNip).trim() }
                   : {}),
               };
+              const upgradedEntry = upgradeLegacyBastConfigTo2026(cleaned, {
+                proposalYear: proposalYearById.get(k),
+              });
+              if (upgradedEntry.upgraded) {
+                anyProposalBastUpgraded = true;
+              }
+              normalizedProposalBastMap[k] = upgradedEntry.config;
             }
           });
         }
+        proposalBastMapRef.current = normalizedProposalBastMap;
         setProposalBastMap(normalizedProposalBastMap);
+        if (anyProposalBastUpgraded && isOnlineRef.current) {
+          void saveDocumentTemplateInSupabase(
+            'proposal_bast',
+            'masdeta_proposal_bast_v1',
+            normalizedProposalBastMap
+          );
+        }
 
         if (fetchedWatermarks && typeof fetchedWatermarks === 'object') {
           setChatDeliveryWatermarks(fetchedWatermarks);
@@ -8397,7 +8436,7 @@ export default function App() {
       }
       return;
     }
-    const next: ProposalBastMap = { ...proposalBastMap };
+    const next: ProposalBastMap = { ...proposalBastMapRef.current };
     if (config === null) {
       delete next[proposalId];
     } else {
@@ -8408,6 +8447,7 @@ export default function App() {
           : {}),
       };
     }
+    proposalBastMapRef.current = next;
     setProposalBastMap(next);
     void saveDocumentTemplateInSupabase('proposal_bast', 'masdeta_proposal_bast_v1', next);
     if (!options?.silent) {
@@ -9439,9 +9479,10 @@ export default function App() {
       setProposalRabMap(nextRabMap);
       void deleteProposalRabConfigFromSupabase(proposalId, prevRabMap);
     }
-    if (proposalBastMap[proposalId]) {
-      const nextBastMap = { ...proposalBastMap };
+    if (proposalBastMapRef.current[proposalId]) {
+      const nextBastMap = { ...proposalBastMapRef.current };
       delete nextBastMap[proposalId];
+      proposalBastMapRef.current = nextBastMap;
       setProposalBastMap(nextBastMap);
       void saveDocumentTemplateInSupabase('proposal_bast', 'masdeta_proposal_bast_v1', nextBastMap);
     }
@@ -12708,6 +12749,8 @@ export default function App() {
             onSwapPenerimaPhoto={handleSwapPenerimaPhoto}
             reportTemplate={reportTemplate}
             schedules={schedulesWithBooks}
+            scheduleBooks={scheduleBooksState.books}
+            scheduleBookMap={scheduleBooksState.scheduleBookMap}
             couponConfig={couponConfig}
             onSaveCouponConfig={handleSaveCouponConfig}
             bastTemplate={bastTemplate}
@@ -12883,6 +12926,7 @@ export default function App() {
               proposalSlotMap={proposalSlotMap}
               schedules={schedulesWithBooks}
               scheduleBooks={scheduleBooksState.books}
+              scheduleBookMap={scheduleBooksState.scheduleBookMap}
               reportTemplate={reportTemplate}
               bastTemplate={bastTemplate}
               sptjmTemplate={sptjmTemplate}

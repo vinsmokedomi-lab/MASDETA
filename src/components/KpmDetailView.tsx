@@ -53,6 +53,7 @@ import {
   DEFAULT_BAST_TEMPLATE,
   DEFAULT_COUPON_CONFIG,
   DEFAULT_PEJABAT_LIST,
+  DEFAULT_SCHEDULE_BOOKS,
   DEFAULT_SPTJM_TEMPLATE,
   InternalUser,
   ItemBantuan,
@@ -66,6 +67,7 @@ import {
   ProposalRecord,
   ProposalSlotMap,
   ReportTemplateConfig,
+  ScheduleBook,
   ScheduleEventItem,
   SharedKpmCard,
   SingleDocumentKey,
@@ -92,13 +94,15 @@ import {
 } from '../utils/imageProcessor';
 import {
   SPTJM_DAY_OPTIONS,
+  applyBastScheduleDateToBastConfig,
   formatBastProposalLocation,
   formatIndonesianDDMonthYYYY,
   formatIndonesianDateWords,
+  formatIndonesianShortDate,
   formatSptjmFullDate,
-  getSptjmAutoDayFromIso,
-  getTodayLocalIsoDate,
+  normalizeIsoDateInput,
   normalizePejabatNipNumber,
+  resolveBastScheduleForProposal,
   resolveCouponScheduleForRecord,
   resolveEffectiveBastConfig,
 } from '../utils/pdfFormatHelpers';
@@ -190,6 +194,8 @@ interface KpmDetailViewProps {
   ) => Promise<boolean | void> | boolean | void;
   reportTemplate?: ReportTemplateConfig;
   schedules?: ScheduleEventItem[];
+  scheduleBooks?: ScheduleBook[];
+  scheduleBookMap?: Record<string, string>;
   couponConfig?: CouponPrintConfig;
   onSaveCouponConfig?: (next: CouponPrintConfig) => void;
   bastTemplate?: BastTemplateConfig;
@@ -308,6 +314,8 @@ export function KpmDetailView({
   onSwapPenerimaPhoto,
   reportTemplate,
   schedules = [],
+  scheduleBooks = DEFAULT_SCHEDULE_BOOKS,
+  scheduleBookMap = {},
   couponConfig,
   onSaveCouponConfig,
   bastTemplate,
@@ -984,9 +992,48 @@ export function KpmDetailView({
     }
   };
 
+  const effectiveScheduleBooks = useMemo(
+    () => (scheduleBooks && scheduleBooks.length > 0 ? scheduleBooks : DEFAULT_SCHEDULE_BOOKS),
+    [scheduleBooks]
+  );
+
+  const matchedBastSchedule = useMemo(
+    () =>
+      resolveBastScheduleForProposal(
+        matchingProposal?.namaProposal || record.proposal,
+        matchingProposal?.tahun || record.tahun,
+        schedules,
+        effectiveScheduleBooks,
+        scheduleBookMap
+      ),
+    [
+      matchingProposal?.namaProposal,
+      matchingProposal?.tahun,
+      record.proposal,
+      record.tahun,
+      schedules,
+      effectiveScheduleBooks,
+      scheduleBookMap,
+    ]
+  );
+
+  const matchedBastDateIso = useMemo(
+    () => normalizeIsoDateInput(matchedBastSchedule?.targetDate),
+    [matchedBastSchedule]
+  );
+
   const handleOpenBastModal = () => {
     setBastDraft(
-      resolveEffectiveBastConfig(bastTemplate, proposalBastMap, matchingProposal?.id, reportTemplate)
+      applyBastScheduleDateToBastConfig(
+        resolveEffectiveBastConfig(
+          bastTemplate,
+          proposalBastMap,
+          matchingProposal?.id,
+          reportTemplate,
+          matchingProposal?.tahun || record.tahun
+        ),
+        matchedBastSchedule
+      )
     );
     setSaveBastDefault(true);
     setIsBastModalOpen(true);
@@ -997,11 +1044,12 @@ export function KpmDetailView({
     setPdfNotice(null);
     setIsDownloadingBastPdf(true);
     try {
+      const effectiveDraft = applyBastScheduleDateToBastConfig(bastDraft, matchedBastSchedule);
       if (saveBastDefault && !isOffline) {
         if (matchingProposal && onSaveProposalBastConfig) {
-          onSaveProposalBastConfig(matchingProposal.id, bastDraft);
+          onSaveProposalBastConfig(matchingProposal.id, effectiveDraft);
         } else if (onSaveBastTemplate) {
-          onSaveBastTemplate(bastDraft);
+          onSaveBastTemplate(effectiveDraft);
         }
       }
       const { exportKpmBastToPdf } = await import('../utils/pdfExporter');
@@ -1012,8 +1060,11 @@ export function KpmDetailView({
         items,
         wilayahList,
         proposalSlotMap,
+        schedules,
+        scheduleBooks: effectiveScheduleBooks,
+        scheduleBookMap,
         reportTemplate,
-        bastConfig: bastDraft,
+        bastConfig: effectiveDraft,
         proposalBastMap,
         useProposalBastMap: false,
       });
@@ -1041,6 +1092,11 @@ export function KpmDetailView({
     };
     setSptjmDraft({
       ...merged,
+      tanggalIso:
+        matchedBastDateIso ||
+        normalizeIsoDateInput(merged.tanggalIso) ||
+        DEFAULT_SPTJM_TEMPLATE.tanggalIso,
+      ...(matchedBastDateIso ? { tanggalCustomText: '' } : {}),
       pejabatNip: normalizePejabatNipNumber(merged.pejabatNip).trim(),
     });
     setSaveSptjmDefault(true);
@@ -1052,14 +1108,23 @@ export function KpmDetailView({
     setPdfNotice(null);
     setIsDownloadingSptjmPdf(true);
     try {
+      const effectiveSptjm: SptjmTemplateConfig = {
+        ...sptjmDraft,
+        tanggalIso:
+          matchedBastDateIso ||
+          normalizeIsoDateInput(sptjmDraft.tanggalIso) ||
+          DEFAULT_SPTJM_TEMPLATE.tanggalIso,
+        ...(matchedBastDateIso ? { tanggalCustomText: '' } : {}),
+      };
       if (saveSptjmDefault && !isOffline && onSaveSptjmTemplate) {
-        onSaveSptjmTemplate(sptjmDraft);
+        onSaveSptjmTemplate(effectiveSptjm);
       }
       const effectiveKopBast = resolveEffectiveBastConfig(
         bastTemplate,
         proposalBastMap,
         matchingProposal?.id,
-        reportTemplate
+        reportTemplate,
+        matchingProposal?.tahun || record.tahun
       );
       const { exportKpmSptjmToPdf } = await import('../utils/pdfExporter');
       const res = await exportKpmSptjmToPdf({
@@ -1069,9 +1134,12 @@ export function KpmDetailView({
         items,
         wilayahList,
         proposalSlotMap,
+        schedules,
+        scheduleBooks: effectiveScheduleBooks,
+        scheduleBookMap,
         reportTemplate,
         bastConfig: effectiveKopBast,
-        sptjmConfig: sptjmDraft,
+        sptjmConfig: effectiveSptjm,
       });
       setIsSptjmModalOpen(false);
       setPdfNotice({
@@ -3400,7 +3468,7 @@ export function KpmDetailView({
                 <strong>Tanggal Terbilang:</strong>{' '}
                 {bastDraft.tanggalSerahTerimaCustomText?.trim() ||
                   formatIndonesianDateWords(
-                    bastDraft.tanggalSerahTerimaIso || getTodayLocalIsoDate()
+                    bastDraft.tanggalSerahTerimaIso || DEFAULT_BAST_TEMPLATE.tanggalSerahTerimaIso
                   )}
               </p>
             </div>
@@ -3418,16 +3486,27 @@ export function KpmDetailView({
               </div>
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600">
-                  Tanggal Serah Terima
+                  Tanggal Serah Terima {matchedBastDateIso ? '(Terkunci ke Jadwal BAST)' : ''}
                 </label>
                 <input
                   type="date"
-                  value={bastDraft.tanggalSerahTerimaIso}
-                  onChange={(e) =>
-                    setBastDraft((prev) => ({ ...prev, tanggalSerahTerimaIso: e.target.value }))
-                  }
-                  className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                  value={matchedBastDateIso || bastDraft.tanggalSerahTerimaIso}
+                  disabled={Boolean(matchedBastDateIso)}
+                  onChange={(e) => {
+                    if (matchedBastDateIso) return;
+                    setBastDraft((prev) => ({ ...prev, tanggalSerahTerimaIso: e.target.value }));
+                  }}
+                  className={`mt-1 min-h-[38px] w-full rounded-xl border px-3 text-xs focus:outline-none ${
+                    matchedBastDateIso
+                      ? 'cursor-not-allowed border-teal-200 bg-teal-50/60 font-semibold text-teal-900'
+                      : 'border-slate-300 text-slate-900 focus:border-teal-700'
+                  }`}
                 />
+                {matchedBastDateIso && (
+                  <p className="mt-1 text-[10px] font-medium text-teal-700">
+                    Mengikuti Buku Jadwal BAST ({formatIndonesianShortDate(matchedBastDateIso)}).
+                  </p>
+                )}
               </div>
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600">
@@ -3682,7 +3761,11 @@ export function KpmDetailView({
                     className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 bg-white px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
                   >
                     <option value="">
-                      Otomatis ({getSptjmAutoDayFromIso(sptjmDraft.tanggalIso)})
+                      Tanpa Hari (Standar:{' '}
+                      {formatIndonesianShortDate(
+                        sptjmDraft.tanggalIso || DEFAULT_SPTJM_TEMPLATE.tanggalIso
+                      )}
+                      )
                     </option>
                     {SPTJM_DAY_OPTIONS.map((day) => (
                       <option key={day} value={day}>
@@ -3693,22 +3776,30 @@ export function KpmDetailView({
                 </div>
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600">
-                    2. Pilih Tanggal (00 Bulan 0000)
+                    2. Pilih Tanggal {matchedBastDateIso ? '(Dari Jadwal BAST)' : '(00 Bulan 0000)'}
                   </label>
                   <input
                     type="date"
-                    value={sptjmDraft.tanggalIso}
-                    onChange={(e) =>
+                    value={matchedBastDateIso || sptjmDraft.tanggalIso}
+                    disabled={Boolean(matchedBastDateIso)}
+                    onChange={(e) => {
+                      if (matchedBastDateIso) return;
                       setSptjmDraft((prev) => ({
                         ...prev,
                         tanggalIso: e.target.value,
                         tanggalCustomText: '',
-                      }))
-                    }
-                    className="mt-1 min-h-[38px] w-full rounded-xl border border-slate-300 px-3 text-xs text-slate-900 focus:border-teal-700 focus:outline-none"
+                      }));
+                    }}
+                    className={`mt-1 min-h-[38px] w-full rounded-xl border px-3 text-xs focus:outline-none ${
+                      matchedBastDateIso
+                        ? 'cursor-not-allowed border-teal-200 bg-teal-50/60 font-semibold text-teal-900'
+                        : 'border-slate-300 text-slate-900 focus:border-teal-700'
+                    }`}
                   />
                   <p className="mt-0.5 text-[10px] text-slate-500 tabular-nums">
-                    Format: {formatIndonesianDDMonthYYYY(sptjmDraft.tanggalIso)}
+                    {matchedBastDateIso
+                      ? `Terkunci ke Buku Jadwal BAST (${formatIndonesianShortDate(matchedBastDateIso)})`
+                      : `Format: ${formatIndonesianDDMonthYYYY(sptjmDraft.tanggalIso)}`}
                   </p>
                 </div>
               </div>

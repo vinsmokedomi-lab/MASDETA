@@ -5,6 +5,7 @@ import {
   DEFAULT_BAST_TEMPLATE,
   DEFAULT_COUPON_CONFIG,
   DEFAULT_KOP_LOGO_URL,
+  DEFAULT_SPTJM_TEMPLATE,
   ItemBantuan,
   KpmRecord,
   ProposalBastMap,
@@ -16,6 +17,7 @@ import {
   ScheduleEventItem,
   SptjmTemplateConfig,
   WilayahKabKota,
+  resolveBastScheduleBook,
   resolveScheduleBookId,
 } from '../types/kpm';
 import {
@@ -445,14 +447,14 @@ export function formatIndonesianDDMonthYYYY(isoDate?: string): string {
 
 export function formatSptjmFullDate(sptjmConfig?: Partial<SptjmTemplateConfig>): string {
   const hariVal = (sptjmConfig?.hari || '').trim();
-  const isoVal = normalizeIsoDateInput(sptjmConfig?.tanggalIso) || (sptjmConfig?.tanggalIso || '').trim();
+  const rawIso = (sptjmConfig?.tanggalIso || '').trim();
+  const isoVal = normalizeIsoDateInput(rawIso) || DEFAULT_SPTJM_TEMPLATE.tanggalIso;
   const customLegacy = (sptjmConfig?.tanggalCustomText || '').trim();
-  if (customLegacy && !hariVal && !isoVal) {
+  if (customLegacy && !hariVal && !rawIso) {
     return customLegacy;
   }
-  const resolvedDay = hariVal || getSptjmAutoDayFromIso(isoVal);
-  const resolvedDate = formatIndonesianDDMonthYYYY(isoVal);
-  return `${resolvedDay} ${resolvedDate}`;
+  const resolvedDate = formatIndonesianShortDate(isoVal);
+  return hariVal ? `${hariVal}, ${resolvedDate}` : resolvedDate;
 }
 
 export function formatIndonesianDayShortDate(isoDate?: string): string {
@@ -868,6 +870,99 @@ export function resolveScheduleForProposalInBook(
   })[0];
 }
 
+export function resolveBastScheduleForProposal(
+  proposalName: string | undefined,
+  tahun: string | undefined,
+  schedules: ScheduleEventItem[] = [],
+  scheduleBooks?: ScheduleBook[],
+  scheduleBookMap: Record<string, string> = {}
+): ScheduleEventItem | undefined {
+  const targetName = (proposalName || '').trim().toLowerCase();
+  if (!targetName || !Array.isArray(schedules) || schedules.length === 0) return undefined;
+  const targetYear = (tahun || '').trim();
+  const bastBook = resolveBastScheduleBook(scheduleBooks);
+
+  const inBastBook = resolveScheduleForProposalInBook(
+    proposalName,
+    tahun,
+    schedules,
+    bastBook.id,
+    scheduleBooks,
+    scheduleBookMap
+  );
+  if (inBastBook) return inBastBook;
+
+  // Fallback hanya untuk agenda kategori pemberkasan BAST & SPTJM (tidak pernah mengambil jadwal pembagian/pengambilan barang)
+  const fallbackMatches = schedules.filter((ev) => {
+    if (ev.category !== 'pemberkasan') return false;
+    const evProp = (ev.proposalName || '').trim().toLowerCase();
+    if (!evProp || evProp !== targetName) return false;
+    const evYear = (ev.tahun || '').trim();
+    if (evYear && targetYear && evYear !== targetYear) return false;
+    return true;
+  });
+
+  if (fallbackMatches.length === 0) return undefined;
+
+  return [...fallbackMatches].sort((a, b) => {
+    const activeDiff = (a.completed ? 0 : 1) - (b.completed ? 0 : 1);
+    if (activeDiff !== 0) return -activeDiff;
+    const yearCmp =
+      ((b.tahun || '').trim() === targetYear ? 1 : 0) -
+      ((a.tahun || '').trim() === targetYear ? 1 : 0);
+    if (yearCmp !== 0) return yearCmp;
+    return (b.targetDate || '').localeCompare(a.targetDate || '');
+  })[0];
+}
+
+export function applyBastScheduleDateToBastConfig(
+  bastConfig: BastTemplateConfig,
+  bastSchedule?: Pick<ScheduleEventItem, 'targetDate'>
+): BastTemplateConfig {
+  const scheduleIso = normalizeIsoDateInput(bastSchedule?.targetDate);
+  if (!scheduleIso) return bastConfig;
+  return {
+    ...bastConfig,
+    tanggalSerahTerimaIso: scheduleIso,
+  };
+}
+
+export function resolveEffectiveSptjmConfigForRecord(
+  sptjmConfig: SptjmTemplateConfig,
+  record: Pick<KpmRecord, 'proposal' | 'proposalId' | 'tahun'>,
+  proposals: ProposalRecord[] = [],
+  schedules: ScheduleEventItem[] = [],
+  scheduleBooks?: ScheduleBook[],
+  scheduleBookMap: Record<string, string> = {}
+): SptjmTemplateConfig {
+  const matchedProp =
+    (record.proposalId ? proposals.find((p) => p.id === record.proposalId) : undefined) ??
+    proposals.find((p) => p.namaProposal === record.proposal && p.tahun === record.tahun) ??
+    proposals.find((p) => p.namaProposal === record.proposal);
+
+  const propName = matchedProp?.namaProposal || record.proposal;
+  const propYear = matchedProp?.tahun || record.tahun;
+  const bastSchedule = resolveBastScheduleForProposal(
+    propName,
+    propYear,
+    schedules,
+    scheduleBooks,
+    scheduleBookMap
+  );
+  const scheduleIso = normalizeIsoDateInput(bastSchedule?.targetDate);
+  if (scheduleIso) {
+    return {
+      ...sptjmConfig,
+      tanggalIso: scheduleIso,
+      tanggalCustomText: '',
+    };
+  }
+  return {
+    ...sptjmConfig,
+    tanggalIso: normalizeIsoDateInput(sptjmConfig.tanggalIso) || DEFAULT_SPTJM_TEMPLATE.tanggalIso,
+  };
+}
+
 export interface AbsensiScheduleFields {
   tanggal: string;
   hari: string;
@@ -988,21 +1083,171 @@ export function formatOfficialNipLine(raw?: string): string {
   return digits ? `NIP. ${digits}` : '';
 }
 
+function isLegacy2025BastNomor(raw?: string): boolean {
+  const clean = (raw || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!clean) return false;
+  if (clean.includes('/bast/')) return false;
+  return /^400\.9\.14\.5\s*\/\s*[.\s_…-]*\s*\/\s*dinsos$/.test(clean);
+}
+
+function isLegacy2025BastSk(raw?: string): boolean {
+  const clean = (raw || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  return (
+    clean === '300.3.3/56/dinsos tanggal 1 juli 2025' ||
+    clean === '961/dinsos/2023 tanggal 7 juli 2023'
+  );
+}
+
+function isLegacy2025BastSp(raw?: string): boolean {
+  const clean = (raw || '').trim().toUpperCase();
+  return clean === 'EP-01K6M49TRC1H4TS8M7FRPN4C99';
+}
+
+function isLegacy2025BastTanggalPemesanan(raw?: string): boolean {
+  const clean = (raw || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  return clean === '03 oktober 2025' || clean === '3 oktober 2025';
+}
+
+function isLegacy2025BastPejabat(nama?: string, nip?: string): boolean {
+  const cleanNama = (nama || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const cleanNip = normalizePejabatNipNumber(nip).trim();
+  return cleanNama === 'drs. raminuddin, m.si' || cleanNip === '19770830 199603 1 001';
+}
+
+export function upgradeLegacyBastConfigTo2026<T extends Partial<BastTemplateConfig>>(
+  raw: T,
+  options?: { isGlobalDefault?: boolean; proposalYear?: string }
+): { config: T; upgraded: boolean } {
+  if (options?.proposalYear === '2025') {
+    return { config: raw, upgraded: false };
+  }
+  const next: Partial<BastTemplateConfig> = { ...raw };
+  let upgraded = false;
+
+  if (next.nomorBast !== undefined && isLegacy2025BastNomor(next.nomorBast)) {
+    next.nomorBast = DEFAULT_BAST_TEMPLATE.nomorBast;
+    upgraded = true;
+  } else if (options?.isGlobalDefault && !(next.nomorBast || '').trim()) {
+    next.nomorBast = DEFAULT_BAST_TEMPLATE.nomorBast;
+    upgraded = true;
+  }
+
+  if (next.nomorSk !== undefined && isLegacy2025BastSk(next.nomorSk)) {
+    next.nomorSk = DEFAULT_BAST_TEMPLATE.nomorSk;
+    upgraded = true;
+  } else if (options?.isGlobalDefault && !(next.nomorSk || '').trim()) {
+    next.nomorSk = DEFAULT_BAST_TEMPLATE.nomorSk;
+    upgraded = true;
+  }
+
+  if (next.nomorPesanan !== undefined && isLegacy2025BastSp(next.nomorPesanan)) {
+    next.nomorPesanan = DEFAULT_BAST_TEMPLATE.nomorPesanan;
+    upgraded = true;
+  } else if (options?.isGlobalDefault && !(next.nomorPesanan || '').trim()) {
+    next.nomorPesanan = DEFAULT_BAST_TEMPLATE.nomorPesanan;
+    upgraded = true;
+  }
+
+  if (next.tanggalPemesanan !== undefined && isLegacy2025BastTanggalPemesanan(next.tanggalPemesanan)) {
+    next.tanggalPemesanan = DEFAULT_BAST_TEMPLATE.tanggalPemesanan;
+    upgraded = true;
+  } else if (options?.isGlobalDefault && !(next.tanggalPemesanan || '').trim()) {
+    next.tanggalPemesanan = DEFAULT_BAST_TEMPLATE.tanggalPemesanan;
+    upgraded = true;
+  }
+
+  if (isLegacy2025BastPejabat(next.pejabatNama, next.pejabatNip)) {
+    next.pejabatNama = DEFAULT_BAST_TEMPLATE.pejabatNama;
+    next.pejabatJabatan = DEFAULT_BAST_TEMPLATE.pejabatJabatan;
+    next.pejabatPangkat = DEFAULT_BAST_TEMPLATE.pejabatPangkat;
+    next.pejabatNip = DEFAULT_BAST_TEMPLATE.pejabatNip;
+    upgraded = true;
+  }
+
+  const normalizedIso = normalizeIsoDateInput(next.tanggalSerahTerimaIso);
+  if (options?.isGlobalDefault) {
+    if (!normalizedIso || normalizedIso.startsWith('2025-')) {
+      next.tanggalSerahTerimaIso = DEFAULT_BAST_TEMPLATE.tanggalSerahTerimaIso;
+      upgraded = true;
+    }
+  } else if (next.tanggalSerahTerimaIso !== undefined) {
+    if (!normalizedIso || normalizedIso.startsWith('2025-')) {
+      next.tanggalSerahTerimaIso = DEFAULT_BAST_TEMPLATE.tanggalSerahTerimaIso;
+      upgraded = true;
+    }
+  }
+
+  return { config: next as T, upgraded };
+}
+
+export function upgradeLegacySptjmConfigTo2026(
+  raw?: Partial<SptjmTemplateConfig>
+): { config: SptjmTemplateConfig; upgraded: boolean } {
+  const merged: SptjmTemplateConfig = {
+    ...DEFAULT_SPTJM_TEMPLATE,
+    ...(raw || {}),
+    pejabatNip: normalizePejabatNipNumber(
+      raw?.pejabatNip ?? DEFAULT_SPTJM_TEMPLATE.pejabatNip
+    ).trim(),
+  };
+  let upgraded = false;
+
+  const cleanNama = (merged.pejabatNama || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const cleanNip = normalizePejabatNipNumber(merged.pejabatNip).trim();
+  const wasLegacyPejabat =
+    cleanNama === 'tatik gestyaningsih, a.ks., m.si' || cleanNip === '19680514 198901 2 002';
+
+  if (wasLegacyPejabat) {
+    merged.pejabatJabatan = DEFAULT_SPTJM_TEMPLATE.pejabatJabatan;
+    merged.pejabatNama = DEFAULT_SPTJM_TEMPLATE.pejabatNama;
+    merged.pejabatNip = DEFAULT_SPTJM_TEMPLATE.pejabatNip;
+    merged.tanggalIso = DEFAULT_SPTJM_TEMPLATE.tanggalIso;
+    merged.hari = '';
+    upgraded = true;
+  }
+
+  const normalizedIso = normalizeIsoDateInput(merged.tanggalIso);
+  if (!normalizedIso || normalizedIso.startsWith('2025-')) {
+    merged.tanggalIso = DEFAULT_SPTJM_TEMPLATE.tanggalIso;
+    upgraded = true;
+  } else {
+    merged.tanggalIso = normalizedIso;
+  }
+
+  if (!(merged.tempat || '').trim()) {
+    merged.tempat = DEFAULT_SPTJM_TEMPLATE.tempat;
+    upgraded = true;
+  }
+
+  return { config: merged, upgraded };
+}
+
 export function resolveEffectiveBastConfig(
   globalTemplate: BastTemplateConfig | undefined,
   proposalBastMap: ProposalBastMap | undefined,
   proposalId?: string,
-  reportTemplate?: ReportTemplateConfig
+  reportTemplate?: ReportTemplateConfig,
+  proposalYear?: string
 ): BastTemplateConfig {
+  const upgradedGlobal = globalTemplate
+    ? upgradeLegacyBastConfigTo2026(globalTemplate, { isGlobalDefault: true, proposalYear }).config
+    : undefined;
   const base: BastTemplateConfig = {
     ...DEFAULT_BAST_TEMPLATE,
-    ...(globalTemplate || {}),
+    ...(upgradedGlobal || {}),
   };
-  const override = proposalId && proposalBastMap ? proposalBastMap[proposalId] : undefined;
+  const rawOverride = proposalId && proposalBastMap ? proposalBastMap[proposalId] : undefined;
+  const override = rawOverride
+    ? upgradeLegacyBastConfigTo2026(rawOverride, { proposalYear }).config
+    : undefined;
   const merged: BastTemplateConfig = {
     ...base,
     ...(override || {}),
   };
+  const resolvedIso =
+    normalizeIsoDateInput(override?.tanggalSerahTerimaIso) ||
+    normalizeIsoDateInput(base.tanggalSerahTerimaIso) ||
+    DEFAULT_BAST_TEMPLATE.tanggalSerahTerimaIso;
   const resolvedLogo =
     (override?.kopLogoDataUrl || '').trim() ||
     (globalTemplate?.kopLogoDataUrl || '').trim() ||
@@ -1011,6 +1256,7 @@ export function resolveEffectiveBastConfig(
 
   return {
     ...merged,
+    tanggalSerahTerimaIso: resolvedIso,
     pejabatNip: normalizePejabatNipNumber(merged.pejabatNip).trim(),
     kopLogoDataUrl: resolvedLogo,
   };

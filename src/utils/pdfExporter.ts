@@ -103,6 +103,9 @@ import {
   formatScheduleDateTimeForCoupon,
   resolveScheduleForProposal,
   resolveScheduleForProposalInBook,
+  resolveBastScheduleForProposal,
+  applyBastScheduleDateToBastConfig,
+  resolveEffectiveSptjmConfigForRecord,
   AbsensiScheduleFields,
   formatAbsensiScheduleFields,
   resolveCouponScheduleForRecord,
@@ -151,6 +154,9 @@ export {
   formatScheduleDateTimeForCoupon,
   resolveScheduleForProposal,
   resolveScheduleForProposalInBook,
+  resolveBastScheduleForProposal,
+  applyBastScheduleDateToBastConfig,
+  resolveEffectiveSptjmConfigForRecord,
   formatAbsensiScheduleFields,
   resolveCouponScheduleForRecord,
   normalizePejabatNipNumber,
@@ -2459,7 +2465,7 @@ function renderSingleBastPage(
   const dateWords = bastConfig.tanggalSerahTerimaCustomText?.trim()
     ? bastConfig.tanggalSerahTerimaCustomText.trim()
     : formatIndonesianDateWords(
-        bastConfig.tanggalSerahTerimaIso?.trim() || getTodayLocalIsoDate()
+        bastConfig.tanggalSerahTerimaIso?.trim() || DEFAULT_BAST_TEMPLATE.tanggalSerahTerimaIso
       );
   const locationText = formatBastProposalLocation(record, proposals, wilayahList);
   const nomorSk = bastConfig.nomorSk?.trim() || DEFAULT_BAST_TEMPLATE.nomorSk;
@@ -2469,15 +2475,15 @@ function renderSingleBastPage(
   const tahunAnggaran =
     (record.tahun || '').trim() ||
     (bastConfig.tanggalSerahTerimaIso ? bastConfig.tanggalSerahTerimaIso.slice(0, 4) : '') ||
-    String(new Date().getFullYear());
+    '2026';
 
   const p1 =
-    `Pada hari ini ${dateWords} bertempat di ${locationText}. ` +
-    `Berdasarkan keputusan Kepala Dinas Sosial Provinsi Kalimantan Barat nomor : ${nomorSk} ` +
-    `tentang barang untuk dijual/diserahkan kepada masyarakat berupa peralatan kerja bagi keluarga fakir miskin potensial ` +
-    `kegiatan pengelolaan data fakir miskin cakupan daerah provinsi sub kegiatan fasilitasi bantuan pengembangan ekonomi Masyarakat ` +
-    `tahun anggaran ${tahunAnggaran}. ` +
-    `Berdasarkan surat pesanan nomor : ${nomorPesanan} tanggal ${tanggalPemesanan}.`;
+    `Pada hari ini ${dateWords} bertempat di ${locationText} berdasarkan Keputusan Kepala Dinas Sosial Provinsi Kalimantan Barat. ` +
+    `Nomor : ${nomorSk} ` +
+    `tentang Barang Untuk Dijual/Diserahkan Kepada Masyarakat Berupa Peralatan Kerja Bagi Keluarga Fakir Miskin Potensial ` +
+    `Kegiatan Pengelolaan Data Fakir Miskin Cakupan Daerah Provinsi Sub Kegiatan Fasilitasi Bantuan Pengembangan Ekonomi Masyarakat ` +
+    `Tahun Anggaran ${tahunAnggaran} ` +
+    `Berdasarkan Surat Pesanan Nomor : ${nomorPesanan} Tanggal ${tanggalPemesanan}.`;
 
   const slotNo = getKpmSlotNumberInProposal(
     record,
@@ -2616,9 +2622,12 @@ function renderSingleBastPage(
   cursorY += 4.8 * gs;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(preset.subTitleFontSize);
-  const nomorBastText = (bastConfig.nomorBast ?? '').trim();
-  if (nomorBastText) {
-    doc.text(nomorBastText, centerX, cursorY, { align: 'center' });
+  const nomorBastRaw = (bastConfig.nomorBast ?? '').trim();
+  if (nomorBastRaw) {
+    const nomorBastDisplay = /^nomor\s*[:.]/i.test(nomorBastRaw)
+      ? nomorBastRaw
+      : `Nomor : ${nomorBastRaw}`;
+    doc.text(nomorBastDisplay, centerX, cursorY, { align: 'center' });
   }
   cursorY += 6.4 * gs;
 
@@ -3214,15 +3223,16 @@ function renderSingleSptjmPage(
   const nameY = jabTopY + sigMetrics.jabH + sigMetrics.signingSpaceH;
   const nipY = nameY + sigMetrics.nipOffset;
 
-  doc.setFont('helvetica', 'normal');
+  doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.4);
   doc.setTextColor(15, 23, 42);
   doc.text('MENGETAHUI', leftSigX, mengetahuiY, { align: 'center' });
   doc.text(`${tempat}, ${tanggalText}`, rightSigX, mengetahuiY, { align: 'center' });
 
+  doc.setFont('helvetica', 'normal');
   doc.setFontSize(9.2);
   doc.text(leftJabLines, leftSigX, jabTopY, { align: 'center' });
-  doc.text('Yang Menyatakan', rightSigX, jabTopY, { align: 'center' });
+  doc.text('Yang Menyatakan,', rightSigX, jabTopY, { align: 'center' });
 
   // Kiri: Pejabat (bold) + NIP & Kanan: Nama KPM, dengan garis tanda tangan simetris sejajar
   doc.setFont('helvetica', 'bold');
@@ -3269,6 +3279,9 @@ export interface ExportKpmBastPdfOptions {
   items: ItemBantuan[];
   wilayahList?: WilayahKabKota[];
   proposalSlotMap?: ProposalSlotMap;
+  schedules?: ScheduleEventItem[];
+  scheduleBooks?: ScheduleBook[];
+  scheduleBookMap?: Record<string, string>;
   reportTemplate?: ReportTemplateConfig;
   bastConfig?: BastTemplateConfig;
   proposalBastMap?: ProposalBastMap;
@@ -3282,6 +3295,9 @@ export async function exportKpmBastToPdf({
   items,
   wilayahList = INITIAL_WILAYAH_LIST,
   proposalSlotMap = {},
+  schedules = [],
+  scheduleBooks,
+  scheduleBookMap = {},
   reportTemplate,
   bastConfig = DEFAULT_BAST_TEMPLATE,
   proposalBastMap,
@@ -3299,11 +3315,22 @@ export async function exportKpmBastToPdf({
     proposals.find((p) => p.namaProposal === record.proposal && p.tahun === record.tahun) ??
     proposals.find((p) => p.namaProposal === record.proposal);
 
-  const effectiveConfig = resolveEffectiveBastConfig(
-    bastConfig,
-    useProposalBastMap ? proposalBastMap : undefined,
-    matchedProp?.id,
-    reportTemplate
+  const bastSchedule = resolveBastScheduleForProposal(
+    matchedProp?.namaProposal || record.proposal,
+    matchedProp?.tahun || record.tahun,
+    schedules,
+    scheduleBooks,
+    scheduleBookMap
+  );
+  const effectiveConfig = applyBastScheduleDateToBastConfig(
+    resolveEffectiveBastConfig(
+      bastConfig,
+      useProposalBastMap ? proposalBastMap : undefined,
+      matchedProp?.id,
+      reportTemplate,
+      matchedProp?.tahun || record.tahun
+    ),
+    bastSchedule
   );
 
   const logoUrl = (effectiveConfig.kopLogoDataUrl || '').trim() || DEFAULT_KOP_LOGO_URL;
@@ -3338,6 +3365,9 @@ export interface ExportKpmSptjmPdfOptions {
   items: ItemBantuan[];
   wilayahList?: WilayahKabKota[];
   proposalSlotMap?: ProposalSlotMap;
+  schedules?: ScheduleEventItem[];
+  scheduleBooks?: ScheduleBook[];
+  scheduleBookMap?: Record<string, string>;
   reportTemplate?: ReportTemplateConfig;
   bastConfig?: BastTemplateConfig;
   sptjmConfig?: SptjmTemplateConfig;
@@ -3350,6 +3380,9 @@ export async function exportKpmSptjmToPdf({
   items,
   wilayahList = INITIAL_WILAYAH_LIST,
   proposalSlotMap = {},
+  schedules = [],
+  scheduleBooks,
+  scheduleBookMap = {},
   reportTemplate,
   bastConfig = DEFAULT_BAST_TEMPLATE,
   sptjmConfig = DEFAULT_SPTJM_TEMPLATE,
@@ -3362,6 +3395,14 @@ export async function exportKpmSptjmToPdf({
   }) as AutoTableDoc;
 
   const kopConfig = resolveEffectiveBastConfig(bastConfig, undefined, undefined, reportTemplate);
+  const effectiveSptjm = resolveEffectiveSptjmConfigForRecord(
+    sptjmConfig,
+    record,
+    proposals,
+    schedules,
+    scheduleBooks,
+    scheduleBookMap
+  );
   const logoUrl = (kopConfig.kopLogoDataUrl || '').trim() || DEFAULT_KOP_LOGO_URL;
   const loadedKopLogo = logoUrl ? await loadSingleImageForPdf(logoUrl) : null;
 
@@ -3373,7 +3414,7 @@ export async function exportKpmSptjmToPdf({
     wilayahList,
     proposalSlotMap,
     kopConfig,
-    sptjmConfig,
+    sptjmConfig: effectiveSptjm,
     loadedKopLogo,
   });
 
@@ -3388,6 +3429,9 @@ export interface ExportKpmBastBulkPdfOptions {
   items: ItemBantuan[];
   wilayahList?: WilayahKabKota[];
   proposalSlotMap?: ProposalSlotMap;
+  schedules?: ScheduleEventItem[];
+  scheduleBooks?: ScheduleBook[];
+  scheduleBookMap?: Record<string, string>;
   reportTemplate?: ReportTemplateConfig;
   bastConfig?: BastTemplateConfig;
   proposalBastMap?: ProposalBastMap;
@@ -3401,6 +3445,9 @@ export async function exportKpmBastBulkToPdf({
   items,
   wilayahList = INITIAL_WILAYAH_LIST,
   proposalSlotMap = {},
+  schedules = [],
+  scheduleBooks,
+  scheduleBookMap = {},
   reportTemplate,
   bastConfig = DEFAULT_BAST_TEMPLATE,
   proposalBastMap,
@@ -3451,11 +3498,22 @@ export async function exportKpmBastBulkToPdf({
       proposals.find((p) => p.namaProposal === rec.proposal && p.tahun === rec.tahun) ??
       proposals.find((p) => p.namaProposal === rec.proposal);
 
-    const effectiveConfig = resolveEffectiveBastConfig(
-      bastConfig,
-      proposalBastMap,
-      matchedProp?.id,
-      reportTemplate
+    const bastSchedule = resolveBastScheduleForProposal(
+      matchedProp?.namaProposal || rec.proposal,
+      matchedProp?.tahun || rec.tahun,
+      schedules,
+      scheduleBooks,
+      scheduleBookMap
+    );
+    const effectiveConfig = applyBastScheduleDateToBastConfig(
+      resolveEffectiveBastConfig(
+        bastConfig,
+        proposalBastMap,
+        matchedProp?.id,
+        reportTemplate,
+        matchedProp?.tahun || rec.tahun
+      ),
+      bastSchedule
     );
     const logoUrl = (effectiveConfig.kopLogoDataUrl || '').trim() || DEFAULT_KOP_LOGO_URL;
     const loadedKopLogo = await getCachedKopLogo(logoUrl);
@@ -3492,6 +3550,9 @@ export interface ExportKpmSptjmBulkPdfOptions {
   items: ItemBantuan[];
   wilayahList?: WilayahKabKota[];
   proposalSlotMap?: ProposalSlotMap;
+  schedules?: ScheduleEventItem[];
+  scheduleBooks?: ScheduleBook[];
+  scheduleBookMap?: Record<string, string>;
   reportTemplate?: ReportTemplateConfig;
   bastConfig?: BastTemplateConfig;
   sptjmConfig?: SptjmTemplateConfig;
@@ -3505,6 +3566,9 @@ export async function exportKpmSptjmBulkToPdf({
   items,
   wilayahList = INITIAL_WILAYAH_LIST,
   proposalSlotMap = {},
+  schedules = [],
+  scheduleBooks,
+  scheduleBookMap = {},
   reportTemplate,
   bastConfig = DEFAULT_BAST_TEMPLATE,
   sptjmConfig = DEFAULT_SPTJM_TEMPLATE,
@@ -3546,6 +3610,14 @@ export async function exportKpmSptjmBulkToPdf({
     if (i > 0) {
       doc.addPage([F4_PAPER_WIDTH_MM, F4_PAPER_HEIGHT_MM], 'portrait');
     }
+    const effectiveSptjm = resolveEffectiveSptjmConfigForRecord(
+      sptjmConfig,
+      rec,
+      proposals,
+      schedules,
+      scheduleBooks,
+      scheduleBookMap
+    );
     renderSingleSptjmPage(doc, {
       record: rec,
       allRecords: pool,
@@ -3554,7 +3626,7 @@ export async function exportKpmSptjmBulkToPdf({
       wilayahList,
       proposalSlotMap,
       kopConfig,
-      sptjmConfig,
+      sptjmConfig: effectiveSptjm,
       loadedKopLogo,
     });
   }
